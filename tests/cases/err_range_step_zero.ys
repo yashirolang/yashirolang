@@ -1,0 +1,6 @@
+# ERROR: range の増分に 0 は使えません
+# ERROR: = ヒント: 増分が 0 だと無限ループになります
+def main() -> int:
+    for i in range(0, 10, 0):
+        print(i)
+    return 0

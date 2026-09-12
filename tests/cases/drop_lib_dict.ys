@@ -1,0 +1,19 @@
+# STAGE0-ONLY: 解放の挿入は C 版だけ
+# FLAGS: --drop --deny-move --deny-borrow --deny-mut
+# OUTPUT: a=2
+# OUTPUT: b=1
+# EXIT: 2
+# v2 に移行した標準ライブラリ（dict / strings）が、
+#         **解放を有効にしたまま**動くことを確かめる。
+#         ★ make drop-asan が二重解放・解放後の使用まで見ます。
+import dict
+import strings
+
+def main() -> int:
+    counts: dict.Dict[str, int] = dict.Dict()
+    for word in strings.split("a b a", " "):
+        counts.set(copy(word), counts.get_or(word, 0) + 1)
+
+    for k in counts.keys():
+        print(k + "=" + str(counts.get(k)))
+    return counts.len()

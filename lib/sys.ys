@@ -1,0 +1,103 @@
+# sys — プロセス
+#
+# ★ この 2 つが無いと、セルフホスト版コンパイラは「コマンド」になれません
+#   （docs/design/self-hosting.md 3.4）。
+#
+# ⚠️ strings を import しています（Output.lines がここで行に分けるため）。
+import strings
+
+extern def pl_argv() -> list[str]
+extern def pl_system(cmd: str) -> int
+extern def pl_getenv(name: str) -> str
+extern def pl_cpu_count() -> int
+extern def pl_proc_spawn(cmd: str) -> int
+extern def pl_proc_wait(pid: int) -> int
+
+# ── コマンドの出力を受け取る ───────────────────────────
+extern def pl_capture(cmd: str) -> str
+extern def pl_capture_status() -> int
+
+# コマンドライン引数（argv[0] はプログラム名）
+def argv() -> list[str]:
+    return pl_argv()
+
+def argc() -> int:
+    return len(pl_argv())
+
+# 環境変数を読む（設定されていなければ空文字列）
+def getenv(name: str) -> str:
+    return pl_getenv(name)
+
+# 外部コマンドを実行して終了コードを返す
+def run(cmd: str) -> int:
+    return pl_system(cmd)
+
+# 使える CPU コアの数（spawn の本数を決めるのに使います）
+#
+# ⚠️ 0 は返りません（割り算に使えます）。
+# ⚠️ ベアメタルでは使えません（time と同じ扱い。lib/README.md）。
+def cpu_count() -> int:
+    return pl_cpu_count()
+
+# ── 子プロセスを「起こす」と「待つ」に分ける ──────────────
+#
+# ★ run() は終わるまで戻ってきません。複数のコマンドを**同時に**走らせたい
+#   ときは、この 2 つを使って自分で待ち合わせます。
+#
+# ⚠️ **スレッド（spawn）から run() を呼んでも速くなりません。** macOS の
+#    system() はグローバルなロックを取るので 1 本ずつしか走りません。
+#    プロセスを並べたいときは必ずこちらを使ってください。
+#
+# ⚠️ Windows では使えません（start_shell が -1 を返します）。
+#    呼ぶ側は run() に落としてください。
+
+# シェルでコマンドを起こして、その番号（pid）を返す。起こせなければ -1
+def start_shell(cmd: str) -> int:
+    return pl_proc_spawn(cmd)
+
+# その番号の終了を待って、終了コードを返す
+def wait_for(pid: int) -> int:
+    return pl_proc_wait(pid)
+
+
+# ── コマンドの出力を受け取る ───────────────────────────
+#
+# ★ run() は終了コードしか返しません。出力が欲しいときは、これまで
+#   一時ファイルに落として読み直すしかありませんでした（パッケージマネージャの shell が
+#   実際そうでした）。パイプで直に受け取れるようにします。
+
+class Output:
+    code: int    # 終了コード（起動できなければ -1）
+    out: str     # 標準出力（そのまま。改行も落としません）
+
+    def init(self, code: int, out: str) -> None:
+        self.code = code
+        self.out = copy(out)
+
+    def ok(self) -> bool:
+        return self.code == 0
+
+    # 末尾の改行を落とした 1 行として読む（`git rev-parse` のような相手向け）
+    def line(self) -> str:
+        return strings.strip(self.out)
+
+    # 空でない行に分ける
+    def lines(self) -> list[str]:
+        out: list[str] = []
+        for raw in strings.split(self.out, "\n"):
+            line: str = strings.strip(raw)
+            if len(line) > 0:
+                out.append(line)
+        return out
+
+# コマンドを走らせて、標準出力と終了コードを受け取る。
+#
+# ⚠️ **標準エラーは含みません。** 混ぜたいときはコマンドに "2>&1" を書いて
+#   ください（混ぜるかどうかは呼ぶ側が決めることなので、既定は分けます）。
+# ⚠️ 中身は**シェルが解釈します**。外から来た文字列をそのまま繋がないでください。
+# ⚠️ **どのシェルかは OS が決めます。** capture と run は必ず同じシェルを使いますが、
+#   ';' やパイプの意味は OS で変わります。複数のコマンドを 1 つの文字列に
+#   詰め込まないでください（Windows で 1 行にまとめられ、CI が落ちました）。
+def capture(cmd: str) -> Output:
+    text: str = pl_capture(cmd)
+    return Output(pl_capture_status(), text)

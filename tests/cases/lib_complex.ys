@@ -1,0 +1,48 @@
+# OUTPUT: 4.0+2.0i
+# OUTPUT: 2.0+6.0i
+# OUTPUT: 11.0-2.0i
+# OUTPUT: -1.0+2.0i
+# OUTPUT: -3.0-4.0i
+# OUTPUT: 5.0
+# OUTPUT: 25.0
+# OUTPUT: False True
+# OUTPUT: -1.0+0.0i
+# OUTPUT: 0.0+1.0i
+# OUTPUT: True
+# OUTPUT: True
+# OUTPUT: True
+# EXIT: 0
+# 複素数（lib/complex）
+#   ★ 言語は変えていません。0.7.0 の演算子の多重定義だけで書けています。
+import complex
+import math
+
+def main() -> int:
+    a: complex.Complex = complex.rect(3.0, 4.0)
+    b: complex.Complex = complex.rect(1.0, -2.0)
+    print((a + b).show())
+    print((a - b).show())
+    print((a * b).show())          # (3+4i)(1-2i) = 11-2i
+    print((a / b).show())          # (3+4i)/(1-2i) = -1+2i
+    print((-a).show())
+    print(str(complex.mag(a)))     # |3+4i| = 5
+    print(str(complex.mag2(a)))
+    print(str(a == b) + " " + str(a != b))
+
+    # i² = -1、√(-1) = i
+    print(complex.powi(complex.i(), 2).show())
+    print(complex.sqrt(complex.rect(-1.0, 0.0)).show())
+
+    # オイラーの等式 e^(iπ) + 1 = 0
+    eul: complex.Complex = complex.exp(complex.rect(0.0, math.pi())) + complex.one()
+    print(str(complex.mag(eul) < 1.0e-15))
+
+    # log は exp の逆（主値の範囲で）
+    z: complex.Complex = complex.rect(2.0, 0.5)
+    print(str(complex.isclose(complex.exp(complex.log(z)), z, 1.0e-12)))
+
+    # sin² + cos² = 1
+    s: complex.Complex = complex.sin(z)
+    c: complex.Complex = complex.cos(z)
+    print(str(complex.isclose(s * s + c * c, complex.one(), 1.0e-12)))
+    return 0

@@ -1,0 +1,20 @@
+# STAGE0-ONLY: 解放の挿入は C 版だけ
+# FLAGS: --drop
+# OUTPUT: 8
+# OUTPUT: abcde
+# EXIT: 0
+# 借りものを束縛した変数は、入れ替えても解放しない。
+#         ★ ここで古い値を解放すると、リストの要素を壊して二重解放になります
+#           （make drop-asan が捕まえます）。
+def pick(xs: list[str]) -> int:
+    t: str = xs[0]
+    t = xs[1]
+    n: int = len(t)
+    t = "fresh"
+    return n + len(t)
+
+def main() -> int:
+    names: list[str] = ["ab", "cde"]
+    print(str(pick(names)))
+    print(names[0] + names[1])
+    return 0

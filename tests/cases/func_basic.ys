@@ -1,0 +1,6 @@
+# EXIT: 42
+def answer() -> int:
+    return 42
+
+def main() -> int:
+    return answer()

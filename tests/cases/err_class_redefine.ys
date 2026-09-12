@@ -1,0 +1,9 @@
+# ERROR: クラス 'P' は既に定義されています
+class P:
+    x: int
+
+class P:
+    y: int
+
+def main() -> int:
+    return 0

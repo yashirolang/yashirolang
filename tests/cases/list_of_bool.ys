@@ -1,0 +1,8 @@
+# OUTPUT: True
+# OUTPUT: False
+# bool は i64 に広げて保存し、読み出しで i1 に戻す（規約 R5）
+def main() -> int:
+    bs: list[bool] = [True, False]
+    print(bs[0])
+    print(bs[1])
+    return 0

@@ -1,0 +1,11 @@
+# ERROR: 関数 'f' は値を返さずに終わる経路があります
+# ★ break があれば while True: からは抜ける。
+#   抜けた先に return が無いので、やはりエラーでなければならない。
+def f(n: int) -> int:
+    while True:
+        if n > 3:
+            break
+        n = n + 1
+
+def main() -> int:
+    return f(0)

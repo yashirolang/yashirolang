@@ -1,0 +1,12 @@
+# OUTPUT: True
+# OUTPUT: False
+# OUTPUT: True
+# OUTPUT: True
+# EXIT: 0
+# 比較は fcmp の ordered（NaN が絡むと必ず False）
+def main() -> int:
+    print(1.5 < 2.0)
+    print(1.5 > 2.0)
+    print(1.5 == 1.5)
+    print(1.5 != 2.5)
+    return 0

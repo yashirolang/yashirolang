@@ -1,0 +1,19 @@
+# OUTPUT: 2
+# OUTPUT: 1
+# OUTPUT: none
+# list[T | None] — 型の一部としても書ける
+class Box:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+def main() -> int:
+    xs: list[Box | None] = [Box(1), None]
+    print(len(xs))
+    for x in xs:
+        if x is not None:
+            print(x.v)
+        else:
+            print("none")
+    return 0

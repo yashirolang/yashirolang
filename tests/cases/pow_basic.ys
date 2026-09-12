@@ -1,0 +1,6 @@
+# OUTPUT: 1024
+# OUTPUT: 1
+def main() -> int:
+    print(2 ** 10)
+    print(5 ** 0)
+    return 0

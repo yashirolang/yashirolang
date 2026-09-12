@@ -1,0 +1,17 @@
+# OUTPUT: True
+# OUTPUT: 4
+# nullable なフィールドは None から始まる（calloc のゼロがそのまま正しい）
+class Node:
+    v: int
+    next: Node | None
+
+def main() -> int:
+    a: Node = Node()
+    print(a.next is None)
+    b: Node = Node()
+    b.v = 4
+    a.next = b
+    n: Node | None = a.next
+    if n is not None:
+        print(n.v)
+    return 0

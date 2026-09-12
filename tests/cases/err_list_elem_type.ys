@@ -1,0 +1,8 @@
+# ERROR: 型が一致しません
+# ERROR: 型 'list[int]' の式
+# ★ 「a == b はリストでは壊れる」と警告していた形。
+#   type_equal が要素型を再帰比較しないと、これが通ってしまう
+def main() -> int:
+    xs: list[int] = [1, 2]
+    ys: list[str] = xs
+    return 0

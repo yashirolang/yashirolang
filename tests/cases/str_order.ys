@@ -1,0 +1,8 @@
+# OUTPUT: True
+# OUTPUT: True
+# OUTPUT: False
+def main() -> int:
+    print("abc" < "abd")
+    print("ab" < "abc")
+    print("b" <= "a")
+    return 0

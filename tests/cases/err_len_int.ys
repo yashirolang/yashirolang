@@ -1,0 +1,4 @@
+# ERROR: len は 'int' 型を受け取れません
+# ERROR: = ヒント: len が受け取れるのは str, list[T] です
+def main() -> int:
+    return len(42)

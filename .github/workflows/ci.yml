@@ -1,0 +1,136 @@
+# CI — Linux / macOS / Windows の 3 つで、同じ検証を回します。
+#
+# ★ このコンパイラは「LLVM IR のテキストを出して clang に渡す」作りなので、
+#   clang さえあればどの OS でも同じ結果になるはずです。CI はそれを確かめる場所です。
+#
+#   ① make            … コンパイラ（stage0）をビルドする
+#   ② make test       … テスト + 解放の検査（ASan）+ セルフホストの比較
+#   ③ make bootstrap  … 3 段ビルドと不動点（stage2 == stage3）
+#   ④ make bootstrap-test … セルフホスト版コンパイラでテストを全部通す
+#   ⑤ make check-naming … 言語名がどこにも書き写されていないことを確かめる
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:   # 手で回せるようにしておく
+
+jobs:
+  # ── ホスト 3 種でのビルドとテスト ──────────────────────────
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false   # ★ 1 つ落ちても他の OS の結果は見たい
+      matrix:
+        include:
+          - name: Linux (clang)
+            os: ubuntu-latest
+            shell: bash
+          - name: macOS (Apple clang)
+            os: macos-latest
+            shell: bash
+          - name: Windows (MSYS2 + clang)
+            os: windows-latest
+            shell: 'msys2 {0}'
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 道具を入れる（Linux）
+        if: runner.os == 'Linux'
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install -y clang llvm
+
+      # macOS の runner には Apple clang が最初から入っています（追加は不要）
+
+      - name: 道具を入れる（Windows / MSYS2）
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            make
+            diffutils
+            grep
+            coreutils
+          pacboy: >-
+            clang:p
+            lld:p
+
+      - name: 環境を表示する
+        run: make info
+
+      # ★ 言語名がどこかに書き写されていないかを、いちばん先に見ます。
+      #   改名を tools/rename.sh の 1 回で終わらせる、という約束の見張りです
+      #   （docs/design/naming.md）。README.md が README.md.in と
+      #   食い違っていても、ここで落ちます。
+      #
+      #   ⚠️ Linux でだけ回します。3 つの OS で同じ結果になる検査なので、
+      #     3 回やっても分かることは増えません。
+      - name: ⓪ 言語名の書き漏れを見る
+        if: runner.os == 'Linux'
+        run: make check-naming
+
+      - name: ① ビルド
+        run: make
+
+      # ★ **小さなメソッドが畳まれるかを、構造で検査します。**
+      #   clang に -Rpass-missed=inline で直接聞くので、機械が変わっても
+      #   答えは変わりません（時間の比では機械差と区別できませんでした）。
+      - name: インライン化の検査（構造で見る）
+        run: make inline-check
+
+      - name: ② テスト（+ 解放の検査 + セルフホストの比較）
+        run: make test
+
+      - name: ③ 不動点（stage2 == stage3）
+        run: make bootstrap
+
+      - name: ④ セルフホスト版コンパイラでテスト
+        run: make bootstrap-test
+
+      # ★ 文書のひな型に名前を流し込めるか（プレースホルダの書き損じ検出）
+      - name: 文書を組み立てる
+        if: runner.os == 'Linux'
+        run: make docs
+
+      # ★ 言語名・拡張子・コマンド名は **make に訊きます**（ここに書き写さない）。
+      #   改名しても CI を直さずに済ませるためです（docs/design/naming.md）。
+      - name: 配布物を作って、別の場所から動かす
+        run: |
+          name=$(make -s print-LANG_NAME)
+          cc=$(make -s print-LANG_CC)
+          ext=$(make -s print-LANG_EXT)
+          make dist
+          cd build/dist
+          d=$(ls -d "$name"-*)
+          printf 'def main() -> int:\n    print("dist ok")\n    return 0\n' > "t$ext"
+          "./$d/bin/$cc" "t$ext" -o t
+          ./t*
+
+  # ── ベアメタル（RISC-V）の検証 ─────────────────────────────
+  #
+  # ★ カーネルの成果を、QEMU のシリアル出力で確かめます。
+  #   リンカは ld.lld（LLVM 付属）を使うので、cross binutils は要りません。
+  baremetal:
+    name: ベアメタル（RISC-V / QEMU）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 道具を入れる
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm lld qemu-system-misc
+
+      - name: ビルド
+        run: make
+
+      - name: カーネルをビルドして QEMU で動かす
+        run: make qemu-test

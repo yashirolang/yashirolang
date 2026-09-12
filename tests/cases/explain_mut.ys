@@ -1,0 +1,24 @@
+# STAGE0-ONLY: --explain-mut は C 版だけ
+# EXPLAIN-MUT: 'c' が変更されます（Counter.bump の 'mut self'）
+# EXPLAIN-MUT: 'xs' が変更されます（fill の引数 'xs: mut list[int]'）
+# EXPLAIN-MUT: 'xs' が変更されます（list.append）
+# EXIT: 4
+# 呼び出し側に mut を書かせない代わりに、聞けば答える（仕様 v2 §5.3）
+class Counter:
+    n: int
+
+    def init(self) -> None:
+        self.n = 0
+
+    def bump(mut self) -> None:
+        self.n = self.n + 1
+
+def fill(xs: mut list[int], v: int) -> None:
+    xs.append(v)
+
+def main() -> int:
+    c: Counter = Counter()
+    c.bump()
+    xs: list[int] = []
+    fill(xs, 3)
+    return c.n + xs[0]

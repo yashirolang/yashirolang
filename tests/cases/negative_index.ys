@@ -1,0 +1,18 @@
+# OUTPUT: 4
+# OUTPUT: 3
+# OUTPUT: o
+# OUTPUT: hell
+# OUTPUT: 2
+# OUTPUT: llo
+# EXIT: 0
+# 負の添字と負のスライス
+def main() -> int:
+    xs: list[int] = [1,2,3,4]
+    print(xs[-1])
+    print(xs[-2])
+    s: str = "hello"
+    print(s[-1])
+    print(s[:-1])
+    print(len(xs[:-2]))
+    print(s[-3:])
+    return 0

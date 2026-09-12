@@ -1,0 +1,4 @@
+# ERROR: list の要素型に None は使えません
+def main() -> int:
+    xs: list[None] = []
+    return 0

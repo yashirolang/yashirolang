@@ -1,0 +1,16 @@
+# OUTPUT: A あ 😀
+# OUTPUT: 3 4
+# OUTPUT: True
+# コードポイントから文字を作る。
+# ★ 組み込みの chr() は**バイト**を作ります（0〜255）。日本語や絵文字は
+#   strings.from_code_point で作ります（json の \uXXXX に要りました）。
+import strings
+
+def main() -> int:
+    a: str = strings.from_code_point(65)
+    ja: str = strings.from_code_point(12354)
+    emoji: str = strings.from_code_point(128512)
+    print(a + " " + ja + " " + emoji)
+    print(str(len(ja)) + " " + str(len(emoji)))
+    print(str(strings.code_point_at(emoji, 0, 4) == 128512))
+    return 0

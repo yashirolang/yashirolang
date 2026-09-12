@@ -1,0 +1,12 @@
+# STAGE0-ONLY: 所有権検査は C 版だけ
+# FLAGS: --deny-move
+# EXIT: 3
+# 移動しても、代入し直せばまた使える（言語仕様 v2 §3.2）
+def take(xs: own list[int]) -> int:
+    return len(xs)
+
+def main() -> int:
+    xs: list[int] = [1, 2]
+    n: int = take(xs)
+    xs = [7]
+    return n + len(xs)

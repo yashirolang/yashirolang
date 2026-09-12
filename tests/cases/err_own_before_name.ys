@@ -1,0 +1,8 @@
+# ERROR: ここには書けません
+# ERROR: = ヒント: 'mut' は型の前に書きます（例: xs: mut list[int]）
+# own / mut は名前の前ではなく型の前に書く
+def f(mut xs: list[int]) -> int:
+    return len(xs)
+
+def main() -> int:
+    return 0

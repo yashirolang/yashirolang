@@ -1,0 +1,7 @@
+# EXIT: 1
+ready: bool = True
+
+def main() -> int:
+    if ready:
+        return 1
+    return 0

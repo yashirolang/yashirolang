@@ -1,0 +1,6 @@
+# OUTPUT: greeting
+greeting: str = "greeting"
+
+def main() -> int:
+    print(greeting)
+    return 0

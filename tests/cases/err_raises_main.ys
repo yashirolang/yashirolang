@@ -1,0 +1,11 @@
+# ERROR: error[E-RAISE-4]: main は raises を宣言できません
+# ERROR: main の中で try で捕まえるか、panic で終わらせてください
+# main の失敗を受け取る相手はいない（R4）
+class IOError:
+    message: str
+
+    def init(self, message: own str) -> None:
+        self.message = message
+
+def main() -> int raises IOError:
+    raise IOError("だめ")

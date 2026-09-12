@@ -1,0 +1,18 @@
+# STAGE0-ONLY: 所有権検査は C 版だけ
+# WARN: 借用した値 's' をリストに保存できません
+# WARN: 'strs' が所有しています（借りているだけです）
+# EXIT: 0
+# OUTPUT: a1b2
+# 内包表記の中も所有権検査が見ること
+#
+#   ⚠️ **一度これを見落としました。** 意味解析と codegen だけ足して
+#     ownck.c を忘れると、同じことを手で書けば出る警告が
+#     **内包表記では静かに消えます**（`--drop` を付けると二重解放で落ちます）。
+#
+#   ★ 直したのは ownck.c の ND_LISTCOMP。ループ変数は「対象の要素を
+#     借りている」ものとして登録し、要素の式は append と同じ扱いで見ます。
+def main() -> int:
+    strs: list[str] = ["a" + "1", "b" + "2"]
+    copy_of: list[str] = [s for s in strs]
+    print(copy_of[0] + strs[1])
+    return 0

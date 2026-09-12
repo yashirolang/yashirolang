@@ -1,0 +1,4 @@
+# EXIT: 1
+def main() -> int:
+    z: int = 0
+    return 7 % z

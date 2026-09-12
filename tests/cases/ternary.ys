@@ -1,0 +1,23 @@
+# OUTPUT: 1
+# OUTPUT: 10
+# OUTPUT: 正
+# OUTPUT: c
+# OUTPUT: 評価: 1
+# OUTPUT: 1
+# EXIT: 0
+# 三項演算子（右結合。選ばれなかった側は評価しない）
+def side(n: int) -> int:
+    print("評価: " + str(n))
+    return n
+
+def main() -> int:
+    x: int = 1 if True else 2
+    print(x)
+    print(10 if x > 0 else 20)
+    s: str = "正" if x > 0 else "負"
+    print(s)
+    # 右結合（Python と同じ）
+    print("a" if False else "b" if False else "c")
+    # 選ばれなかった側は評価されない
+    print(side(1) if True else side(2))
+    return 0

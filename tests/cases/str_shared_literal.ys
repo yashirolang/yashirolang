@@ -1,0 +1,5 @@
+# OUTPUT: True
+# 同じ内容のリテラルは 1 つにまとめられる（内容比較なので結果は変わらない）
+def main() -> int:
+    print("hi" == "hi")
+    return 0

@@ -1,0 +1,8 @@
+# EXIT: 1
+# 達成目標
+def main() -> int:
+    x: int = 5
+    flag: bool = x < 10 and not (x == 3)
+    if flag:
+        return 1
+    return 0

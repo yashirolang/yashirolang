@@ -1,0 +1,16 @@
+# OUTPUT: 5
+# ★ panic() は戻らないので、ガード節として絞り込みが効く。
+class Box:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+def get(b: Box | None) -> int:
+    if b is None:
+        panic("box がありません")
+    return b.v
+
+def main() -> int:
+    print(get(Box(5)))
+    return 0

@@ -1,0 +1,11 @@
+# OUTPUT: 1
+# None の関数では値なし return で抜けられる
+def show(x: int) -> None:
+    if x < 0:
+        return
+    print(x)
+
+def main() -> int:
+    show(1)
+    show(-1)
+    return 0

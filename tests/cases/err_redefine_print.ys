@@ -1,0 +1,7 @@
+# ERROR: 'print' は再定義できません
+# ERROR: = ヒント: print は組み込み関数です
+def print(x: int) -> None:
+    return
+
+def main() -> int:
+    return 0

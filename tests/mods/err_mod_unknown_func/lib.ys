@@ -1,0 +1,7 @@
+G: int = 3
+
+class Box:
+    v: int
+
+def f(n: int) -> int:
+    return n

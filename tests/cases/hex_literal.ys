@@ -1,0 +1,3 @@
+# EXIT: 255
+def main() -> int:
+    return 0xFF

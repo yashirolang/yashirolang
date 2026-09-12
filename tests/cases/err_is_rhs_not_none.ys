@@ -1,0 +1,11 @@
+# ERROR: is は None との比較にだけ使えます
+# ERROR: 値が等しいかを調べるには == を使ってください
+class Box:
+    v: int
+
+def main() -> int:
+    a: Box = Box()
+    b: Box = Box()
+    if a is b:
+        return 1
+    return 0

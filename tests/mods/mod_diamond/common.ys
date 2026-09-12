@@ -1,0 +1,4 @@
+COUNT: int = 7
+
+def base() -> int:
+    return 10

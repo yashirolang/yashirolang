@@ -1,0 +1,80 @@
+# OUTPUT: done
+# EXIT: 0
+# 統計と乱数（分布の性質で検証する）
+import stats
+import random
+import math
+import linalg
+
+def approx(name: str, got: float, want: float, tol: float) -> None:
+    if math.fabs(got - want) > tol:
+        print("NG " + name + " got=" + str(got) + " want=" + str(want))
+
+def main() -> int:
+    d: list[float] = [2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]
+    approx("mean", stats.mean(d), 5.0, 1.0e-12)
+    approx("pstdev", stats.pstdev(d), 2.0, 1.0e-12)
+    approx("median", stats.median(d), 4.5, 1.0e-12)
+    approx("mode", stats.mode(d), 4.0, 1.0e-12)
+    approx("variance", stats.variance([1.0,2.0,3.0,4.0]), 1.6666666666666667, 1.0e-12)
+    approx("quantile.5", stats.quantile(d, 0.5), 4.5, 1.0e-12)
+    approx("quantile0", stats.quantile(d, 0.0), 2.0, 1.0e-12)
+    approx("quantile1", stats.quantile(d, 1.0), 9.0, 1.0e-12)
+    approx("gmean", stats.geometric_mean([1.0,4.0,16.0]), 4.0, 1.0e-12)
+    approx("hmean", stats.harmonic_mean([1.0,2.0,4.0]), 12.0/7.0, 1.0e-12)
+
+    x: list[float] = [1.0,2.0,3.0,4.0,5.0]
+    y: list[float] = [2.0,4.0,6.0,8.0,10.0]
+    approx("corr=1", stats.correlation(x, y), 1.0, 1.0e-12)
+    r: list[float] = stats.linear_regression(x, y)
+    approx("slope", r[0], 2.0, 1.0e-12)
+    approx("intercept", r[1], 0.0, 1.0e-12)
+
+    # sorted が元を壊さないこと
+    orig: list[float] = [3.0, 1.0, 2.0]
+    s: list[float] = stats.sorted(orig)
+    approx("sorted", linalg.dist(s, [1.0,2.0,3.0]), 0.0, 0.0)
+    approx("original kept", linalg.dist(orig, [3.0,1.0,2.0]), 0.0, 0.0)
+
+    # ── 乱数の統計的な性質 ──
+    random.seed(42)
+    n: int = 20000
+    xs: list[float] = []
+    i: int = 0
+    while i < n:
+        xs.append(random.random())
+        i = i + 1
+    approx("uniform mean", stats.mean(xs), 0.5, 0.01)
+    approx("uniform var", stats.pvariance(xs), 1.0/12.0, 0.005)
+    if linalg.vmin(xs) < 0.0 or linalg.vmax(xs) >= 1.0:
+        print("NG random range")
+
+    gs: list[float] = []
+    i = 0
+    while i < n:
+        gs.append(random.gauss(10.0, 2.0))
+        i = i + 1
+    approx("gauss mean", stats.mean(gs), 10.0, 0.06)
+    approx("gauss stdev", stats.stdev(gs), 2.0, 0.06)
+
+    # randint が範囲内で全部の目を出すか（サイコロ）
+    random.seed(7)
+    counts: list[float] = linalg.zeros(6)
+    i = 0
+    while i < 6000:
+        v: int = random.randint(1, 6)
+        if v < 1 or v > 6:
+            print("NG randint range " + str(v))
+        counts[v-1] = counts[v-1] + 1.0
+        i = i + 1
+    if linalg.vmin(counts) < 900.0 or linalg.vmax(counts) > 1100.0:
+        print("NG dice balance " + linalg.vec_str(counts))
+
+    # 同じ種なら同じ系列
+    random.seed(123)
+    a1: float = random.random()
+    random.seed(123)
+    approx("reproducible", random.random(), a1, 0.0)
+
+    print("done")
+    return 0

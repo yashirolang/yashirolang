@@ -1,0 +1,21 @@
+# OUTPUT: True
+# OUTPUT: 20
+# メソッドの中から self の別メソッドを呼ぶ
+class Counter:
+    n: int
+
+    def init(self, n: int) -> None:
+        self.n = n
+
+    def is_zero(self) -> bool:
+        return self.n == 0
+
+    def double(self) -> int:
+        return self.n * 2
+
+def main() -> int:
+    c: Counter = Counter(0)
+    print(c.is_zero())
+    c.n = 10
+    print(c.double())
+    return 0

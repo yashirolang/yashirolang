@@ -1,0 +1,3 @@
+# ERROR: main は引数を取れません
+def main(n: int) -> int:
+    return n

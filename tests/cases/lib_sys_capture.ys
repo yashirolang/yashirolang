@@ -1,0 +1,23 @@
+# OUTPUT: 0 hello 1
+# OUTPUT: 2 True
+# OUTPUT: 3 False
+# 外部コマンドの出力を受け取る。
+# ★ これが無いと一時ファイルを経由するしかありませんでした。
+#
+# ⚠️ **シェルの書き方に頼らないこと。** `echo a; echo b` のような書き方は
+#   OS で意味が変わります（Windows の CI が実際に 1 行として受け取りました）。
+#   ここで外に出すのは `echo hello` と `exit 3` だけにして、行に分ける部分は
+#   Output を直に作って確かめます。
+import sys
+
+def main() -> int:
+    r: sys.Output = sys.capture("echo hello")
+    print(str(r.code) + " " + r.line() + " " + str(len(r.lines())))
+
+    # 行に分ける部分は、シェルを通さずに確かめる
+    man: sys.Output = sys.Output(0, "a\nb\n")
+    print(str(len(man.lines())) + " " + str(man.ok()))
+
+    bad: sys.Output = sys.capture("exit 3")
+    print(str(bad.code) + " " + str(bad.ok()))
+    return 0

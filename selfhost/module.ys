@@ -1,0 +1,330 @@
+# module — モジュールの読み込み
+#
+# ★ src/module.c の移植です。入口のファイルから import をたどり、
+#   依存が先に並んだ順（トポロジカル順）で返します。
+#   循環 import は 3 値の state で検出します。
+import io
+import strings
+import sys
+import ast
+import diag
+import langinfo
+import lexer
+import parser
+import token
+
+# 標準ライブラリの場所。
+#
+# ⚠️ C 版はビルド時に埋め込みます（-DPLC_LIB_DIR）が、本言語には
+#   プリプロセッサがありません。**環境変数 PLC_LIB_DIR**で受け取り、
+#   無ければ "lib" を使います。C 版も同じ環境変数を先に見るようにしたので、
+#   両者は同じ規則で探します。
+DEFAULT_LIB_DIR: str = "lib"
+
+# ── 追加の探索場所（-I <dir>） ─────────────────────────
+#
+# ★ C 版（src/module.c）の静的変数 g_search に対応します。
+# ⚠️ グローバル変数の初期化式は定数だけなので list[str] は持てません。
+#   改行で区切った 1 本の文字列に畳んで持ちます。
+SEARCH_PATHS: str = ""
+
+def set_search_paths(dirs: list[str]) -> None:
+    SEARCH_PATHS = strings.join(dirs, "\n")
+
+def search_paths() -> list[str]:
+    if len(SEARCH_PATHS) == 0:
+        return []
+    return strings.split(SEARCH_PATHS, "\n")
+
+def lib_dir() -> str:
+    env: str = sys.getenv("PLC_LIB_DIR")
+    if len(env) > 0:
+        return env
+    return DEFAULT_LIB_DIR
+
+
+class Module:
+    name: str    # "lexer"（IR の名前修飾に使う）
+    path: str    # "…/lexer"
+    dir: str     # import を探すディレクトリ（入口ファイルのある場所）
+    src: str
+    ast: rc[ast.Node] | None
+
+    deps: list[rc[Module]]
+
+    ll_path: str
+
+    # 深さ優先探索の状態（0=未訪問 / 1=訪問中 / 2=完了）
+    state: int
+
+    next: rc[Module] | None   # 依存順のリスト（依存が先）
+
+    def init(self, name: str, path: str, dir_: str) -> None:
+        self.name = copy(name)
+        self.path = copy(path)
+        self.dir = copy(dir_)
+        self.src = ""
+        self.ll_path = ""
+        self.state = 0
+        self.deps = []
+
+
+class Loader:
+    dir: str
+    loaded: list[rc[Module]]
+    order: rc[Module] | None
+    order_tail: rc[Module] | None
+    stack: list[rc[Module]]
+
+    def init(self, dir_: str) -> None:
+        self.dir = copy(dir_)
+        self.loaded = []
+        self.stack = []
+
+
+# "a/b/lexer" → "a/b"（区切りが無ければ "."）
+def dir_of(path: str) -> str:
+    i: int = len(path) - 1
+    while i >= 0:
+        if strings.byte_at(path, i) == 47:   # '/'
+            if i == 0:
+                return "/"
+            return strings.substr(path, 0, i)
+        i = i - 1
+    return "."
+
+# "a/b/lexer" → "lexer"
+def module_name_of(path: str) -> str:
+    base: str = path
+    i: int = len(path) - 1
+    while i >= 0:
+        if strings.byte_at(path, i) == 47:
+            base = strings.substr(path, i + 1, len(path) - i - 1)
+            i = -1
+        else:
+            i = i - 1
+
+    n: int = len(base)
+    elen: int = langinfo.ext_len()
+    if n > elen and strings.endswith(base, langinfo.ext()):
+        n = n - elen
+
+    out: list[str] = []
+    j: int = 0
+    while j < n:
+        b: int = strings.byte_at(base, j)
+        ok: bool = ((b >= 97 and b <= 122) or (b >= 65 and b <= 90) or b == 95 or
+                    (j > 0 and b >= 48 and b <= 57))
+        if ok:
+            out.append(chr(b))
+        else:
+            out.append("_")
+        j = j + 1
+    if n == 0:
+        return "m"
+    return strings.join(out, "")
+
+def join_path(dir_: str, name: str) -> str:
+    if dir_ == ".":
+        return name + langinfo.ext()
+    return dir_ + "/" + name + langinfo.ext()
+
+# 探す場所を順に並べる（① 入口のディレクトリ ② -I ③ lib/）。
+# ★ 並びは「表示する順」であって「優先順位」ではありません。
+def candidates(ld: Loader, name: str) -> list[str]:
+    out: list[str] = []
+    out.append(join_path(ld.dir, name))
+    extra: list[str] = search_paths()
+    i: int = 0
+    while i < len(extra):
+        out.append(join_path(extra[i], name))
+        i = i + 1
+    out.append(join_path(lib_dir(), name))
+    return out
+
+# 見つからなかったときに「どこを探したか」を並べる
+def searched_list(ld: Loader, name: str) -> str:
+    return strings.join(candidates(ld, name), "\n             ")
+
+# モジュールを探す（2 つ以上の場所で見つかったらエラー）
+def path_for(ld: Loader, name: str, from_: rc[token.Token] | None) -> str:
+    cand: list[str] = candidates(ld, name)
+    lib_at: int = len(cand) - 1   # lib/ は最後（衝突の文言を変えるために覚えておく）
+
+    # 実在するものだけを集めます。**同じパスは 1 つに畳みます**
+    #（-I . のように入口のディレクトリと重なる指定を衝突にしないため）。
+    hits: list[str] = []
+    lib_hit: bool = False
+    i: int = 0
+    while i < len(cand):
+        if io.exists(cand[i]):
+            dup: bool = False
+            k: int = 0
+            while k < len(hits):
+                if hits[k] == cand[i]:
+                    dup = True
+                k = k + 1
+            if not dup:
+                if i == lib_at:
+                    lib_hit = True
+                hits.append(copy(cand[i]))
+        i = i + 1
+
+    # ★ 優先順位は決めません。2 つ以上で見つかったらエラーにします（14.4 節）。
+    if len(hits) > 1:
+        tail: str = "名前が重ならないようにしてください"
+        if len(hits) == 2:
+            tail = "どちらかの名前を変えてください"
+        msg: str = "モジュール '" + name + "' が複数の探索場所にあります"
+        if lib_hit:
+            msg = "モジュール '" + name + "' が標準ライブラリと衝突しています"
+        hint: str = ("見つかった場所:\n             " +
+                     strings.join(hits, "\n             ") +
+                     "\n             " + tail)
+        if from_ is None:
+            panic(msg)
+        else:
+            diag.error_full(from_, msg, "どちらを指しているか決められません",
+                            None, "", hint)
+    if len(hits) == 1:
+        return hits[0]
+    return cand[0]   # 見つからない場合も「利用者側のパス」を返す（診断に出すため）
+
+# dir か -I の探索場所に <name> があるか
+#（「import を書き忘れていませんか」の診断用。★ lib/ は見ません）
+def file_exists(dir_: str, name: str) -> bool:
+    if io.exists(join_path(dir_, name)):
+        return True
+    extra: list[str] = search_paths()
+    i: int = 0
+    while i < len(extra):
+        if io.exists(join_path(extra[i], name)):
+            return True
+        i = i + 1
+    return False
+
+def find_module(ld: Loader, name: str) -> rc[Module] | None:
+    i: int = 0
+    while i < len(ld.loaded):
+        m: rc[Module] = ld.loaded[i]
+        if m.name == name:
+            return m
+        i = i + 1
+    return None
+
+# 循環の経路を "main → lexer → parser → lexer" の形にする
+def cycle_path(ld: Loader, name: str) -> str:
+    parts: list[str] = []
+    started: bool = False
+    i: int = 0
+    while i < len(ld.stack):
+        m: rc[Module] = ld.stack[i]
+        if not started and m.name == name:
+            started = True
+        if started:
+            parts.append(copy(m.name))
+        i = i + 1
+    parts.append(copy(name))
+    return strings.join(parts, " → ")
+
+
+# ★ 再帰から戻るときに order へ積むと、それだけでトポロジカル順になる
+def load(ld: mut Loader, name: str, path: str, from_: rc[token.Token] | None) -> rc[Module]:
+    found: rc[Module] | None = find_module(ld, name)
+    if found is not None:
+        if found.state == 1:   # 訪問中に再訪 → 循環
+            if from_ is None:
+                panic("循環 import です")
+            else:
+                diag.error_full(from_,
+                                "循環 import です: " + cycle_path(ld, name),
+                                "この import が循環を作っています", None, "",
+                                "モジュールの依存関係は一方通行（DAG）にしてください。" +
+                                "共通部分を 3 つ目のモジュールに切り出すと解けます")
+        return found
+
+    if from_ is not None and not io.exists(path):
+        diag.error_full(from_, "モジュール '" + name + "' が見つかりません",
+                        "この import を解決できません", None, "",
+                        "次のパスを探しました:\n             " + searched_list(ld, name) +
+                        "\n             モジュール名はファイル名（" + langinfo.ext() +
+                        " を除いたもの）です")
+
+    m: rc[Module] = rc(Module(name, path, ld.dir))
+    m.src = lexer.read_source(path)
+    m.state = 1
+
+    # ★ 構文解析より前に表へ載せる（そうしないと循環を検出できない）
+    ld.loaded.append(m)
+
+    toks: list[rc[token.Token]] = lexer.tokenize(m.path, m.src)
+    m.ast = parser.parse(toks)
+
+    ld.stack.append(m)
+    root: rc[ast.Node] | None = m.ast
+    if root is not None:
+        d: rc[ast.Node] | None = root.body
+        while d is not None:
+            if d.kind == ast.ND_IMPORT:
+                if d.name == m.name:
+                    diag.error_at_hint(tok_of(d),
+                                       "モジュールは自分自身を import できません",
+                                       "'" + d.name + "' は自分自身です")
+                k: int = 0
+                while k < len(m.deps):
+                    if m.deps[k].name == d.name:
+                        diag.error_full(tok_of(d),
+                                        "'" + d.name + "' は既に import されています",
+                                        "重複した import です", None, "",
+                                        "同じモジュールを 2 回書く必要はありません")
+                    k = k + 1
+                dep: rc[Module] = load(ld, d.name, path_for(ld, d.name, tok_of(d)),
+                                   tok_of(d))
+                m.deps.append(dep)
+            d = d.next
+    ld.stack = pop_last(ld.stack)
+
+    m.state = 2
+
+    # ★ 再帰から戻るときに積むので、依存が必ず自分より前に並ぶ
+    tail: rc[Module] | None = ld.order_tail
+    if tail is None:
+        ld.order = m
+    else:
+        tail.next = m
+    ld.order_tail = m
+    return m
+
+
+# list に pop が無いので作り直す（同じ割り切り）
+def pop_last(xs: list[rc[Module]]) -> list[rc[Module]]:
+    out: list[rc[Module]] = []
+    i: int = 0
+    while i < len(xs) - 1:
+        out.append(xs[i])
+        i = i + 1
+    return out
+
+def tok_of(n: rc[ast.Node]) -> rc[token.Token]:
+    t: rc[token.Token] | None = n.tok
+    if t is None:
+        panic("module: node without token")
+        return rc(token.Token(0, rc(token.SrcText("", "")), 0, 0, 0, 0))
+    else:
+        return t
+
+
+# 入口ファイルから import をたどって全モジュールを読む
+def load_modules(entry_path: str) -> rc[Module] | None:
+    ld: Loader = Loader(dir_of(entry_path))
+    load(ld, module_name_of(entry_path), entry_path, None)
+    return ld.order
+
+def entry_of(mods: rc[Module] | None, entry_path: str) -> rc[Module] | None:
+    name: str = module_name_of(entry_path)
+    m: rc[Module] | None = mods
+    while m is not None:
+        if m.name == name:
+            return m
+        m = m.next
+    return None

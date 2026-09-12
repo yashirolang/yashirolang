@@ -1,0 +1,13 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# FLAGS: --deny-borrow
+# ERROR: error[E-BORROW-3]: 借用した値 's' をリストに保存できません
+# ERROR: 引数 'src' は借用です（既定）
+# コンテナに入れるのも「保存」。借りたリストの要素も借りもの
+def collect(dst: mut list[str], src: list[str]) -> None:
+    for s in src:
+        dst.append(s)
+
+def main() -> int:
+    out: list[str] = []
+    collect(out, ["a", "b"])
+    return len(out)

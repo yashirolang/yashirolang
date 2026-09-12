@@ -1,0 +1,6 @@
+# ERROR: 閉じ括弧 ')' がありません
+# ERROR: ここに ')' が必要です
+# ERROR: note: 対応する '(' はここです
+# ERROR: = ヒント: 括弧の対応を確認してください
+def main() -> int:
+    return (1 + 2

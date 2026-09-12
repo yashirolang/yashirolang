@@ -1,0 +1,4 @@
+# OUTPUT: 42
+def main() -> int:
+    print(42)
+    return 0

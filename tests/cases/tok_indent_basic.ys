@@ -1,0 +1,4 @@
+# TOKENS: INT NEWLINE INDENT INT NEWLINE DEDENT EOF
+# インデント 1 段 = INDENT 1 個（幅 4 でも INDENT は 1 個）
+1
+    2

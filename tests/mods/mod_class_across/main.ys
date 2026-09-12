@@ -1,0 +1,17 @@
+# OUTPUT: 2
+# OUTPUT: 3
+# OUTPUT: 5
+# 他モジュールのクラスを list に入れ、nullable なフィールドを絞り込んで使う
+import ast
+
+def main() -> int:
+    xs: list[ast.Node] = [ast.make(2), ast.make(3)]
+    print(xs[0].v)
+    print(xs[1].v)
+    a: ast.Node = ast.Node(0)
+    a.next = xs[1]
+    nxt: ast.Node | None = a.next
+    if nxt is not None:
+        nxt.v = 5
+    print(xs[1].v)
+    return 0

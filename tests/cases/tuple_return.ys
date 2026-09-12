@@ -1,0 +1,26 @@
+# OUTPUT: 3 2
+# OUTPUT: 14 2
+# OUTPUT: 7 hello True
+# EXIT: 0
+# 複数戻り値（タプル）と分解代入
+#
+# ★ 分解代入は宣言も兼ねる。型は右辺のタプルから決まるので書かせない。
+
+def divmod2(a: int, b: int) -> (int, int):
+    return a // b, a % b
+
+def mixed() -> (int, str, bool):
+    return 7, "hello", True
+
+def main() -> int:
+    q: int = 0
+    r: int = 0
+    q, r = divmod2(17, 5)
+    print(str(q) + " " + str(r))
+
+    q2, r2 = divmod2(100, 7)
+    print(str(q2) + " " + str(r2))
+
+    a, b, c = mixed()
+    print(str(a) + " " + b + " " + str(c))
+    return 0

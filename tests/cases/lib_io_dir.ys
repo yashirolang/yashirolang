@@ -1,0 +1,35 @@
+# OUTPUT: True True
+# OUTPUT: 2
+# OUTPUT: bye.txt
+# OUTPUT: True False
+# ディレクトリを作る・一覧する・消す。
+# ★ ここまで io は「読む・書く・消す・あるか」だけで、パッケージマネージャを
+#   書いたときに `sys.run("mkdir -p …")` に頼るしかありませんでした。
+import io
+import strings
+import sys
+
+def base() -> str:
+    tmp: str = sys.getenv("TMPDIR")
+    if len(tmp) == 0:
+        return "po-io-dir-test"
+    return tmp + "/po-io-dir-test"
+
+def main() -> int:
+    root: str = base()
+    io.remove_all(root)
+    print(str(io.mkdir_all(root + "/a/b")) + " " + str(io.is_dir(root + "/a/b")))
+
+    io.write_file(root + "/a/hello.txt", "hi")
+    print(str(io.size(root + "/a/hello.txt")))
+
+    io.rename(root + "/a/hello.txt", root + "/a/bye.txt")
+    names: list[str] = io.listdir(root + "/a")
+    out: list[str] = []
+    for n in names:
+        if strings.endswith(n, ".txt"):
+            out.append(copy(n))
+    print(strings.join(out, ","))
+
+    print(str(io.remove_all(root)) + " " + str(io.is_dir(root)))
+    return 0

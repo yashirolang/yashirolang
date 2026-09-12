@@ -1,0 +1,25 @@
+# OUTPUT: 2.0 4.0
+# OUTPUT: 6.0 8.0
+# OUTPUT: True
+# OUTPUT: True
+# OUTPUT: -1.0
+# OUTPUT: 10.0
+# EXIT: 0
+# linalg.Matrix の演算子
+#   ⚠️ '*' は**行列の積**です（numpy と違います。要素ごとの積は mmul）。
+import linalg
+
+def main() -> int:
+    a: linalg.Matrix = linalg.from_rows([[1.0, 2.0], [3.0, 4.0]])
+    b: linalg.Matrix = linalg.identity(2)
+    c: linalg.Matrix = a * b + a
+    print(str(c[0, 0]) + " " + str(c[0, 1]))
+    print(str(c[1, 0]) + " " + str(c[1, 1]))
+    print(str(a * b == a))
+    print(str(a != b))
+    d: linalg.Matrix = -a
+    print(str(d[0, 0]))
+    d[0, 0] = 9.0
+    d[0, 0] += 1.0
+    print(str(d[0, 0]))
+    return 0

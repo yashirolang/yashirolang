@@ -1,0 +1,54 @@
+# OUTPUT: ok
+# EXIT: 0
+# 整数の + - * が桁あふれで panic すること、および
+#   **あふれない計算を誤検出しない**こと。
+#
+#   ⚠️ 「あふれる側」は 1 プロセスで 1 回しか試せない（panic するため）ので、
+#     ここでは誤検出しないことだけを見ます。あふれる側は
+#     rt_overflow_add / rt_overflow_mul / rt_overflow_neg です。
+def main() -> int:
+    ok: bool = True
+    hi: int = 9223372036854775807
+    lo: int = -9223372036854775807 - 1
+
+    # 境界ちょうどは通る
+    if hi + 0 != hi:
+        ok = False
+    if hi - 0 != hi:
+        ok = False
+    if hi * 1 != hi:
+        ok = False
+    if lo + 0 != lo:
+        ok = False
+    if lo * 1 != lo:
+        ok = False
+    if (hi - 1) + 1 != hi:
+        ok = False
+    if (lo + 1) - 1 != lo:
+        ok = False
+
+    # 単項マイナス。⚠️ -lo は表せないので、ここでは試さない（rt_overflow_neg）
+    if 0 - hi != -hi:
+        ok = False
+
+    # 折り返しが要るところは wrap_* で書ける
+    if wrap_add(hi, 1) != lo:
+        ok = False
+    if wrap_mul(hi, 2) != -2:
+        ok = False
+    if wrap_sub(lo, 1) != hi:
+        ok = False
+
+    # ★ 線形合同法（lib/random と同じ形）が書けること
+    st: int = 88172645463325252
+    i: int = 0
+    while i < 3:
+        st = wrap_add(wrap_mul(st, 6364136223846793005), 1442695040888963407)
+        i = i + 1
+    if st == 0:
+        ok = False
+
+    if ok:
+        print("ok")
+        return 0
+    return 1

@@ -1,0 +1,36 @@
+# STAGE0-ONLY: --drop と所有権検査は C 版だけ
+# FLAGS: --drop --deny-move --deny-borrow --deny-mut
+# OUTPUT: 7
+# OUTPUT: 解放 7
+# EXIT: 0
+# **「入れ物に入れて、なおかつ返す」は rc[T] でしか書けない**
+#
+#   所有権だけで書くと、どちらの形にしても壊れます:
+#     ① h.n = t; return t        → E-MOVE-1。--drop で **null を返して落ちる**
+#     ② h.n = ...; return h.n    → E-BORROW-4。**二重解放で落ちる**
+#
+#   共有が本当に必要なら rc[T] を使います（仕様 §7）。
+#   ★ このテストは「所有権モデルは完結している」ことの証拠です。
+#     コンパイラ自身のソースが未移行なだけです（roadmap.md 参照）。
+class Node:
+    v: int
+    def init(self, v: int) -> None:
+        self.v = v
+    def drop(self) -> None:
+        print("解放 " + str(self.v))
+
+class Holder:
+    n: rc[Node] | None
+    def init(self) -> None:
+        self.n = None
+
+def store_and_return(h: mut Holder) -> rc[Node]:
+    t: rc[Node] = rc(Node(7))
+    h.n = t
+    return t
+
+def main() -> int:
+    h: Holder = Holder()
+    r: rc[Node] = store_and_return(h)
+    print(r.v)
+    return 0

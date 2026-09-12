@@ -1,0 +1,17 @@
+# OUTPUT: 1
+# OUTPUT: 2
+# OUTPUT: Fizz
+# OUTPUT: 4
+# OUTPUT: Buzz
+# 言語仕様 8 節のサンプルと同じ書き方（for で FizzBuzz）
+def main() -> int:
+    for i in range(1, 6):
+        if i % 15 == 0:
+            print("FizzBuzz")
+        elif i % 3 == 0:
+            print("Fizz")
+        elif i % 5 == 0:
+            print("Buzz")
+        else:
+            print(str(i))
+    return 0

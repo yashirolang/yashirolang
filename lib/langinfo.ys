@@ -1,0 +1,39 @@
+# langinfo — 言語の「名前」まわりの唯一の定義場所（この言語で書かれた側）
+#
+# ★ C 版の src/langinfo.h と対になります。名前が変わったら、
+#   このファイルと src/langinfo.h と Makefile の LANG_* だけを直せば済みます。
+#   （手で直さずに tools/rename.sh を使ってください）
+#   詳しくは docs/design/naming.md を参照。
+#
+# ★ selfhost/ ではなく lib/ に置いてあるのは、**セルフホスト版コンパイラと
+#   パッケージマネージャの両方から import できる**ようにするためです。
+#   lib/ は常に探索されるので、-I を足す必要がありません。
+#
+# ⚠️ 本言語にはプリプロセッサが無いので、マクロではなく関数で持ちます。
+#   （グローバル定数はモジュールをまたいで読めないため）
+
+NAME: str = "yashirolang"   # 人が読む言語名
+EXT: str = ".ys"            # ソースファイルの拡張子（ドット込み）
+CC: str = "yashirolang"         # コンパイラのコマンド名
+PM: str = "ysm"             # パッケージマネージャのコマンド名
+VERSION: str = "0.15.2"      # 版番号（--version で出す）
+
+def name() -> str:
+    return NAME
+
+def ext() -> str:
+    return EXT
+
+# 拡張子の長さ（"." を含む）
+def ext_len() -> int:
+    return len(EXT)
+
+def cc() -> str:
+    return CC
+
+
+def pm() -> str:
+    return PM
+
+def version() -> str:
+    return VERSION

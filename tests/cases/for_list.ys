@@ -1,0 +1,8 @@
+# OUTPUT: 10
+# OUTPUT: 20
+# OUTPUT: 30
+def main() -> int:
+    xs: list[int] = [10, 20, 30]
+    for x in xs:
+        print(x)
+    return 0

@@ -1,0 +1,6 @@
+# EXIT: 1
+# not は右結合（自己再帰）なので重ねられる
+def main() -> int:
+    if not not True:
+        return 1
+    return 0

@@ -1,0 +1,37 @@
+# STAGE0-ONLY: --drop は C 版だけ（解放の移植は次章）
+# FLAGS: --drop
+# OUTPUT: drop in-work
+# OUTPUT: 1
+# OUTPUT: drop in-work
+# OUTPUT: caught: 失敗
+# EXIT: 0
+# 失敗して抜ける経路でも、スコープの所有値は解放される
+#         （設計 error-handling.md §3.1 の「propagate の前に drop」）
+class IOError:
+    message: str
+
+    def init(self, message: own str) -> None:
+        self.message = message
+
+class Res:
+    tag: str
+
+    def init(self, tag: own str) -> None:
+        self.tag = tag
+
+    def drop(self) -> None:
+        print("drop " + self.tag)
+
+def work(fail: bool) -> int raises IOError:
+    r: Res = Res("in-work")
+    if fail:
+        raise IOError("失敗")
+    return 1
+
+def main() -> int:
+    try:
+        print(str(work(False)))
+        print(str(work(True)))
+    except IOError as e:
+        print("caught: " + e.message)
+    return 0

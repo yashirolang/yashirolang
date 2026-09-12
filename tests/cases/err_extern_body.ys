@@ -1,0 +1,7 @@
+# ERROR: extern def に ':' は書けません
+# ERROR: extern 宣言は本体を持ちません（改行で終わります）
+extern def pl_str_len(s: str) -> int:
+    return 0
+
+def main() -> int:
+    return 0

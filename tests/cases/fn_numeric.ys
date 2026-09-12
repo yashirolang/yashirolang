@@ -1,0 +1,49 @@
+# OUTPUT: ok
+# EXIT: 0
+# 関数を受け取る数値計算。**関数型が入るまで書けなかったもの**
+#   ★ math.sin のように、他モジュールの関数もそのまま渡せます。
+import math
+
+def integrate(f: fn(float) -> float, a: float, b: float, n: int) -> float:
+    # シンプソン則
+    h: float = (b - a) / float(n)
+    s: float = f(a) + f(b)
+    i: int = 1
+    while i < n:
+        w: float = 2.0
+        if i % 2 == 1:
+            w = 4.0
+        s = s + w * f(a + float(i) * h)
+        i = i + 1
+    return s * h / 3.0
+
+def find_root(f: fn(float) -> float, a: float, b: float) -> float:
+    lo: float = a
+    hi: float = b
+    i: int = 0
+    while i < 200:
+        mid: float = (lo + hi) / 2.0
+        if f(lo) * f(mid) <= 0.0:
+            hi = mid
+        else:
+            lo = mid
+        i = i + 1
+    return (lo + hi) / 2.0
+
+def sq(x: float) -> float:
+    return x * x
+
+def main() -> int:
+    ok: bool = True
+    if math.fabs(integrate(sq, 0.0, 1.0, 1000) - 1.0 / 3.0) > 1.0e-12:
+        print("NG 積分 x^2")
+        ok = False
+    if math.fabs(integrate(math.sin, 0.0, math.pi(), 1000) - 2.0) > 1.0e-9:
+        print("NG 積分 sin")
+        ok = False
+    if math.fabs(find_root(math.cos, 0.0, 3.0) - math.pi() / 2.0) > 1.0e-12:
+        print("NG 求根 cos")
+        ok = False
+    if ok:
+        print("ok")
+    return 0

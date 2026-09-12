@@ -1,0 +1,5 @@
+# TOKENS: PUNCT INT PUNCT INT PUNCT NEWLINE EOF
+# ★ 括弧の中では行頭の空白をインデントとして扱わない
+# （字句解析器の性質だけを見るので、プログラムとして正しい必要はない）
+(1 +
+        5)

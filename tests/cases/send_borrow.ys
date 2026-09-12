@@ -1,0 +1,25 @@
+# ERROR: E-SEND-1
+# ERROR: 借りている値 'j' はスレッドに渡せません
+# STAGE0-ONLY: 所有権検査は C 版にしかありません
+# STAGE1-SKIP: 所有権検査（E-SEND-*）は C 版にしかないので、IR を比べられません
+# 借りはスレッドに渡せません（A-18。設計文書 2.1）
+#
+# 🤔 これは**新しい規則ではありません。** 借用検査がすでに持っている
+#   「借りは呼び出しより長生きしない」という不変条件が、そのまま
+#   「借りはスレッドに渡せない」に翻訳されただけです。
+
+class Job:
+    n: int
+
+    def init(mut self, n: int) -> None:
+        self.n = n
+
+def work(j: Job) -> int:
+    return j.n
+
+def outer(j: Job) -> int:
+    t: Thread[int] = spawn(work, j)
+    return t.join()
+
+def main() -> int:
+    return outer(Job(1))

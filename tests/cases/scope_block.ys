@@ -1,0 +1,7 @@
+# OUTPUT: 1
+# ブロック内で宣言した変数はブロックを抜けると見えなくなる
+def main() -> int:
+    if True:
+        y: int = 1
+        print(y)
+    return 0

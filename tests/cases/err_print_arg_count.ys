@@ -1,0 +1,4 @@
+# ERROR: print は 1 個の引数を取りますが、2 個渡されました
+def main() -> int:
+    print(1, 2)
+    return 0

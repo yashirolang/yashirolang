@@ -1,0 +1,6 @@
+# ERROR: None 型の値は存在しないのでフィールドにできません
+class P:
+    x: None
+
+def main() -> int:
+    return 0

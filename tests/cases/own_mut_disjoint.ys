@@ -1,0 +1,19 @@
+# STAGE0-ONLY: 可変性の検査は C 版だけ
+# FLAGS: --deny-move --deny-borrow --deny-mut
+# EXIT: 1
+# 別々のフィールドは重ならないので、可変と共有で同時に渡してよい
+class Pair:
+    a: list[int]
+    b: list[int]
+
+    def init(self) -> None:
+        self.a = []
+        self.b = []
+
+def fill(xs: mut list[int], ys: list[int]) -> None:
+    xs.append(len(ys))
+
+def main() -> int:
+    p: Pair = Pair()
+    fill(p.a, p.b)
+    return len(p.a)

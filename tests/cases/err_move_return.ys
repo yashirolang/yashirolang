@@ -1,0 +1,12 @@
+# STAGE0-ONLY: 所有権検査は C 版だけ
+# FLAGS: --deny-move
+# ERROR: error[E-MOVE-1]: 移動済みの値 'xs' を使っています
+# ERROR: ここで使われています
+# return も移動する場所。移動済みの値は返せない
+def steal(xs: own list[int]) -> list[int]:
+    ys: list[int] = xs
+    print(len(ys))
+    return xs
+
+def main() -> int:
+    return len(steal([1, 2]))

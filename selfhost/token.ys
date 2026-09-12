@@ -1,0 +1,115 @@
+# token — トークンの表現
+#
+# ★ src/lexer.h の TokenKind と Token を本言語に移したものです。
+#   値と順序は C 版に揃えます（揃えないと --dump-tokens の比較ができません）。
+#
+# ⚠️ 本言語には enum がないので、グローバル定数で代用します
+#   （言語仕様 6.2：初期化式はコンパイル時定数）。
+
+TK_EOF: int = 0
+TK_INT: int = 1
+TK_PUNCT: int = 2
+TK_IDENT: int = 3
+TK_KEYWORD: int = 4
+TK_STR: int = 5
+TK_NEWLINE: int = 6
+TK_INDENT: int = 7
+TK_DEDENT: int = 8
+TK_FLOAT: int = 9    # C 版の TokenKind と同じ値にすること
+TK_FSTRING: int = 10  # f"..."（波括弧は残したまま）
+
+# --dump-tokens に出す名前（C 版の token_kind_name と同じ文字列）
+def kind_name(kind: int) -> str:
+    if kind == TK_EOF:
+        return "EOF"
+    if kind == TK_INT:
+        return "INT"
+    if kind == TK_PUNCT:
+        return "PUNCT"
+    if kind == TK_IDENT:
+        return "IDENT"
+    if kind == TK_KEYWORD:
+        return "KEYWORD"
+    if kind == TK_STR:
+        return "STR"
+    if kind == TK_NEWLINE:
+        return "NEWLINE"
+    if kind == TK_INDENT:
+        return "INDENT"
+    if kind == TK_DEDENT:
+        return "DEDENT"
+    if kind == TK_FLOAT:
+        return "FLOAT"
+    if kind == TK_FSTRING:
+        return "FSTRING"
+    panic("token.kind_name: unknown kind")
+    return ""
+
+
+# ★ **ソース全体はここに 1 つだけ置き、全トークンで共有します。**
+#
+#   ⚠️ 以前は Token が file と src（ソース全文）を own で持っていました。
+#     複製すると「トークン数 × ソース長」で O(n²) になるため所有権ごと
+#     渡していたのですが、字句解析器の側では self.src を渡すことになり、
+#     **借りたものを移動している**（E-BORROW-1）状態でした。
+#
+#   ★ rc[SrcText] にすると、複製せずに共有でき、所有権も筋が通ります。
+#     ⚠️ `rc[str]` は書けません（rc[T] はクラス専用）。だから包みます。
+class SrcText:
+    file: str    # ファイル名
+    text: str    # ソース全体
+
+    def init(self, file: own str, text: own str) -> None:
+        self.file = file
+        self.text = text
+
+
+class Token:
+    kind: int
+
+    # ── 位置情報（エラー報告に使う。全トークンが必ず持つ）──
+    src: rc[SrcText]   # ファイル名とソース全体（**全トークンで共有**）
+    line: int
+    col: int         # 行頭からのバイト数（1 起算）。C 版の Token.col と同じ
+
+    # ★ C 版と同じ形に戻しました。
+    #   C 版の Token は `const char *line_start`（ソースを指すポインタ）を
+    #   持ちます。本言語にポインタは無いので「ソースそのもの + 行頭の添字」で
+    #   同じことを表します。str は参照なので、複製は起きません。
+    line_start: int  # 行頭のバイト位置
+    len: int         # トークンのバイト長（下線の長さに使う）
+
+    # ── ソース上の実体 ──
+    #
+    # ⚠️ C 版は「ソースを指すポインタ + 長さ」でしたが、本言語には
+    #   ポインタがないので、その範囲を複製して持ちます。
+    raw: str   # 見た目そのまま（STR なら引用符やエスケープを含む）
+    text: str  # 値（STR はエスケープ解決後 / IDENT・KEYWORD は名前）
+    ival: int  # TK_INT の値
+    slen: int  # text のバイト長
+
+    # ⚠️ **ソース全体を複製してはいけません。**
+    #   トークンごとに複製すると「トークン数 × ソース長」で **O(n²)** に
+    #   なります（計測：字句解析だけで 0.55 秒、C 版の全工程
+    #   0.024 秒に対して 23 倍）。
+    #   ★ `rc[SrcText]` で**共有**します。実体は 1 つのままで、
+    #     所有権の筋も通ります（以前は own で持ち回っていたので、
+    #     字句解析器の側が「借りたものを移動している」状態でした）。
+    def init(self, kind: int, src: rc[SrcText], line: int, col: int,
+             line_start: int, length: int) -> None:
+        self.kind = kind
+        self.src = src
+        self.line = line
+        self.col = col
+        self.line_start = line_start
+        self.len = length
+        self.raw = ""
+        self.text = ""
+        self.ival = 0
+        self.slen = 0
+
+    def is_punct(self, op: str) -> bool:
+        return self.kind == TK_PUNCT and self.raw == op
+
+    def is_kw(self, kw: str) -> bool:
+        return self.kind == TK_KEYWORD and self.text == kw

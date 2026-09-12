@@ -1,0 +1,10 @@
+# STAGE0-ONLY: 所有権検査は C 版だけ
+# FLAGS: --deny-move
+# ERROR: error[E-MOVE-1]: 移動済みの値 'a' を使っています
+# ERROR: 'a' はここで移動しました
+# append した要素はリストのものになる（言語仕様 v2 §3.1）
+def main() -> int:
+    a: list[int] = [1]
+    xss: list[list[int]] = []
+    xss.append(a)
+    return len(a) + len(xss)

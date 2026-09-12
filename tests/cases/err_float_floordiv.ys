@@ -1,0 +1,5 @@
+# ERROR: 型 'float' に演算子 '//' は適用できません
+# float に '//' と '%' は使えない（int に変換してから）
+def main() -> int:
+    print(7.0 // 2.0)
+    return 0

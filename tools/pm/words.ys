@@ -1,0 +1,61 @@
+# words — 行を語に分ける小道具
+#
+# ★ package.pkg も package.lock も「1 行 = 1 事実」の行指向です。
+#   構文解析器を持ち込まないのは、**手で読めて手で直せる**ことを
+#   ロックファイルの性質として優先したからです。
+import strings
+
+# 空白（空白・タブ）で区切って、空の語を落とす
+def fields(line: str) -> list[str]:
+    flat: str = strings.replace(copy(line), "\t", " ")
+    out: list[str] = []
+    for w in strings.split(flat, " "):
+        if len(w) > 0:
+            out.append(copy(w))
+    return out
+
+# 2 語目以降を 1 つの文字列に戻す（値に空白が入る欄のため）
+def rest(ws: list[str], from_: int) -> str:
+    out: list[str] = []
+    i: int = from_
+    while i < len(ws):
+        out.append(copy(ws[i]))
+        i = i + 1
+    return strings.join(out, " ")
+
+# コメント（# から行末）と前後の空白を落とす
+def strip_comment(line: str) -> str:
+    i: int = strings.find(line, "#")
+    if i < 0:
+        return strings.strip(line)
+    return strings.strip(strings.substr(line, 0, i))
+
+# 本言語の識別子として使える名前か（モジュール名・パッケージ名の検査）
+#
+# ⚠️ ここを緩めると、取ってきたファイル名がそのまま import 名になります。
+#   外から来た名前を検査せずに使わないでください。
+def is_ident(s: str) -> bool:
+    if len(s) == 0:
+        return False
+    i: int = 0
+    while i < len(s):
+        b: int = strings.byte_at(s, i)
+        low: bool = b >= 97 and b <= 122
+        up: bool = b >= 65 and b <= 90
+        dig: bool = b >= 48 and b <= 57
+        if not (low or up or b == 95 or (i > 0 and dig)):
+            return False
+        i = i + 1
+    return True
+
+# git の SHA として使える形か（16 進 40 文字。ロックの検証に使う）
+def is_sha(s: str) -> bool:
+    if len(s) != 40:
+        return False
+    i: int = 0
+    while i < len(s):
+        b: int = strings.byte_at(s, i)
+        if not ((b >= 48 and b <= 57) or (b >= 97 and b <= 102)):
+            return False
+        i = i + 1
+    return True

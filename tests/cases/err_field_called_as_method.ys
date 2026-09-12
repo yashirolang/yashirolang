@@ -1,0 +1,8 @@
+# ERROR: クラス 'C' にメソッド 'v' はありません
+# ERROR: 'v' はフィールドです。'()' を外してください
+class C:
+    v: int
+
+def main() -> int:
+    c: C = C()
+    return c.v()

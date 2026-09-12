@@ -1,0 +1,88 @@
+# types — シンボル表
+#
+# ★ C 版の src/sema.c 前半（rc[FuncSig] / rc[VarEntry] / rc[Scope] / rc[ModuleSyms]）にあたります。
+#
+# ⚠️ Type / Class / Field は **ast** に置きました。C 版では types.h と ast.h に
+#   分かれていますが、本言語は**循環 import を禁止している**ため
+#   （判断 150）、Node ↔ Type ↔ Class を相互に参照させるには
+#   同じモジュールに置くしかありません。
+#
+#   さらに Class は「定義されたモジュール」を指す必要がありますが、
+#   rc[ModuleSyms] はこちら側にあるので、**モジュール名（str）で持ちます**。
+#   ポインタの代わりに名前で引く——これも循環を切るための形です。
+#
+#   ★ 「言語の制限が設計を決めた」例です。
+import strings
+import ast
+import module
+import token
+
+# 関数のシグネチャ表
+class FuncSig:
+    name: str        # 表を引く鍵（"add" / "Token.show"）
+    ir_name: str     # IR 上の名前（"lexer.add" / "lexer.Token.show"）
+    ret: rc[ast.Type] | None
+    params: list[rc[ast.Type]]
+    pnames: list[str]
+    nparams: int
+    tok: rc[token.Token] | None
+    owner: rc[ModuleSyms] | None
+    next: rc[FuncSig] | None
+
+    # ★ ジェネリック関数のテンプレート（実体なら None）
+    tmpl: rc[ast.Node] | None
+
+    # ── raises 節（宣言されたエラーのクラス）──
+    raises_cls: list[rc[ast.Class]]
+
+    def init(self, name: str, tok: rc[token.Token] | None) -> None:
+        self.name = copy(name)
+        self.ir_name = ""
+        self.nparams = 0
+        self.params = []
+        self.pnames = []
+        self.tok = tok
+        self.raises_cls = []
+
+
+class VarEntry:
+    name: str
+    ir_name: str     # LLVM 上の名前（記号 % / @ まで含む）
+    is_global: bool
+
+    # ★ 型が 2 つ（宣言された型と、絞り込まれた今の型）
+    declared: rc[ast.Type] | None
+    type: rc[ast.Type] | None
+
+    decl_tok: rc[token.Token] | None
+    next: rc[VarEntry] | None
+
+    def init(self, name: str, tok: rc[token.Token] | None) -> None:
+        self.name = copy(name)
+        self.ir_name = ""
+        self.is_global = False
+        self.decl_tok = tok
+
+
+class Scope:
+    parent: rc[Scope] | None
+    vars: rc[VarEntry] | None
+
+    def init(self, parent: rc[Scope] | None) -> None:
+        self.parent = parent
+
+
+# モジュールごとのシンボル表
+class ModuleSyms:
+    mod: rc[module.Module] | None
+    funcs: rc[FuncSig] | None
+    classes: rc[ast.Class] | None
+    ifaces: rc[ast.Iface] | None
+    globals: rc[Scope] | None
+    next: rc[ModuleSyms] | None
+
+    def init(self, mod: rc[module.Module] | None) -> None:
+        self.mod = mod
+        self.globals = rc(Scope(None))
+
+

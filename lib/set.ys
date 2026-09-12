@@ -1,0 +1,105 @@
+# set — 集合
+#
+# ★ 中身は dict.Dict[T, bool] です。**新しい構文は 1 つも増えません**
+#   （複素数や FFT を入れたときと同じやり方。ロードマップ 優先度 C）。
+#
+#   Python の set との違い:
+#     ・リテラル {1, 2} は書けません（`s: Set[int] = Set()` を作って add します）
+#       ⚠️ 型引数は**左辺の注釈**が渡します。`Set[int]()` とは書けません
+#         （ジェネリクスの決まり。dict.Dict と同じです）
+#     ・`in` は `s.has(x)` か `x in s`（__contains__ を持っています）
+#     ・和・積・差はメソッド（`|` `&` `-` の多重定義は入れていません。
+#       演算子の意味は左辺の型で決まるので、集合演算のつもりで書いた `-` が
+#       別の型で違う意味になるのを避けたいためです）
+import dict
+import lists
+
+class Set[T]:
+    d: dict.Dict[T, bool]
+
+    def init(self) -> None:
+        self.d = dict.Dict()
+
+    def len(self) -> int:
+        return self.d.len()
+
+    def has(self, x: T) -> bool:
+        return self.d.has(x)
+
+    # `x in s` と書けるようにする（in は右辺の型で決まります）
+    def __contains__(self, x: T) -> bool:
+        return self.d.has(x)
+
+    # 入れる。**既にあれば何も起きません**（返り値は「新しく入ったか」）
+    def add(mut self, x: own T) -> bool:
+        if self.d.has(x):
+            return False
+        self.d.set(x, True)
+        return True
+
+    # 消す（返り値は「あったか」）
+    def remove(mut self, x: T) -> bool:
+        return self.d.remove(x)
+
+    # 中身を並べる。⚠️ **並びは入れた順ではありません**（表の並びです）
+    def items(mut self) -> list[T]:
+        return self.d.keys()
+
+
+# ── 作る ────────────────────────────────────────────────────
+
+def of[T](xs: list[T]) -> Set[T]:
+    s: Set[T] = Set()
+    for x in xs:
+        s.add(copy(x))
+    return s
+
+
+# ── 集合演算 ────────────────────────────────────────────────
+#
+# ★ どれも**新しい集合を返します**。引数は変えません。
+
+def union[T](a: mut Set[T], b: mut Set[T]) -> Set[T]:
+    out: Set[T] = Set()
+    for x in a.items():
+        out.add(copy(x))
+    for y in b.items():
+        out.add(copy(y))
+    return out
+
+def intersection[T](a: mut Set[T], b: mut Set[T]) -> Set[T]:
+    out: Set[T] = Set()
+    for x in a.items():
+        if b.has(x):
+            out.add(copy(x))
+    return out
+
+def difference[T](a: mut Set[T], b: mut Set[T]) -> Set[T]:
+    out: Set[T] = Set()
+    for x in a.items():
+        if not b.has(x):
+            out.add(copy(x))
+    return out
+
+# a のすべてが b にあるか
+def is_subset[T](a: mut Set[T], b: mut Set[T]) -> bool:
+    for x in a.items():
+        if not b.has(x):
+            return False
+    return True
+
+def equals[T](a: mut Set[T], b: mut Set[T]) -> bool:
+    if a.len() != b.len():
+        return False
+    return is_subset(a, b)
+
+# 重複を落として、**元の並びのまま**返す
+#
+# ★ items() の並びは表の都合で決まるので、「順番を保ちたい」ときはこちらです。
+def dedup[T](xs: list[T]) -> list[T]:
+    seen: Set[T] = Set()
+    out: list[T] = []
+    for x in xs:
+        if seen.add(copy(x)):
+            out.append(copy(x))
+    return out

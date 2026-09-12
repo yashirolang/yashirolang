@@ -1,0 +1,12 @@
+# OUTPUT: 1
+# OUTPUT: 2
+# ★ 兄弟スコープの同名変数。シャドーイングではないので許される。
+#   IR 名は sema が %x と %x.1 に振り分ける（その前提が崩れる例）
+def main() -> int:
+    if True:
+        x: int = 1
+        print(x)
+    if True:
+        x: int = 2
+        print(x)
+    return 0

@@ -1,0 +1,12 @@
+# OUTPUT: 0
+# OUTPUT: 5
+# OUTPUT: 5
+# 他モジュールのグローバル変数は読み書きできる（external global）
+import counter
+
+def main() -> int:
+    print(counter.n)
+    counter.n = 5
+    print(counter.n)
+    print(counter.get())
+    return 0

@@ -1,0 +1,7 @@
+# ERROR: 'len' は再定義できません
+# ERROR: = ヒント: len は組み込み関数です
+def len(s: str) -> int:
+    return 0
+
+def main() -> int:
+    return 0

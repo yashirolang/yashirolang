@@ -1,0 +1,9 @@
+# EXIT: 3
+# ★ exit() も戻らない（ランタイム側で _Noreturn）。
+def pick(n: int) -> int:
+    if n > 0:
+        return 3
+    exit(9)
+
+def main() -> int:
+    return pick(1)

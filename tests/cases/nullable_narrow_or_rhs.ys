@@ -1,0 +1,18 @@
+# OUTPUT: 1
+# ★ or の rhs は lhs が偽のときだけ評価される。
+#   その間は「lhs が成り立たない側」で絞り込める。
+class Box:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+def missing_or_zero(b: Box | None) -> bool:
+    return b is None or b.v == 0
+
+def main() -> int:
+    if missing_or_zero(None):
+        print(1)
+    if missing_or_zero(Box(5)):
+        print(999)
+    return 0

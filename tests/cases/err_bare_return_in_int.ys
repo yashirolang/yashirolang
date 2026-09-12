@@ -1,0 +1,7 @@
+# ERROR: 関数 'f' は 'int' を返さなければなりません
+# ERROR: この return には値がありません
+def f() -> int:
+    return
+
+def main() -> int:
+    return f()

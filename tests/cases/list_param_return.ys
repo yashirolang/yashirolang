@@ -1,0 +1,15 @@
+# OUTPUT: 6
+def total(xs: list[int]) -> int:
+    t: int = 0
+    i: int = 0
+    while i < len(xs):
+        t += xs[i]
+        i += 1
+    return t
+
+def make() -> list[int]:
+    return [1, 2, 3]
+
+def main() -> int:
+    print(total(make()))
+    return 0

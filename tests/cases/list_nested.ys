@@ -1,0 +1,10 @@
+# OUTPUT: 4
+# OUTPUT: 2
+# list[list[int]] — type_equal の再帰比較が要る形
+def main() -> int:
+    grid: list[list[int]] = []
+    row: list[int] = [3, 4]
+    grid.append(row)
+    print(grid[0][1])
+    print(len(grid[0]))
+    return 0

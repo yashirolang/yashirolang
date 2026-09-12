@@ -1,0 +1,14 @@
+# ERROR: self に 'own' は書けません
+# ERROR: = ヒント: self の所有権は奪えません（'mut self' なら書けます）
+# self の所有権は奪えない（呼び出し元が持ち続ける）
+class C:
+    n: int
+
+    def init(self) -> None:
+        self.n = 0
+
+    def g(own self) -> int:
+        return self.n
+
+def main() -> int:
+    return 0

@@ -1,0 +1,24 @@
+# OUTPUT: True
+# OUTPUT: False
+# OUTPUT: False
+# OUTPUT: False
+# OUTPUT: False
+# OUTPUT: inf
+# OUTPUT: -inf
+# OUTPUT: nan
+# EXIT: 0
+# NaN の比較（IEEE 754）
+#   ★ '!=' だけ unordered。NaN != NaN は **True** でなければならない
+#     （これが x != x という NaN の判定になる）。それ以外の比較は全部 False。
+def main() -> int:
+    inf: float = 1.0e308 * 10.0
+    nan: float = inf - inf
+    print(nan != nan)
+    print(nan == nan)
+    print(nan < 1.0)
+    print(nan > 1.0)
+    print(nan >= nan)
+    print(inf)
+    print(-inf)
+    print(nan)
+    return 0

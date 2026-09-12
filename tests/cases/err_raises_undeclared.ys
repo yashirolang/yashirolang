@@ -1,0 +1,26 @@
+# ERROR: error[E-RAISE-2]: エラー 'ParseError' が宣言されていません
+# ERROR: この関数の raises に 'ParseError' を足すか、try で捕まえてください
+# 宣言していないエラーは通り抜けられない
+class IOError:
+    message: str
+
+    def init(self, message: own str) -> None:
+        self.message = message
+
+class ParseError:
+    line: int
+
+    def init(self, line: int) -> None:
+        self.line = line
+
+def boom() -> int raises ParseError:
+    raise ParseError(1)
+
+def wrap() -> int raises IOError:
+    return boom()
+
+def main() -> int:
+    try:
+        return wrap()
+    except IOError as e:
+        return 1

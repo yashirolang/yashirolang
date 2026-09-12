@@ -1,0 +1,9 @@
+# OUTPUT: True
+# OUTPUT: False
+# ★ 内容の比較（ポインタ比較ではない）
+def main() -> int:
+    a: str = "abc"
+    b: str = "ab" + "c"
+    print(a == b)
+    print(a != b)
+    return 0

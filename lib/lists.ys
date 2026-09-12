@@ -1,0 +1,167 @@
+# lists — 型を問わないリスト操作
+#
+# ★ **ジェネリック関数**が入って書けるようになりました。それまでは
+#   `linalg` の `list[float]` 専用版しかなく、`list[int]` や `list[str]`
+#   には使えませんでした。
+#
+# ⚠️ 比較を伴うもの（max / min / sort / index_of）は `<` や `==` を使うので、
+#   **それが定義された型**にしか使えません。クラスを渡すと、実体化した
+#   ときに「演算子が適用できません」と言われます（型制約が無いため）。
+#
+# ⚠️ 要素を返すもの（first / last / max_of）は **借用を返します**。
+#   元のリストが生きているあいだだけ有効です。
+
+# ── 作る ────────────────────────────────────────────────────
+
+# ⚠️ **「n 個の x で埋める」は汎用には書けません。**
+#   同じ値を n 個入れるには所有権が n 個要りますが、複製の手段が
+#   型ごとに違います（str は copy、クラスは自分で作る）。
+#   `list[int]` / `list[float]` なら `linalg.full` を、
+#   それ以外は呼び出し側で作ってください:
+#
+#       out: list[Node] = []
+#       for i in range(n):
+#           out.append(Node())
+
+# 逆順に見るための**添字の並び**
+# ⚠️ 要素そのものを並べ替えた複製は汎用には作れません（下の注意を参照）
+def reversed_indices[T](xs: list[T]) -> list[int]:
+    out: list[int] = []
+    i: int = len(xs) - 1
+    while i >= 0:
+        out.append(i)
+        i = i - 1
+    return out
+
+
+# ── 調べる ──────────────────────────────────────────────────
+
+# 最初に x が現れる位置。無ければ -1
+def index_of[T](xs: list[T], x: T) -> int:
+    for i, v in enumerate(xs):
+        if v == x:
+            return i
+    return -1
+
+def contains[T](xs: list[T], x: T) -> bool:
+    return index_of(xs, x) >= 0
+
+# 条件を満たす数
+def count_if[T](xs: list[T], pred: fn(T) -> bool) -> int:
+    n: int = 0
+    for x in xs:
+        if pred(x):
+            n = n + 1
+    return n
+
+def all_of[T](xs: list[T], pred: fn(T) -> bool) -> bool:
+    for x in xs:
+        if not pred(x):
+            return False
+    return True
+
+def any_of[T](xs: list[T], pred: fn(T) -> bool) -> bool:
+    for x in xs:
+        if pred(x):
+            return True
+    return False
+
+
+# ── 取り出す ────────────────────────────────────────────────
+#
+# ⚠️ 空のときに返す値を呼び出し側から渡してもらいます。
+#   `T | None` は class と str にしか付けられないので、汎用には使えません。
+
+def first_or[T](xs: list[T], default: own T) -> T:
+    if len(xs) == 0:
+        return default
+    return xs[0]
+
+def last_or[T](xs: list[T], default: own T) -> T:
+    if len(xs) == 0:
+        return default
+    return xs[len(xs) - 1]
+
+# 最大・最小。⚠️ 空のリストは panic します（返す値が決められないため）
+def max_of[T](xs: list[T]) -> T:
+    if len(xs) == 0:
+        panic("lists.max_of: 空のリストです")
+    m: int = 0
+    for i, v in enumerate(xs):
+        if v > xs[m]:
+            m = i
+    return xs[m]
+
+def min_of[T](xs: list[T]) -> T:
+    if len(xs) == 0:
+        panic("lists.min_of: 空のリストです")
+    m: int = 0
+    for i, v in enumerate(xs):
+        if v < xs[m]:
+            m = i
+    return xs[m]
+
+
+# ── 作り変える ──────────────────────────────────────────────
+
+# ⚠️ **要素を「別のリストに移す」ものは汎用には書けません。**
+#
+#   filter / map / sorted のように「新しいリストに 1 つずつ入れる」形は、
+#   借りた要素を別の入れ物に保存することになり E-BORROW-3 になります。
+#   T が所有型（str / list / class）のときに壊れるためです。
+#
+#   ★ 代わりに **添字を返す**ものを置きます。中身は元のリストが持ったまま
+#     なので、所有権が動きません。
+#
+#       for i in lists.indices_where(xs, pred):
+#           use(xs[i])
+#
+#   ⚠️ 並べ替えも同じ理由で「順番（添字の並び）」を返します:
+#
+#       for i in lists.sorted_indices(xs):
+#           print(xs[i])
+#
+#   `list[float]` を実際に並べ替えたいときは `stats.sorted` を使ってください
+#   （float はコピー型なので移せます）。
+
+# 条件を満たす要素の**添字**
+def indices_where[T](xs: list[T], keep: fn(T) -> bool) -> list[int]:
+    out: list[int] = []
+    for i, x in enumerate(xs):
+        if keep(x):
+            out.append(i)
+    return out
+
+# 昇順に見るための**添字の並び**（元は壊しません）。マージソート
+def sorted_indices[T](xs: list[T]) -> list[int]:
+    idx: list[int] = []
+    for i, x in enumerate(xs):
+        idx.append(i)
+    return msort(xs, idx)
+
+def msort[T](xs: list[T], idx: list[int]) -> list[int]:
+    if len(idx) <= 1:
+        return idx[0:len(idx)]
+    mid: int = len(idx) // 2
+    return mmerge(xs, msort(xs, idx[0:mid]), msort(xs, idx[mid:len(idx)]))
+
+def mmerge[T](xs: list[T], a: list[int], b: list[int]) -> list[int]:
+    out: list[int] = []
+    i: int = 0
+    j: int = 0
+    while i < len(a) and j < len(b):
+        # ⚠️ **not (b < a)** で比べます。同じ値のときに右を先に取ると
+        #   安定でなくなります。
+        if not (xs[b[j]] < xs[a[i]]):
+            out.append(a[i])
+            i = i + 1
+        else:
+            out.append(b[j])
+            j = j + 1
+    while i < len(a):
+        out.append(a[i])
+        i = i + 1
+    while j < len(b):
+        out.append(b[j])
+        j = j + 1
+    return out

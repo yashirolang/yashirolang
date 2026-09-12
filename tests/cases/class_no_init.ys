@@ -1,0 +1,18 @@
+# OUTPUT: 0
+# OUTPUT: False
+# OUTPUT: 
+# OUTPUT: 0
+# init が無いクラス。pl_alloc(calloc) のゼロ埋め＋str/list の既定値（12.6）
+class Box:
+    n: int
+    flag: bool
+    s: str
+    xs: list[int]
+
+def main() -> int:
+    b: Box = Box()
+    print(b.n)
+    print(b.flag)
+    print(b.s)
+    print(len(b.xs))
+    return 0

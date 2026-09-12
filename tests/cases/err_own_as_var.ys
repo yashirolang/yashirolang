@@ -1,0 +1,6 @@
+# ERROR: 'own' は予約語です
+# ERROR: = ヒント: 予約語は変数名として使えません
+# own は予約語になったので変数名には使えない
+def main() -> int:
+    own: int = 1
+    return own

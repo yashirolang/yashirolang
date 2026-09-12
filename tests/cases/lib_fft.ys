@@ -1,0 +1,52 @@
+# OUTPUT: constant: True
+# OUTPUT: peaks at 1 and 7: True
+# OUTPUT: round trip: True
+# OUTPUT: not a power of two: True
+# EXIT: 0
+# 高速フーリエ変換（lib/fft）
+#   ★ 「複素数が無いと書けない」ものの代表（レビュー D1）。
+#     言語は変えず、lib/complex と演算子の多重定義だけで書けています。
+import fft
+import complex
+import math
+
+def main() -> int:
+    # ① 定数列 → X[0] だけが N、あとは 0
+    #   ⚠️ str(float) が最短の往復表記になったので、**そのまま出しません**。
+    #     0 のはずの成分は 4.44e-16 のような値になり、機械や clang の版で
+    #     下位桁が変わりうるためです。許容誤差で見ます。
+    ones: list[float] = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    sp0: list[float] = fft.spectrum(ones)
+    flat: bool = math.fabs(sp0[0] - 8.0) < 1.0e-9
+    for k in range(1, 8):
+        if math.fabs(sp0[k]) > 1.0e-9:
+            flat = False
+    print("constant: " + str(flat))
+
+    # ② 周期 N の正弦波 1 本 → k=1 と k=N-1 に N/2 のピーク
+    ys: list[float] = []
+    for i in range(8):
+        ys.append(math.sin(2.0 * math.pi() * float(i) / 8.0))
+    sp: list[float] = fft.spectrum(ys)
+    ok: bool = (math.fabs(sp[1] - 4.0) < 1.0e-9 and
+                math.fabs(sp[7] - 4.0) < 1.0e-9 and
+                math.fabs(sp[0]) < 1.0e-9 and math.fabs(sp[2]) < 1.0e-9)
+    print("peaks at 1 and 7: " + str(ok))
+
+    # ③ ifft(fft(x)) が元に戻る
+    xs: list[float] = []
+    s: int = 7
+    for i in range(16):
+        s = (s * 1103515 + 12345) % 2147483648
+        xs.append(float(s % 1000) / 100.0)
+    back: list[complex.Complex] = fft.ifft(fft.fft_real(xs))
+    worst: float = 0.0
+    for i in range(16):
+        d: float = math.fabs(back[i].re - xs[i]) + math.fabs(back[i].im)
+        if d > worst:
+            worst = d
+    print("round trip: " + str(worst < 1.0e-12))
+
+    # ④ 2 のべき乗でない長さは弾く
+    print("not a power of two: " + str(not fft.is_pow2(12)))
+    return 0

@@ -1,0 +1,35 @@
+# STAGE0-ONLY: 可変性の検査は C 版だけ
+# FLAGS: --deny-move --deny-borrow --deny-mut
+# EXIT: 6
+# mut を書いてあれば書き換えてよい。
+#         ★ 局所変数の再代入と、init での self への代入には mut が要らない（仕様 §5.1）
+class Counter:
+    n: int
+
+    def init(self) -> None:
+        self.n = 0
+
+    def bump(mut self) -> None:
+        self.n = self.n + 1
+
+    def get(self) -> int:
+        return self.n
+
+def fill(xs: mut list[int], v: int) -> None:
+    xs.append(v)
+
+def total(xs: list[int]) -> int:
+    s: int = 0
+    for x in xs:
+        s = s + x
+    return s
+
+def main() -> int:
+    c: Counter = Counter()
+    c.bump()
+    c.bump()
+    xs: list[int] = []
+    fill(xs, 3)
+    i: int = 0
+    i = i + 1
+    return c.get() + total(xs) + i

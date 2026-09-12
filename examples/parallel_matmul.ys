@@ -1,0 +1,66 @@
+# scoped spawn + 可変長 spawn + ベクトル化：写しを配らずに並列化する
+import sys
+import time
+
+# ★ a と b は**借り**（読むだけ）。写しを取りません。
+#   受け持ちぶんの結果だけを own で返します。
+def rows(a: list[float], b: list[float], n: int, r0: int, r1: int) -> list[float]:
+    out: list[float] = []
+    t: int = 0
+    while t < (r1 - r0) * n:
+        out.append(0.0)
+        t = t + 1
+    i: int = 0
+    while i < r1 - r0:
+        k: int = 0
+        while k < n:
+            aik: float = a[(r0 + i) * n + k]
+            j: int = 0
+            while j < n:
+                out[i * n + j] = out[i * n + j] + aik * b[k * n + j]
+                j = j + 1
+            k = k + 1
+        i = i + 1
+    return out
+
+def main() -> int:
+    n: int = 512
+    a: list[float] = []
+    b: list[float] = []
+    t: int = 0
+    while t < n * n:
+        a.append(float(t % 7) * 0.5)
+        b.append(float(t % 5) * 0.25)
+        t = t + 1
+
+    cores: int = sys.cpu_count()
+
+    # ── 1 コア ──
+    t0: int = time.monotonic_ns()
+    one: list[float] = rows(a, b, n, 0, n)
+    t1: int = time.monotonic_ns()
+    print("1 コア : " + str((t1 - t0) // 1000000) + " ms")
+
+    # ── コア数ぶん ──
+    t2: int = time.monotonic_ns()
+    parts: list[list[float]] = []
+    scope:
+        ts: list[Thread[list[float]]] = []
+        p: int = 0
+        while p < cores:
+            ts.append(spawn(rows, a, b, n, n * p // cores, n * (p + 1) // cores))
+            p = p + 1
+        for th in ts:
+            parts.append(th.join())
+    t3: int = time.monotonic_ns()
+    print(str(cores) + " コア: " + str((t3 - t2) // 1000000) + " ms")
+
+    same: bool = True
+    q: int = 0
+    for part in parts:
+        for x in part:
+            if x != one[q]:
+                same = False
+            q = q + 1
+    print("検算（全要素一致）: " + str(same))
+    return 0

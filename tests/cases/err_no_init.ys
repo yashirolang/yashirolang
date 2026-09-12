@@ -1,0 +1,5 @@
+# ERROR: 変数宣言には初期化式が必要です
+# ERROR: = ヒント: 本言語では未初期化の変数を作れません
+def main() -> int:
+    x: int
+    return x

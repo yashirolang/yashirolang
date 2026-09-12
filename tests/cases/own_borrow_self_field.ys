@@ -1,0 +1,22 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# FLAGS: --deny-move --deny-borrow
+# OUTPUT: abc
+# OUTPUT: a
+# 唯一の例外 — self のフィールドの借用は返してよい（仕様 v2 §4.5）
+class Lexer:
+    src: str
+
+    def init(self, src: own str) -> None:
+        self.src = src
+
+    def source(self) -> str:
+        return self.src
+
+    def head(self) -> str:
+        return self.src[0]
+
+def main() -> int:
+    lx: Lexer = Lexer("abc")
+    print(lx.source())
+    print(lx.head())
+    return 0

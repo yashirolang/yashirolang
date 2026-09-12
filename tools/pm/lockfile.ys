@@ -1,0 +1,154 @@
+# lockfile — package.lock の読み書き
+#
+# ★ **このファイルが、レジストリを持たないこの設計の中心です。**
+#   中央のレジストリが担っていた「一度公開した版は二度と変わらない」という
+#   保証を、利用者のリポジトリに入るこのファイルが肩代わりします。
+#
+# 書き方（pkg の直後にその mod が続きます）:
+#
+#   lock 1
+#   root json https://github.com/u/json-pkg 1.2.0
+#   pkg json https://github.com/u/json-pkg 1.2.0 <commit の SHA> <tree の SHA>
+#   mod json json_lex
+#
+# root は「この宣言から解決した」という記録です。package.pkg の dep と
+# 食い違ったら、ロックは古いので解決し直します（依存を**消した**ことにも
+# これで気づけます）。
+#
+# ⚠️ タグではなく **commit の SHA** を記録します。タグは張り替えられますが、
+#   commit の SHA は中身が変われば必ず変わるからです。tree の SHA も
+#   別に持ち、取得のたびに突き合わせます。
+import io
+import strings
+import semver
+import words
+import langinfo
+
+FILENAME: str = "package.lock"
+FORMAT: int = 1
+
+class Entry:
+    name: str
+    url: str
+    ver: str
+    rev: str        # commit の SHA（40 桁）
+    tree: str       # その commit の tree の SHA（40 桁）
+    mods: list[str] # 入れるモジュール名（＝ import で書く名前）
+
+    def init(self, name: str, url: str, ver: str, rev: str, tree: str) -> None:
+        self.name = copy(name)
+        self.url = copy(url)
+        self.ver = copy(ver)
+        self.rev = copy(rev)
+        self.tree = copy(tree)
+        self.mods = []
+
+# このロックを作ったときの「直接の依存」（package.pkg の dep のうつし）
+class Root:
+    name: str
+    url: str
+    min_: str
+
+    def init(self, name: str, url: str, min_: str) -> None:
+        self.name = copy(name)
+        self.url = copy(url)
+        self.min_ = copy(min_)
+
+class Lock:
+    entries: list[Entry]
+    roots: list[Root]
+
+    def init(self) -> None:
+        self.entries = []
+        self.roots = []
+
+    def find(self, name: str) -> int:
+        i: int = 0
+        while i < len(self.entries):
+            if self.entries[i].name == name:
+                return i
+            i = i + 1
+        return -1
+
+def fail(lineno: int, msg: str) -> None:
+    io.eprint(langinfo.pm() + ": " + FILENAME + ":" + str(lineno) + ": " + msg + "\n")
+    io.eprint("    壊れているなら削除して '" + langinfo.pm() +
+              " sync' をやり直してください\n")
+    exit(1)
+
+def parse(text: str) -> Lock:
+    lk: Lock = Lock()
+    lineno: int = 0
+    seen_format: bool = False
+    for raw in strings.split(text, "\n"):
+        lineno = lineno + 1
+        line: str = words.strip_comment(raw)
+        if len(line) == 0:
+            continue
+        ws: list[str] = words.fields(line)
+
+        if ws[0] == "lock":
+            if len(ws) != 2 or ws[1] != str(FORMAT):
+                fail(lineno, "知らない形式です（読めるのは lock " +
+                     str(FORMAT) + " です）")
+            seen_format = True
+        elif ws[0] == "root":
+            if len(ws) != 4:
+                fail(lineno, "root は 'root <名前> <URL> <最低版>' です")
+            if not words.is_ident(ws[1]):
+                fail(lineno, "パッケージ名が識別子ではありません: " + ws[1])
+            if not semver.parse(ws[3]).ok:
+                fail(lineno, "版が 1.2.3 の形ではありません: " + ws[3])
+            lk.roots.append(Root(ws[1], ws[2], ws[3]))
+        elif ws[0] == "pkg":
+            if not seen_format:
+                fail(lineno, "先頭に 'lock " + str(FORMAT) + "' が要ります")
+            if len(ws) != 6:
+                fail(lineno, "pkg は 'pkg <名前> <URL> <版> <rev> <tree>' です")
+            if not words.is_ident(ws[1]):
+                fail(lineno, "パッケージ名が識別子ではありません: " + ws[1])
+            if not semver.parse(ws[3]).ok:
+                fail(lineno, "版が 1.2.3 の形ではありません: " + ws[3])
+            if not words.is_sha(ws[4]) or not words.is_sha(ws[5]):
+                fail(lineno, "rev / tree は 16 進 40 桁でなければなりません")
+            if lk.find(ws[1]) >= 0:
+                fail(lineno, "'" + ws[1] + "' が 2 回書かれています")
+            lk.entries.append(Entry(ws[1], ws[2], ws[3], ws[4], ws[5]))
+        elif ws[0] == "mod":
+            if len(lk.entries) == 0:
+                fail(lineno, "mod は pkg の後に書いてください")
+            e: Entry = lk.entries[len(lk.entries) - 1]
+            i: int = 1
+            while i < len(ws):
+                if not words.is_ident(ws[i]):
+                    fail(lineno, "モジュール名が識別子ではありません: " + ws[i])
+                e.mods.append(copy(ws[i]))
+                i = i + 1
+        else:
+            fail(lineno, "知らない項目です: " + ws[0])
+    return lk
+
+def render(lk: Lock) -> str:
+    out: list[str] = []
+    out.append("# " + FILENAME + " — " + langinfo.pm() +
+               " が書きます。手で編集しないでください。")
+    out.append("# ★ このファイルはコミットしてください。取ってくる中身を")
+    out.append("#   commit の SHA と tree の SHA で固定します。")
+    out.append("lock " + str(FORMAT))
+    for r in lk.roots:
+        out.append("root " + r.name + " " + r.url + " " + r.min_)
+    for e in lk.entries:
+        out.append("pkg " + e.name + " " + e.url + " " + e.ver + " " +
+                   e.rev + " " + e.tree)
+        if len(e.mods) > 0:
+            out.append("mod " + strings.join(e.mods, " "))
+    out.append("")
+    return strings.join(out, "\n")
+
+def load(path: str) -> Lock:
+    if not io.exists(path):
+        return Lock()
+    return parse(io.read_file(path))
+
+def save(path: str, lk: Lock) -> None:
+    io.write_file(path, render(lk))

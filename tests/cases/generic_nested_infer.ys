@@ -1,0 +1,25 @@
+# OUTPUT: 7
+# OUTPUT: hi
+# OUTPUT: 2
+# 型引数を **入れ子の型から**決める。
+# ★ これが無いと `def f[T](b: Box[T])` を呼べず、自分で作った容器を
+#   受け取る関数（集合演算など）が 1 つも書けませんでした。
+class Box[T]:
+    v: T
+
+    def init(self, v: own T) -> None:
+        self.v = v
+
+def unwrap[T](b: Box[T]) -> T:
+    return b.v
+
+def pair_len[T](a: Box[T], b: Box[T]) -> int:
+    return 2
+
+def main() -> int:
+    bi: Box[int] = Box(7)
+    bs: Box[str] = Box("hi")
+    print(str(unwrap(bi)))
+    print(unwrap(bs))
+    print(str(pair_len(bs, bs)))
+    return 0

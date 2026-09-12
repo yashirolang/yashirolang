@@ -1,0 +1,19 @@
+# STDIN: the quick
+# STDIN: brown fox
+# OUTPUT: 20
+# OUTPUT: 4
+# EXIT: 0
+# io.read_all は標準入力を最後まで読む
+import io
+import strings
+
+def main() -> int:
+    text: str = io.read_all()
+    print(len(text))
+    n: int = 0
+    for w in strings.split(strings.strip(text), "\n"):
+        for x in strings.split(w, " "):
+            if len(x) > 0:
+                n = n + 1
+    print(n)
+    return 0

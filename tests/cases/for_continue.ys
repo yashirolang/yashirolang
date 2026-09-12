@@ -1,0 +1,11 @@
+# OUTPUT: 0
+# OUTPUT: 1
+# OUTPUT: 3
+# OUTPUT: 4
+# ★ この章最大の落とし穴。continue が増分を飛ばすと無限ループになる
+def main() -> int:
+    for i in range(5):
+        if i == 2:
+            continue
+        print(i)
+    return 0

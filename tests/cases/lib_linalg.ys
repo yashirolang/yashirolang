@@ -1,0 +1,79 @@
+# OUTPUT: done
+# EXIT: 0
+# 線形代数（ヒルベルト行列・det(AB)=detA·detB・転置の性質など）
+import linalg
+import math
+
+def approx(name: str, got: float, want: float, tol: float) -> None:
+    if math.fabs(got - want) > tol:
+        print("NG " + name + " got=" + str(got) + " want=" + str(want))
+
+def main() -> int:
+    # ① ヒルベルト行列（条件数が非常に悪い＝数値的に難しい）5x5
+    n: int = 5
+    h: linalg.Matrix = linalg.mzeros(n, n)
+    i: int = 0
+    while i < n:
+        j: int = 0
+        while j < n:
+            h.set(i, j, 1.0 / float(i + j + 1))
+            j = j + 1
+        i = i + 1
+
+    # A·x = b を x=[1,1,1,1,1] で作り、解き直して戻るか
+    xtrue: list[float] = linalg.ones(n)
+    b: list[float] = linalg.matvec(h, xtrue)
+    x: list[float] = linalg.solve(h, b)
+    approx("hilbert5 solve", linalg.dist(x, xtrue), 0.0, 1.0e-9)
+
+    # ② A · A⁻¹ = I になるか
+    hi: linalg.Matrix = linalg.inverse(h)
+    p: linalg.Matrix = linalg.matmul(h, hi)
+    err: float = 0.0
+    i = 0
+    while i < n:
+        j: int = 0
+        while j < n:
+            want: float = 0.0
+            if i == j:
+                want = 1.0
+            err = math.fmax(err, math.fabs(p.get(i, j) - want))
+            j = j + 1
+        i = i + 1
+    approx("hilbert5 inv", err, 0.0, 1.0e-8)
+
+    # ③ 既知の行列式（3x3）
+    m: linalg.Matrix = linalg.from_rows([[6.0,1.0,1.0],[4.0,-2.0,5.0],[2.0,8.0,7.0]])
+    approx("det3", linalg.det(m), -306.0, 1.0e-10)
+
+    # ④ det(A·B) = det(A)·det(B)
+    a: linalg.Matrix = linalg.from_rows([[2.0,0.0,1.0],[1.0,3.0,2.0],[1.0,1.0,1.0]])
+    approx("det(AB)", linalg.det(linalg.matmul(a, m)),
+           linalg.det(a) * linalg.det(m), 1.0e-8)
+
+    # ⑤ 特異行列は det = 0（3 行目 = 1 行目 + 2 行目）
+    s: linalg.Matrix = linalg.from_rows([[1.0,2.0,3.0],[4.0,5.0,6.0],[5.0,7.0,9.0]])
+    approx("singular det", linalg.det(s), 0.0, 1.0e-12)
+    if linalg.rank(s) != 2:
+        print("NG rank " + str(linalg.rank(s)))
+
+    # ⑥ 転置の性質 (AB)ᵀ = BᵀAᵀ
+    l: linalg.Matrix = linalg.msub(linalg.transpose(linalg.matmul(a, m)),
+                                   linalg.matmul(linalg.transpose(m), linalg.transpose(a)))
+    approx("transpose", linalg.norm(l.data), 0.0, 1.0e-10)
+
+    # ⑦ mpow
+    approx("mpow", linalg.norm(linalg.msub(linalg.mpow(a, 3),
+           linalg.matmul(linalg.matmul(a, a), a)).data), 0.0, 1.0e-10)
+
+    # ⑧ ベクトルの性質
+    u: list[float] = [1.0, 2.0, 3.0]
+    v: list[float] = [4.0, 5.0, 6.0]
+    approx("cross⊥u", linalg.dot(linalg.cross(u, v), u), 0.0, 1.0e-12)
+    approx("cross⊥v", linalg.dot(linalg.cross(u, v), v), 0.0, 1.0e-12)
+    approx("normalize", linalg.norm(linalg.normalize(u)), 1.0, 1.0e-15)
+    approx("angle", linalg.angle([1.0,0.0], [0.0,1.0]), math.pi()/2.0, 1.0e-15)
+    approx("norm overflow", linalg.norm([3.0e300, 4.0e300]), 5.0e300, 1.0e287)
+
+    print("done")
+    return 0

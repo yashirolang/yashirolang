@@ -1,0 +1,4 @@
+# EXIT: 14
+# 0b1100 | 0b0110 = 0b1110 = 14
+def main() -> int:
+    return 0b1100 | 0b0110

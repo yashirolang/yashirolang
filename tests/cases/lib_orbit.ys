@@ -1,0 +1,48 @@
+# OUTPUT: ok
+# EXIT: 0
+# math + linalg + physics を組み合わせた実用例
+#   地球の公転を 1 年ぶん、速度ベルレ法で積分する。
+#   ★ 速度ベルレ法は「エネルギーが長時間ずれない」性質があるので、
+#     1 年回しても元の軌道に戻ります（オイラー法だと外へ膨らみます）。
+import math
+import linalg
+import physics
+
+def main() -> int:
+    m_sun: float = 1.98892e30
+    pos: list[float] = [physics.au(), 0.0]
+    vel: list[float] = [0.0, physics.orbital_velocity(m_sun, physics.au())]
+    dt: float = 3600.0
+
+    r0: float = linalg.norm(pos)
+    e0: float = 0.5 * linalg.dot(vel, vel) - physics.G() * m_sun / r0
+
+    i: int = 0
+    while i < 8766:
+        r: float = linalg.norm(pos)
+        a: list[float] = linalg.scale(pos, -physics.G() * m_sun / (r * r * r))
+        vel = linalg.add(vel, linalg.scale(a, dt * 0.5))
+        pos = linalg.add(pos, linalg.scale(vel, dt))
+        r = linalg.norm(pos)
+        a = linalg.scale(pos, -physics.G() * m_sun / (r * r * r))
+        vel = linalg.add(vel, linalg.scale(a, dt * 0.5))
+        i = i + 1
+
+    r1: float = linalg.norm(pos)
+    e1: float = 0.5 * linalg.dot(vel, vel) - physics.G() * m_sun / r1
+    ok: bool = True
+    # 1 年後にほぼ同じ半径へ戻る
+    if math.fabs(r1 / r0 - 1.0) > 1.0e-3:
+        print("NG 半径 " + str(r1 / r0))
+        ok = False
+    # エネルギーが保存されている
+    if math.fabs((e1 - e0) / e0) > 1.0e-10:
+        print("NG エネルギー " + str(math.fabs((e1 - e0) / e0)))
+        ok = False
+    # 出発点の近くに戻る（1 度以内）
+    if math.fabs(math.degrees(math.atan2(pos[1], pos[0]))) > 1.0:
+        print("NG 角度 " + str(math.degrees(math.atan2(pos[1], pos[0]))))
+        ok = False
+    if ok:
+        print("ok")
+    return 0

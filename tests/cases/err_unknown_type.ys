@@ -1,0 +1,6 @@
+# ERROR: 未知の型名 'foo' です
+# ERROR: この型は存在しません
+# ERROR: = ヒント: 現在使える型: int
+def main() -> int:
+    x: foo = 1
+    return x

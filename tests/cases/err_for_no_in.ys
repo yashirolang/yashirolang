@@ -1,0 +1,6 @@
+# ERROR: 'in' が必要です
+# ERROR: = ヒント: for は「for 変数 in 対象:」の形で書きます
+def main() -> int:
+    for x xs:
+        print(x)
+    return 0

@@ -1,0 +1,4 @@
+# ERROR: 'class' は予約語です
+# ERROR: = ヒント: 予約語は変数名として使えません
+def main() -> int:
+    return class + 1

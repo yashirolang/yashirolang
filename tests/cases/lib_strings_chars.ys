@@ -1,0 +1,30 @@
+# OUTPUT: 9
+# OUTPUT: 3
+# OUTPUT: 6
+# OUTPUT: あ
+# OUTPUT: い
+# OUTPUT: う
+# OUTPUT: 3
+# OUTPUT: 0
+# OUTPUT: 3
+# OUTPUT: 1
+# EXIT: 0
+# str は UTF-8 の **バイト列**
+#   ⚠️ len / 添字 / スライス / find はすべて **バイト**単位です。
+#     `for c in s` も 9 回まわります（3 回ではありません）。
+#   ★ 文字として扱いたいときは strings.chars / char_count / width を使います。
+import strings
+
+def main() -> int:
+    s: str = "あいう"
+    print(len(s))                    # バイト数
+    print(strings.char_count(s))     # 文字数
+    print(strings.width(s))          # 表示幅（全角は 2）
+    for c in strings.chars(s):
+        print(c)
+    print(len(strings.chars("abc")))
+    print(len(strings.chars("")))
+    print(len(strings.chars("aあ🎉")))   # 4 バイトの絵文字も 1 文字
+    # 壊れたバイトでも止まらない（1 バイトずつ進む）
+    print(len(strings.chars(chr(200))))
+    return 0

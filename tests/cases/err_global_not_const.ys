@@ -1,0 +1,7 @@
+# ERROR: グローバル変数の初期化式は定数でなければなりません
+# ERROR: = ヒント: 計算が必要なら main の中でローカル変数にしてください
+base: int = 1
+derived: int = base + 1
+
+def main() -> int:
+    return derived

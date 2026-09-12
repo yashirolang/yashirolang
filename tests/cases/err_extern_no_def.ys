@@ -1,0 +1,5 @@
+# ERROR: extern の後に def が必要です
+extern pl_str_len(s: str) -> int
+
+def main() -> int:
+    return 0

@@ -1,0 +1,19 @@
+# STAGE0-ONLY: 可変性の検査は C 版だけ
+# FLAGS: --deny-mut
+# ERROR: error[E-MUT-1]: 読み取り専用の借用 'self.n' を書き換えています
+# ERROR: 'self' は読み取り専用で借りています
+# ERROR: メソッドの宣言を 'def bump(mut self, ...)' にしてください
+# self を書き換えるメソッドには mut が要る（仕様 v2 §5.2）
+class Counter:
+    n: int
+
+    def init(self) -> None:
+        self.n = 0
+
+    def bump(self) -> None:
+        self.n = self.n + 1
+
+def main() -> int:
+    c: Counter = Counter()
+    c.bump()
+    return c.n

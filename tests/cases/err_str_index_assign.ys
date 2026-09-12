@@ -1,0 +1,6 @@
+# ERROR: 文字列の要素には代入できません
+# ERROR: = ヒント: str は不変（immutable）です
+def main() -> int:
+    s: str = "abc"
+    s[0] = "x"
+    return 0

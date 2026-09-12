@@ -1,0 +1,5 @@
+# OUTPUT: 1000000
+# 終了コードは 0〜255 しか表せないが print なら見える
+def main() -> int:
+    print(1000000)
+    return 0

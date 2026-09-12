@@ -1,0 +1,14 @@
+# OUTPUT: None
+# OUTPUT: 0
+# EXIT: 0
+# 標準入力が空なら read_line は None、read_all は空文字列
+import io
+
+def main() -> int:
+    line: str | None = io.read_line()
+    if line is None:
+        print("None")
+    else:
+        print("[" + line + "]")
+    print(len(io.read_all()))
+    return 0

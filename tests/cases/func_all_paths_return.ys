@@ -1,0 +1,10 @@
+# EXIT: 2
+# if / else の両方が return する（合流点は到達不能 → unreachable）
+def sign(x: int) -> int:
+    if x > 0:
+        return 2
+    else:
+        return 1
+
+def main() -> int:
+    return sign(5)

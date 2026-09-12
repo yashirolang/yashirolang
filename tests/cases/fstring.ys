@@ -1,0 +1,40 @@
+# OUTPUT: hello, world
+# OUTPUT: 42 + 1 = 43
+# OUTPUT: float=1.5 bool=True
+# OUTPUT: len=3 first=1 field=7
+# OUTPUT: 式も書ける: 1.414214
+# OUTPUT: 波括弧 { } はこう
+# OUTPUT: 
+# OUTPUT: 末尾リテラル42あり
+# OUTPUT: 4242
+# OUTPUT: 入れ子の呼び出し 5
+# EXIT: 0
+# f-string（パーサで "a" + str(x) + "b" に脱糖する）
+#   ★ 埋め込んだ式はその場で字句解析し直すので、任意の式が書けます
+import math
+
+class P:
+    x: int
+    def init(self, x: int) -> None:
+        self.x = x
+
+def main() -> int:
+    name: str = "world"
+    n: int = 42
+    f: float = 1.5
+    b: bool = True
+    xs: list[int] = [1, 2, 3]
+    p: P = P(7)
+
+    print(f"hello, {name}")
+    print(f"{n} + 1 = {n + 1}")
+    print(f"float={f} bool={b}")
+    print(f"len={len(xs)} first={xs[0]} field={p.x}")
+    # ⚠️ 近似値は丸めてから（str(float) は最短の往復表記です）
+    print(f"式も書ける: {math.round_to(math.sqrt(2.0), 6)}")
+    print(f"波括弧 {{ }} はこう")
+    print(f"")
+    print(f"末尾リテラル{n}あり")
+    print(f"{n}{n}")
+    print(f"入れ子の呼び出し {str(len(name))}")
+    return 0

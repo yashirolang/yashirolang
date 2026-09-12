@@ -1,0 +1,8 @@
+# OUTPUT: 5
+# 戻り型 None の関数（規約 R9：ret void）
+def show(x: int) -> None:
+    print(x)
+
+def main() -> int:
+    show(5)
+    return 0

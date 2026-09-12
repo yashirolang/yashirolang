@@ -1,0 +1,18 @@
+# OUTPUT: True
+# OUTPUT: False
+# OUTPUT: 7
+# None リテラル・is / is not・T を T | None に入れる（広げる方向）
+class Box:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+def main() -> int:
+    b: Box | None = None
+    print(b is None)
+    b = Box(7)
+    print(b is None)
+    if b is not None:
+        print(b.v)
+    return 0

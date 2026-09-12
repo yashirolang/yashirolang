@@ -1,0 +1,5 @@
+# ERROR: 折り返す算術が使えるのは int だけです
+# wrap_* は int 専用
+def main() -> int:
+    x: float = 1.0
+    return wrap_add(x, 1.0)

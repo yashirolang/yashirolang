@@ -1,0 +1,27 @@
+# STAGE0-ONLY: --drop は C 版だけ（解放の移植は次章）
+# FLAGS: --drop --deny-move --deny-borrow --deny-mut
+# OUTPUT: child
+# EXIT: 1
+# **借りた rc をフィールドに保存できる**。
+#         ★ これが行き止まりになった形（E-BORROW-3）の答えです。
+class Node:
+    name: str
+    child: rc[Node] | None
+
+    def init(self, name: own str) -> None:
+        self.name = name
+        self.child = None
+
+    def attach(mut self, c: rc[Node]) -> None:
+        self.child = c
+
+def main() -> int:
+    root: rc[Node] = rc(Node("root"))
+    kid: rc[Node] = rc(Node("child"))
+    root.attach(kid)
+
+    c: rc[Node] | None = root.child
+    if c is None:
+        return 0
+    print(c.name)
+    return 1

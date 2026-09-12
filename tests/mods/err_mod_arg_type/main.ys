@@ -1,0 +1,5 @@
+# ERROR: 関数 'lib.f' の第 1 引数: 型 'str' を 'int' に渡せません
+import lib
+
+def main() -> int:
+    return lib.f("a")

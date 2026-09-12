@@ -1,0 +1,13 @@
+# OUTPUT: 99
+# OUTPUT: 99
+# インスタンスは参照。代入でコピーされない（list と同じ、str と違う）
+class Cell:
+    v: int
+
+def main() -> int:
+    a: Cell = Cell()
+    b: Cell = a
+    b.v = 99
+    print(a.v)
+    print(b.v)
+    return 0

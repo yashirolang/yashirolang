@@ -1,0 +1,15 @@
+# STAGE0-ONLY: 所有権検査は C 版だけ
+# FLAGS: --deny-move
+# ERROR: error[E-MOVE-1]: 移動済みの値 'xs' を使っています
+# ERROR: 'xs' はここで移動しました
+# フィールドへの代入は移動（コンテナが所有する）
+class Box:
+    items: list[int]
+
+    def init(self, xs: own list[int]) -> None:
+        self.items = xs
+        print(len(xs))
+
+def main() -> int:
+    b: Box = Box([1, 2])
+    return len(b.items)

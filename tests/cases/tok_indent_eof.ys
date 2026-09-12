@@ -1,0 +1,5 @@
+# TOKENS: INT NEWLINE INDENT INT NEWLINE INDENT INT NEWLINE DEDENT DEDENT EOF
+# ★ ファイル末尾で、開いているインデントぶんの DEDENT を全部出すことの確認
+1
+    2
+        3

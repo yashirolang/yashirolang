@@ -1,0 +1,7 @@
+# ERROR: 未定義の名前 'y' です
+# ブロックを抜けると見えなくなる
+def main() -> int:
+    if True:
+        y: int = 1
+    print(y)
+    return 0

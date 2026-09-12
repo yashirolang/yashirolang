@@ -1,0 +1,23 @@
+# OUTPUT: 9
+# OUTPUT: 0
+# 引数・戻り値にも使える。T を渡すと自動で広がる
+class Box:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+def find(ok: bool) -> Box | None:
+    if ok:
+        return Box(9)
+    return None
+
+def value(b: Box | None) -> int:
+    if b is None:
+        return 0
+    return b.v
+
+def main() -> int:
+    print(value(find(True)))
+    print(value(find(False)))
+    return 0

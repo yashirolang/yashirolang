@@ -1,0 +1,6 @@
+# EXIT: 100
+def main() -> int:
+    x: int = 1
+    x = 10
+    x = x * x
+    return x

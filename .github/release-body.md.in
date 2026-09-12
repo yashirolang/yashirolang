@@ -1,0 +1,14 @@
+## 使い方
+
+1. お使いの OS の `.tar.gz` を展開します
+2. 中の `bin/` にコンパイラ（`{{cc}}`）とパッケージマネージャ（`{{pm}}`）が入っています
+
+**必要なもの: clang**（このコンパイラは LLVM IR を出して、
+リンクを clang に任せる作りです）。
+
+```bash
+tar xzf <展開したい .tar.gz>
+cd <展開されたディレクトリ>
+printf 'def main() -> int:\n    print("hello")\n    return 0\n' > hello{{ext}}
+./bin/{{cc}} hello{{ext}} -o hello && ./hello
+```

@@ -1,0 +1,130 @@
+# manifest — package.pkg の読み書き
+#
+# 書き方（1 行 1 事実。# から行末はコメント）:
+#
+#   name    myapp                 パッケージ名（識別子）
+#   version 0.1.0                 このパッケージの版
+#   entry   main.<ext>            build が渡す入口ファイル（省略可）
+#   src     .                     ソースを置いてあるディレクトリ（省略時 "."）
+#   dep     json https://github.com/u/json-pkg 1.2.0
+#
+# ★ dep の 3 つ目は「**これ以上**の版が要る」という下限です。上限は
+#   書けません。MVSが上限を必要としないからです。
+import io
+import strings
+import semver
+import words
+import langinfo
+
+class Dep:
+    name: str
+    url: str
+    min_: str      # "1.2.0"（下限）
+
+    def init(self, name: str, url: str, min_: str) -> None:
+        self.name = copy(name)
+        self.url = copy(url)
+        self.min_ = copy(min_)
+
+class Manifest:
+    name: str
+    version: str
+    entry: str
+    src: str
+    deps: list[Dep]
+
+    def init(self) -> None:
+        self.name = ""
+        self.version = "0.0.0"
+        self.entry = ""
+        self.src = "."
+        self.deps = []
+
+    def find(self, name: str) -> int:
+        i: int = 0
+        while i < len(self.deps):
+            if self.deps[i].name == name:
+                return i
+            i = i + 1
+        return -1
+
+FILENAME: str = "package.pkg"
+
+def fail(where: str, lineno: int, msg: str) -> None:
+    io.eprint(langinfo.pm() + ": " + where + ":" + str(lineno) + ": " + msg + "\n")
+    exit(1)
+
+# where は診断に出すファイル名（取ってきたパッケージのものは
+# "json@1.2.0 の package.pkg" のように渡します）
+def parse(text: str, where: str) -> Manifest:
+    m: Manifest = Manifest()
+    lineno: int = 0
+    for raw in strings.split(text, "\n"):
+        lineno = lineno + 1
+        line: str = words.strip_comment(raw)
+        if len(line) == 0:
+            continue
+        ws: list[str] = words.fields(line)
+        key: str = ws[0]
+
+        if key == "name":
+            if len(ws) != 2 or not words.is_ident(ws[1]):
+                fail(where, lineno, "name には識別子を 1 つ書いてください")
+            m.name = copy(ws[1])
+        elif key == "version":
+            if len(ws) != 2 or not semver.parse(ws[1]).ok:
+                fail(where, lineno, "version は 1.2.3 の形で書いてください")
+            m.version = semver.show(semver.parse(ws[1]))
+        elif key == "entry":
+            if len(ws) != 2:
+                fail(where, lineno, "entry にはファイル名を 1 つ書いてください")
+            m.entry = copy(ws[1])
+        elif key == "src":
+            if len(ws) != 2:
+                fail(where, lineno, "src にはディレクトリ名を 1 つ書いてください")
+            m.src = copy(ws[1])
+        elif key == "dep":
+            if len(ws) != 4:
+                fail(where, lineno,
+                     "dep は 'dep <名前> <URL> <最低版>' の 4 語で書いてください")
+            if not words.is_ident(ws[1]):
+                fail(where, lineno, "パッケージ名 '" + ws[1] + "' は識別子ではありません")
+            if not semver.parse(ws[3]).ok:
+                fail(where, lineno, "最低版 '" + ws[3] + "' は 1.2.3 の形で書いてください")
+            if m.find(ws[1]) >= 0:
+                fail(where, lineno, "'" + ws[1] + "' は既に書かれています")
+            m.deps.append(Dep(ws[1], ws[2], semver.show(semver.parse(ws[3]))))
+        else:
+            fail(where, lineno, "知らない項目です: " + key)
+
+    if len(m.name) == 0:
+        io.eprint(langinfo.pm() + ": " + where + ": name がありません\n")
+        exit(1)
+    return m
+
+def render(m: Manifest) -> str:
+    out: list[str] = []
+    out.append("# " + FILENAME + " — このパッケージの宣言")
+    out.append("name    " + m.name)
+    out.append("version " + m.version)
+    if len(m.entry) > 0:
+        out.append("entry   " + m.entry)
+    if m.src != ".":
+        out.append("src     " + m.src)
+    if len(m.deps) > 0:
+        out.append("")
+        out.append("# dep <名前> <git の URL> <最低版>")
+        for d in m.deps:
+            out.append("dep     " + d.name + " " + d.url + " " + d.min_)
+    out.append("")
+    return strings.join(out, "\n")
+
+def load(path: str) -> Manifest:
+    if not io.exists(path):
+        io.eprint(langinfo.pm() + ": " + path + " がありません（'" +
+                  langinfo.pm() + " init' で作れます）\n")
+        exit(1)
+    return parse(io.read_file(path), path)
+
+def save(path: str, m: Manifest) -> None:
+    io.write_file(path, render(m))

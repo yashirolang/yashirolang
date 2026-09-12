@@ -1,0 +1,49 @@
+# OUTPUT: (1.5, 2.5)
+# OUTPUT: (0.5, 1.5)
+# OUTPUT: (2.0, 4.0)
+# OUTPUT: (-1.0, -2.0)
+# OUTPUT: False
+# OUTPUT: True
+# OUTPUT: True
+# EXIT: 0
+# 演算子の多重定義（__add__ など）
+#   ★ 読み替えるのは意味解析だけで、codegen は 1 行も変えていません。
+#   ⚠️ != は __ne__ が無ければ not (a == b) に読み替えます。
+class Vec2:
+    x: float
+    y: float
+
+    def init(self, x: float, y: float) -> None:
+        self.x = x
+        self.y = y
+
+    def __add__(self, o: Vec2) -> Vec2:
+        return Vec2(self.x + o.x, self.y + o.y)
+
+    def __sub__(self, o: Vec2) -> Vec2:
+        return Vec2(self.x - o.x, self.y - o.y)
+
+    def __mul__(self, k: float) -> Vec2:
+        return Vec2(self.x * k, self.y * k)
+
+    def __neg__(self) -> Vec2:
+        return Vec2(-self.x, -self.y)
+
+    def __eq__(self, o: Vec2) -> bool:
+        return self.x == o.x and self.y == o.y
+
+    def show(self) -> str:
+        return "(" + str(self.x) + ", " + str(self.y) + ")"
+
+def main() -> int:
+    a: Vec2 = Vec2(1.0, 2.0)
+    b: Vec2 = Vec2(0.5, 0.5)
+    print((a + b).show())
+    print((a - b).show())
+    print((a * 2.0).show())
+    print((-a).show())
+    print(str(a == b))
+    print(str(a != b))
+    # 優先順位はふつうの演算子と同じ（* が先）
+    print(str(a + b * 2.0 == Vec2(2.0, 3.0)))
+    return 0

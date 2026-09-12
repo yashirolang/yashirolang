@@ -1,0 +1,5 @@
+# EXIT: 1
+# '*' の桁あふれは panic
+def main() -> int:
+    a: int = 9223372036854775807
+    return a * 2

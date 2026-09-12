@@ -1,0 +1,6 @@
+# ERROR: モジュールの修飾は 1 段だけです（パッケージはありません）
+import lib
+
+def main() -> int:
+    b: lib.Box.Inner = lib.Box()
+    return 0

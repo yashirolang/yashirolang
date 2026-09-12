@@ -1,0 +1,18 @@
+# OUTPUT: 7
+# ★ and の rhs は lhs が真のときだけ評価される。
+#   その間だけ絞り込みを効かせる（条件式の「途中」での絞り込み）。
+class Box:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+def is_seven(b: Box | None) -> bool:
+    return b is not None and b.v == 7
+
+def main() -> int:
+    if is_seven(Box(7)):
+        print(7)
+    if is_seven(None):
+        print(999)
+    return 0

@@ -1,0 +1,99 @@
+# OUTPUT: 5 5 0 3
+# OUTPUT: 45 45 45
+# OUTPUT: ok
+# EXIT: 0
+# FLAGS: -O2
+# IR-NOT: @pl_list_len
+# IR-NOT: @pl_str_len
+# len は呼び出しではなく load 1 つ
+#
+#   ★ **`for x in xs:` の条件が毎回の関数呼び出しでした。**
+#     脱糖した形は `for.ix.N < len(for.it.N)` です。呼び出しだと LLVM は
+#     「メモリを書くかもしれない」と見てループの外へ出せず、しかも本体の
+#     境界検査は同じ長さを **load** で読むので、**明らかに範囲内なのに
+#     検査が残って**いました。
+#
+#   ★ load に揃えたら、LLVM が境界検査ごと消せるようになりました
+#     （3000000 要素の総和 10 回が 51 → 18 ms）。
+#
+#   ⚠️ str の長さはポインタの 8 バイト手前にあり、最上位側の 1 ビットが
+#     「静的な文字列か」の印です。**落とさないと長さが巨大になります。**
+#     リテラル（静的）と連結で作ったもの（ヒープ）の両方を見ます。
+import time
+
+def total_for(xs: list[int]) -> int:
+    s: int = 0
+    for x in xs:
+        s = s + x
+    return s
+
+def total_range_len(xs: list[int]) -> int:
+    s: int = 0
+    for i in range(len(xs)):
+        s = s + xs[i]
+    return s
+
+def total_while(xs: list[int]) -> int:
+    s: int = 0
+    i: int = 0
+    while i < len(xs):
+        s = s + xs[i]
+        i = i + 1
+    return s
+
+def main() -> int:
+    lit: str = "abcde"          # 静的（PL_STR_STATIC の印が付く）
+    heap: str = "ab" + "cde"    # ヒープ
+    empty: str = ""
+    xs: list[int] = [1, 2, 3]
+    print(str(len(lit)) + " " + str(len(heap)) + " " + str(len(empty)) + " " +
+          str(len(xs)))
+
+    ys: list[int] = []
+    for i in range(10):
+        ys.append(i)
+    print(str(total_for(ys)) + " " + str(total_while(ys)) + " " +
+          str(total_range_len(ys)))
+
+    # ★ 速さも見ます。境界検査が残ると、この 2 つの差が開きます
+    #   （for は検査が消え、範囲を自分で回す while は残るため）。
+    #
+    # ⚠️ **最小値で比べます。** 1 回ずつ測ると、CI の共用マシンでは他の
+    #   仕事に割り込まれた 1 回がそのまま結果になります（実際に macOS の
+    #   CI が ratio 3.97 で落ちました）。測り直して最小を採ると、
+    #   「割り込まれなかった回」の値が残ります。
+    # ⚠️ そもそも**この性質は上の IR-NOT で固定してあります**。ここは
+    #   「呼び出しは消えたのに遅い」という別の原因に気づくための番人です。
+    big: list[int] = []
+    for i in range(2000000):
+        big.append(i % 7)
+
+    a: int = 0
+    b: int = 0
+    t_for: int = 0
+    t_while: int = 0
+    for k in range(3):
+        t0: int = time.monotonic_ns()
+        a = total_for(big)
+        e1: int = time.since_ns(t0)
+        if t_for == 0 or e1 < t_for:
+            t_for = e1
+
+        t0 = time.monotonic_ns()
+        b = total_while(big)
+        e2: int = time.since_ns(t0)
+        if t_while == 0 or e2 < t_while:
+            t_while = e2
+
+    if a != b:
+        print("NG 答えが違います")
+        return 1
+    if t_while <= 0:
+        print("ok")      # 速すぎて測れない環境（分解能が粗い）は通す
+        return 0
+    ratio: float = float(t_for) / float(t_while)
+    if ratio > 3.0:
+        print("NG for が while より遅すぎます: " + str(ratio))
+        return 1
+    print("ok")
+    return 0

@@ -1,0 +1,44 @@
+# OUTPUT: 3 2
+# OUTPUT: x 1.5 True
+# OUTPUT: 21
+# OUTPUT: 3ok
+# OUTPUT: 1 2 3
+# OUTPUT: 78
+# OUTPUT: 9
+# EXIT: 0
+# タプルの添字 t[0]
+#
+#   ⚠️ **添字は整数リテラルだけ**です。(int, str) の要素は位置ごとに型が
+#     違うので、添字が実行時に決まると**式の型が決まりません**。
+#   ⚠️ タプルは作ったら変わりません（要素への代入はできません）。
+def divmod2(a: int, b: int) -> (int, int):
+    return a // b, a % b
+
+def named() -> (str, float, bool):
+    return "x", 1.5, True
+
+def main() -> int:
+    t: (int, int) = divmod2(17, 5)
+    print(str(t[0]) + " " + str(t[1]))
+
+    u: (str, float, bool) = named()
+    print(u[0] + " " + str(u[1]) + " " + str(u[2]))
+
+    # 分解代入も今までどおり
+    q, r = divmod2(9, 4)
+    print(str(q) + str(r))
+
+    # ★ タプルのリテラル（式の位置に書ける）
+    lit: (int, str) = (3, "ok")
+    print(str(lit[0]) + lit[1])
+
+    three: (int, int, int) = (1, 2, 3)
+    print(str(three[0]) + " " + str(three[1]) + " " + str(three[2]))
+
+    a, b = (7, 8)          # 分解代入の右辺にも書ける
+    print(str(a) + str(b))
+
+    # ⚠️ 要素が 1 つの括弧は「ただの括弧」（1 要素のタプルは無い）
+    x: int = (1 + 2) * 3
+    print(str(x))
+    return 0

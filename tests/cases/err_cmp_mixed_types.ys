@@ -1,0 +1,4 @@
+# ERROR: 型 'int' と 'bool' に演算子 '<' は適用できません
+# ERROR: この演算子の両辺の型が違います
+def main() -> int:
+    return 1 < True

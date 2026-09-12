@@ -1,0 +1,671 @@
+# frame — 表形式のデータ（pandas でやっていたこと）
+#
+# ★ **列ごとに型のある表**です。CSV の読み書き・絞り込み・並べ替え・
+#   グループ集計まで、本言語だけで書いてあります。
+#
+# ⚠️ **pandas の設計は真似していません。** pandas の列は「何でも入る」
+#   ものですが、この言語には暗黙の型変換がありません。列は
+#   `Column`（数値か文字列か）として持ち、**取り出すときに型を選ばせます**
+#   （`df.num("price")` / `df.text("name")`）。取り違えたらその場でエラーです。
+#
+# 使い方:
+#
+#   import frame
+#   df: frame.Frame = frame.read_csv("sales.csv")
+#   print(frame.describe(df))
+#   hi: frame.Frame = df.where(frame.gt(df.num("price"), 100.0))
+#   print(str(frame.mean_of(hi.num("price"))))
+import io
+import math
+import stats
+import strings
+
+# 列の種類
+COL_NUM: int = 0
+COL_TEXT: int = 1
+
+
+class Column:
+    name: str
+    kind: int
+    nums: list[float]
+    texts: list[str]
+
+    def init(self, name: str, kind: int) -> None:
+        self.name = copy(name)
+        self.kind = kind
+        self.nums = []
+        self.texts = []
+
+    def size(self) -> int:
+        if self.kind == COL_NUM:
+            return len(self.nums)
+        return len(self.texts)
+
+    # 1 行ぶんを文字列にする（表示と CSV 書き出しで使います）
+    def cell(self, i: int) -> str:
+        if self.kind == COL_NUM:
+            return str(self.nums[i])
+        return copy(self.texts[i])
+
+
+class Frame:
+    cols: list[Column]
+
+    def init(self) -> None:
+        self.cols = []
+
+    # ── 形 ──────────────────────────────────────────────
+
+    def rows(self) -> int:
+        if len(self.cols) == 0:
+            return 0
+        c: Column = self.cols[0]
+        return c.size()
+
+    def width(self) -> int:
+        return len(self.cols)
+
+    def names(self) -> list[str]:
+        out: list[str] = []
+        for c in self.cols:
+            out.append(copy(c.name))
+        return out
+
+    def index_of(self, name: str) -> int:
+        i: int = 0
+        while i < len(self.cols):
+            c: Column = self.cols[i]
+            if c.name == name:
+                return i
+            i = i + 1
+        return -1
+
+    def has(self, name: str) -> bool:
+        return self.index_of(name) >= 0
+
+    # ⚠️ 「無い列」は None を返さず、その場で panic します。
+    #   綴りを間違えた列名が空のリストとして流れていくほうが危険です。
+    def col(self, name: str) -> Column:
+        i: int = self.index_of(name)
+        if i < 0:
+            panic("frame: 列 '" + name + "' がありません（ある列: " +
+                  strings.join(self.names(), ", ") + "）")
+        return self.cols[i]
+
+    # ── 取り出す（型を名前で選ぶ）──────────────────────
+
+    def num(self, name: str) -> list[float]:
+        c: Column = self.col(name)
+        if c.kind != COL_NUM:
+            panic("frame: 列 '" + name + "' は文字列の列です（num では取れません）")
+        out: list[float] = []
+        for x in c.nums:
+            out.append(x)
+        return out
+
+    def text(self, name: str) -> list[str]:
+        c: Column = self.col(name)
+        if c.kind != COL_TEXT:
+            panic("frame: 列 '" + name + "' は数値の列です（text では取れません）")
+        out: list[str] = []
+        for s in c.texts:
+            out.append(copy(s))
+        return out
+
+    # ── 組み立てる ──────────────────────────────────────
+
+    def add_num(mut self, name: str, xs: list[float]) -> None:
+        self.check_new(name, len(xs))
+        c: Column = Column(name, COL_NUM)
+        for x in xs:
+            c.nums.append(x)
+        self.cols.append(c)
+
+    def add_text(mut self, name: str, xs: list[str]) -> None:
+        self.check_new(name, len(xs))
+        c: Column = Column(name, COL_TEXT)
+        for s in xs:
+            c.texts.append(copy(s))
+        self.cols.append(c)
+
+    def check_new(self, name: str, n: int) -> None:
+        if self.has(name):
+            panic("frame: 列 '" + name + "' は既にあります")
+        if len(self.cols) > 0 and n != self.rows():
+            panic("frame: 行数が合いません（表は " + str(self.rows()) +
+                  " 行、足そうとした列は " + str(n) + " 行）")
+
+    # ── 行を選ぶ ────────────────────────────────────────
+
+    # keep[i] が True の行だけを集めた新しい表を返します
+    def where(self, keep: list[bool]) -> Frame:
+        if len(keep) != self.rows():
+            panic("frame.where: 印の数が行数と違います（" + str(len(keep)) +
+                  " と " + str(self.rows()) + "）")
+        idx: list[int] = []
+        i: int = 0
+        while i < len(keep):
+            if keep[i]:
+                idx.append(i)
+            i = i + 1
+        return self.take(idx)
+
+    # idx に並べた行番号のとおりに行を取り出します（並べ替えにも使います）
+    def take(self, idx: list[int]) -> Frame:
+        out: Frame = Frame()
+        n: int = self.rows()
+        for c in self.cols:
+            d: Column = Column(c.name, c.kind)
+            for k in idx:
+                if k < 0 or k >= n:
+                    panic("frame.take: 行番号が範囲外です（" + str(k) + "）")
+                if c.kind == COL_NUM:
+                    d.nums.append(c.nums[k])
+                else:
+                    d.texts.append(copy(c.texts[k]))
+            out.cols.append(d)
+        return out
+
+    def head(self, n: int) -> Frame:
+        m: int = n
+        if m > self.rows():
+            m = self.rows()
+        if m < 0:
+            m = 0
+        idx: list[int] = []
+        for i in range(m):
+            idx.append(i)
+        return self.take(idx)
+
+    # 数値の列で並べ替える（昇順）
+    def sort_by(self, name: str) -> Frame:
+        return self.take(order_of(self.num(name), True))
+
+    def sort_by_desc(self, name: str) -> Frame:
+        return self.take(order_of(self.num(name), False))
+
+    # ── 見る ────────────────────────────────────────────
+
+    def show(self) -> str:
+        return self.show_head(20)
+
+    # 先頭 n 行を桁を揃えて表にします（⚠️ 幅は**表示幅**で数えます）
+    def show_head(self, n: int) -> str:
+        m: int = n
+        if m > self.rows():
+            m = self.rows()
+        w: list[int] = []
+        for c in self.cols:
+            wi: int = strings.width(c.name)
+            i: int = 0
+            while i < m:
+                cw: int = strings.width(c.cell(i))
+                if cw > wi:
+                    wi = cw
+                i = i + 1
+            w.append(wi)
+
+        out: list[str] = []
+        j: int = 0
+        while j < len(self.cols):
+            c2: Column = self.cols[j]
+            out.append(pad(c2.name, w[j]))
+            if j + 1 < len(self.cols):
+                out.append("  ")
+            j = j + 1
+        out.append("\n")
+
+        r: int = 0
+        while r < m:
+            j2: int = 0
+            while j2 < len(self.cols):
+                c3: Column = self.cols[j2]
+                out.append(pad(c3.cell(r), w[j2]))
+                if j2 + 1 < len(self.cols):
+                    out.append("  ")
+                j2 = j2 + 1
+            out.append("\n")
+            r = r + 1
+        if self.rows() > m:
+            out.append("… ほか " + str(self.rows() - m) + " 行\n")
+        return strings.join(out, "")
+
+
+# 表示幅で右詰めにします（strings.lpad は表示幅で数えます）
+def pad(s: str, w: int) -> str:
+    return strings.lpad(s, w)
+
+
+# ── 比較（where に渡す印を作る）────────────────────────────
+
+def gt(xs: list[float], k: float) -> list[bool]:
+    out: list[bool] = []
+    for x in xs:
+        out.append(x > k)
+    return out
+
+def ge(xs: list[float], k: float) -> list[bool]:
+    out: list[bool] = []
+    for x in xs:
+        out.append(x >= k)
+    return out
+
+def lt(xs: list[float], k: float) -> list[bool]:
+    out: list[bool] = []
+    for x in xs:
+        out.append(x < k)
+    return out
+
+def le(xs: list[float], k: float) -> list[bool]:
+    out: list[bool] = []
+    for x in xs:
+        out.append(x <= k)
+    return out
+
+def eq_num(xs: list[float], k: float) -> list[bool]:
+    out: list[bool] = []
+    for x in xs:
+        out.append(x == k)
+    return out
+
+def eq_text(xs: list[str], k: str) -> list[bool]:
+    out: list[bool] = []
+    for s in xs:
+        out.append(s == k)
+    return out
+
+def both(a: list[bool], b: list[bool]) -> list[bool]:
+    same_len(a, b, "both")
+    out: list[bool] = []
+    for i in range(len(a)):
+        out.append(a[i] and b[i])
+    return out
+
+def either(a: list[bool], b: list[bool]) -> list[bool]:
+    same_len(a, b, "either")
+    out: list[bool] = []
+    for i in range(len(a)):
+        out.append(a[i] or b[i])
+    return out
+
+def negate(a: list[bool]) -> list[bool]:
+    out: list[bool] = []
+    for x in a:
+        out.append(not x)
+    return out
+
+def same_len(a: list[bool], b: list[bool], who: str) -> None:
+    if len(a) != len(b):
+        panic("frame." + who + ": 印の数が違います（" + str(len(a)) + " と " +
+              str(len(b)) + "）")
+
+
+# ── 並べ替えの順番を作る ───────────────────────────────────
+
+# xs を昇順（asc が False なら降順）に並べる行番号を返します。
+# ⚠️ **安定です**（同じ値なら元の順を保ちます）。併合整列。
+def order_of(xs: list[float], asc: bool) -> list[int]:
+    idx: list[int] = []
+    for i in range(len(xs)):
+        idx.append(i)
+    return msort(xs, idx, asc)
+
+def msort(xs: list[float], idx: list[int], asc: bool) -> list[int]:
+    if len(idx) <= 1:
+        out: list[int] = []
+        for k in idx:
+            out.append(k)
+        return out
+    mid: int = len(idx) // 2
+    a: list[int] = []
+    b: list[int] = []
+    i: int = 0
+    while i < len(idx):
+        if i < mid:
+            a.append(idx[i])
+        else:
+            b.append(idx[i])
+        i = i + 1
+    return mmerge(xs, msort(xs, a, asc), msort(xs, b, asc), asc)
+
+def mmerge(xs: list[float], a: list[int], b: list[int],
+           asc: bool) -> list[int]:
+    out: list[int] = []
+    i: int = 0
+    j: int = 0
+    while i < len(a) and j < len(b):
+        take_a: bool = False
+        if asc:
+            take_a = xs[a[i]] <= xs[b[j]]
+        else:
+            take_a = xs[a[i]] >= xs[b[j]]
+        if take_a:
+            out.append(a[i])
+            i = i + 1
+        else:
+            out.append(b[j])
+            j = j + 1
+    while i < len(a):
+        out.append(a[i])
+        i = i + 1
+    while j < len(b):
+        out.append(b[j])
+        j = j + 1
+    return out
+
+
+# ── まとめる（groupby 相当）────────────────────────────────
+
+# key の列ごとに value の列（数値）を集計します。
+#   how: "mean" / "sum" / "count" / "min" / "max"
+# 返るのは 2 列（key と value）の新しい表で、**key の初出の順**に並びます。
+#
+# ★ 鍵の列は**文字列でも数値でもかまいません**。返る表の鍵の列は、
+#   元の列と同じ種類になります（数値の鍵なら数値の列）。
+def group_by(df: Frame, key: str, value: str, how: str) -> Frame:
+    kc: Column = df.col(key)
+    ks: list[str] = []
+    if kc.kind == COL_TEXT:
+        ks = df.text(key)
+    else:
+        for x in df.num(key):
+            ks.append(str(x))
+    vs: list[float] = df.num(value)
+
+    names: list[str] = []
+    sums: list[float] = []
+    cnts: list[float] = []
+    mins: list[float] = []
+    maxs: list[float] = []
+
+    i: int = 0
+    while i < len(ks):
+        at: int = -1
+        j: int = 0
+        while j < len(names):
+            if names[j] == ks[i]:
+                at = j
+                j = len(names)
+            else:
+                j = j + 1
+        if at < 0:
+            names.append(copy(ks[i]))
+            sums.append(vs[i])
+            cnts.append(1.0)
+            mins.append(vs[i])
+            maxs.append(vs[i])
+        else:
+            sums[at] = sums[at] + vs[i]
+            cnts[at] = cnts[at] + 1.0
+            if vs[i] < mins[at]:
+                mins[at] = vs[i]
+            if vs[i] > maxs[at]:
+                maxs[at] = vs[i]
+        i = i + 1
+
+    out: list[float] = []
+    k: int = 0
+    while k < len(names):
+        if how == "mean":
+            out.append(sums[k] / cnts[k])
+        elif how == "sum":
+            out.append(sums[k])
+        elif how == "count":
+            out.append(cnts[k])
+        elif how == "min":
+            out.append(mins[k])
+        elif how == "max":
+            out.append(maxs[k])
+        else:
+            panic("frame.group_by: 知らない集計です '" + how +
+                  "'（mean / sum / count / min / max）")
+        k = k + 1
+
+    r: Frame = Frame()
+    if kc.kind == COL_TEXT:
+        r.add_text(key, names)
+    else:
+        # 鍵が数値だったなら、数値の列として返します
+        kn: list[float] = []
+        for nm in names:
+            kn.append(float(nm))
+        r.add_num(key, kn)
+    r.add_num(value, out)
+    return r
+
+
+# ── まとめて眺める（describe 相当）─────────────────────────
+
+def describe(df: Frame) -> str:
+    out: list[str] = []
+    out.append("行 " + str(df.rows()) + " / 列 " + str(df.width()) + "\n")
+    for c in df.cols:
+        if c.kind == COL_TEXT:
+            out.append(strings.rpad(c.name, 12) + " 文字列  異なり " +
+                       str(distinct_count(c.texts)) + "\n")
+        else:
+            n: int = len(c.nums)
+            if n == 0:
+                out.append(strings.rpad(c.name, 12) + " 数値    （空）\n")
+            else:
+                out.append(strings.rpad(c.name, 12) + " 数値    平均 " +
+                           str(math.round_to(stats.mean(c.nums), 4)) +
+                           "  最小 " + str(min_of(c.nums)) +
+                           "  最大 " + str(max_of(c.nums)) +
+                           "  標準偏差 " +
+                           str(math.round_to(pstdev_safe(c.nums), 4)) + "\n")
+    return strings.join(out, "")
+
+def pstdev_safe(xs: list[float]) -> float:
+    if len(xs) < 2:
+        return 0.0
+    return stats.pstdev(xs)
+
+def min_of(xs: list[float]) -> float:
+    v: float = xs[0]
+    for x in xs:
+        if x < v:
+            v = x
+    return v
+
+def max_of(xs: list[float]) -> float:
+    v: float = xs[0]
+    for x in xs:
+        if x > v:
+            v = x
+    return v
+
+def mean_of(xs: list[float]) -> float:
+    return stats.mean(xs)
+
+def distinct_count(xs: list[str]) -> int:
+    seen: list[str] = []
+    for s in xs:
+        found: bool = False
+        for t in seen:
+            if t == s:
+                found = True
+        if not found:
+            seen.append(copy(s))
+    return len(seen)
+
+
+# ── CSV ────────────────────────────────────────────────────
+
+# CSV を読みます。1 行目を見出しとして扱います。
+#
+# ★ 列の型は**中身を見て決めます**：その列の値が全部数として読めるなら
+#   数値の列、そうでなければ文字列の列です（空の値があれば文字列）。
+# ⚠️ 引用符（"…"）に対応しています（"" は " 1 個）。改行を含む欄も読めます。
+def read_csv(path: str) -> Frame:
+    return parse_csv(io.read_file(path))
+
+def parse_csv(text: str) -> Frame:
+    rows: list[list[str]] = split_csv(text)
+    if len(rows) == 0:
+        panic("frame: CSV が空です")
+
+    head: list[str] = rows[0]
+    ncol: int = len(head)
+    df: Frame = Frame()
+
+    j: int = 0
+    while j < ncol:
+        # その列の値を集める
+        cells: list[str] = []
+        i: int = 1
+        while i < len(rows):
+            r: list[str] = rows[i]
+            if len(r) != ncol:
+                panic("frame: " + str(i + 1) + " 行目の欄の数が見出しと違います（" +
+                      str(len(r)) + " と " + str(ncol) + "）")
+            cells.append(copy(r[j]))
+            i = i + 1
+
+        if all_numeric(cells):
+            xs: list[float] = []
+            for s in cells:
+                xs.append(float(s))
+            df.add_num(head[j], xs)
+        else:
+            df.add_text(head[j], cells)
+        j = j + 1
+    return df
+
+# 全部が数として読めるか（空の欄が 1 つでもあれば False）
+def all_numeric(cells: list[str]) -> bool:
+    if len(cells) == 0:
+        return False
+    for s in cells:
+        if not is_number(s):
+            return False
+    return True
+
+# ⚠️ float(s) は読めなければ panic するので、**先にここで確かめます**。
+#   （try で受けないのは、raises を宣言しない設計にそろえるためです）
+def is_number(s: str) -> bool:
+    t: str = strings.strip(s)
+    if len(t) == 0:
+        return False
+    i: int = 0
+    if strings.byte_at(t, 0) == 43 or strings.byte_at(t, 0) == 45:
+        i = 1
+    digits: int = 0
+    dots: int = 0
+    while i < len(t):
+        b: int = strings.byte_at(t, i)
+        if b >= 48 and b <= 57:
+            digits = digits + 1
+        elif b == 46:
+            dots = dots + 1
+            if dots > 1:
+                return False
+        elif b == 101 or b == 69:
+            # 指数部：e のあとは符号と数字だけ
+            if digits == 0:
+                return False
+            i = i + 1
+            if i < len(t) and (strings.byte_at(t, i) == 43 or
+                               strings.byte_at(t, i) == 45):
+                i = i + 1
+            ed: int = 0
+            while i < len(t):
+                eb: int = strings.byte_at(t, i)
+                if eb < 48 or eb > 57:
+                    return False
+                ed = ed + 1
+                i = i + 1
+            return ed > 0
+        else:
+            return False
+        i = i + 1
+    return digits > 0
+
+# CSV を「行 × 欄」に切ります（引用符に対応）
+def split_csv(text: str) -> list[list[str]]:
+    rows: list[list[str]] = []
+    row: list[str] = []
+    cell: list[str] = []
+    i: int = 0
+    n: int = len(text)
+    quoted: bool = False
+    started: bool = False
+
+    while i < n:
+        b: int = strings.byte_at(text, i)
+        if quoted:
+            if b == 34:
+                if i + 1 < n and strings.byte_at(text, i + 1) == 34:
+                    cell.append("\"")
+                    i = i + 1
+                else:
+                    quoted = False
+            else:
+                cell.append(strings.substr(text, i, 1))
+        elif b == 34:
+            quoted = True
+            started = True
+        elif b == 44:
+            row.append(strings.join(cell, ""))
+            cell = []
+            started = True
+        elif b == 10 or b == 13:
+            if b == 13 and i + 1 < n and strings.byte_at(text, i + 1) == 10:
+                i = i + 1
+            if started or len(cell) > 0 or len(row) > 0:
+                row.append(strings.join(cell, ""))
+                rows.append(row)
+                row = []
+                cell = []
+                started = False
+        else:
+            cell.append(strings.substr(text, i, 1))
+            started = True
+        i = i + 1
+
+    if started or len(cell) > 0 or len(row) > 0:
+        row.append(strings.join(cell, ""))
+        rows.append(row)
+    return rows
+
+
+def write_csv(df: Frame, path: str) -> None:
+    io.write_file(path, to_csv(df))
+
+def to_csv(df: Frame) -> str:
+    out: list[str] = []
+    j: int = 0
+    while j < df.width():
+        c: Column = df.cols[j]
+        out.append(quote_csv(c.name))
+        if j + 1 < df.width():
+            out.append(",")
+        j = j + 1
+    out.append("\n")
+
+    i: int = 0
+    while i < df.rows():
+        j2: int = 0
+        while j2 < df.width():
+            c2: Column = df.cols[j2]
+            out.append(quote_csv(c2.cell(i)))
+            if j2 + 1 < df.width():
+                out.append(",")
+            j2 = j2 + 1
+        out.append("\n")
+        i = i + 1
+    return strings.join(out, "")
+
+# , " 改行 のどれかを含むときだけ引用します
+def quote_csv(s: str) -> str:
+    need: bool = False
+    i: int = 0
+    while i < len(s):
+        b: int = strings.byte_at(s, i)
+        if b == 44 or b == 34 or b == 10 or b == 13:
+            need = True
+        i = i + 1
+    if not need:
+        return copy(s)
+    return "\"" + strings.replace(copy(s), "\"", "\"\"") + "\""

@@ -1,0 +1,7 @@
+# ERROR: range の増分が定数ではありません
+# ERROR: = ヒント: 増分は整数リテラルで書いてください
+def main() -> int:
+    s: int = 2
+    for i in range(0, 10, s):
+        print(i)
+    return 0

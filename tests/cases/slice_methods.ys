@@ -1,0 +1,62 @@
+# OUTPUT: hello
+# OUTPUT: world
+# OUTPUT: hello
+# OUTPUT: hello world
+# OUTPUT: 範囲外でも落ちない: [lo world] [] []
+# OUTPUT: 3
+# OUTPUT: 2 3 4
+# OUTPUT: 4
+# OUTPUT: 30
+# OUTPUT: 2
+# OUTPUT: 5 10 20
+# OUTPUT: 10
+# OUTPUT: 1
+# OUTPUT: -1
+# OUTPUT: 20 5
+# OUTPUT: 2 3
+# OUTPUT: 5
+# OUTPUT: 0
+# OUTPUT: c
+# OUTPUT: 1
+# EXIT: 0
+# スライスと list のメソッド
+#   ★ スライスは **新しい値を作ります**（借用ではない）。
+#     範囲は Python と同じ規則で丸めるので、はみ出しても落ちません。
+
+def main() -> int:
+    s: str = "hello world"
+    print(s[0:5])
+    print(s[6:])
+    print(s[:5])
+    print(s[:])
+    print(f"範囲外でも落ちない: [{s[3:100]}] [{s[100:200]}] [{s[5:2]}]")
+
+    xs: list[int] = [1, 2, 3, 4, 5]
+    ys: list[int] = xs[1:4]
+    print(len(ys))
+    print(f"{ys[0]} {ys[1]} {ys[2]}")
+    print(len(xs[:2]) + len(xs[3:]))
+
+    # メソッド
+    zs: list[int] = [10, 20, 30]
+    print(zs.pop())
+    print(len(zs))
+    zs.insert(0, 5)
+    print(f"{zs[0]} {zs[1]} {zs[2]}")
+    print(zs.remove(1))
+    print(zs.index(20))
+    print(zs.index(999))
+    zs.reverse()
+    print(f"{zs[0]} {zs[1]}")
+    ws: list[int] = zs.copy()
+    ws.append(99)
+    print(f"{len(zs)} {len(ws)}")
+    zs.extend(ws)
+    print(len(zs))
+    zs.clear()
+    print(len(zs))
+
+    ss: list[str] = ["a", "b", "c"]
+    print(ss.pop())
+    print(ss.index("b"))
+    return 0

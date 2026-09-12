@@ -1,0 +1,4 @@
+# EXIT: 5
+def main() -> int:
+    _my_var2: int = 5
+    return _my_var2

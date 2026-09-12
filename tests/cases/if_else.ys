@@ -1,0 +1,7 @@
+# OUTPUT: 2
+def main() -> int:
+    if False:
+        print(1)
+    else:
+        print(2)
+    return 0

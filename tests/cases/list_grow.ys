@@ -1,0 +1,17 @@
+# OUTPUT: 100
+# OUTPUT: 4950
+# 初期 cap は 4。倍々に伸びることの確認
+def main() -> int:
+    xs: list[int] = []
+    i: int = 0
+    while i < 100:
+        xs.append(i)
+        i += 1
+    print(len(xs))
+    total: int = 0
+    j: int = 0
+    while j < len(xs):
+        total += xs[j]
+        j += 1
+    print(total)
+    return 0

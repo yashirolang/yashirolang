@@ -1,0 +1,6 @@
+# EXIT: 1
+# 比較は算術より弱い：(1 + 2) < (2 * 3)
+def main() -> int:
+    if 1 + 2 < 2 * 3:
+        return 1
+    return 0

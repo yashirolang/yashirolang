@@ -1,0 +1,21 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# FLAGS: --deny-move --deny-borrow
+# EXIT: 2
+# own で受け取った値は、保存しても返してもよい
+class Bag:
+    items: list[str]
+
+    def init(self) -> None:
+        self.items = []
+
+    def add(mut self, s: own str) -> None:
+        self.items.append(s)
+
+def relabel(name: own str) -> str:
+    return name
+
+def main() -> int:
+    b: Bag = Bag()
+    b.add("x")
+    b.add(relabel("y"))
+    return len(b.items)

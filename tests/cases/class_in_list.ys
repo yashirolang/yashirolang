@@ -1,0 +1,16 @@
+# OUTPUT: 2
+# OUTPUT: 10
+# OUTPUT: 20
+# list[T] の要素にクラスを置く（type_equal の再帰比較＋クラスの同一性）
+class Item:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+def main() -> int:
+    xs: list[Item] = [Item(10), Item(20)]
+    print(len(xs))
+    for it in xs:
+        print(it.v)
+    return 0

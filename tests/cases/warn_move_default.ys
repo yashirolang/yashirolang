@@ -1,0 +1,10 @@
+# STAGE0-ONLY: 所有権検査は C 版だけ
+# WARN: warning[E-MOVE-1]: 移動済みの値 'xs' を使っています
+# EXIT: 3
+# 既定は警告。生成される IR は v1 のままなので、実行はできる
+#         （--deny-move を付けるとエラーになる。err_move_assign を参照）
+def main() -> int:
+    xs: list[int] = [1, 2, 3]
+    ys: list[int] = xs
+    print(len(ys))
+    return len(xs)

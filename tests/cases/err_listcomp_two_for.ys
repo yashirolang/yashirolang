@@ -1,0 +1,7 @@
+# ERROR: 内包表記の 'for' が 2 つあります
+# for は 1 つだけ（入れ子は変数に入れる）
+def main() -> int:
+    xs: list[int] = [1, 2]
+    ys: list[int] = [x + y for x in xs for y in xs]
+    print(str(len(ys)))
+    return 0

@@ -1,0 +1,6 @@
+# ERROR: モジュール 'nosuch' が見つかりません
+# ERROR: 次のパスを探しました
+import nosuch
+
+def main() -> int:
+    return 0

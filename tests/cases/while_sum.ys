@@ -1,0 +1,9 @@
+# OUTPUT: 55
+def main() -> int:
+    i: int = 1
+    total: int = 0
+    while i <= 10:
+        total += i
+        i += 1
+    print(total)
+    return 0

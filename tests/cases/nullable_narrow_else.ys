@@ -1,0 +1,19 @@
+# OUTPUT: -1
+# OUTPUT: 5
+# if x is None: の else 節では絞り込まれている
+class Box:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+def get(b: Box | None) -> int:
+    if b is None:
+        return -1
+    else:
+        return b.v
+
+def main() -> int:
+    print(get(None))
+    print(get(Box(5)))
+    return 0

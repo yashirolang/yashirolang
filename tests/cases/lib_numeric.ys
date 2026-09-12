@@ -1,0 +1,81 @@
+# OUTPUT: done
+# EXIT: 0
+# 数値解析ライブラリ（関数を受け取る計算）
+#   ★ 関数型が入るまで、この種のものは一切書けませんでした
+import numeric
+import math
+import linalg
+
+def approx(name: str, got: float, want: float, tol: float) -> None:
+    if math.fabs(got - want) > tol:
+        print(f"NG {name} got={got} want={want}")
+
+def sq(x: float) -> float:
+    return x * x
+
+def cube_minus2(x: float) -> float:
+    return x * x * x - 2.0
+
+def d_cube(x: float) -> float:
+    return 3.0 * x * x
+
+def bell(x: float) -> float:
+    return math.exp(-x * x)
+
+def shifted(x: float) -> float:
+    return (x - 3.0) * (x - 3.0) + 1.0
+
+def decay(t: float, y: float) -> float:
+    return -2.0 * y
+
+def dbl(x: float) -> float:
+    return x * 2.0
+
+def positive(x: float) -> bool:
+    return x > 0.0
+
+def add(a: float, b: float) -> float:
+    return a + b
+
+def main() -> int:
+    # 積分
+    approx("台形 x²", numeric.trapezoid(sq, 0.0, 1.0, 100000), 1.0/3.0, 1.0e-9)
+    approx("シンプソン x²", numeric.simpson(sq, 0.0, 1.0, 100), 1.0/3.0, 1.0e-14)
+    approx("シンプソン sin", numeric.simpson(math.sin, 0.0, math.pi(), 1000), 2.0, 1.0e-9)
+    approx("自動 exp", numeric.integrate(math.exp, 0.0, 1.0, 1.0e-12),
+           math.e() - 1.0, 1.0e-10)
+    # ガウス積分 ∫e^{-x²} = √π（[-6,6] でほぼ全部）
+    approx("ガウス積分", numeric.integrate(bell, -6.0, 6.0, 1.0e-12),
+           math.sqrt(math.pi()), 1.0e-9)
+
+    # 求根：2 の立方根
+    c: float = math.cbrt(2.0)
+    approx("二分法", numeric.bisect(cube_minus2, 0.0, 3.0), c, 1.0e-12)
+    approx("ニュートン", numeric.newton(cube_minus2, d_cube, 1.0, 1.0e-15), c, 1.0e-12)
+    approx("割線法", numeric.secant(cube_minus2, 0.0, 3.0, 1.0e-15), c, 1.0e-12)
+    approx("cos の零点", numeric.bisect(math.cos, 0.0, 3.0), math.pi()/2.0, 1.0e-12)
+
+    # 微分
+    approx("d/dx sin(1)", numeric.derivative(math.sin, 1.0), math.cos(1.0), 1.0e-9)
+    approx("d²/dx² sin(1)", numeric.derivative2(math.sin, 1.0), -math.sin(1.0), 1.0e-6)
+
+    # 常微分方程式 dy/dt = -2y, y(0)=1 → y(t)=e^{-2t}
+    ys: list[float] = numeric.solve_ode(decay, 0.0, 1.0, 1.0, 100)
+    approx("ODE 段数", float(len(ys)), 101.0, 0.0)
+    # ★ RK4 の全体誤差は h⁴。h=0.01 なので 1e-8 が妥当な目安
+    approx("ODE y(1)", ys[100], math.exp(-2.0), 1.0e-8)
+
+    # 最適化：(x-3)²+1 の極小は x=3
+    approx("最小化", numeric.minimize(shifted, 0.0, 10.0, 1.0e-12), 3.0, 1.0e-6)
+
+    # 列の操作
+    xs: list[float] = [1.0, -2.0, 3.0]
+    approx("map", linalg.vsum(numeric.map(xs, dbl)), 4.0, 0.0)
+    approx("filter", float(len(numeric.filter(xs, positive))), 2.0, 0.0)
+    approx("reduce", numeric.reduce(xs, add, 0.0), 2.0, 0.0)
+    if numeric.all(xs, positive):
+        print("NG all")
+    if not numeric.any(xs, positive):
+        print("NG any")
+    print("done")
+    return 0

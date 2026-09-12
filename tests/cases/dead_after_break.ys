@@ -1,0 +1,8 @@
+# OUTPUT: 2
+# break の後ろは到達不能（規約 R7 の dead.N ラベルになる）
+def main() -> int:
+    while True:
+        break
+        print(1)
+    print(2)
+    return 0

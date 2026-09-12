@@ -1,0 +1,25 @@
+# OUTPUT: 3 余り 2
+# OUTPUT: True at 1
+# OUTPUT: 1 2 3
+# EXIT: 0
+# pair.Pair / Triple（タプルの代わり）
+#   ★ タプルが足すのは構文の短さだけ。表現できることは増えません。
+import pair
+
+def divmod2(a: int, b: int) -> pair.Pair[int, int]:
+    return pair.Pair(a // b, a % b)
+
+def find(xs: list[str], k: str) -> pair.Pair[bool, int]:
+    for i, x in enumerate(xs):
+        if x == k:
+            return pair.Pair(True, i)
+    return pair.Pair(False, -1)
+
+def main() -> int:
+    r: pair.Pair[int, int] = divmod2(17, 5)
+    print(f"{r.first} 余り {r.second}")
+    f: pair.Pair[bool, int] = find(["a", "b", "c"], "b")
+    print(f"{f.first} at {f.second}")
+    t: pair.Triple[int, int, int] = pair.Triple(1, 2, 3)
+    print(f"{t.first} {t.second} {t.third}")
+    return 0

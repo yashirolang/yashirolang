@@ -1,0 +1,7 @@
+# ERROR: フィールド 'x' は既に宣言されています
+class P:
+    x: int
+    x: str
+
+def main() -> int:
+    return 0

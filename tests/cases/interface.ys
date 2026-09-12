@@ -1,0 +1,53 @@
+# OUTPUT: (1, 2)
+# OUTPUT: 2
+# OUTPUT: (1, 2)
+# OUTPUT: [hi]
+# OUTPUT: [hi]
+# EXIT: 0
+# インタフェース
+#   ★ 表現は「vtable へのポインタをオブジェクトの先頭に置く」方式です。
+#     ファットポインタ（実体 + vtable の 2 語）にすると、この処理系の
+#     「値はどれも 8 バイト」という前提が全部崩れるためです。
+#     おかげで **クラス → インタフェースの変換は何もしません**（同じポインタ）。
+interface Show:
+    def show(self) -> str
+
+interface Sized:
+    def size(self) -> int
+
+class Point(Show, Sized):
+    x: int
+    y: int
+    def init(self, x: int, y: int) -> None:
+        self.x = x
+        self.y = y
+    def show(self) -> str:
+        return f"({self.x}, {self.y})"
+    def size(self) -> int:
+        return 2
+
+class Label(Show):
+    text: str
+    def init(self, text: own str) -> None:
+        self.text = text
+    def show(self) -> str:
+        return "[" + self.text + "]"
+
+def print_all(xs: list[Show]) -> None:
+    for x in xs:
+        print(x.show())
+
+def main() -> int:
+    p: Point = Point(1, 2)
+    print(p.show())
+    print(p.size())
+
+    # ★ 別々のクラスを 1 つのリストに入れる（これが目的）
+    xs: list[Show] = []
+    xs.append(p)
+    xs.append(Label("hi"))
+    print_all(xs)
+
+    s: Show = Label("hi")
+    print(s.show())
+    return 0

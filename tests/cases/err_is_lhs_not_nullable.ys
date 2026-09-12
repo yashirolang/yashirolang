@@ -1,0 +1,7 @@
+# ERROR: 型 'int' の値が None になることはありません
+# ERROR: None になれるのは str / list[T] / class だけです
+def main() -> int:
+    n: int = 1
+    if n is None:
+        return 1
+    return 0

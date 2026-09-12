@@ -1,0 +1,19 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# FLAGS: --deny-borrow
+# ERROR: error[E-BORROW-3]: 借用した値 't' をフィールドに保存できません
+# ERROR: 引数 's' は借用です（既定）
+# 局所変数に入れ替えても借りものは借りもの（別名を追いかける）
+class Box:
+    label: str
+
+    def init(self, s: own str) -> None:
+        self.label = s
+
+    def rename(mut self, s: str) -> None:
+        t: str = s
+        self.label = t
+
+def main() -> int:
+    b: Box = Box("x")
+    b.rename("y")
+    return len(b.label)

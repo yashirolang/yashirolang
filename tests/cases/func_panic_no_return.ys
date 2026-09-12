@@ -1,0 +1,9 @@
+# EXIT: 3
+# ★ panic() は戻らないので、その後ろに return が無くてもよい。
+def pick(n: int) -> int:
+    if n > 0:
+        return 3
+    panic("正の数しか受け取れません")
+
+def main() -> int:
+    return pick(1)

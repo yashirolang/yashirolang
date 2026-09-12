@@ -1,0 +1,7 @@
+# OUTPUT: 0
+# OUTPUT: 2
+# OUTPUT: 4
+def main() -> int:
+    for i in range(0, 6, 2):
+        print(i)
+    return 0

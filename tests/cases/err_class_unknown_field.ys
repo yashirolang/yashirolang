@@ -1,0 +1,8 @@
+# ERROR: クラス 'P' にフィールド 'z' はありません
+# ERROR: クラスの定義はここです
+class P:
+    x: int
+
+def main() -> int:
+    p: P = P()
+    return p.z

@@ -1,0 +1,7 @@
+# ERROR: モジュール 'lib' は値として使えません
+# ERROR: モジュールの中身は 'lib.名前' の形で使います
+import lib
+
+def main() -> int:
+    print(lib)
+    return 0

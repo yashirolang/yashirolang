@@ -1,0 +1,35 @@
+# OUTPUT: parse: 7
+# OUTPUT: io: なし
+# EXIT: 0
+# raises A | B。タグで振り分けるので、正しい except が選ばれる
+class IOError:
+    message: str
+
+    def init(self, message: own str) -> None:
+        self.message = message
+
+class ParseError:
+    line: int
+
+    def init(self, line: int) -> None:
+        self.line = line
+
+def step(mode: int) -> int raises IOError | ParseError:
+    if mode == 1:
+        raise IOError("なし")
+    if mode == 2:
+        raise ParseError(7)
+    return 0
+
+def run(mode: int) -> None:
+    try:
+        print("ok:" + str(step(mode)))
+    except IOError as e:
+        print("io: " + e.message)
+    except ParseError as p:
+        print("parse: " + str(p.line))
+
+def main() -> int:
+    run(2)
+    run(1)
+    return 0

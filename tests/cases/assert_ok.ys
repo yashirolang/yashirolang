@@ -1,0 +1,8 @@
+# OUTPUT: ok
+# EXIT: 0
+# assert（パーサで if not cond: panic(msg) に脱糖する）
+def main() -> int:
+    assert 1 == 1
+    assert 2 > 1, "だめ"
+    print("ok")
+    return 0

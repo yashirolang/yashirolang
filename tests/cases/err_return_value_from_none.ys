@@ -1,0 +1,7 @@
+# ERROR: 戻り型が None の関数 'f' は値を返せません
+def f() -> None:
+    return 1
+
+def main() -> int:
+    f()
+    return 0

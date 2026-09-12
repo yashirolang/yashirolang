@@ -1,0 +1,6 @@
+# ERROR: if の条件には bool が必要です
+# ERROR: これは 'str' 型です
+def main() -> int:
+    if "yes":
+        return 1
+    return 0

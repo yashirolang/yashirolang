@@ -1,0 +1,25 @@
+# OUTPUT: 9
+# OUTPUT: 2
+# OUTPUT: -1
+# OUTPUT: 2
+# OUTPUT: True
+# OUTPUT: False
+# OUTPUT: a
+# OUTPUT: b
+# str -> int の表。値に list の添字を入れて使う（14.6 節）
+import dict
+
+def main() -> int:
+    d: dict.Dict[str, int] = dict.Dict()
+    d.set("a", 1)
+    d.set("b", 2)
+    d.set("a", 9)
+    print(d.get("a"))
+    print(d.get("b"))
+    print(d.get_or("z", -1))
+    print(d.len())
+    print(d.has("b"))
+    print(d.has("z"))
+    for k in d.keys():
+        print(k)
+    return 0

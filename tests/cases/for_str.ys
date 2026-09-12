@@ -1,0 +1,8 @@
+# OUTPUT: a
+# OUTPUT: b
+# OUTPUT: c
+# ★ len() と [] が str にも使えるので、脱糖がそのまま通用する
+def main() -> int:
+    for c in "abc":
+        print(c)
+    return 0

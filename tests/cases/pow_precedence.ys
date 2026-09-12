@@ -1,0 +1,5 @@
+# OUTPUT: -9
+# ** は単項マイナスより強い：-(3 ** 2)
+def main() -> int:
+    print(0 - 3 ** 2)
+    return 0

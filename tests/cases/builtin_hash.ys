@@ -1,0 +1,17 @@
+# OUTPUT: True
+# OUTPUT: True
+# OUTPUT: True
+# OUTPUT: True
+# OUTPUT: True
+# EXIT: 0
+# hash 組み込み
+#   ★ **単相化のおかげで**、ジェネリックなコードの中で hash(k) と書けます
+#     （K が確定してから型検査されるため）。dict がこれを使っています。
+#   ⚠️ FNV-1a。暗号用ではありません。
+def main() -> int:
+    print(hash("abc") == hash("abc"))
+    print(hash("abc") != hash("abd"))
+    print(hash(42) == hash(42))
+    print(hash(1.5) != hash(2.5))
+    print(hash(True) != hash(False))
+    return 0

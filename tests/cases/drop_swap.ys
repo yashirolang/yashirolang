@@ -1,0 +1,33 @@
+# STAGE0-ONLY: 解放の挿入は C 版だけ
+# FLAGS: --drop
+# OUTPUT: world?hello!
+# OUTPUT: 31
+# OUTPUT: 2 1
+# EXIT: 0
+# 入れ替え（a, b = b, a）が二重解放にならないこと
+#
+#   ⚠️ **実際に壊しました。** 隠し変数 swap.N を（ほかの脱糖と同じように）
+#     「借り」として扱うと、こうなります。
+#       swap.0 = b      ← b は自分のものと思ったまま
+#       a = swap.0      ← a の古い値を解放する。だが swap.1 がそれを指している
+#       b = swap.1      ← **解放済みの領域**を b に入れてしまう
+#     実行すると "out of memory" で落ちました。
+#
+#   ★ 直し方は ownck.c の is_owning_hidden。swap.N だけは**所有**にして、
+#     右辺を読んだ時点で元の変数を null 化します。
+def main() -> int:
+    s: str = "hello" + "!"
+    t: str = "world" + "?"
+    s, t = t, s
+    print(s + t)
+
+    xs: list[int] = [1, 2]
+    ys: list[int] = [3, 4]
+    xs, ys = ys, xs
+    print(str(xs[0]) + str(ys[0]))
+
+    a: int = 1
+    b: int = 2
+    a, b = b, a
+    print(str(a) + " " + str(b))
+    return 0

@@ -1,0 +1,19 @@
+# OUTPUT: 12
+# OUTPUT: 0
+# ★ ド・モルガン。not(a or b) = (not a) and (not b)
+#   ガード節を or で書いても、その後ろでは両方とも絞り込める。
+class Box:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+def add(b: Box | None, c: Box | None) -> int:
+    if b is None or c is None:
+        return 0
+    return b.v + c.v
+
+def main() -> int:
+    print(add(Box(5), Box(7)))
+    print(add(None, Box(7)))
+    return 0

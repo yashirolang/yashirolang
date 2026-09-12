@@ -1,0 +1,18 @@
+# float の級数 2000 万項（浮動小数の算術を見る）
+import time
+
+N: int = 20000000
+
+def main() -> int:
+    t0: int = time.monotonic_ns()
+    s: float = 0.0
+    sign: float = 1.0
+    i: int = 0
+    while i < N:
+        s = s + sign / float(2 * i + 1)
+        sign = -sign
+        i = i + 1
+    ms: float = time.since_ms(t0)
+    print("RESULT " + str(s * 4.0))
+    print("TIME_MS " + str(ms))
+    return 0

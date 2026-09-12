@@ -1,0 +1,6 @@
+# ERROR: enumerate には 2 つのループ変数が必要です
+# enumerate は 2 つのループ変数を要求する
+def main() -> int:
+    for x in enumerate([1, 2]):
+        print(x)
+    return 0

@@ -1,0 +1,36 @@
+# STAGE0-ONLY: 解放の挿入は C 版だけ
+# FLAGS: --drop --deny-move --deny-borrow --deny-mut
+# OUTPUT: 2
+# OUTPUT: end
+# OUTPUT: drop b
+# OUTPUT: drop a
+# EXIT: 0
+# 借りているものは解放しない。
+#         ★ 引数・for のループ変数・self のフィールドの借用が対象。
+#           もし解放してしまうと、ここで二重解放になります。
+class Res:
+    name: str
+
+    def init(self, name: own str) -> None:
+        self.name = name
+
+    def label(self) -> str:
+        return self.name
+
+    def drop(self) -> None:
+        print("drop " + self.name)
+
+def count(rs: list[Res]) -> int:
+    n: int = 0
+    for r in rs:
+        s: str = r.label()
+        n = n + 1
+    return n
+
+def main() -> int:
+    a: Res = Res("a")
+    b: Res = Res("b")
+    rs: list[Res] = []
+    print(str(count(rs) + 2))
+    print("end")
+    return 0

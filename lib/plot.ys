@@ -1,0 +1,500 @@
+# plot — 作図
+#
+# ★ **出力は SVG のテキストです。** 画像の圧縮も、窓を開く処理も要りません。
+#   文字列を組み立てて書き出すだけなので、**本言語だけで完結**します。
+#   出来た .svg はブラウザでそのまま開けます。
+#
+# ⚠️ **matplotlib のコードは見ていません。** SVG は W3C の公開仕様です。
+#   関数名も matplotlib ではなく、この言語の書き味に合わせて選んでいます。
+#
+# 使い方:
+#
+#   import plot
+#   p: plot.Plot = plot.Plot(640, 400)
+#   p.title("正弦波")
+#   p.line("sin", xs, ys)
+#   p.save("out.svg")
+#
+# ⚠️ ベアメタルでは `save` が使えません（`io` に依存）。
+#    図の文字列だけ欲しいときは `to_svg()` を使ってください。
+import io
+import math
+import strings
+
+# 系列の種類
+KIND_LINE: int = 0
+KIND_SCATTER: int = 1
+KIND_BAR: int = 2
+
+# 既定の色（順に使い回します）
+def palette(i: int) -> str:
+    k: int = i % 6
+    if k == 0:
+        return "#1f5fd0"
+    if k == 1:
+        return "#d94f2b"
+    if k == 2:
+        return "#2e9e4f"
+    if k == 3:
+        return "#9b51c9"
+    if k == 4:
+        return "#c9a227"
+    return "#00868b"
+
+
+# ── 数と文字列 ──────────────────────────────────────────────
+
+def fcopy(a: list[float]) -> list[float]:
+    v: list[float] = []
+    for x in a:
+        v.append(x)
+    return v
+
+def scopy(a: list[str]) -> list[str]:
+    v: list[str] = []
+    for s in a:
+        v.append(copy(s))
+    return v
+
+# 座標に使う数（小数 2 桁まで。SVG のファイルを小さく保つため）
+def num(x: float) -> str:
+    return str(math.round_to(x, 2))
+
+# 目盛りのラベル（刻み幅から小数の桁数を決めます）
+def tick_label(v: float, step: float) -> str:
+    nd: int = 0
+    if step > 0.0 and step < 1.0:
+        nd = 0 - int(math.floor(math.log10(step)))
+        if nd > 6:
+            nd = 6
+    r: float = math.round_to(v, nd)
+    if r == 0.0:
+        r = 0.0            # -0.0 を 0 に揃える
+    if nd == 0:
+        return str(int(r))
+    return str(r)
+
+# SVG の本文に入れてよい形に直します（& < > の 3 つ）
+def esc(s: str) -> str:
+    a: str = strings.replace(copy(s), "&", "&amp;")
+    b: str = strings.replace(a, "<", "&lt;")
+    return strings.replace(b, ">", "&gt;")
+
+# 「きりの良い」刻み幅（1・2・5 × 10^n の中から選ぶ）
+def nice_step(span: float, want: int) -> float:
+    if span <= 0.0 or want < 1:
+        return 1.0
+    raw: float = span / float(want)
+    mag: float = math.pow(10.0, math.floor(math.log10(raw)))
+    n: float = raw / mag
+    if n <= 1.0:
+        return mag
+    if n <= 2.0:
+        return 2.0 * mag
+    if n <= 5.0:
+        return 5.0 * mag
+    return 10.0 * mag
+
+
+# ── 系列 ────────────────────────────────────────────────────
+
+class Series:
+    name: str
+    xs: list[float]
+    ys: list[float]
+    kind: int
+    color: str
+
+    def init(self, name: str, xs: own list[float], ys: own list[float],
+             kind: int, color: str) -> None:
+        if len(xs) != len(ys):
+            panic("plot: x と y の長さが違います（" + str(len(xs)) + " と " +
+                  str(len(ys)) + "）")
+        self.name = copy(name)
+        self.xs = xs
+        self.ys = ys
+        self.kind = kind
+        self.color = copy(color)
+
+
+# ── 図 ──────────────────────────────────────────────────────
+
+class Plot:
+    width: int
+    height: int
+    title_: str
+    xlabel_: str
+    ylabel_: str
+    items: list[Series]
+    # 棒グラフの目盛り名（空なら数値の軸を描きます）
+    cats: list[str]
+    # 軸の範囲を自分で決めたとき
+    fixed: bool
+    x0: float
+    x1: float
+    y0: float
+    y1: float
+
+    def init(self, width: int, height: int) -> None:
+        if width < 120 or height < 120:
+            panic("plot.Plot: 図は 120x120 以上にしてください")
+        self.width = width
+        self.height = height
+        self.title_ = ""
+        self.xlabel_ = ""
+        self.ylabel_ = ""
+        self.items = []
+        self.cats = []
+        self.fixed = False
+        self.x0 = 0.0
+        self.x1 = 1.0
+        self.y0 = 0.0
+        self.y1 = 1.0
+
+    def title(mut self, s: str) -> None:
+        self.title_ = copy(s)
+
+    def xlabel(mut self, s: str) -> None:
+        self.xlabel_ = copy(s)
+
+    def ylabel(mut self, s: str) -> None:
+        self.ylabel_ = copy(s)
+
+    # 軸の範囲を固定します（呼ばなければ中身から自動で決めます）
+    def limits(mut self, x0: float, x1: float, y0: float, y1: float) -> None:
+        if x1 <= x0 or y1 <= y0:
+            panic("plot.limits: 最小 < 最大 で渡してください")
+        self.fixed = True
+        self.x0 = x0
+        self.x1 = x1
+        self.y0 = y0
+        self.y1 = y1
+
+    # ── 系列を足す ──────────────────────────────────────
+
+    def line(mut self, name: str, xs: list[float], ys: list[float]) -> None:
+        c: str = palette(len(self.items))
+        self.items.append(Series(name, fcopy(xs), fcopy(ys), KIND_LINE, c))
+
+    def scatter(mut self, name: str, xs: list[float], ys: list[float]) -> None:
+        c: str = palette(len(self.items))
+        self.items.append(Series(name, fcopy(xs), fcopy(ys), KIND_SCATTER, c))
+
+    # 棒グラフ。ラベルは目盛りに使います（同じ図に 1 つだけ）
+    def bar(mut self, name: str, labels: list[str], hs: list[float]) -> None:
+        if len(labels) != len(hs):
+            panic("plot.bar: ラベルと高さの数が違います")
+        xs: list[float] = []
+        for i in range(len(hs)):
+            xs.append(float(i))
+        c: str = palette(len(self.items))
+        self.items.append(Series(name, xs, fcopy(hs), KIND_BAR, c))
+        self.cats = scopy(labels)
+
+    # ヒストグラム（度数を数えて棒グラフにします）
+    def hist(mut self, name: str, a: list[float], bins: int) -> None:
+        if bins < 1:
+            panic("plot.hist: bins は 1 以上です")
+        if len(a) == 0:
+            panic("plot.hist: 空のリストです")
+        lo: float = a[0]
+        hi: float = a[0]
+        for x in a:
+            if x < lo:
+                lo = x
+            if x > hi:
+                hi = x
+        if hi <= lo:
+            hi = lo + 1.0
+        w: float = (hi - lo) / float(bins)
+        counts: list[float] = []
+        for i in range(bins):
+            counts.append(0.0)
+        for x in a:
+            k: int = int((x - lo) / w)
+            if k < 0:
+                k = 0
+            if k >= bins:
+                k = bins - 1
+            counts[k] = counts[k] + 1.0
+        labels: list[str] = []
+        for i in range(bins):
+            labels.append(tick_label(lo + float(i) * w, w))
+        self.bar(name, labels, counts)
+
+    # ── 出力 ────────────────────────────────────────────
+
+    def save(self, path: str) -> None:
+        io.write_file(path, self.to_svg())
+
+    def to_svg(self) -> str:
+        if len(self.items) == 0:
+            panic("plot: 系列が 1 つもありません")
+
+        # 余白（左は目盛りの文字ぶん広く取ります）
+        ml: int = 62
+        mr: int = 18
+        mt: int = 34
+        mb: int = 46
+        if len(self.title_) == 0:
+            mt = 18
+        pw: float = float(self.width - ml - mr)
+        ph: float = float(self.height - mt - mb)
+        px: float = float(ml)
+        py: float = float(mt)
+
+        bars: bool = self.has_bars()
+
+        # ── 値の範囲を決める ──
+        xlo: float = self.x0
+        xhi: float = self.x1
+        ylo: float = self.y0
+        yhi: float = self.y1
+        if not self.fixed:
+            xlo = self.min_x()
+            xhi = self.max_x()
+            ylo = self.min_y()
+            yhi = self.max_y()
+            # 棒グラフは 0 を含めます（高さの比較が狂うため）
+            if bars:
+                if ylo > 0.0:
+                    ylo = 0.0
+                if yhi < 0.0:
+                    yhi = 0.0
+                # 0 の側は動かさず、伸びている側にだけ余白を足します
+                if yhi > 0.0:
+                    yhi = yhi + (yhi - ylo) * 0.05
+                if ylo < 0.0:
+                    ylo = ylo - (yhi - ylo) * 0.05
+                xlo = xlo - 0.5
+                xhi = xhi + 0.5
+            else:
+                pad: float = (yhi - ylo) * 0.05
+                if pad <= 0.0:
+                    pad = 1.0
+                ylo = ylo - pad
+                yhi = yhi + pad
+            if xhi <= xlo:
+                xhi = xlo + 1.0
+
+        out: list[str] = []
+        out.append("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" +
+                   str(self.width) + "\" height=\"" + str(self.height) +
+                   "\" viewBox=\"0 0 " + str(self.width) + " " +
+                   str(self.height) + "\">\n")
+        out.append("<rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>\n")
+        out.append("<g font-family=\"sans-serif\" font-size=\"11\" " +
+                   "fill=\"#333333\">\n")
+
+        if len(self.title_) > 0:
+            out.append("<text x=\"" + num(px + pw * 0.5) + "\" y=\"20\" " +
+                       "text-anchor=\"middle\" font-size=\"14\">" +
+                       esc(self.title_) + "</text>\n")
+
+        # ── 目盛りと補助線 ──
+        ystep: float = nice_step(yhi - ylo, 5)
+        yv: float = math.ceil(ylo / ystep) * ystep
+        while yv <= yhi + ystep * 0.001:
+            sy: float = py + ph - (yv - ylo) / (yhi - ylo) * ph
+            out.append("<line x1=\"" + num(px) + "\" y1=\"" + num(sy) +
+                       "\" x2=\"" + num(px + pw) + "\" y2=\"" + num(sy) +
+                       "\" stroke=\"#e6e6e6\"/>\n")
+            out.append("<text x=\"" + num(px - 6.0) + "\" y=\"" +
+                       num(sy + 4.0) + "\" text-anchor=\"end\">" +
+                       esc(tick_label(yv, ystep)) + "</text>\n")
+            yv = yv + ystep
+
+        if bars and len(self.cats) > 0:
+            i: int = 0
+            while i < len(self.cats):
+                sx: float = px + (float(i) - xlo) / (xhi - xlo) * pw
+                out.append("<text x=\"" + num(sx) + "\" y=\"" +
+                           num(py + ph + 16.0) + "\" text-anchor=\"middle\">" +
+                           esc(self.cats[i]) + "</text>\n")
+                i = i + 1
+        else:
+            xstep: float = nice_step(xhi - xlo, 6)
+            xv: float = math.ceil(xlo / xstep) * xstep
+            while xv <= xhi + xstep * 0.001:
+                sx2: float = px + (xv - xlo) / (xhi - xlo) * pw
+                out.append("<line x1=\"" + num(sx2) + "\" y1=\"" + num(py) +
+                           "\" x2=\"" + num(sx2) + "\" y2=\"" +
+                           num(py + ph) + "\" stroke=\"#f0f0f0\"/>\n")
+                out.append("<text x=\"" + num(sx2) + "\" y=\"" +
+                           num(py + ph + 16.0) +
+                           "\" text-anchor=\"middle\">" +
+                           esc(tick_label(xv, xstep)) + "</text>\n")
+                xv = xv + xstep
+
+        # ── 枠 ──
+        out.append("<rect x=\"" + num(px) + "\" y=\"" + num(py) +
+                   "\" width=\"" + num(pw) + "\" height=\"" + num(ph) +
+                   "\" fill=\"none\" stroke=\"#888888\"/>\n")
+
+        # ── 系列本体 ──
+        nb: int = self.bar_count()
+        bi: int = 0
+        si: int = 0
+        while si < len(self.items):
+            s: Series = self.items[si]
+            if s.kind == KIND_BAR:
+                out.append(self.draw_bars(s, bi, nb, px, py, pw, ph,
+                                          xlo, xhi, ylo, yhi))
+                bi = bi + 1
+            elif s.kind == KIND_SCATTER:
+                out.append(self.draw_points(s, px, py, pw, ph,
+                                            xlo, xhi, ylo, yhi))
+            else:
+                out.append(self.draw_line(s, px, py, pw, ph,
+                                          xlo, xhi, ylo, yhi))
+            si = si + 1
+
+        # ── 軸の名前 ──
+        if len(self.xlabel_) > 0:
+            out.append("<text x=\"" + num(px + pw * 0.5) + "\" y=\"" +
+                       str(self.height - 8) + "\" text-anchor=\"middle\">" +
+                       esc(self.xlabel_) + "</text>\n")
+        if len(self.ylabel_) > 0:
+            out.append("<text x=\"14\" y=\"" + num(py + ph * 0.5) +
+                       "\" text-anchor=\"middle\" transform=\"rotate(-90 14 " +
+                       num(py + ph * 0.5) + ")\">" + esc(self.ylabel_) +
+                       "</text>\n")
+
+        # ── 凡例（名前のある系列だけ）──
+        out.append(self.draw_legend(px, py, pw))
+
+        out.append("</g>\n</svg>\n")
+        return strings.join(out, "")
+
+    # ── 描画の部品 ──────────────────────────────────────
+
+    def draw_line(self, s: Series, px: float, py: float, pw: float, ph: float,
+                  xlo: float, xhi: float, ylo: float, yhi: float) -> str:
+        if len(s.xs) == 0:
+            return ""
+        pts: list[str] = []
+        i: int = 0
+        while i < len(s.xs):
+            sx: float = px + (s.xs[i] - xlo) / (xhi - xlo) * pw
+            sy: float = py + ph - (s.ys[i] - ylo) / (yhi - ylo) * ph
+            pts.append(num(sx) + "," + num(sy))
+            i = i + 1
+        return ("<polyline fill=\"none\" stroke=\"" + s.color +
+                "\" stroke-width=\"1.6\" points=\"" +
+                strings.join(pts, " ") + "\"/>\n")
+
+    def draw_points(self, s: Series, px: float, py: float, pw: float,
+                    ph: float, xlo: float, xhi: float,
+                    ylo: float, yhi: float) -> str:
+        out: list[str] = []
+        i: int = 0
+        while i < len(s.xs):
+            sx: float = px + (s.xs[i] - xlo) / (xhi - xlo) * pw
+            sy: float = py + ph - (s.ys[i] - ylo) / (yhi - ylo) * ph
+            out.append("<circle cx=\"" + num(sx) + "\" cy=\"" + num(sy) +
+                       "\" r=\"2.6\" fill=\"" + s.color + "\"/>\n")
+            i = i + 1
+        return strings.join(out, "")
+
+    # nb 本の棒グラフを横に並べます（bi 番目）
+    def draw_bars(self, s: Series, bi: int, nb: int, px: float, py: float,
+                  pw: float, ph: float, xlo: float, xhi: float,
+                  ylo: float, yhi: float) -> str:
+        out: list[str] = []
+        slot: float = pw / (xhi - xlo)
+        w: float = slot * 0.8 / float(nb)
+        base: float = py + ph - (0.0 - ylo) / (yhi - ylo) * ph
+        i: int = 0
+        while i < len(s.xs):
+            cx: float = px + (s.xs[i] - xlo) / (xhi - xlo) * pw
+            x: float = cx - slot * 0.4 + w * float(bi)
+            sy: float = py + ph - (s.ys[i] - ylo) / (yhi - ylo) * ph
+            top: float = sy
+            h: float = base - sy
+            if h < 0.0:
+                top = base
+                h = 0.0 - h
+            out.append("<rect x=\"" + num(x) + "\" y=\"" + num(top) +
+                       "\" width=\"" + num(w) + "\" height=\"" + num(h) +
+                       "\" fill=\"" + s.color + "\"/>\n")
+            i = i + 1
+        return strings.join(out, "")
+
+    def draw_legend(self, px: float, py: float, pw: float) -> str:
+        n: int = 0
+        for s in self.items:
+            if len(s.name) > 0:
+                n = n + 1
+        if n == 0:
+            return ""
+        out: list[str] = []
+        y: float = py + 6.0
+        i: int = 0
+        while i < len(self.items):
+            s2: Series = self.items[i]
+            if len(s2.name) > 0:
+                out.append("<rect x=\"" + num(px + pw - 96.0) + "\" y=\"" +
+                           num(y) + "\" width=\"10\" height=\"10\" fill=\"" +
+                           s2.color + "\"/>\n")
+                out.append("<text x=\"" + num(px + pw - 82.0) + "\" y=\"" +
+                           num(y + 9.0) + "\">" + esc(s2.name) + "</text>\n")
+                y = y + 15.0
+            i = i + 1
+        return strings.join(out, "")
+
+    # ── 範囲を調べる ────────────────────────────────────
+
+    def has_bars(self) -> bool:
+        for s in self.items:
+            if s.kind == KIND_BAR:
+                return True
+        return False
+
+    def bar_count(self) -> int:
+        n: int = 0
+        for s in self.items:
+            if s.kind == KIND_BAR:
+                n = n + 1
+        if n == 0:
+            return 1
+        return n
+
+    def min_x(self) -> float:
+        v: float = 0.0
+        first: bool = True
+        for s in self.items:
+            for x in s.xs:
+                if first or x < v:
+                    v = x
+                    first = False
+        return v
+
+    def max_x(self) -> float:
+        v: float = 1.0
+        first: bool = True
+        for s in self.items:
+            for x in s.xs:
+                if first or x > v:
+                    v = x
+                    first = False
+        return v
+
+    def min_y(self) -> float:
+        v: float = 0.0
+        first: bool = True
+        for s in self.items:
+            for y in s.ys:
+                if first or y < v:
+                    v = y
+                    first = False
+        return v
+
+    def max_y(self) -> float:
+        v: float = 1.0
+        first: bool = True
+        for s in self.items:
+            for y in s.ys:
+                if first or y > v:
+                    v = y
+                    first = False
+        return v

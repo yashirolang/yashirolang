@@ -1,0 +1,48 @@
+# OUTPUT: 1.5
+# OUTPUT: 2.5
+# OUTPUT: 3.5
+# OUTPUT: 0.0
+# OUTPUT: 7
+# EXIT: 0
+# 2 次元の添字 m[i, j] と、その代入・複合代入
+#   ⚠️ m[i, j] += v は「対象も添字も 1 回だけ」評価します（脱糖）。
+class Mat:
+    cols: int
+    data: list[float]
+
+    def init(self, rows: int, cols: int) -> None:
+        self.cols = cols
+        d: list[float] = []
+        for i in range(rows * cols):
+            d.append(0.0)
+        self.data = d
+
+    def __getitem__(self, i: int, j: int) -> float:
+        return self.data[i * self.cols + j]
+
+    def __setitem__(mut self, i: int, j: int, v: float) -> None:
+        self.data[i * self.cols + j] = v
+
+# 添字が 1 つのクラスも書けます
+class Box:
+    xs: list[int]
+
+    def init(self) -> None:
+        self.xs = [7, 8, 9]
+
+    def __getitem__(self, i: int) -> int:
+        return self.xs[i]
+
+def main() -> int:
+    m: Mat = Mat(2, 3)
+    m[0, 0] = 1.5
+    m[1, 2] = 2.5
+    print(str(m[0, 0]))
+    print(str(m[1, 2]))
+    m[1, 2] += 1.0
+    print(str(m[1, 2]))
+    print(str(m[0, 1]))
+
+    b: Box = Box()
+    print(str(b[0]))
+    return 0

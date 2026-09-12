@@ -1,0 +1,4 @@
+# ERROR: 型 'str' に演算子 '-' は適用できません
+def main() -> int:
+    s: str = "ab" - "b"
+    return 0

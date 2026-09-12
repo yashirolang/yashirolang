@@ -1,0 +1,4081 @@
+# sema — 意味解析・型検査
+#
+# ★ src/sema.c（2148 行）の移植です。**機械的に移しています。**
+#   関数名・検査の順序・診断の文言を C 版と揃えてあるので、
+#   エラーメッセージが食い違ったら diff で追えます。
+#
+# ⚠️ Type / Class / FuncSig / ModuleSyms は types にまとめてあります
+#   （循環 import を禁止したため）。
+import strings
+import ast
+import diag
+import module
+import token
+import types
+
+
+# 組み込み関数の表（C 版 BUILTINS と同じ順序）。
+#
+# ⚠️ 本言語のグローバルにはリストを書けないので、
+#   Sema の init で 1 回だけ組み立てます（keywords と同じ）。
+class Builtin:
+    name: str
+    arg: int    # 引数の TypeKind
+    ret: int    # 戻り値の TypeKind
+    impl: str   # 呼び出すランタイム関数
+
+    def init(self, name: str, arg: int, ret: int, impl: str) -> None:
+        self.name = copy(name)
+        self.arg = arg
+        self.ret = ret
+        self.impl = copy(impl)
+
+
+# ── ジェネリクス（単相化） ─────────────────────────────
+#
+# 型引数の束縛（K → str）。⚠️ タプルが無いので 2 本の list を並べて持ちます。
+# ★ **割り当て済みの IR 名の入れ物**。
+#
+#   ⚠️ `list[str]` を直接フィールドに置くと、実体化のたびの「退避して戻す」が
+#     **借りたものをフィールドに保存**（E-BORROW-3）になります。
+#     `rc[UsedNames]` にすると共有として筋が通り、複製も起きません
+#     （`rc[list[str]]` とは書けないので、クラスで包みます）。
+class UsedNames:
+    names: list[str]
+
+    def init(self) -> None:
+        self.names = []
+
+
+class TBinds:
+    names: list[str]
+    types_: list[rc[ast.Type]]
+
+    def init(self) -> None:
+        self.names = []
+        self.types_ = []
+
+    def find(self, name: str) -> rc[ast.Type] | None:
+        i: int = 0
+        while i < len(self.names):
+            if self.names[i] == name:
+                return self.types_[i]
+            i = i + 1
+        return None
+
+
+# 実体化したクラス 1 つぶん（本体の検査を後回しにするための記録）
+class Instance:
+    node: rc[ast.Node] | None
+    owner: rc[types.ModuleSyms] | None
+    binds: rc[TBinds] | None
+    # ★ どこで要求されたか（エラーに添える）
+    site: rc[token.Token] | None
+    iname: str
+    # ★ 関数の実体か（クラスでなく）
+    is_func: bool
+
+    def init(self, node: rc[ast.Node], owner: rc[types.ModuleSyms],
+             binds: own rc[TBinds], site: rc[token.Token], iname: own str,
+             is_func: bool) -> None:
+        self.node = node
+        self.owner = owner
+        self.binds = binds
+        self.site = site
+        self.iname = iname
+        self.is_func = is_func
+
+
+class Sema:
+    prims: ast.Prims | None
+    scope: rc[types.Scope] | None
+    loop_depth: int
+    scope_depth: int   # scope: の中にいる深さ（0 なら外）
+    used: rc[UsedNames]                 # 割り当て済みの IR 名（関数ごとにリセット）
+    cur_func: rc[types.FuncSig] | None
+    cur: rc[types.ModuleSyms] | None        # 今検査中のモジュール
+    mods: list[rc[types.ModuleSyms]]        # 全モジュール（依存順）
+    expected: rc[ast.Type] | None         # 今この式に期待されている型
+    builtins: list[Builtin]
+
+    # ── エラー処理 ──
+    # ★ 0 は「エラー無し」に予約し、1 から連番。割り当て順は
+    #   「モジュールの依存順 → 出現順」（error-handling.md §4）。
+    err_classes: list[rc[ast.Class]]
+    try_stack: list[rc[ast.Node]]
+
+    # ── ジェネリクス ──
+    next_slot: int                # 次に振る vtable のスロット番号
+    tbind: rc[TBinds] | None          # 今有効な型引数の束縛
+    pending: list[Instance]       # 本体をあとで検査する実体
+    # ★ いま検査しているのが「どこで要求された実体か」。
+    #   ⚠️ テンプレートの中で出たエラーはライブラリの中の行を指すので、
+    #     使う側のどの行が発端かを添える。
+    inst_site: rc[token.Token] | None
+    inst_name: str
+
+    def init(self) -> None:
+        self.prims = ast.Prims()
+        self.loop_depth = 0
+        self.scope_depth = 0
+        self.used = rc(UsedNames())
+        self.mods = []
+        self.err_classes = []
+        self.try_stack = []
+        self.tbind = None
+        self.pending = []
+        self.next_slot = 0
+        self.inst_site = None
+        self.inst_name = ""
+        self.builtins = [
+            Builtin("print", ast.TY_INT, ast.TY_NONE, "pl_print_int"),
+            Builtin("print", ast.TY_STR, ast.TY_NONE, "pl_print_str"),
+            Builtin("print", ast.TY_BOOL, ast.TY_NONE, "pl_print_bool"),
+            Builtin("print", ast.TY_FLOAT, ast.TY_NONE, "pl_print_float"),
+            Builtin("len", ast.TY_STR, ast.TY_INT, "pl_str_len"),
+            Builtin("len", ast.TY_LIST, ast.TY_INT, "pl_list_len"),
+            Builtin("str", ast.TY_INT, ast.TY_STR, "pl_str_from_int"),
+            Builtin("str", ast.TY_BOOL, ast.TY_STR, "pl_str_from_bool"),
+            Builtin("str", ast.TY_FLOAT, ast.TY_STR, "pl_str_from_float"),
+            # ★ str(str) は複製。f-string が型を知らずに包めるように
+            Builtin("str", ast.TY_STR, ast.TY_STR, "pl_str_copy"),
+            Builtin("int", ast.TY_STR, ast.TY_INT, "pl_str_to_int"),
+            # ★ float(str)。CSV を読むのに要ります
+            Builtin("float", ast.TY_STR, ast.TY_FLOAT, "pl_str_to_float"),
+            # int ↔ float。⚠️ 暗黙変換はしないので必ずここを通す
+            Builtin("int", ast.TY_FLOAT, ast.TY_INT, "pl_int_from_float"),
+            Builtin("float", ast.TY_INT, ast.TY_FLOAT, "pl_float_from_int"),
+            Builtin("ord", ast.TY_STR, ast.TY_INT, "pl_ord"),
+            Builtin("chr", ast.TY_INT, ast.TY_STR, "pl_chr"),
+            Builtin("exit", ast.TY_INT, ast.TY_NONE, "pl_exit"),
+            Builtin("panic", ast.TY_STR, ast.TY_NONE, "pl_panic"),
+            # ★ 借りたものを保存したいときの逃げ道（決定 D8）
+            # ★ Python で最も使う組み込み
+            Builtin("abs", ast.TY_INT, ast.TY_INT, "pl_iabs"),
+            Builtin("abs", ast.TY_FLOAT, ast.TY_FLOAT, "pl_fabs"),
+            Builtin("sum", ast.TY_LIST, ast.TY_INT, "pl_list_sum"),
+            # ★ ハッシュ。**単相化のおかげで**ジェネリックなコードの
+            #   中で hash(k) と書ける（K が確定してから型検査されるため）
+            Builtin("hash", ast.TY_STR, ast.TY_INT, "pl_hash_str"),
+            Builtin("hash", ast.TY_INT, ast.TY_INT, "pl_hash_i64"),
+            Builtin("hash", ast.TY_FLOAT, ast.TY_INT, "pl_hash_f64"),
+            Builtin("hash", ast.TY_BOOL, ast.TY_INT, "pl_hash_i64"),
+            # ★ input(プロンプト) — Python と同じ形。
+            #   ⚠️ EOF では panic する。読めないかもしれない場面では
+            #     io.read_line()（None が返る）を使うこと。
+            Builtin("input", ast.TY_STR, ast.TY_STR, "pl_input"),
+            Builtin("copy", ast.TY_STR, ast.TY_STR, "pl_str_copy"),
+            # ★ 値型にも copy を許す（そのまま返すだけ）。
+            #   ⚠️ "pl_copy_id" は codegen が**呼び出しを出さない印**。
+            #   対になる定義: src/sema.c の BUILTINS
+            Builtin("copy", ast.TY_INT, ast.TY_INT, "pl_copy_id"),
+            Builtin("copy", ast.TY_FLOAT, ast.TY_FLOAT, "pl_copy_id"),
+            Builtin("copy", ast.TY_BOOL, ast.TY_BOOL, "pl_copy_id")]
+
+    # ── プリミティブ型のシングルトン ────────────────────────
+
+    def prim(self, kind: int) -> rc[ast.Type]:
+        p: ast.Prims | None = self.prims
+        if p is None:
+            panic("sema: prims が初期化されていません")
+            return rc(ast.Type(kind))
+        if kind == ast.TY_INT:
+            return unwrap_type(p.int_)
+        if kind == ast.TY_BOOL:
+            return unwrap_type(p.bool_)
+        if kind == ast.TY_NONE:
+            return unwrap_type(p.none_)
+        if kind == ast.TY_STR:
+            return unwrap_type(p.str_)
+        if kind == ast.TY_FLOAT:
+            return unwrap_type(p.float_)
+        if kind == ast.TY_NULL:
+            return unwrap_type(p.null_)
+        panic("sema: 未知のプリミティブ型")
+        return rc(ast.Type(kind))
+
+    def ty_int(self) -> rc[ast.Type]:
+        return self.prim(ast.TY_INT)
+
+    def ty_bool(self) -> rc[ast.Type]:
+        return self.prim(ast.TY_BOOL)
+
+    def ty_none(self) -> rc[ast.Type]:
+        return self.prim(ast.TY_NONE)
+
+    def ty_str(self) -> rc[ast.Type]:
+        return self.prim(ast.TY_STR)
+
+    def ty_float(self) -> rc[ast.Type]:
+        return self.prim(ast.TY_FLOAT)
+
+    def ty_null(self) -> rc[ast.Type]:
+        return self.prim(ast.TY_NULL)
+
+    def type_from_name(self, name: str) -> rc[ast.Type] | None:
+        if name == "int":
+            return self.ty_int()
+        if name == "bool":
+            return self.ty_bool()
+        if name == "None":
+            return self.ty_none()
+        if name == "str":
+            return self.ty_str()
+        if name == "float":
+            return self.ty_float()
+        return None
+
+    # ── モジュールの出入り ──────────────────────────
+
+    def enter_module(mut self, ms: rc[types.ModuleSyms]) -> None:
+        cur: rc[types.ModuleSyms] | None = self.cur
+        if cur is not None:
+            cur.globals = self.scope
+        self.cur = ms
+        self.scope = ms.globals
+
+    def cur_syms(self) -> rc[types.ModuleSyms]:
+        c: rc[types.ModuleSyms] | None = self.cur
+        if c is None:
+            panic("sema: 現在のモジュールがありません")
+            return rc(types.ModuleSyms(None))
+        else:
+            return c
+
+    def cur_mod(self) -> rc[module.Module]:
+        m: rc[module.Module] | None = self.cur_syms().mod
+        if m is None:
+            panic("sema: モジュールがありません")
+            return rc(module.Module("", "", ""))
+        else:
+            return m
+
+    # import しているモジュールを名前で引く
+    def lookup_import(self, name: str) -> rc[types.ModuleSyms] | None:
+        m: rc[module.Module] = self.cur_mod()
+        i: int = 0
+        while i < len(m.deps):
+            if m.deps[i].name == name:
+                return self.syms_of(m.deps[i])
+            i = i + 1
+        return None
+
+    def syms_of(self, m: rc[module.Module]) -> rc[types.ModuleSyms] | None:
+        i: int = 0
+        while i < len(self.mods):
+            ms: rc[types.ModuleSyms] = self.mods[i]
+            mm: rc[module.Module] | None = ms.mod
+            if mm is not None:
+                # ★ 絞り込みは「受け取った側で 1 回」。ここでは if を分ける
+                if mm == m:
+                    return ms
+            i = i + 1
+        return None
+
+    # ── 表を引く ────────────────────────────────────────────
+
+    def lookup_func_in(self, ms: rc[types.ModuleSyms], name: str) -> rc[types.FuncSig] | None:
+        f: rc[types.FuncSig] | None = ms.funcs
+        while f is not None:
+            if f.name == name:
+                return f
+            f = f.next
+        return None
+
+    # ── インタフェースを引く ────────────────────────────
+    def lookup_iface_in(self, ms: rc[types.ModuleSyms], name: str) -> rc[ast.Iface] | None:
+        i: rc[ast.Iface] | None = ms.ifaces
+        while i is not None:
+            x: rc[ast.Iface] = i
+            if x.name == name:
+                return x
+            i = x.next
+        return None
+
+    def lookup_iface(self, name: str) -> rc[ast.Iface] | None:
+        return self.lookup_iface_in(self.cur_syms(), name)
+
+    def lookup_class_in(self, ms: rc[types.ModuleSyms], name: str) -> rc[ast.Class] | None:
+        c: rc[ast.Class] | None = ms.classes
+        while c is not None:
+            if c.name == name:
+                return c
+            c = c.next
+        return None
+
+    def lookup_global_in(self, ms: rc[types.ModuleSyms],
+                         name: str) -> rc[types.VarEntry] | None:
+        sc: rc[types.Scope] | None = ms.globals
+        if sc is None:
+            return None
+        v: rc[types.VarEntry] | None = sc.vars
+        while v is not None:
+            if v.name == name:
+                return v
+            v = v.next
+        return None
+
+    def lookup_func(self, name: str) -> rc[types.FuncSig] | None:
+        return self.lookup_func_in(self.cur_syms(), name)
+
+    def lookup_func_by_ir(self, ir_name: str) -> rc[types.FuncSig] | None:
+        f: rc[types.FuncSig] | None = self.cur_syms().funcs
+        while f is not None:
+            if f.ir_name == ir_name:
+                return f
+            f = f.next
+        return None
+
+    def lookup_class(self, name: str) -> rc[ast.Class] | None:
+        return self.lookup_class_in(self.cur_syms(), name)
+
+    def lookup_field(self, c: rc[ast.Class], name: str) -> rc[ast.Field] | None:
+        f: rc[ast.Field] | None = c.fields
+        while f is not None:
+            if f.name == name:
+                return f
+            f = f.next
+        return None
+
+    def mangle(self, prefix: str, name: str) -> str:
+        return prefix + "." + name
+
+    def mod_mangle(self, name: str) -> str:
+        return self.mangle(self.cur_mod().name, name)
+
+    # ── スコープ ────────────────────────────────────────────
+
+    def scope_push(mut self) -> None:
+        self.scope = rc(types.Scope(self.scope))
+
+    def scope_pop(mut self) -> None:
+        sc: rc[types.Scope] | None = self.scope
+        if sc is not None:
+            self.scope = sc.parent
+
+    def lookup_local(self, name: str) -> rc[types.VarEntry] | None:
+        sc: rc[types.Scope] | None = self.scope
+        if sc is None:
+            return None
+        v: rc[types.VarEntry] | None = sc.vars
+        while v is not None:
+            if v.name == name:
+                return v
+            v = v.next
+        return None
+
+    # 内側から外側へ順に探す（名前解決）
+    def lookup(self, name: str) -> rc[types.VarEntry] | None:
+        sc: rc[types.Scope] | None = self.scope
+        while sc is not None:
+            v: rc[types.VarEntry] | None = sc.vars
+            while v is not None:
+                if v.name == name:
+                    return v
+                v = v.next
+            sc = sc.parent
+        return None
+
+    # ── IR 名の割り当て ───────────────────────────────
+
+    def name_used(self, name: str) -> bool:
+        # ⚠️ "entry" は予約する。LLVM はラベルとローカル値が
+        #   同じ名前空間にいるので、関数先頭の `entry:` と衝突します。
+        if name == "entry":
+            return True
+        i: int = 0
+        while i < len(self.used.names):
+            if self.used.names[i] == name:
+                return True
+            i = i + 1
+        return False
+
+    def unique_ir_name(mut self, name: str) -> str:
+        if not self.name_used(name):
+            self.used.names.append(copy(name))
+            return copy(name)
+        i: int = 1
+        while True:
+            cand: str = name + "." + str(i)
+            if not self.name_used(cand):
+                self.used.names.append(copy(cand))
+                return cand
+            i = i + 1
+        return copy(name)
+
+    # ★ モジュール名と同じ名前は宣言できない
+    def reject_module_name(self, name: str, tok: rc[token.Token] | None,
+                           what: str) -> None:
+        if self.lookup_import(name) is None:
+            return
+        diag.error_full(unwrap_tok(tok),
+                        "'" + name + "' は import したモジュールの名前です",
+                        "この名前の" + what + "は宣言できません", None, "",
+                        "モジュール名と同じ名前を使うと '" + name +
+                        ".x' が曖昧になります")
+
+    # ローカル変数として登録する（IR 名は %x 形式）
+    def declare(mut self, name: str, t: rc[ast.Type],
+                tok: rc[token.Token] | None) -> rc[types.VarEntry]:
+        self.reject_module_name(name, tok, "変数")
+
+        v: rc[types.VarEntry] = rc(types.VarEntry(name, tok))
+        v.ir_name = "%" + self.unique_ir_name(name)
+        v.declared = t
+        v.type = t
+
+        sc: rc[types.Scope] | None = self.scope
+        if sc is None:
+            panic("sema: スコープがありません")
+        else:
+            v.next = sc.vars
+            sc.vars = v
+        return v
+
+    # ── 型注釈の解決 ────────────────────────────────────────
+
+    # ★ T | None を包む層
+    def resolve_type(mut self, tr: mut rc[ast.Node]) -> rc[ast.Type]:
+        # ★ 関数型 fn(A, B) -> C
+        if tr.name == "fn" and len(tr.mod_name) == 0:
+            ft: rc[ast.Type] = rc(ast.Type(ast.TY_FN))
+            a: rc[ast.Node] | None = tr.body
+            while a is not None:
+                an: rc[ast.Node] = a
+                ft.params.append(self.resolve_type(an))
+                a = an.next
+            ft.elem = self.resolve_type(unwrap_node(tr.rhs))
+            return ft
+
+        base: rc[ast.Type] = self.resolve_base_type(tr)
+        if not tr.nullable:
+            return base
+
+        if not ast.type_can_be_opt(base):
+            diag.error_full(unwrap_tok(tr.tok),
+                            "'" + ast.type_name(base) + " | None' は書けません",
+                            "この型は None になれません", None, "",
+                            "None はヌルポインタとして表すので、int や bool には" +
+                            "付けられません" +
+                            "（nullable にできるのは str / list[T] / class です）")
+        return ast.type_opt(base)
+
+    # ── ジェネリクス（単相化） ─────────────────────────
+    #
+    # ★ 方針は design/future-features.md §1 のとおり **単相化**。
+    #   Dict[str, int] と Dict[str, Symbol] は **別々のクラス**を作る。
+
+    # ── ジェネリック関数 ──────────────────────────────
+    #
+    # ★ クラスと違い、**呼び出し側の実引数から型引数を決める**。
+    #   左辺の型からは決められないため（f(xs) の左辺は戻り値の型しかない）。
+    #
+    # ★ 見るのは「T そのもの」「list[T] / rc[T] の中身」「fn(A) -> B」、
+    #   そして **Box[T] のようなジェネリッククラスの型引数**。
+    #   決められなければエラーにする。
+    def unify_tparam(self, name: str, decl_tr: rc[ast.Node] | None,
+                     actual: rc[ast.Type]) -> rc[ast.Type] | None:
+        if decl_tr is None:
+            return None
+        tr: rc[ast.Node] = decl_tr
+
+        # T そのもの
+        if tr.name == name and tr.lhs is None:
+            return actual
+        # ★ 関数型 fn(A) -> B。**引数と戻り型の両方**を見る。
+        #   これが無いと map_to[T, U](xs: list[T], f: fn(T) -> U) の U が
+        #   決められない（U は f の戻り型にしか現れない）。
+        if tr.name == "fn" and actual.kind == ast.TY_FN:
+            fi: int = 0
+            fa: rc[ast.Node] | None = tr.body
+            while fa is not None:
+                fan: rc[ast.Node] = fa
+                if fi < len(actual.params):
+                    got: rc[ast.Type] | None = self.unify_tparam(name, fan,
+                                                             actual.params[fi])
+                    if got is not None:
+                        return got
+                fi = fi + 1
+                fa = fan.next
+            if tr.rhs is not None and actual.elem is not None:
+                return self.unify_tparam(name, tr.rhs, ast.elem_of(actual))
+            return None
+
+        # ★ ジェネリックなクラス Box[T] → 実体に渡された型引数を見る。
+        #   これが無いと、集合演算のような「自分で作った容器を受け取る関数」が
+        #   1 つも書けない（def union[T](a: Set[T], b: Set[T])）。
+        # ⚠️ 突き合わせるのは**名前だけ**（モジュールは見ない）。
+        #   対になる定義: src/sema.c の unify_tparam
+        if tr.targs is not None and actual.kind == ast.TY_CLASS:
+            acls: rc[ast.Class] | None = actual.cls
+            if acls is not None:
+                atmpl: rc[ast.Class] | None = acls.from_template
+                if atmpl is not None and atmpl.name == tr.name:
+                    ti: int = 0
+                    ta: rc[ast.Node] | None = tr.targs
+                    while ta is not None:
+                        tan: rc[ast.Node] = ta
+                        if ti < len(acls.targs_of):
+                            g2: rc[ast.Type] | None = self.unify_tparam(
+                                name, tan.lhs, acls.targs_of[ti])
+                            if g2 is not None:
+                                return g2
+                        ti = ti + 1
+                        ta = tan.next
+                    return None
+
+        # list[T] / rc[T] → 中身を見る
+        if tr.lhs is not None and actual.elem is not None:
+            return self.unify_tparam(name, tr.lhs, ast.elem_of(actual))
+        return None
+
+    # 型参照に書かれた型引数を並べる
+    def collect_targs(mut self, tr: rc[ast.Node]) -> list[rc[ast.Type]]:
+        out: list[rc[ast.Type]] = []
+        a: rc[ast.Node] | None = tr.targs
+        while a is not None:
+            an: rc[ast.Node] = a
+            out.append(self.resolve_type(unwrap_node(an.lhs)))
+            a = an.next
+        return out
+
+    # 実体の名前を作る（Dict$str$int）
+    #
+    # ⚠️ 型名をそのまま使うと '[' や ',' が混ざって IR の名前に使えない。
+    #   英数字と '.' 以外を '_' に潰す。
+    def mangle_inst(self, base: str, args: list[rc[ast.Type]]) -> str:
+        parts: list[str] = []
+        parts.append(copy(base))
+        for a in args:
+            parts.append("$")
+            nm: str = ast.type_name(a)
+            i: int = 0
+            while i < len(nm):
+                ch: str = nm[i]
+                b: int = strings.byte_at(nm, i)
+                ok: bool = ((b >= 97 and b <= 122) or (b >= 65 and b <= 90) or
+                            (b >= 48 and b <= 57) or ch == "." or ch == "_")
+                if ok:
+                    parts.append(ch)
+                else:
+                    parts.append("_")
+                i = i + 1
+        return strings.join(parts, "")
+
+    # テンプレートから実体を 1 つ作る（既にあれば作らない）
+    def instantiate_class(mut self, tmpl: rc[ast.Class], args: list[rc[ast.Type]],
+                          at: rc[token.Token]) -> rc[ast.Type]:
+        tnode: rc[ast.Node] = unwrap_node(tmpl.node)
+        want: int = 0
+        tp: rc[ast.Node] | None = tnode.targs
+        while tp is not None:
+            want = want + 1
+            tp = unwrap_node(tp).next
+        if len(args) != want:
+            diag.error_full(at,
+                            "'" + tmpl.name + "' は型引数を " + str(want) +
+                            " 個取りますが、" + str(len(args)) + " 個書かれました",
+                            "型引数の個数が違います", tmpl.tok,
+                            "このクラスの定義です", "")
+
+        iname: str = self.mangle_inst(tmpl.name, args)
+
+        owner: rc[types.ModuleSyms] = self.syms_by_name(tmpl.owner_name)
+
+        # 既に作ってあれば、それを返す（同じ組み合わせは 1 個だけ）
+        ex: rc[ast.Class] | None = self.lookup_class_in(owner, iname)
+        if ex is not None:
+            return unwrap_type(ex.type)
+
+        # ★ テンプレートが定義されているモジュールに実体を作る。
+        #   メソッドの本体はそのモジュールの名前しか参照しないため。
+        #   ⚠️ 型引数は **Type として**渡すので、名前解決は要らない。
+        saved_mod: rc[types.ModuleSyms] = self.cur_syms()
+        saved_scope: rc[types.Scope] | None = self.scope
+        saved_tbind: rc[TBinds] | None = self.tbind
+        saved_func: rc[types.FuncSig] | None = self.cur_func
+        saved_used: rc[UsedNames] = self.used
+
+        self.enter_module(owner)
+
+        binds: rc[TBinds] = rc(TBinds())
+        i2: int = 0
+        tp2: rc[ast.Node] | None = tnode.targs
+        while tp2 is not None:
+            tpn: rc[ast.Node] = tp2
+            binds.names.append(copy(tpn.name))
+            binds.types_.append(args[i2])
+            i2 = i2 + 1
+            tp2 = tpn.next
+        self.tbind = binds
+
+        # 木を複製して、名前を実体のものに差し替える
+        inst: rc[ast.Node] = unwrap_node(ast.ast_clone(tnode))
+        inst.name = copy(iname)
+        inst.targs = None            # ★ 実体はもうテンプレートではない
+        inst.next = None
+
+        self.declare_class(inst)
+        icls: rc[ast.Class] | None = inst.cls
+        if icls is not None:
+            icls.from_template = tmpl
+            # ★ 渡された型引数を覚える（unify_tparam が入れ子をたどる）
+            ai: int = 0
+            while ai < len(args):
+                icls.targs_of.append(args[ai])
+                ai = ai + 1
+        self.declare_class_members(inst)
+        ty: rc[ast.Type] = unwrap_type(inst.type)
+
+        # ★ codegen が拾えるように、そのモジュールの AST に足す
+        omod: rc[module.Module] | None = owner.mod
+        root: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, None)
+        if omod is None:
+            panic("sema: モジュールがありません")
+        else:
+            root = unwrap_node(omod.ast)
+        last: rc[ast.Node] = unwrap_node(root.body)
+        nx: rc[ast.Node] | None = last.next
+        while nx is not None:
+            last = nx
+            nx = last.next
+        last.next = inst
+
+        self.pending.append(Instance(inst, owner, binds, at, copy(iname), False))
+
+        self.enter_module(saved_mod)
+        self.scope = saved_scope
+        self.cur_func = saved_func
+        self.used = saved_used
+        self.tbind = saved_tbind
+        return ty
+
+    def resolve_base_type(mut self, tr: mut rc[ast.Node]) -> rc[ast.Type]:
+        # ★ モジュール修飾された型注釈
+        if len(tr.mod_name) > 0:
+            ms: rc[types.ModuleSyms] | None = self.lookup_import(tr.mod_name)
+            if ms is None:
+                diag.error_full(unwrap_tok(tr.tok),
+                                "モジュール '" + tr.mod_name +
+                                "' を import していません",
+                                "この修飾を解決できません", None, "",
+                                "ファイルの先頭に 'import " + tr.mod_name +
+                                "' を書いてください")
+                return self.ty_int()
+            # ★ 他のモジュールのインタフェース
+            mif: rc[ast.Iface] | None = self.lookup_iface_in(ms, tr.name)
+            if mif is not None:
+                return ast.type_iface(mif.name, mif)
+
+            c: rc[ast.Class] | None = self.lookup_class_in(ms, tr.name)
+            if c is None:
+                diag.error_full(unwrap_tok(tr.tok),
+                                "モジュール '" + tr.mod_name + "' にクラス '" +
+                                tr.name + "' はありません",
+                                "このクラスは定義されていません", None, "",
+                                "他のモジュールから使えるのはクラスだけです" +
+                                "（int や list はモジュール修飾なしで書きます）")
+                return self.ty_int()
+            # ★ 他のモジュールのジェネリッククラスも実体化できる
+            if c.node is not None and unwrap_node(c.node).targs is not None:
+                return self.instantiate_class(c, self.collect_targs(tr),
+                                              unwrap_tok(tr.tok))
+            if tr.lhs is not None:
+                diag.error_at_hint(unwrap_tok(tr.tok),
+                                   "要素型を取るのは list と rc だけです",
+                                   "型 '" + tr.mod_name + "." + tr.name +
+                                   "' は要素型を取りません")
+            return unwrap_type(c.type)
+
+        if tr.name == "list":
+            if tr.lhs is None:
+                diag.error_at_hint(unwrap_tok(tr.tok),
+                                   "要素型を書いてください（例: list[int]）",
+                                   "list には要素型が必要です")
+                return self.ty_int()
+            elem: rc[ast.Type] = self.resolve_type(unwrap_node(tr.lhs))
+            if elem.kind == ast.TY_NONE:
+                diag.error_at_hint(unwrap_tok(tr.tok),
+                                   "None 型の値は存在しないので要素にできません",
+                                   "list の要素型に None は使えません")
+            return ast.type_list(elem)
+
+        # ── rc[T]（共有所有）──
+        #
+        # ★ 中身に取れるのはクラスだけ（共有したくなるのは木やグラフの節点）
+        if tr.name == "rc":
+            if tr.lhs is None:
+                diag.error_at_hint(unwrap_tok(tr.tok),
+                                   "中身の型を書いてください（例: rc[Node]）",
+                                   "rc には中身の型が必要です")
+                return self.ty_int()
+            rel: rc[ast.Type] = self.resolve_type(unwrap_node(tr.lhs))
+            if rel.kind != ast.TY_CLASS:
+                diag.error_at_hint(unwrap_tok(tr.tok),
+                                   "rc に入れられるのはクラスだけです（例: rc[Node]）",
+                                   "'" + ast.type_name(rel) + "' は rc に入れられません")
+            return ast.type_rc(rel)
+
+        # ── Thread[R] / mutex[T]（A-18）──
+        #
+        # ★ Thread[R] の R は**戻り型**。spawn した関数が返すものを join が返す。
+        if tr.name == "Thread":
+            if tr.lhs is None:
+                diag.error_at_hint(unwrap_tok(tr.tok),
+                                   "戻り型を書いてください（例: Thread[int]）",
+                                   "Thread には戻り型が必要です")
+                return self.ty_int()
+            return ast.type_thread(self.resolve_type(unwrap_node(tr.lhs)))
+
+        # ★ mutex に入れられるのはクラスとリストだけ（取り出して書き換える
+        #   ものだから。int を包んでも lock に渡した関数から書き戻せません）
+        if tr.name == "mutex":
+            if tr.lhs is None:
+                diag.error_at_hint(unwrap_tok(tr.tok),
+                                   "中身の型を書いてください（例: mutex[Counter]）",
+                                   "mutex には中身の型が必要です")
+                return self.ty_int()
+            mel: rc[ast.Type] = self.resolve_type(unwrap_node(tr.lhs))
+            if mel.kind != ast.TY_CLASS and mel.kind != ast.TY_LIST:
+                diag.error_at_hint(unwrap_tok(tr.tok),
+                                   "mutex に入れられるのはクラスかリストだけです" +
+                                   "（例: mutex[Counter] / mutex[list[float]]）",
+                                   "'" + ast.type_name(mel) + "' は mutex に入れられません")
+            return ast.type_mutex(mel)
+
+        # ★ タプル型 (A, B)
+        if tr.name == "(tuple)":
+            tt: rc[ast.Type] = rc(ast.Type(ast.TY_TUPLE))
+            tai: rc[ast.Node] | None = tr.targs
+            while tai is not None:
+                tan: rc[ast.Node] = tai
+                et: rc[ast.Type] = self.resolve_type(unwrap_node(tan.lhs))
+                if et.kind == ast.TY_NONE:
+                    diag.error_at_hint(unwrap_tok(tan.tok),
+                                       "None 型の値は存在しないので要素にできません",
+                                       "タプルの要素に None は使えません")
+                tt.params.append(et)
+                tai = tan.next
+            return tt
+
+        # ★ 型引数の名前（class Dict[K, V] の K）。
+        #   ⚠️ **クラス名より先に**引く。テンプレートを読む間だけ有効。
+        tb: rc[TBinds] | None = self.tbind
+        if tb is not None:
+            tv: rc[ast.Type] | None = tb.find(tr.name)
+            if tv is not None:
+                if tr.lhs is not None:
+                    diag.error_at_hint(unwrap_tok(tr.tok),
+                                       "型引数そのものは型引数を取りません",
+                                       "型 '" + tr.name + "' は型引数を取りません")
+                return tv
+
+        t: rc[ast.Type] | None = self.type_from_name(tr.name)
+        if t is not None:
+            if tr.lhs is not None:
+                diag.error_at_hint(unwrap_tok(tr.tok),
+                                   "要素型を取るのは list と rc だけです",
+                                   "型 '" + tr.name + "' は要素型を取りません")
+            return t
+
+        # ★ インタフェース名も型として書ける（list[Show] など）
+        ifc1: rc[ast.Iface] | None = self.lookup_iface(tr.name)
+        if ifc1 is not None:
+            if tr.lhs is not None:
+                diag.error_at_hint(unwrap_tok(tr.tok),
+                                   "インタフェースは型引数を取りません",
+                                   "型 '" + tr.name + "' は型引数を取りません")
+            return ast.type_iface(ifc1.name, ifc1)
+
+        # ★ 組み込みの型名で無ければ、クラス名として引く
+        c2: rc[ast.Class] | None = self.lookup_class(tr.name)
+        if c2 is not None:
+            # ★ ジェネリッククラスなら、ここで実体を作る
+            if c2.node is not None and unwrap_node(c2.node).targs is not None:
+                return self.instantiate_class(c2, self.collect_targs(tr),
+                                              unwrap_tok(tr.tok))
+            if tr.lhs is not None:
+                diag.error_at_hint(unwrap_tok(tr.tok),
+                                   "要素型を取るのは list と rc だけです",
+                                   "型 '" + tr.name + "' は要素型を取りません")
+            return unwrap_type(c2.type)
+
+        diag.error_full(unwrap_tok(tr.tok), "未知の型名 '" + tr.name + "' です",
+                        "この型は存在しません", None, "",
+                        "現在使える型: " + ast.type_name_list() +
+                        "、および定義したクラス名")
+        return self.ty_int()
+
+    # ★ 同名の別クラスだったときは、モジュール修飾つきで説明する
+    def no_implicit_hint(self, got: rc[ast.Type], want: rc[ast.Type]) -> str:
+        if got.kind == ast.TY_CLASS and want.kind == ast.TY_CLASS:
+            gc: rc[ast.Class] | None = got.cls
+            wc: rc[ast.Class] | None = want.cls
+            # ⚠️ 'and' の左で絞った変数を、同じ条件式の右では使えません
+            #    （絞り込みが効くのは本体から）。if を分けます。
+            if gc is not None:
+                if wc is not None:
+                    if gc.name == wc.name:
+                        return ("'" + gc.ir_name + "' と '" + wc.ir_name +
+                                "' は名前が同じだけの別のクラスです" +
+                                "（同じ型かどうかは名前ではなく定義で決まります）")
+        # ★ 関数型どうしなら、**どこが違うのか**を言う。
+        #   「暗黙の型変換がありません」では何を直せばよいか分からない。
+        if got.kind == ast.TY_FN and want.kind == ast.TY_FN:
+            if len(got.params) != len(want.params):
+                return ("引数の数が違います（" + str(len(got.params)) + " 個と " +
+                        str(len(want.params)) + " 個）")
+            fi: int = 0
+            while fi < len(got.params):
+                if not ast.type_equal(got.params[fi], want.params[fi]):
+                    return (str(fi + 1) + " 番目の引数の型が違います（'" +
+                            ast.type_name(got.params[fi]) + "' と '" +
+                            ast.type_name(want.params[fi]) + "'）")
+                fi = fi + 1
+            return ("戻り型が違います（'" + ast.type_name(ast.elem_of(got)) +
+                    "' と '" + ast.type_name(ast.elem_of(want)) + "'）")
+
+        # ★ クラス → インタフェースなら、実装宣言の書き忘れを疑う
+        if want.kind == ast.TY_IFACE and got.kind == ast.TY_CLASS:
+            gc2: rc[ast.Class] | None = got.cls
+            wi2: rc[ast.Iface] | None = want.iface
+            if gc2 is not None and wi2 is not None:
+                return ("'" + gc2.name + "' が '" + wi2.name +
+                        "' を実装すると宣言していません（'class " + gc2.name +
+                        "(" + wi2.name + "):' と書きます）")
+
+        return "本言語には暗黙の型変換がありません（言語仕様 3.5）"
+
+    # ── 式の検査 ────────────────────────────────────────────
+
+    # x is None / x is not None の検査
+    def check_is(mut self, n: rc[ast.Node]) -> rc[ast.Type]:
+        lhs: rc[ast.Node] = unwrap_node(n.lhs)
+        rhs: rc[ast.Node] = unwrap_node(n.rhs)
+        l: rc[ast.Type] = self.check_expr(lhs)
+
+        if rhs.kind != ast.ND_NONE:
+            r: rc[ast.Type] = self.check_expr(rhs)
+            diag.error_full(unwrap_tok(rhs.tok),
+                            ast.op_symbol(n.op) + " は None との比較にだけ使えます",
+                            "ここには None を書いてください（型 '" +
+                            ast.type_name(r) + "' の式です）", None, "",
+                            "値が等しいかを調べるには == を使ってください")
+        rhs.type = self.ty_null()
+
+        if l.kind != ast.TY_OPT:
+            hint: str = "None になれるのは str / list[T] / class だけです"
+            if ast.type_can_be_opt(l):
+                hint = ("None を入れたいなら、型注釈を '" + ast.type_name(l) +
+                        " | None' にしてください")
+            diag.error_full(unwrap_tok(lhs.tok),
+                            "型 '" + ast.type_name(l) +
+                            "' の値が None になることはありません",
+                            "この式は必ず値を持ちます", None, "", hint)
+        return self.ty_bool()
+
+    # 二項演算子が、その型に適用できるか
+    def op_supports(self, op: int, t: rc[ast.Type]) -> bool:
+        if t.kind == ast.TY_CLASS:
+            return op == ast.OP_EQ or op == ast.OP_NE
+        # ★ list は連結（+）と繰り返し（*）ができる
+        if t.kind == ast.TY_LIST:
+            return (op == ast.OP_EQ or op == ast.OP_NE or
+                    op == ast.OP_ADD or op == ast.OP_MUL)
+        if t.kind == ast.TY_OPT or t.kind == ast.TY_NULL:
+            return False
+        if ast.is_compare(op):
+            return True
+        if t.kind == ast.TY_INT:
+            return op != ast.OP_TRUEDIV
+        # ★ float は int のちょうど裏返し。'/' が使えて '//' '%' とビット演算が使えない
+        #   ★ '**' は float でも使える。ランタイムに pl_fpow を自前で
+        #     置いた（libc の pow はベアメタルで使えないため）。
+        if t.kind == ast.TY_FLOAT:
+            return (op == ast.OP_ADD or op == ast.OP_SUB or
+                    op == ast.OP_MUL or op == ast.OP_TRUEDIV or
+                    op == ast.OP_POW)
+        # ★ str は連結（+）と繰り返し（*）
+        if t.kind == ast.TY_STR:
+            return op == ast.OP_ADD or op == ast.OP_MUL
+        return False
+
+    # 「ここには bool が必要」というエラー
+    def bool_required(self, message: str, where_label: str,
+                      where_tok: rc[token.Token] | None, operand: rc[ast.Node],
+                      actual: rc[ast.Type]) -> rc[ast.Type]:
+        diag.error_full(unwrap_tok(operand.tok), message,
+                        "これは '" + ast.type_name(actual) + "' 型です",
+                        where_tok, where_label,
+                        "本言語は int を真偽値として扱いません（言語仕様 4.4）。" +
+                        "比較を書いてください（例: x != 0）")
+        return self.ty_bool()
+
+    # x in xs / sub in s
+    #
+    # ★ 右辺の型で意味が変わります。list[T] なら要素に等しいものがあるか、
+    #   str なら部分文字列として含まれるか。
+    # ⚠️ dict には使えません（d.has(k) を使う）。
+    def check_in(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
+        l: rc[ast.Type] = self.check_expr(unwrap_node(n.lhs))
+        r: rc[ast.Type] = self.check_expr(unwrap_node(n.rhs))
+
+        # ★ `k in d` は `d.__contains__(k)` に読み替える。
+        #   ⚠️ ここだけは **右辺の型**で決まる（入れ物のほうが決める）。
+        #     Python の __contains__ と同じで、in は「入れ物に聞く」演算子。
+        if r.kind == ast.TY_CLASS:
+            cc: rc[ast.Class] = unwrap_class(r.cls)
+            if self.class_has_method(cc, "__contains__"):
+                obj: rc[ast.Node] = unwrap_node(n.rhs)   # 入れ物
+                arg: rc[ast.Node] = unwrap_node(n.lhs)   # 探すもの
+                arg.next = None
+
+                # ⚠️ ノードの中身を丸ごと写すと式の並び（実引数の next）が
+                #   壊れる。**その場で作り替える。**
+                if n.op == ast.OP_IN:
+                    n.kind = ast.ND_METHOD
+                    n.name = "__contains__"
+                    n.lhs = obj
+                    n.args = arg
+                    n.rhs = None
+                    rt: rc[ast.Type] = self.check_class_method(n, cc)
+                    if rt.kind != ast.TY_BOOL:
+                        diag.error_at(unwrap_tok(n.tok),
+                                      "'in' に使うには __contains__ が bool を" +
+                                      "返す必要があります（いまは '" +
+                                      ast.type_name(rt) + "' を返しています）")
+                    return self.ty_bool()
+
+                # not in は結果を反転させる
+                call: rc[ast.Node] = ast.new_node(ast.ND_METHOD, n.tok)
+                call.lhs = obj
+                call.name = "__contains__"
+                call.args = arg
+                rt2: rc[ast.Type] = self.check_class_method(call, cc)
+                if rt2.kind != ast.TY_BOOL:
+                    diag.error_at(unwrap_tok(n.tok),
+                                  "'not in' に使うには __contains__ が bool を" +
+                                  "返す必要があります（いまは '" +
+                                  ast.type_name(rt2) + "' を返しています）")
+                call.type = rt2
+                n.kind = ast.ND_UNARY
+                n.op = ast.OP_NOT
+                n.lhs = call
+                n.rhs = None
+                return self.ty_bool()
+
+        if r.kind == ast.TY_STR:
+            if l.kind != ast.TY_STR:
+                diag.error_at(unwrap_tok(n.tok),
+                              "str の 'in' には str が必要です（左辺は '" +
+                              ast.type_name(l) + "' 型です）")
+            return self.ty_bool()
+        if r.kind == ast.TY_LIST:
+            if not ast.type_assignable(l, ast.elem_of(r)):
+                diag.error_full(unwrap_tok(unwrap_node(n.lhs).tok),
+                                "'in' の左辺が要素の型と合いません",
+                                "これは '" + ast.type_name(l) + "' 型です",
+                                unwrap_node(n.rhs).tok,
+                                "こちらの要素は '" +
+                                ast.type_name(ast.elem_of(r)) + "' 型です", "")
+            return self.ty_bool()
+
+        diag.error_full(unwrap_tok(unwrap_node(n.rhs).tok),
+                        "'" + ast.type_name(r) + "' 型に 'in' は使えません",
+                        "ここには list[T] か str が必要です", None, "",
+                        self.in_hint(r))
+        return self.ty_bool()
+
+    # 'in' が使えないときのヒント
+    def in_hint(self, r: rc[ast.Type]) -> str:
+        if r.kind == ast.TY_CLASS:
+            return ("クラス '" + unwrap_class(r.cls).name +
+                    "' に '__contains__(self, x) -> bool' を定義すると、" +
+                    "'in' が使えます")
+        return "dict の鍵を調べるには d.has(k) を使ってください"
+
+    # 三項演算子 a if c else b
+    def check_ternary(mut self, n: rc[ast.Node]) -> rc[ast.Type]:
+        c: rc[ast.Type] = self.check_expr(unwrap_node(n.lhs))
+        if c.kind != ast.TY_BOOL:
+            self.bool_required("三項演算子の条件には bool が必要です",
+                               "この 'if' の条件です", n.tok,
+                               unwrap_node(n.lhs), c)
+
+        a: rc[ast.Type] = self.check_expr(unwrap_node(n.rhs))
+        b: rc[ast.Type] = self.check_expr(unwrap_node(n.els))
+
+        # ★ どちらかが None リテラルなら、もう一方に合わせる
+        if ast.type_assignable(b, a):
+            return a
+        if ast.type_assignable(a, b):
+            return b
+
+        diag.error_full(unwrap_tok(unwrap_node(n.els).tok),
+                        "三項演算子の両側で型が違います",
+                        "こちらは '" + ast.type_name(b) + "' 型です",
+                        unwrap_node(n.rhs).tok,
+                        "こちらは '" + ast.type_name(a) + "' 型です",
+                        "式の型は 1 つに決まらなければなりません" +
+                        "（どちらかを合わせてください）")
+        return a
+
+    # xs[a:b] / s[a:b]。⚠️ **新しい値を作ります**（借用ではない）
+    # タプル式 a, b
+    #
+    # ★ 期待型（左辺や戻り型）が分かっていれば、それに合わせて要素を検査する。
+    #   分からなければ、そのまま要素の型を並べたタプルになる。
+    def check_tuple(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
+        want: rc[ast.Type] | None = self.expected
+        n_elems: int = 0
+        ei: rc[ast.Node] | None = n.body
+        while ei is not None:
+            en: rc[ast.Node] = ei
+            n_elems = n_elems + 1
+            ei = en.next
+
+        has_want: bool = False
+        wt: rc[ast.Type] = self.ty_int()
+        if want is not None:
+            wt = want
+            if wt.kind == ast.TY_TUPLE:
+                has_want = True
+
+        if has_want and len(wt.params) != n_elems:
+            diag.error_full(unwrap_tok(n.tok),
+                            "タプルの要素の数が違います（" + str(n_elems) +
+                            " 個と " + str(len(wt.params)) + " 個）",
+                            "ここは " + str(n_elems) + " 個です", None, "",
+                            "'" + ast.type_name(wt) + "' が必要です")
+
+        t: rc[ast.Type] = rc(ast.Type(ast.TY_TUPLE))
+        k: int = 0
+        xi: rc[ast.Node] | None = n.body
+        while xi is not None:
+            xn: rc[ast.Node] = xi
+            if has_want:
+                self.expected = wt.params[k]
+            else:
+                self.expected = None
+            et: rc[ast.Type] = self.check_expr(xn)
+            self.expected = None
+            if has_want:
+                if not ast.type_assignable(et, wt.params[k]):
+                    diag.error_full(unwrap_tok(xn.tok),
+                                    "タプルの " + str(k + 1) + " 番目の型が合いません",
+                                    "これは '" + ast.type_name(et) + "' 型です",
+                                    None, "",
+                                    "ここには '" + ast.type_name(wt.params[k]) +
+                                    "' が必要です")
+                t.params.append(wt.params[k])
+            else:
+                t.params.append(et)
+            k = k + 1
+            xi = xn.next
+        return t
+
+    def check_slice(mut self, n: rc[ast.Node]) -> rc[ast.Type]:
+        t: rc[ast.Type] = self.check_expr(unwrap_node(n.lhs))
+        if t.kind != ast.TY_STR and t.kind != ast.TY_LIST:
+            diag.error_full(unwrap_tok(unwrap_node(n.lhs).tok),
+                            "'" + ast.type_name(t) + "' 型はスライスできません",
+                            "ここには str か list[T] が必要です", None, "", "")
+        if n.rhs is not None:
+            a: rc[ast.Type] = self.check_expr(unwrap_node(n.rhs))
+            if a.kind != ast.TY_INT:
+                diag.error_at(unwrap_tok(unwrap_node(n.rhs).tok),
+                              "スライスの開始は int です（'" +
+                              ast.type_name(a) + "' 型でした）")
+        if n.els is not None:
+            b: rc[ast.Type] = self.check_expr(unwrap_node(n.els))
+            if b.kind != ast.TY_INT:
+                diag.error_at(unwrap_tok(unwrap_node(n.els).tok),
+                              "スライスの終端は int です（'" +
+                              ast.type_name(b) + "' 型でした）")
+        return t
+
+    # ── 演算子の多重定義 ──────────────────────────────
+    #
+    # ★ `a + b` の左辺がクラスで、そのクラスに `__add__` があれば
+    #   **`a.__add__(b)` に読み替える。** 読み替えるのは意味解析だけで、
+    #   codegen と IR は 1 行も変えていない（ふつうのメソッド呼び出しになる）。
+    #
+    # ⚠️ **反転（`__radd__`）は無い。** `2.0 * m` は書けない（`m * 2.0` と書く）。
+    def op_method_name(self, op: int) -> str:
+        if op == ast.OP_ADD:
+            return "__add__"
+        if op == ast.OP_SUB:
+            return "__sub__"
+        if op == ast.OP_MUL:
+            return "__mul__"
+        if op == ast.OP_TRUEDIV:
+            return "__truediv__"
+        if op == ast.OP_FLOORDIV:
+            return "__floordiv__"
+        if op == ast.OP_MOD:
+            return "__mod__"
+        if op == ast.OP_POW:
+            return "__pow__"
+        if op == ast.OP_EQ:
+            return "__eq__"
+        if op == ast.OP_NE:
+            return "__ne__"
+        if op == ast.OP_LT:
+            return "__lt__"
+        if op == ast.OP_LE:
+            return "__le__"
+        if op == ast.OP_GT:
+            return "__gt__"
+        if op == ast.OP_GE:
+            return "__ge__"
+        return ""
+
+    # そのクラスにそのメソッドがあるか
+    def class_has_method(mut self, c: rc[ast.Class], name: str) -> bool:
+        owner: rc[types.ModuleSyms] = self.syms_by_name(c.owner_name)
+        return self.lookup_func_in(owner, self.mangle(c.name, name)) is not None
+
+    # n（ND_BINOP）を n.lhs.name(n.rhs) の呼び出しに作り替える
+    def rewrite_to_method(mut self, n: mut rc[ast.Node], c: rc[ast.Class],
+                          name: str) -> rc[ast.Type]:
+        rhs: rc[ast.Node] = unwrap_node(n.rhs)
+        rhs.next = None
+        n.kind = ast.ND_METHOD
+        n.name = copy(name)
+        n.args = rhs
+        n.rhs = None
+        return self.check_class_method(n, c)
+
+    def check_binop(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
+        # ★ in / not in は「両辺が同じ型」ではないので先に分岐
+        if n.op == ast.OP_IN or n.op == ast.OP_NOTIN:
+            return self.check_in(n)
+
+        # ★ is / is not は型の合わせ方が違うので先に分岐
+        if n.op == ast.OP_IS or n.op == ast.OP_ISNOT:
+            return self.check_is(n)
+
+        lhs: rc[ast.Node] = unwrap_node(n.lhs)
+        rhs: rc[ast.Node] = unwrap_node(n.rhs)
+        l: rc[ast.Type] = self.check_expr(lhs)
+
+        # ★ 左辺がクラスなら、演算子は多重定義を探す。
+        #   ⚠️ 右辺はここでは検査しない。**メソッドの引数として**
+        #     check_class_method が検査する（2 回検査しないため）。
+        if l.kind == ast.TY_CLASS:
+            lc: rc[ast.Class] = unwrap_class(l.cls)
+            mn: str = self.op_method_name(n.op)
+            if mn != "" and self.class_has_method(lc, mn):
+                return self.rewrite_to_method(n, lc, mn)
+
+            # ★ `!=` は `__ne__` が無ければ `not (a == b)` に読み替える
+            #   （Python と同じ。`__eq__` だけ書けば両方使える）。
+            if n.op == ast.OP_NE and self.class_has_method(lc, "__eq__"):
+                call: rc[ast.Node] = ast.new_node(ast.ND_METHOD, n.tok)
+                call.lhs = lhs
+                call.name = "__eq__"
+                rhs.next = None
+                call.args = rhs
+                rt: rc[ast.Type] = self.check_class_method(call, lc)
+                if rt.kind != ast.TY_BOOL:
+                    diag.error_at(unwrap_tok(n.tok),
+                                  "'!=' に使うには __eq__ が bool を返す必要が" +
+                                  "あります（いまは '" + ast.type_name(rt) +
+                                  "' を返しています）")
+                call.type = rt
+                n.kind = ast.ND_UNARY
+                n.op = ast.OP_NOT
+                n.lhs = call
+                n.rhs = None
+                return self.ty_bool()
+
+        r: rc[ast.Type] = self.check_expr(rhs)
+
+        # ★ 繰り返し（"ab" * 3 / [0] * 3）だけは両辺の型が違う。
+        #   ⚠️ 3 * "ab"（左右が逆）は認めない（「何を何回」の順を固定する）
+        if n.op == ast.OP_MUL and r.kind == ast.TY_INT:
+            if l.kind == ast.TY_STR or l.kind == ast.TY_LIST:
+                return l
+
+        # ★ 検査は 2 段構え（型システム 5.3）
+        if not ast.type_equal(l, r):
+            diag.error_full(unwrap_tok(n.tok),
+                            "型 '" + ast.type_name(l) + "' と '" +
+                            ast.type_name(r) + "' に演算子 '" +
+                            ast.op_symbol(n.op) + "' は適用できません",
+                            "この演算子の両辺の型が違います", None, "",
+                            self.no_implicit_hint(l, r))
+
+        if not self.op_supports(n.op, l):
+            if n.op == ast.OP_TRUEDIV:
+                diag.error_at_hint(unwrap_tok(n.tok),
+                                   "切り捨て除算の '//' を使ってください" +
+                                   "（本言語には暗黙の型変換がないため、" +
+                                   "'/' は float 専用です）",
+                                   "整数の除算に '/' は使えません")
+            # ★ クラスなら「多重定義すれば書ける」ことを示す
+            if l.kind == ast.TY_CLASS and self.op_method_name(n.op) != "":
+                diag.error_at_hint(unwrap_tok(n.tok),
+                                   "クラス '" + unwrap_class(l.cls).name +
+                                   "' に '" + self.op_method_name(n.op) +
+                                   "(self, other) -> …' を定義すると、" +
+                                   "この演算子が使えます",
+                                   "型 '" + ast.type_name(l) + "' に演算子 '" +
+                                   ast.op_symbol(n.op) + "' は適用できません")
+            diag.error_at(unwrap_tok(n.tok),
+                          "型 '" + ast.type_name(l) + "' に演算子 '" +
+                          ast.op_symbol(n.op) + "' は適用できません")
+
+        # 0 除算のうち、右辺がリテラル 0 の場合はここで弾く
+        if ((n.op == ast.OP_FLOORDIV or n.op == ast.OP_MOD) and
+                rhs.kind == ast.ND_INT and rhs.ival == 0):
+            diag.error_full(unwrap_tok(rhs.tok), "0 で除算しています",
+                            "この 0 で割ろうとしています",
+                            n.tok, "演算子 '" + ast.op_symbol(n.op) + "' はここです",
+                            "")
+
+        # ★ 比較は bool を返す。算術は両辺と同じ型を返す
+        if ast.is_compare(n.op):
+            return self.ty_bool()
+        return l
+
+    def check_logical(mut self, n: rc[ast.Node]) -> rc[ast.Type]:
+        lhs: rc[ast.Node] = unwrap_node(n.lhs)
+        rhs: rc[ast.Node] = unwrap_node(n.rhs)
+        l: rc[ast.Type] = self.check_expr(lhs)
+
+        # ★ 短絡評価するので、rhs は「lhs がある側に転んだとき」しか
+        #   評価されません。その側の絞り込みを rhs の検査中だけ効かせます。
+        #
+        #     a is not None and a.v == 0   ← and の rhs は lhs が真のときだけ見る
+        #     a is None     or  a.v == 0   ← or  の rhs は lhs が偽のときだけ見る
+        #
+        # ⚠️ 抜けたら必ず戻す（15.5 節と同じ「入る前に変えて、抜けたら戻す」）。
+        svars: list[rc[types.VarEntry]] = []
+        stypes: list[rc[ast.Type]] = []
+        self.narrow_apply(lhs, n.op == ast.OP_AND, svars, stypes)
+        r: rc[ast.Type] = self.check_expr(rhs)
+        self.narrow_restore(svars, stypes)
+
+        msg: str = "演算子 '" + ast.op_symbol(n.op) + "' には bool が必要です"
+        lbl: str = "演算子 '" + ast.op_symbol(n.op) + "' はここです"
+        if l.kind != ast.TY_BOOL:
+            return self.bool_required(msg, lbl, n.tok, lhs, l)
+        if r.kind != ast.TY_BOOL:
+            return self.bool_required(msg, lbl, n.tok, rhs, r)
+        return self.ty_bool()
+
+    def check_unary(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
+        operand: rc[ast.Node] = unwrap_node(n.lhs)
+        t: rc[ast.Type] = self.check_expr(operand)
+
+        # not は bool を取り bool を返す
+        if n.op == ast.OP_NOT:
+            if t.kind != ast.TY_BOOL:
+                return self.bool_required(
+                    "演算子 '" + ast.op_symbol(n.op) + "' には bool が必要です",
+                    "演算子 '" + ast.op_symbol(n.op) + "' はここです",
+                    n.tok, operand, t)
+            return self.ty_bool()
+
+        # ★ クラスの単項マイナスは __neg__ に読み替える
+        if t.kind == ast.TY_CLASS and n.op == ast.OP_NEG:
+            uc: rc[ast.Class] = unwrap_class(t.cls)
+            if self.class_has_method(uc, "__neg__"):
+                n.kind = ast.ND_METHOD
+                n.name = "__neg__"
+                n.args = None
+                return self.check_class_method(n, uc)
+
+        # ★ float には - と + が使える（~ はビット演算なので int だけ）
+        if t.kind == ast.TY_FLOAT:
+            if n.op == ast.OP_NEG or n.op == ast.OP_POS:
+                return t
+            diag.error_at(unwrap_tok(n.tok),
+                          "型 '" + ast.type_name(t) + "' に単項演算子 '" +
+                          ast.op_symbol(n.op) + "' は適用できません")
+
+        # - + ~ は int のみ
+        if t.kind != ast.TY_INT:
+            diag.error_at(unwrap_tok(n.tok),
+                          "型 '" + ast.type_name(t) + "' に単項演算子 '" +
+                          ast.op_symbol(n.op) + "' は適用できません")
+        return t
+
+    # FuncSig から関数型を作る
+    def fn_type_of(self, f: rc[types.FuncSig]) -> rc[ast.Type]:
+        t: rc[ast.Type] = rc(ast.Type(ast.TY_FN))
+        for pt in f.params:
+            t.params.append(pt)
+        t.elem = f.ret
+        return t
+
+    def check_var(self, n: mut rc[ast.Node]) -> rc[ast.Type]:
+        v: rc[types.VarEntry] | None = self.lookup(n.name)
+
+        # ★ 変数に無ければ **関数を探す**（関数の名前を値にする）
+        #   ⚠️ 変数が先。同名の局所変数があればそちらが勝つ。
+        if v is None:
+            fs: rc[types.FuncSig] | None = self.lookup_func(n.name)
+            if fs is not None:
+                if len(fs.raises_cls) > 0:
+                    diag.error_full(unwrap_tok(n.tok),
+                                    "'" + n.name +
+                                    "' は raises する関数なので値にできません",
+                                    "ここでは値として使えません", None, "",
+                                    "関数型はエラーの受け渡しを表せません" +
+                                    "（raises しない関数で包んでください）")
+                n.ir_name = fs.ir_name
+                n.is_func_ref = True
+                return self.fn_type_of(fs)
+
+        if v is None:
+            # ★ モジュール名そのものは値ではない
+            if self.lookup_import(n.name) is not None:
+                diag.error_full(unwrap_tok(n.tok),
+                                "モジュール '" + n.name + "' は値として使えません",
+                                "ここにはモジュール名を書けません", None, "",
+                                "モジュールの中身は '" + n.name +
+                                ".名前' の形で使います")
+
+            # 同名のモジュールが存在するのに import していない場合
+            if module.file_exists(self.cur_mod().dir, n.name):
+                diag.error_full(unwrap_tok(n.tok),
+                                "モジュール '" + n.name +
+                                "' を import していません",
+                                "このモジュールはここからは見えません", None, "",
+                                "ファイルの先頭に 'import " + n.name +
+                                "' を書いてください")
+
+            diag.error_full(unwrap_tok(n.tok),
+                            "未定義の名前 '" + n.name + "' です",
+                            "この名前は宣言されていません", None, "",
+                            "使う前に宣言してください（例: " + n.name +
+                            ": int = 0）")
+            return self.ty_int()
+        n.ir_name = v.ir_name
+        return unwrap_type(v.type)
+
+    def check_expr(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
+        t: rc[ast.Type] = self.ty_int()
+        if n.kind == ast.ND_INT:
+            t = self.ty_int()
+        elif n.kind == ast.ND_FLOAT:
+            t = self.ty_float()
+        elif n.kind == ast.ND_COND:
+            t = self.check_ternary(n)
+        elif n.kind == ast.ND_SLICE:
+            t = self.check_slice(n)
+        elif n.kind == ast.ND_TUPLE:
+            t = self.check_tuple(n)
+        elif n.kind == ast.ND_BOOL:
+            t = self.ty_bool()
+        elif n.kind == ast.ND_STR:
+            t = self.ty_str()
+        elif n.kind == ast.ND_NONE:
+            t = self.ty_null()
+        elif n.kind == ast.ND_VAR:
+            t = self.check_var(n)
+        elif n.kind == ast.ND_BINOP:
+            t = self.check_binop(n)
+        elif n.kind == ast.ND_LOGICAL:
+            t = self.check_logical(n)
+        elif n.kind == ast.ND_CALL:
+            t = self.check_call(n)
+        elif n.kind == ast.ND_LIST:
+            t = self.check_list_lit(n)
+        elif n.kind == ast.ND_INDEX:
+            t = self.check_index_expr(n)
+        elif n.kind == ast.ND_METHOD:
+            t = self.check_method(n)
+        elif n.kind == ast.ND_FIELD:
+            t = self.check_field(n)
+        elif n.kind == ast.ND_UNARY:
+            t = self.check_unary(n)
+        elif n.kind == ast.ND_LISTCOMP:
+            t = self.check_listcomp(n)
+        else:
+            panic("sema.check_expr: 式ではないノードです")
+        n.type = t
+        return t
+
+    # ── 文の検査 ────────────────────────────────────────────
+
+    def check_vardecl(mut self, n: mut rc[ast.Node]) -> None:
+        # ① 型注釈を解決する（型注釈が無いのは for の脱糖）
+        declared: rc[ast.Type] | None = None
+        if n.type_ref is not None:
+            d0: rc[ast.Type] = self.resolve_type(unwrap_node(n.type_ref))
+            if d0.kind == ast.TY_NONE:
+                diag.error_at_hint(unwrap_tok(n.tok),
+                                   "None 型の値は存在しないので変数にできません",
+                                   "変数の型に None は使えません")
+            declared = d0
+
+        # ② 同じスコープでの再宣言を禁止（言語仕様 5.1）
+        prev: rc[types.VarEntry] | None = self.lookup_local(n.name)
+        if prev is not None:
+            diag.error_full(unwrap_tok(n.tok),
+                            "変数 '" + n.name + "' は既に宣言されています",
+                            "ここで再宣言されています",
+                            prev.decl_tok, "最初の宣言はここです",
+                            "既存の変数に代入するなら型注釈を外してください" +
+                            "（例: x = 1）")
+
+        # ②' 外側のスコープの変数を隠していないか（シャドーイング禁止）
+        outer: rc[types.VarEntry] | None = self.lookup(n.name)
+        if outer is not None:
+            diag.error_full(unwrap_tok(n.tok),
+                            "変数 '" + n.name +
+                            "' は外側のスコープの変数を隠しています",
+                            "シャドーイングは禁止されています（言語仕様 5.1）",
+                            outer.decl_tok, "外側の宣言はここです",
+                            "別の名前にするか、型注釈を外して既存の変数に" +
+                            "代入してください（例: x = 1）")
+
+        # ③ 初期化式の型が宣言した型に代入できるか
+        rhs: rc[ast.Node] = unwrap_node(n.rhs)
+        self.expected = declared
+        actual: rc[ast.Type] = self.check_expr(rhs)
+        self.expected = None
+
+        # 型注釈が無ければ、初期化式の型がそのまま変数の型になる
+        if declared is None:
+            if actual.kind == ast.TY_NONE:
+                diag.error_at_hint(unwrap_tok(rhs.tok),
+                                   "値を返さない式は変数に入れられません",
+                                   "None 型の値は変数にできません")
+            declared = actual
+        want: rc[ast.Type] = unwrap_type(declared)
+
+        if not ast.type_assignable(actual, want):
+            diag.error_full(unwrap_tok(rhs.tok), "型が一致しません",
+                            "型 '" + ast.type_name(actual) + "' の式",
+                            n.tok,
+                            "変数 '" + n.name + "' は '" +
+                            ast.type_name(want) + "' 型として宣言されています",
+                            self.no_implicit_hint(actual, want))
+
+        # ④ スコープに登録する（★ 初期化式を検査した「後」に）
+        v: rc[types.VarEntry] = self.declare(n.name, want, n.tok)
+        n.ir_name = v.ir_name
+        n.type = want
+
+    def check_assign(mut self, n: mut rc[ast.Node]) -> None:
+        target: rc[ast.Node] = unwrap_node(n.lhs)
+
+        # 添字への代入 xs[i] = v
+        if target.kind == ast.ND_INDEX:
+            # ★ クラスへの代入は __setitem__ に読み替える。
+            #   m[i, j] = v  →  m.__setitem__(i, j, v)
+            #   ⚠️ 読み替えるのは**代入文そのもの**（値まで実引数にするため）。
+            tobj: rc[ast.Type] = self.check_expr(unwrap_node(target.lhs))
+            if tobj.kind == ast.TY_CLASS:
+                sc: rc[ast.Class] = unwrap_class(tobj.cls)
+                if not self.class_has_method(sc, "__setitem__"):
+                    diag.error_at_hint(unwrap_tok(target.tok),
+                                       "クラス '" + sc.name +
+                                       "' に '__setitem__(self, …, 値) -> None' を" +
+                                       "定義すると、添字への代入が使えます",
+                                       "型 '" + ast.type_name(tobj) +
+                                       "' の添字には代入できません")
+                args: rc[ast.Node] = unwrap_node(target.rhs)
+                last: rc[ast.Node] = args
+                while last.next is not None:
+                    last = unwrap_node(last.next)
+                val: rc[ast.Node] = unwrap_node(n.rhs)
+                val.next = None
+                last.next = val          # 最後の実引数は「代入する値」
+
+                # ⚠️ **代入文のノードそのもの**を呼び出しにする
+                #   （文の並び next を壊さないよう、入れ替えではなく上書き）。
+                n.kind = ast.ND_METHOD
+                n.tok = target.tok
+                n.name = "__setitem__"
+                n.lhs = target.lhs
+                n.args = args
+                n.rhs = None
+                n.type = self.check_class_method(n, sc)
+                return
+
+            et: rc[ast.Type] = self.check_index_expr(target)
+            target.type = et
+
+            # ⚠️ タプルの要素には代入できない
+            if tobj.kind == ast.TY_TUPLE:
+                diag.error_at_hint(unwrap_tok(target.tok),
+                                   "タプルは作ったら変わりません（新しいタプルを" +
+                                   "作ってください）",
+                                   "タプルの要素には代入できません")
+
+            # ⚠️ str は不変なので s[0] = "x" は書けない
+            obj: rc[ast.Node] = unwrap_node(target.lhs)
+            if unwrap_type(obj.type).kind == ast.TY_STR:
+                diag.error_at_hint(unwrap_tok(target.tok),
+                                   "str は不変（immutable）です。" +
+                                   "新しい文字列を作ってください",
+                                   "文字列の要素には代入できません")
+
+            self.expected = et
+            av: rc[ast.Type] = self.check_expr(unwrap_node(n.rhs))
+            self.expected = None
+
+            if not ast.type_assignable(av, et):
+                diag.error_full(unwrap_tok(unwrap_node(n.rhs).tok),
+                                "型が一致しません",
+                                "型 '" + ast.type_name(av) + "' の式",
+                                target.tok,
+                                "この要素は '" + ast.type_name(et) + "' 型です",
+                                self.no_implicit_hint(av, et))
+            n.type = et
+            return
+
+        # フィールドへの代入 t.kind = v
+        if target.kind == ast.ND_FIELD:
+            ft: rc[ast.Type] = self.check_field(target)
+            target.type = ft
+
+            self.expected = ft
+            av2: rc[ast.Type] = self.check_expr(unwrap_node(n.rhs))
+            self.expected = None
+
+            if not ast.type_assignable(av2, ft):
+                fld: rc[ast.Field] | None = target.field
+                rel: rc[token.Token] | None = None
+                rel_label: str = ""
+                if fld is not None:
+                    rel = fld.tok
+                    rel_label = ("フィールド '" + fld.name + "' は '" +
+                                 ast.type_name(ft) + "' 型として宣言されています")
+                diag.error_full(unwrap_tok(unwrap_node(n.rhs).tok),
+                                "型が一致しません",
+                                "型 '" + ast.type_name(av2) + "' の式",
+                                rel, rel_label, self.no_implicit_hint(av2, ft))
+            n.type = ft
+            return
+
+        if target.kind != ast.ND_VAR:
+            panic("sema: 代入先が変数ではありません")
+
+        v: rc[types.VarEntry] | None = self.lookup(target.name)
+        if v is None:
+            diag.error_full(unwrap_tok(target.tok),
+                            "未定義の名前 '" + target.name + "' に代入しています",
+                            "この名前は宣言されていません", None, "",
+                            "初めて使うときは型注釈が必要です（例: " +
+                            target.name + ": int = 0）")
+            return
+        target.type = v.type
+        target.ir_name = v.ir_name
+
+        # ★ 代入できるかは「宣言された型」で判定する
+        declared2: rc[ast.Type] = unwrap_type(v.declared)
+        self.expected = declared2
+        actual2: rc[ast.Type] = self.check_expr(unwrap_node(n.rhs))
+        self.expected = None
+        if not ast.type_assignable(actual2, declared2):
+            diag.error_full(unwrap_tok(unwrap_node(n.rhs).tok), "型が一致しません",
+                            "型 '" + ast.type_name(actual2) + "' の式",
+                            v.decl_tok,
+                            "変数 '" + v.name + "' は '" +
+                            ast.type_name(declared2) + "' 型として宣言されています",
+                            self.no_implicit_hint(actual2, declared2))
+
+        # ★ 代入したら絞り込みは解除する（15.5 節）
+        v.type = declared2
+        target.type = declared2
+        n.type = declared2
+
+    # 条件式は bool でなければならない
+    def check_cond(mut self, where: str, stmt_node: rc[ast.Node], cond: mut rc[ast.Node]) -> None:
+        t: rc[ast.Type] = self.check_expr(cond)
+        if t.kind != ast.TY_BOOL:
+            self.bool_required(where + "には bool が必要です", where + "はここです",
+                               stmt_node.tok, cond, t)
+
+    # ── 絞り込み（narrowing） ───────────────────────────
+
+    def narrow_one(self, var_node: rc[ast.Node], saved: mut list[rc[types.VarEntry]],
+                   saved_types: mut list[rc[ast.Type]]) -> None:
+        if var_node.kind != ast.ND_VAR:
+            return
+        v: rc[types.VarEntry] | None = self.lookup(var_node.name)
+        if v is None:
+            return
+        if v.is_global:
+            return                       # グローバルは絞らない
+        vt: rc[ast.Type] = unwrap_type(v.type)
+        if vt.kind != ast.TY_OPT:
+            return
+        saved.append(v)
+        saved_types.append(vt)
+        v.type = ast.elem_of(vt)         # ★ ここだけ Token になる
+
+    def narrow_apply(self, cond: rc[ast.Node] | None, positive: bool,
+                     saved: mut list[rc[types.VarEntry]],
+                     saved_types: mut list[rc[ast.Type]]) -> None:
+        if cond is None:
+            return
+        c: rc[ast.Node] = cond
+        if c.kind == ast.ND_BINOP and c.op == ast.OP_ISNOT and positive:
+            self.narrow_one(unwrap_node(c.lhs), saved, saved_types)
+        elif c.kind == ast.ND_BINOP and c.op == ast.OP_IS and not positive:
+            self.narrow_one(unwrap_node(c.lhs), saved, saved_types)
+        elif c.kind == ast.ND_LOGICAL and c.op == ast.OP_AND and positive:
+            self.narrow_apply(c.lhs, True, saved, saved_types)
+            self.narrow_apply(c.rhs, True, saved, saved_types)
+        elif c.kind == ast.ND_LOGICAL and c.op == ast.OP_OR and not positive:
+            # ★ ド・モルガン。
+            #   not(a or b) = (not a) and (not b) なので、成り立たない側では両方絞れる。
+            #
+            #     if b is None or c is None:
+            #         return 0
+            #     # ← ここでは b も c も None ではない
+            #
+            # ⚠️ 「成り立つ側」の or は相変わらず絞れない（一方しか保証されない）。
+            self.narrow_apply(c.lhs, False, saved, saved_types)
+            self.narrow_apply(c.rhs, False, saved, saved_types)
+
+    def narrow_restore(self, saved: mut list[rc[types.VarEntry]],
+                       saved_types: list[rc[ast.Type]]) -> None:
+        i: int = 0
+        while i < len(saved):
+            saved[i].type = saved_types[i]
+            i = i + 1
+
+    # 文の並びを順に検査する（ガード節の絞り込みを含む）
+    def check_stmt_list(mut self, first: mut rc[ast.Node] | None) -> None:
+        gvars: list[rc[types.VarEntry]] = []
+        gtypes: list[rc[ast.Type]] = []
+
+        st: rc[ast.Node] | None = first
+        while st is not None:
+            self.check_stmt(st)
+            if (st.kind == ast.ND_IF and st.els is None and
+                    self.always_returns(st.body)):
+                self.narrow_apply(st.lhs, False, gvars, gtypes)
+            st = st.next
+
+        self.narrow_restore(gvars, gtypes)
+
+    def check_block(mut self, n: mut rc[ast.Node]) -> None:
+        self.scope_push()
+        self.check_stmt_list(n.body)
+        self.scope_pop()
+
+
+    # ── scope: から途中で抜けることを禁じる ──────────────────
+    #
+    # 🤔 なぜ禁じるのか
+    #   scope: の出口には「まだ待っていないスレッドを全部 join する」という
+    #   仕事がある。**途中から抜ける道があると、その仕事が飛ぶ。**
+    #   飛ぶと、まだ走っているスレッドが借りている値の寿命が切れる
+    #   — つまり scoped spawn の根拠そのものが崩れる。
+    #
+    # ⚠️ ループの中の break / continue は、そのループが scope: の**中**に
+    #    あるなら問題ない（外へは出ないため）。
+    def scope_escape(mut self, first: rc[ast.Node] | None, loop_depth: int,
+                     try_depth: int) -> None:
+        q: rc[ast.Node] | None = first
+        while q is not None:
+            n: rc[ast.Node] = q
+            what: str = ""
+            if n.kind == ast.ND_RETURN:
+                what = "return"
+            elif n.kind == ast.ND_RAISE:
+                what = "raise"
+            elif n.kind == ast.ND_BREAK:
+                if loop_depth == 0:
+                    what = "break"
+            elif n.kind == ast.ND_CONTINUE:
+                if loop_depth == 0:
+                    what = "continue"
+            elif n.kind == ast.ND_CALL or n.kind == ast.ND_METHOD:
+                # ⚠️ 失敗しうる呼び出しは、捕まえないと外へ飛ぶ
+                if n.can_fail and try_depth == 0:
+                    what = "失敗しうる呼び出し"
+            if len(what) > 0:
+                diag.error_code_full(unwrap_tok(n.tok), "E-SCOPE-1",
+                                     "scope: の中から '" + what +
+                                     "' で抜けることはできません",
+                                     "ここで scope: の外へ出ようとしています",
+                                     None, "",
+                                     "scope: の出口では、始めたスレッドを全部 join します。" +
+                                     "途中で抜けるとそれが飛ぶので、" +
+                                     "結果を変数に受けてからブロックを出てください")
+            ld: int = loop_depth
+            if n.kind == ast.ND_WHILE:
+                ld = loop_depth + 1
+            td: int = try_depth
+            if n.kind == ast.ND_TRY:
+                td = try_depth + 1
+            self.scope_escape(n.lhs, ld, td)
+            self.scope_escape(n.rhs, ld, td)
+            self.scope_escape(n.incr, ld, td)
+            self.scope_escape(n.body, ld, td)
+            self.scope_escape(n.args, ld, td)
+            # ⚠️ except 節の中は try の外（そこで失敗すればさらに外へ飛ぶ）
+            etd: int = td
+            if n.kind == ast.ND_TRY:
+                etd = try_depth
+            self.scope_escape(n.els, ld, etd)
+            q = n.next
+
+    def check_stmt(mut self, n: mut rc[ast.Node]) -> None:
+        if n.kind == ast.ND_VARDECL:
+            self.check_vardecl(n)
+        elif n.kind == ast.ND_UNPACK:
+            self.check_unpack(n)
+        elif n.kind == ast.ND_ASSIGN:
+            self.check_assign(n)
+        elif n.kind == ast.ND_BLOCK:
+            self.check_block(n)
+        elif n.kind == ast.ND_SCOPE:
+            # ★ scope: ブロック（A-18 の scoped spawn）。
+            #   型としては何もしない。意味を与えるのは所有権検査（借りを
+            #   渡せる）と codegen（出口で join する）。
+            self.scope_depth = self.scope_depth + 1
+            self.check_block(unwrap_node(n.body))
+            self.scope_depth = self.scope_depth - 1
+            # ⚠️ 検査は**型検査のあと**。can_fail は検査中に付くため。
+            self.scope_escape(n.body, 0, 0)
+        elif n.kind == ast.ND_RETURN:
+            self.check_return(n)
+        elif n.kind == ast.ND_PASS:
+            return
+        elif n.kind == ast.ND_IF:
+            self.check_cond("if の条件", n, unwrap_node(n.lhs))
+
+            # ★ then 節では条件が成り立っている
+            tvars: list[rc[types.VarEntry]] = []
+            ttypes: list[rc[ast.Type]] = []
+            self.narrow_apply(n.lhs, True, tvars, ttypes)
+            self.check_block(unwrap_node(n.body))
+            self.narrow_restore(tvars, ttypes)
+
+            if n.els is not None:
+                evars: list[rc[types.VarEntry]] = []
+                etypes: list[rc[ast.Type]] = []
+                self.narrow_apply(n.lhs, False, evars, etypes)
+                self.check_stmt(unwrap_node(n.els))
+                self.narrow_restore(evars, etypes)
+        elif n.kind == ast.ND_WHILE:
+            self.check_cond("while の条件", n, unwrap_node(n.lhs))
+            self.loop_depth = self.loop_depth + 1
+
+            wvars: list[rc[types.VarEntry]] = []
+            wtypes: list[rc[ast.Type]] = []
+            self.narrow_apply(n.lhs, True, wvars, wtypes)
+            self.check_block(unwrap_node(n.body))
+            if n.incr is not None:
+                self.check_stmt(unwrap_node(n.incr))
+            self.narrow_restore(wvars, wtypes)
+
+            self.loop_depth = self.loop_depth - 1
+        elif n.kind == ast.ND_TRY:
+            # ① except の型を先に解決する（本体を見るときに「捕まえられるか」が要る）
+            ex: rc[ast.Node] | None = n.els
+            while ex is not None:
+                et: rc[ast.Type] = self.resolve_type(unwrap_node(ex.type_ref))
+                if et.kind != ast.TY_CLASS:
+                    diag.error_full(unwrap_tok(ex.tok),
+                                    "'" + ast.type_name(et) +
+                                    "' はエラー型として使えません",
+                                    "except に書けるのはクラスだけです", None, "",
+                                    "エラーはふつうのクラスとして定義してください")
+                else:
+                    ex.err_tag = self.err_tag_of(unwrap_class(et.cls))
+                ex.type = et
+                ex = ex.next
+
+            # ② try の本体（この間に起きた失敗は、この try が受け止める）
+            self.try_stack.append(n)
+            self.check_block(unwrap_node(n.body))
+            self.try_stack = try_pop(self.try_stack)
+
+            # ③ except の本体（as で束縛する変数はその節の中だけ）
+            ex2: rc[ast.Node] | None = n.els
+            while ex2 is not None:
+                self.scope_push()
+                if len(ex2.name) > 0:
+                    v: rc[types.VarEntry] = self.declare(ex2.name,
+                                                     unwrap_type(ex2.type), ex2.tok)
+                    ex2.ir_name = v.ir_name
+                self.check_stmt_list(unwrap_node(ex2.body).body)
+                self.scope_pop()
+                ex2 = ex2.next
+
+            # ④ 何も捕まえていない try は、書いた人の勘違い（R5。警告）
+            if not n.can_fail:
+                diag.warn_full(unwrap_tok(n.tok), "E-RAISE-5",
+                               "この try の中に、失敗しうる呼び出しがありません",
+                               "except は決して実行されません",
+                               "raises を宣言した関数を呼んでいるか確かめてください")
+        elif n.kind == ast.ND_RAISE:
+            rt: rc[ast.Type] = self.check_expr(unwrap_node(n.lhs))
+            if rt.kind != ast.TY_CLASS:
+                diag.error_full(unwrap_tok(unwrap_node(n.lhs).tok),
+                                "'" + ast.type_name(rt) + "' は raise できません",
+                                "raise にはエラーオブジェクトを渡します", None, "",
+                                "エラーはふつうのクラスです" +
+                                "（例: raise IOError(\"見つかりません\")）")
+            else:
+                rc: rc[ast.Class] = unwrap_class(rt.cls)
+                if not self.try_catches(rc) and not self.func_declares(rc):
+                    cf2: rc[types.FuncSig] | None = self.cur_func
+                    ndecl: int = 0
+                    ftok: rc[token.Token] | None = None
+                    if cf2 is not None:
+                        ndecl = len(cf2.raises_cls)
+                        ftok = cf2.tok
+                    if ndecl == 0:
+                        diag.error_code_full(unwrap_tok(n.tok), "E-RAISE-1",
+                                        "'" + rc.name +
+                                        "' を raise していますが、宣言がありません",
+                                        "この関数は失敗しないと宣言されています",
+                                        ftok, "関数の宣言はここです",
+                                        "関数の宣言に 'raises " + rc.name +
+                                        "' を足してください")
+                    else:
+                        diag.error_code_full(unwrap_tok(n.tok), "E-RAISE-2",
+                                        "エラー '" + rc.name + "' が宣言されていません",
+                                        "raises に含まれていません",
+                                        ftok, "関数の宣言はここです",
+                                        "この関数の raises に '" + rc.name +
+                                        "' を足してください")
+                n.err_tag = self.err_tag_of(rc)
+                n.type = rt
+        elif n.kind == ast.ND_BREAK or n.kind == ast.ND_CONTINUE:
+            if self.loop_depth > 0:
+                return
+            kw: str = "continue"
+            if n.kind == ast.ND_BREAK:
+                kw = "break"
+            diag.error_full(unwrap_tok(n.tok),
+                            "'" + kw + "' はループの外では使えません",
+                            "この '" + kw + "' を囲む while がありません", None, "",
+                            "'" + kw + "' は while の中でだけ使えます")
+        else:
+            self.check_expr(n)   # 式文
+
+    # ── 組み込み関数 ───────────────────────────────────
+
+    # エラー型の ID を引く（無ければ割り当てる）
+    def err_tag_of(mut self, c: rc[ast.Class]) -> int:
+        i: int = 0
+        while i < len(self.err_classes):
+            if self.err_classes[i] == c:
+                return i + 1
+            i = i + 1
+        self.err_classes.append(c)
+        return len(self.err_classes)
+
+    # いま入っている try のどれかが c を捕まえるか（捕まえた try に印を付ける）
+    def try_catches(mut self, c: rc[ast.Class]) -> bool:
+        i: int = len(self.try_stack) - 1
+        while i >= 0:
+            t: rc[ast.Node] = self.try_stack[i]
+            ex: rc[ast.Node] | None = t.els
+            while ex is not None:
+                et: rc[ast.Type] | None = ex.type
+                if et is not None:
+                    ec: rc[ast.Class] | None = et.cls
+                    # ⚠️ 'and' では絞り込みが効かないので、ガードを分けます（15.5 節）
+                    if ec is not None and ec == c:
+                        t.can_fail = True
+                        return True
+                ex = ex.next
+            i = i - 1
+        return False
+
+    # 今検査中の関数が c を raises に宣言しているか
+    def func_declares(self, c: rc[ast.Class]) -> bool:
+        f: rc[types.FuncSig] | None = self.cur_func
+        if f is None:
+            return False
+        i: int = 0
+        while i < len(f.raises_cls):
+            if f.raises_cls[i] == c:
+                return True
+            i = i + 1
+        return False
+
+    # raises 節を解決する
+    def resolve_raises(mut self, fn: mut rc[ast.Node], f: mut rc[types.FuncSig]) -> None:
+        r: rc[ast.Node] | None = fn.err_types
+        while r is not None:
+            t: rc[ast.Type] = self.resolve_type(r)
+            if t.kind != ast.TY_CLASS:
+                diag.error_full(unwrap_tok(r.tok),
+                                "'" + ast.type_name(t) + "' はエラー型として使えません",
+                                "raises に書けるのはクラスだけです", None, "",
+                                "エラーはふつうのクラスとして定義してください")
+            else:
+                f.raises_cls.append(unwrap_class(t.cls))
+                self.err_tag_of(unwrap_class(t.cls))
+            r.type = t
+            r = r.next
+
+    # 失敗しうる呼び出しを、誰が受け止めるかを決める（R1 / R2）
+    def check_can_fail(mut self, n: mut rc[ast.Node], f: rc[types.FuncSig],
+                       shown: str) -> None:
+        if len(f.raises_cls) == 0:
+            return
+        n.can_fail = True
+
+        i: int = 0
+        while i < len(f.raises_cls):
+            ec: rc[ast.Class] = f.raises_cls[i]
+            if not self.try_catches(ec) and not self.func_declares(ec):
+                cf: rc[types.FuncSig] | None = self.cur_func
+                declared: int = 0
+                if cf is not None:
+                    declared = len(cf.raises_cls)
+                if declared == 0:
+                    diag.error_code_full(unwrap_tok(n.tok), "E-RAISE-1",
+                                    "失敗しうる呼び出し '" + shown + "' を処理していません",
+                                    "この呼び出しは '" + ec.name +
+                                    "' を返すことがあります",
+                                    f.tok, "'" + shown + "' はここで宣言されています",
+                                    "try で捕まえるか、この関数に 'raises " +
+                                    ec.name + "' を足してください")
+                else:
+                    diag.error_code_full(unwrap_tok(n.tok), "E-RAISE-2",
+                                    "エラー '" + ec.name + "' が宣言されていません",
+                                    "'" + shown + "' は '" + ec.name +
+                                    "' を返すことがあります",
+                                    f.tok, "'" + shown + "' はここで宣言されています",
+                                    "この関数の raises に '" + ec.name +
+                                    "' を足すか、try で捕まえてください")
+            i = i + 1
+
+    def is_builtin_name(self, name: str) -> bool:
+        i: int = 0
+        while i < len(self.builtins):
+            if self.builtins[i].name == name:
+                return True
+            i = i + 1
+        return False
+
+    # 受け取れる型の一覧（エラーメッセージ用）
+    def builtin_arg_types(self, name: str) -> str:
+        parts: list[str] = []
+        i: int = 0
+        while i < len(self.builtins):
+            b: Builtin = self.builtins[i]
+            if b.name == name:
+                if b.arg == ast.TY_LIST:
+                    parts.append("list[T]")
+                else:
+                    parts.append(ast.type_name(self.prim(b.arg)))
+            i = i + 1
+        return strings.join(parts, ", ")
+
+    def check_builtin_call(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
+        nargs: int = count_siblings(n.args)
+
+        # ★ input() は引数なしでも書ける（Python と同じ）。
+        #   ⚠️ 引数を省いたときは、空のプロンプトを渡したことにする。
+        if n.name == "input" and nargs == 0:
+            empty: rc[ast.Node] = ast.new_str_node(n.tok, "", 0)
+            empty.type = self.ty_str()
+            n.args = empty
+            nargs = 1
+
+        if nargs != 1:
+            diag.error_full(unwrap_tok(n.tok),
+                            n.name + " は 1 個の引数を取りますが、" + str(nargs) +
+                            " 個渡されました",
+                            "引数の個数が違います", None, "",
+                            n.name + "(値) の形で使ってください")
+
+        arg: rc[ast.Node] = unwrap_node(n.args)
+        at: rc[ast.Type] = self.check_expr(arg)
+
+        # ★ print(xs) / str(xs) — list をそのまま表示できるようにする。
+        #   ⚠️ 要素の型ごとにランタイム関数を呼び分けるので、**要素が
+        #     int / float / str / bool のときだけ**。入れ子（list[list[int]]）は
+        #     要素をさらに文字列にする手立てが要るので、ここで弾く。
+        if at.kind == ast.TY_LIST and (n.name == "print" or n.name == "str"):
+            ek: int = ast.elem_of(at).kind
+            if (ek != ast.TY_INT and ek != ast.TY_FLOAT and
+                    ek != ast.TY_STR and ek != ast.TY_BOOL):
+                diag.error_full(unwrap_tok(arg.tok),
+                                "'" + ast.type_name(at) + "' はそのまま " +
+                                n.name + " できません",
+                                "要素が '" + ast.type_name(ast.elem_of(at)) +
+                                "' 型です", None, "",
+                                "そのまま出せるのは list[int] / list[float] / " +
+                                "list[str] / list[bool] だけです。" +
+                                "ほかは for でまわしてください")
+            n.is_list_str = True
+            if n.name == "print":
+                return self.ty_none()
+            return self.ty_str()
+
+        i: int = 0
+        while i < len(self.builtins):
+            b: Builtin = self.builtins[i]
+            if b.name == n.name and b.arg == at.kind:
+                n.builtin = copy(b.impl)        # ★ codegen はこれを見る
+                return self.prim(b.ret)
+            i = i + 1
+
+        # ★ 実体化の中で出たエラーには、発端の行を添える
+        rtok: rc[token.Token] | None = self.inst_site
+        rlab: str = ""
+        if rtok is not None:
+            rlab = "この実体化（" + self.inst_name + "）で使われました"
+        diag.error_full(unwrap_tok(arg.tok),
+                        n.name + " は '" + ast.type_name(at) + "' 型を受け取れません",
+                        "これは '" + ast.type_name(at) + "' 型です", rtok, rlab,
+                        n.name + " が受け取れるのは " +
+                        self.builtin_arg_types(n.name) + " です")
+        return self.ty_int()
+
+    # ── リテラル・添字 ──────────────────────────────────────
+
+    def check_list_lit(mut self, n: rc[ast.Node]) -> rc[ast.Type]:
+        want: rc[ast.Type] | None = self.expected   # ★ 使う前に控える
+
+        if n.body is None:
+            # ⚠️ 'or' では絞り込みが効かないので、判定を分けます
+            want_is_list: bool = False
+            if want is not None:
+                if want.kind == ast.TY_LIST:
+                    want_is_list = True
+            if not want_is_list:
+                diag.error_full(unwrap_tok(n.tok), "空のリストの要素型が決まりません",
+                                "この [] がどんなリストなのか分かりません", None, "",
+                                "型注釈を書いてください（例: xs: list[int] = []）。" +
+                                "関数の引数に直接渡す場合は、" +
+                                "いったん変数に入れてください")
+                return self.ty_int()
+            return unwrap_type(want)
+
+        # 要素があるなら、最初の要素の型を要素型にする（推論はしない）
+        self.expected = None
+        if want is not None:
+            if want.kind == ast.TY_LIST:
+                self.expected = want.elem
+        first_node: rc[ast.Node] = unwrap_node(n.body)
+        first: rc[ast.Type] = self.check_expr(first_node)
+        et: rc[ast.Type] = first
+        if want is not None:
+            w: rc[ast.Type] = want
+            if w.kind == ast.TY_LIST:
+                welem: rc[ast.Type] = ast.elem_of(w)
+                if ast.type_assignable(first, welem):
+                    et = welem
+
+        i: int = 2
+        el: rc[ast.Node] | None = first_node.next
+        while el is not None:
+            e: rc[ast.Node] = el
+            self.expected = et
+            t: rc[ast.Type] = self.check_expr(e)
+            if not ast.type_assignable(t, et):
+                diag.error_full(unwrap_tok(e.tok),
+                                "リストの要素の型がそろっていません（第 " + str(i) +
+                                " 要素）",
+                                "これは '" + ast.type_name(t) + "' 型です",
+                                first_node.tok,
+                                "最初の要素は '" + ast.type_name(et) + "' 型です",
+                                "リストの要素はすべて同じ型でなければなりません")
+            i = i + 1
+            el = e.next
+        self.expected = None
+        return ast.type_list(et)
+
+    # ── 内包表記 ──────────────────────────────────────
+    #
+    #   [ E for x in xs if C ]
+    #
+    # ★ **式の位置に現れるので、構文解析での脱糖にできない**（for やカンマ代入
+    #   との違い）。ここで型を決め、codegen がその場でループを組み立てる。
+    #
+    # ⚠️ 隠し宣言 3 つ（ループ変数 / 結果の list / 添字）は構文解析器が並べている。
+    #   ここで型を入れて宣言し、**alloca の名前**を用意する。
+    def check_listcomp(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
+        lv: rc[ast.Node] = unwrap_node(n.body)          # ループ変数
+        res: rc[ast.Node] = unwrap_node(lv.next)        # 結果の list
+        ix: rc[ast.Node] = unwrap_node(res.next)        # 添字
+
+        # ── 対象の型を決める ──
+        elem_t: rc[ast.Type] = self.ty_int()
+        if n.args is not None:
+            # range：構文解析器が「開始・終端」に正規化し、増分は ival にある
+            a: rc[ast.Node] | None = n.args
+            while a is not None:
+                arg: rc[ast.Node] = unwrap_node(a)
+                at: rc[ast.Type] = self.check_expr(arg)
+                if at.kind != ast.TY_INT:
+                    diag.error_at_hint(unwrap_tok(arg.tok),
+                                       "range の引数は int です",
+                                       "これは '" + ast.type_name(at) + "' 型です")
+                a = arg.next
+        else:
+            obj: rc[ast.Node] = unwrap_node(n.rhs)
+            it: rc[ast.Type] = self.check_expr(obj)
+            if it.kind != ast.TY_LIST:
+                diag.error_full(unwrap_tok(obj.tok),
+                                "'" + ast.type_name(it) +
+                                "' 型は内包表記の対象にできません",
+                                "これは '" + ast.type_name(it) + "' 型です",
+                                None, "",
+                                "対象にできるのは list[T] と range(...) です")
+            elem_t = ast.elem_of(it)
+
+        # ── ループ変数の見えるところで、要素の式と条件を検査する ──
+        self.scope_push()
+        lv.type = elem_t
+        vlv: rc[types.VarEntry] = self.declare(lv.name, elem_t, lv.tok)
+        lv.ir_name = copy(vlv.ir_name)
+
+        et: rc[ast.Type] = self.check_expr(unwrap_node(n.lhs))
+        if et.kind == ast.TY_NONE:
+            diag.error_full(unwrap_tok(unwrap_node(n.lhs).tok),
+                            "内包表記の要素が値を持ちません",
+                            "この式は None 型です", None, "",
+                            "値を返す式を書いてください")
+
+        if n.els is not None:
+            cnd: rc[ast.Node] = unwrap_node(n.els)
+            ct: rc[ast.Type] = self.check_expr(cnd)
+            if ct.kind != ast.TY_BOOL:
+                diag.error_at_hint(unwrap_tok(cnd.tok),
+                                   "内包表記の 'if' には bool が必要です",
+                                   "これは '" + ast.type_name(ct) + "' 型です")
+        self.scope_pop()
+
+        # ── 隠し変数（結果の list と添字）──
+        lt: rc[ast.Type] = ast.type_list(et)
+        res.type = lt
+        vres: rc[types.VarEntry] = self.declare(res.name, lt, res.tok)
+        res.ir_name = copy(vres.ir_name)
+        ix.type = self.ty_int()
+        vix: rc[types.VarEntry] = self.declare(ix.name, self.ty_int(), ix.tok)
+        ix.ir_name = copy(vix.ir_name)
+        return lt
+
+    def check_index_expr(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
+        obj: rc[ast.Node] = unwrap_node(n.lhs)
+        idx: rc[ast.Node] = unwrap_node(n.rhs)
+        ot: rc[ast.Type] = self.check_expr(obj)
+
+        # ★ クラスの添字は __getitem__ に読み替える（m[i, j] を含む）。
+        #   ⚠️ 添字は **並び**なので、そのまま実引数のリストになる。
+        if ot.kind == ast.TY_CLASS:
+            gc: rc[ast.Class] = unwrap_class(ot.cls)
+            if not self.class_has_method(gc, "__getitem__"):
+                diag.error_at_hint(unwrap_tok(n.tok),
+                                   "クラス '" + gc.name +
+                                   "' に '__getitem__(self, …) -> …' を" +
+                                   "定義すると、添字が使えます",
+                                   "型 '" + ast.type_name(ot) +
+                                   "' は添字を取れません")
+            n.kind = ast.ND_METHOD
+            n.name = "__getitem__"
+            n.args = idx
+            n.rhs = None
+            return self.check_class_method(n, gc)
+
+        # ★ タプルの添字 t[0]
+        #
+        #   ⚠️ **添字は定数（整数リテラル）だけ**。(int, str) の要素は位置ごとに
+        #     型が違うので、添字が実行時に決まると**式の型が決まらない**。
+        if ot.kind == ast.TY_TUPLE:
+            if idx.next is not None:
+                diag.error_at_hint(unwrap_tok(unwrap_node(idx.next).tok),
+                                   "タプルの添字は 1 つだけです",
+                                   "添字が 2 つ以上あります")
+            if idx.kind != ast.ND_INT:
+                diag.error_full(unwrap_tok(idx.tok),
+                                "タプルの添字は整数リテラルでなければなりません",
+                                "ここは定数である必要があります", None, "",
+                                "要素ごとに型が違うので、添字が実行時に決まると" +
+                                "式の型が決められません（分解代入 a, b = t も" +
+                                "使えます）")
+            k: int = idx.ival
+            if k < 0 or k >= len(ot.params):
+                diag.error_full(unwrap_tok(idx.tok),
+                                "タプルの添字が範囲外です（" + str(k) + "）",
+                                "要素は " + str(len(ot.params)) + " 個です（0 〜 " +
+                                str(len(ot.params) - 1) + "）", None, "", "")
+                return self.ty_int()
+            idx.type = self.ty_int()
+            return ot.params[k]
+
+        # list[T] と str の添字は 1 つだけ
+        if idx.next is not None:
+            diag.error_full(unwrap_tok(unwrap_node(idx.next).tok),
+                            "型 '" + ast.type_name(ot) +
+                            "' に添字を 2 つ以上は書けません",
+                            "2 つめの添字はここです", None, "",
+                            "2 次元の添字（m[i, j]）が使えるのは __getitem__ を" +
+                            "定義したクラスだけです")
+
+        it: rc[ast.Type] = self.check_expr(idx)
+
+        if it.kind != ast.TY_INT:
+            diag.error_full(unwrap_tok(idx.tok), "添字は int でなければなりません",
+                            "これは '" + ast.type_name(it) + "' 型です", None, "", "")
+
+        if ot.kind == ast.TY_LIST:
+            return ast.elem_of(ot)
+        # ★ str の添字は 1 文字の str を返す
+        if ot.kind == ast.TY_STR:
+            return self.ty_str()
+
+        diag.error_full(unwrap_tok(obj.tok),
+                        "型 '" + ast.type_name(ot) + "' は添字を取れません",
+                        "これは '" + ast.type_name(ot) + "' 型です", None, "",
+                        "添字が使えるのは list[T] と str です")
+        return self.ty_int()
+
+    # ── フィールド・メソッド ────────────────────────
+
+    # 「'.' の左がモジュールか」を判定する
+    def dot_module(self, n: rc[ast.Node]) -> rc[types.ModuleSyms] | None:
+        lhs: rc[ast.Node] = unwrap_node(n.lhs)
+        if lhs.kind != ast.ND_VAR:
+            return None
+        if self.lookup(lhs.name) is not None:
+            return None
+        return self.lookup_import(lhs.name)
+
+    # lexer.MAX_KIND — 他のモジュールのグローバル変数
+    def check_module_global(self, n: mut rc[ast.Node],
+                            ms: rc[types.ModuleSyms]) -> rc[ast.Type]:
+        mod_name: str = mod_name_of(ms)
+        v: rc[types.VarEntry] | None = self.lookup_global_in(ms, n.name)
+
+        # ★ グローバル変数に無ければ **関数を探す**
+        #   （math.sin のように、他モジュールの関数も値として渡せる）
+        if v is None:
+            mf: rc[types.FuncSig] | None = self.lookup_func_in(ms, n.name)
+            if mf is not None and len(mf.raises_cls) == 0:
+                n.ir_name = mf.ir_name
+                n.is_func_ref = True
+                n.is_extern = True     # 他モジュールなので declare が要る
+                return self.fn_type_of(mf)
+
+        if v is None:
+            hint: str = ("モジュールから使えるのは、そのファイルのトップレベルの" +
+                         "関数・クラス・グローバル変数です")
+            if self.lookup_func_in(ms, n.name) is not None:
+                hint = ("'" + n.name + "' は関数です。'" + mod_name + "." +
+                        n.name + "(...)' と呼んでください")
+            elif self.lookup_class_in(ms, n.name) is not None:
+                hint = ("'" + n.name + "' はクラスです。生成するには '" +
+                        mod_name + "." + n.name + "(...)' と書いてください")
+            diag.error_full(unwrap_tok(n.tok),
+                            "モジュール '" + mod_name + "' に '" + n.name +
+                            "' はありません",
+                            "この名前は定義されていません", None, "", hint)
+            return self.ty_int()
+
+        # ★ codegen への記録
+        n.mod_name = copy(mod_name)
+        n.ir_name = v.ir_name
+        n.is_global = True
+        n.is_extern = ms != self.cur_syms()
+        return unwrap_type(v.type)
+
+    # ★ T | None に '.' で触ろうとしたときの案内
+    def reject_opt_access(self, obj: rc[ast.Node], at: rc[ast.Node], what: str,
+                          ot: rc[ast.Type]) -> None:
+        hint: str = ("一度ローカル変数に入れてから絞り込んでください:\n" +
+                     "             x: T | None = ...\n" +
+                     "             if x is not None:\n" +
+                     "                 ...")
+        if obj.kind == ast.ND_VAR:
+            hint = ("先に None を除いてください:\n" +
+                    "             if " + obj.name + " is not None:\n" +
+                    "                 ...")
+        diag.error_full(unwrap_tok(at.tok),
+                        "型 '" + ast.type_name(ot) + "' の値には" + what +
+                        "がありません",
+                        "None かもしれない値です",
+                        obj.tok, "この式は '" + ast.type_name(ot) + "' 型です",
+                        hint)
+
+    def check_field(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
+        ms: rc[types.ModuleSyms] | None = self.dot_module(n)
+        if ms is not None:
+            return self.check_module_global(n, ms)
+
+        obj: rc[ast.Node] = unwrap_node(n.lhs)
+        ot: rc[ast.Type] = auto_deref(self.check_expr(obj))   # rc[T] は中身のように使える
+
+        if ot.kind == ast.TY_OPT:
+            self.reject_opt_access(obj, n, "フィールド", ot)
+
+        if ot.kind != ast.TY_CLASS:
+            diag.error_full(unwrap_tok(obj.tok),
+                            "型 '" + ast.type_name(ot) + "' にフィールドはありません",
+                            "これは '" + ast.type_name(ot) + "' 型です", None, "",
+                            "'.' でフィールドを読めるのは class のインスタンス" +
+                            "だけです")
+            return self.ty_int()
+
+        c: rc[ast.Class] = unwrap_class(ot.cls)
+        f: rc[ast.Field] | None = self.lookup_field(c, n.name)
+        if f is None:
+            diag.error_full(unwrap_tok(n.tok),
+                            "クラス '" + c.name + "' にフィールド '" + n.name +
+                            "' はありません",
+                            "このフィールドは宣言されていません",
+                            c.tok, "クラスの定義はここです",
+                            "クラス本体の先頭に「名前: 型」の形で宣言してください")
+            return self.ty_int()
+
+        n.field = f     # ★ codegen はこれ（の index）を getelementptr に渡す
+        return unwrap_type(f.type)
+
+    # クラスのメソッド呼び出しの検査
+    def check_class_method(mut self, n: mut rc[ast.Node], c: rc[ast.Class]) -> rc[ast.Type]:
+        # ★ メソッドは「クラスが定義されたモジュール」の表にいる
+        mname: str = self.mangle(c.name, n.name)
+        owner: rc[types.ModuleSyms] = self.syms_by_name(c.owner_name)
+        f: rc[types.FuncSig] | None = self.lookup_func_in(owner, mname)
+        if f is None:
+            hint: str = ""
+            if self.lookup_field(c, n.name) is not None:
+                hint = "'" + n.name + "' はフィールドです。'()' を外してください"
+            diag.error_full(unwrap_tok(n.tok),
+                            "クラス '" + c.name + "' にメソッド '" + n.name +
+                            "' はありません",
+                            "このメソッドは定義されていません",
+                            c.tok, "クラスの定義はここです", hint)
+            return self.ty_int()
+
+        # 引数の個数（self は数えない）
+        nargs: int = count_siblings(n.args)
+        if nargs != f.nparams - 1:
+            diag.error_full(unwrap_tok(n.tok),
+                            "メソッド '" + mname + "' は " + str(f.nparams - 1) +
+                            " 個の引数を取りますが、" + str(nargs) +
+                            " 個渡されました",
+                            "呼び出しの引数の個数が違います",
+                            f.tok, "このメソッドはここで定義されています",
+                            "self は自動的に渡されるので、書く必要はありません")
+
+        # ★ 第 1 引数は self なので、実引数は params[i + 1] と比べる
+        i: int = 0
+        a: rc[ast.Node] | None = n.args
+        while a is not None:
+            arg: rc[ast.Node] = a
+            want: rc[ast.Type] = f.params[i + 1]
+            self.expected = want
+            at: rc[ast.Type] = self.check_expr(arg)
+            self.expected = None
+            if not ast.type_assignable(at, want):
+                diag.error_full(unwrap_tok(arg.tok),
+                                "メソッド '" + mname + "' の第 " + str(i + 1) +
+                                " 引数: 型 '" + ast.type_name(at) + "' を '" +
+                                ast.type_name(want) + "' に渡せません",
+                                "これは '" + ast.type_name(at) + "' 型です",
+                                f.tok,
+                                "引数 '" + f.pnames[i + 1] + "' は '" +
+                                ast.type_name(want) + "' 型です",
+                                self.no_implicit_hint(at, want))
+            i = i + 1
+            a = arg.next
+
+        n.ir_name = f.ir_name
+        n.is_extern = self.is_extern_owner(f.owner)
+        self.check_can_fail(n, f, mname)
+        return unwrap_type(f.ret)
+
+    def check_method(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
+        ms: rc[types.ModuleSyms] | None = self.dot_module(n)
+        if ms is not None:
+            return self.check_module_call(n, ms)
+
+        obj: rc[ast.Node] = unwrap_node(n.lhs)
+        ot: rc[ast.Type] = auto_deref(self.check_expr(obj))
+        if ot.kind == ast.TY_OPT:
+            self.reject_opt_access(obj, n, "メソッド", ot)
+
+        if ot.kind == ast.TY_CLASS:
+            return self.check_class_method(n, unwrap_class(ot.cls))
+
+        # ★ インタフェース越しの呼び出し。
+        #   どの実装が呼ばれるかは **実行時に**決まる（vtable を引く）。
+        if ot.kind == ast.TY_IFACE:
+            ifc: rc[ast.Iface] = unwrap_iface(ot.iface)
+            found: bool = False
+            slot: int = 0
+            sig2: rc[ast.Node] = ast.new_node(ast.ND_FUNC, None)
+            for q in ifc.methods:
+                if q.name == n.name:
+                    found = True
+                    slot = q.slot + 0     # ⚠️ 借用ではなく値で受ける
+                    sig2 = unwrap_node(q.sig)
+            if not found:
+                diag.error_full(unwrap_tok(n.tok),
+                                "インタフェース '" + ifc.name + "' に '" + n.name +
+                                "' はありません",
+                                "このメソッドは宣言されていません", ifc.tok,
+                                "インタフェースの定義はここです",
+                                "インタフェース越しに呼べるのは、" +
+                                "そこに宣言したものだけです")
+
+            want2: int = count_siblings(sig2.params) - 1   # self は数えない
+            na3: int = count_siblings(n.args)
+            if na3 != want2:
+                diag.error_at_hint(unwrap_tok(n.tok),
+                                   "'" + ifc.name + "." + n.name + "' は " +
+                                   str(want2) + " 個の引数を取ります",
+                                   "引数の個数が違います（" + str(na3) +
+                                   " 個渡されました）")
+
+            k2: int = 1
+            pm2: rc[ast.Node] | None = unwrap_node(sig2.params).next
+            a2: rc[ast.Node] | None = n.args
+            while a2 is not None:
+                an3: rc[ast.Node] = a2
+                pn3: rc[ast.Node] = unwrap_node(pm2)
+                wt2: rc[ast.Type] = self.resolve_type(unwrap_node(pn3.type_ref))
+                self.expected = wt2
+                at3: rc[ast.Type] = self.check_expr(an3)
+                self.expected = None
+                if not ast.type_assignable(at3, wt2):
+                    diag.error_at_hint(unwrap_tok(an3.tok),
+                                       "ここには '" + ast.type_name(wt2) +
+                                       "' が必要です",
+                                       str(k2) + " 番目の引数が '" +
+                                       ast.type_name(at3) + "' 型です")
+                k2 = k2 + 1
+                pm2 = pn3.next
+                a2 = an3.next
+
+            n.iface_slot = slot
+            n.is_iface_call = True
+            return self.resolve_type(unwrap_node(sig2.type_ref))
+
+        # ── Thread[R].join() — 終わるまで待って戻り値を受け取る ──
+        #
+        # ⚠️ join は所有を消費します（2 回 join できません）。それを保証するのは
+        #    所有権検査（C 版 ownck）です。
+        if ot.kind == ast.TY_THREAD:
+            if n.name != "join":
+                diag.error_at_hint(unwrap_tok(n.tok),
+                                   "Thread にあるのは join() だけです",
+                                   "'Thread' に '" + n.name + "' はありません")
+            if n.args is not None:
+                diag.error_at_hint(unwrap_tok(n.tok),
+                                   "t.join() の形で使ってください",
+                                   "join は引数を取りません")
+            return ast.elem_of(ot)
+
+        # ── mutex[T].lock(f) — ロックを取り、f(中身) を呼び、必ず解く ──
+        #
+        # ★ 生の lock / unlock は出しません（解き忘れが起きえない形）。
+        if ot.kind == ast.TY_MUTEX:
+            if n.name != "lock":
+                diag.error_at_hint(unwrap_tok(n.tok),
+                                   "mutex にあるのは lock(関数) だけです",
+                                   "'mutex' に '" + n.name + "' はありません")
+            nlk: int = count_siblings(n.args)
+            if nlk != 1:
+                diag.error_at_hint(unwrap_tok(n.tok),
+                                   "m.lock(関数) の形で使ってください",
+                                   "lock は 1 個の引数（関数）を取ります（" +
+                                   str(nlk) + " 個渡されました）")
+                return self.ty_int()
+            lan: rc[ast.Node] = unwrap_node(n.args)
+            lft: rc[ast.Type] = self.check_expr(lan)
+            if lft.kind != ast.TY_FN or len(lft.params) != 1:
+                diag.error_at_hint(unwrap_tok(lan.tok),
+                                   "lock には 'fn(" + ast.type_name(ast.elem_of(ot)) +
+                                   ") -> R' の関数を渡してください",
+                                   "'" + ast.type_name(lft) +
+                                   "' はその形の関数ではありません")
+                return self.ty_int()
+            if not ast.type_assignable(ast.elem_of(ot), lft.params[0]):
+                diag.error_at_hint(unwrap_tok(lan.tok),
+                                   "中身は '" + ast.type_name(ast.elem_of(ot)) + "' です",
+                                   "この関数は '" + ast.type_name(lft.params[0]) +
+                                   "' を受け取ります")
+            return ast.elem_of(lft)
+
+        # ★ list のメソッド。C 版と同じ規則・同じ文言にすること。
+        #   argk: "e"=要素型 / "i"=int / "l"=同じ list / "-"=引数なし
+        #   retk: "e"=要素型 / "i"=int / "n"=None / "l"=同じ list
+        if ot.kind == ast.TY_LIST:
+            names: list[str] = ["pop", "insert", "remove", "index",
+                                "reverse", "clear", "copy", "extend"]
+            argks: list[str] = ["-", "i", "i", "e", "-", "-", "-", "l"]
+            retks: list[str] = ["e", "n", "e", "i", "n", "n", "l", "n"]
+            usages: list[str] = ["xs.pop()", "xs.insert(位置, 値)",
+                                 "xs.remove(位置)", "xs.index(値)",
+                                 "xs.reverse()", "xs.clear()", "xs.copy()",
+                                 "xs.extend(別のリスト)"]
+            mi: int = 0
+            while mi < len(names):
+                if names[mi] == n.name:
+                    el: rc[ast.Type] = ast.elem_of(ot)
+                    want: int = 1
+                    if argks[mi] == "-":
+                        want = 0
+                    if n.name == "insert":
+                        want = 2
+                    na: int = count_siblings(n.args)
+                    if na != want:
+                        diag.error_full(unwrap_tok(n.tok),
+                                        n.name + " は " + str(want) +
+                                        " 個の引数を取りますが、" + str(na) +
+                                        " 個渡されました",
+                                        "引数の個数が違います", None, "",
+                                        usages[mi] + " の形で使ってください")
+
+                    if n.name == "insert":
+                        a0: rc[ast.Type] = self.check_expr(unwrap_node(n.args))
+                        if a0.kind != ast.TY_INT:
+                            diag.error_at(unwrap_tok(unwrap_node(n.args).tok),
+                                          "insert の位置は int です（'" +
+                                          ast.type_name(a0) + "' 型でした）")
+                        a1n: rc[ast.Node] = unwrap_node(unwrap_node(n.args).next)
+                        self.expected = el
+                        a1: rc[ast.Type] = self.check_expr(a1n)
+                        self.expected = None
+                        if not ast.type_assignable(a1, el):
+                            diag.error_at(unwrap_tok(a1n.tok),
+                                          "'" + ast.type_name(el) +
+                                          "' のリストに '" + ast.type_name(a1) +
+                                          "' は入れられません")
+                    elif argks[mi] == "i":
+                        b0: rc[ast.Type] = self.check_expr(unwrap_node(n.args))
+                        if b0.kind != ast.TY_INT:
+                            diag.error_at(unwrap_tok(unwrap_node(n.args).tok),
+                                          n.name + " の引数は int です（'" +
+                                          ast.type_name(b0) + "' 型でした）")
+                    elif argks[mi] == "e":
+                        self.expected = el
+                        c0: rc[ast.Type] = self.check_expr(unwrap_node(n.args))
+                        self.expected = None
+                        if not ast.type_assignable(c0, el):
+                            diag.error_at(unwrap_tok(unwrap_node(n.args).tok),
+                                          "'" + ast.type_name(el) +
+                                          "' のリストから '" + ast.type_name(c0) +
+                                          "' は探せません")
+                    elif argks[mi] == "l":
+                        d0: rc[ast.Type] = self.check_expr(unwrap_node(n.args))
+                        if not ast.type_assignable(d0, ot):
+                            diag.error_at(unwrap_tok(unwrap_node(n.args).tok),
+                                          "extend には同じ型のリストが必要です（'" +
+                                          ast.type_name(d0) + "' でした）")
+
+                    if retks[mi] == "e":
+                        return el
+                    if retks[mi] == "i":
+                        return self.ty_int()
+                    if retks[mi] == "l":
+                        return ot
+                    return self.ty_none()
+                mi = mi + 1
+
+        if ot.kind == ast.TY_LIST and n.name == "append":
+            nargs: int = count_siblings(n.args)
+            if nargs != 1:
+                diag.error_full(unwrap_tok(n.tok),
+                                "append は 1 個の引数を取りますが、" + str(nargs) +
+                                " 個渡されました",
+                                "引数の個数が違います", None, "",
+                                "xs.append(値) の形で使ってください")
+
+            elem: rc[ast.Type] = ast.elem_of(ot)
+            arg: rc[ast.Node] = unwrap_node(n.args)
+            self.expected = elem
+            at: rc[ast.Type] = self.check_expr(arg)
+            self.expected = None
+
+            if not ast.type_assignable(at, elem):
+                diag.error_full(unwrap_tok(arg.tok),
+                                "'" + ast.type_name(elem) + "' のリストに '" +
+                                ast.type_name(at) + "' を追加できません",
+                                "これは '" + ast.type_name(at) + "' 型です",
+                                None, "", self.no_implicit_hint(at, elem))
+            return self.ty_none()
+
+        diag.error_full(unwrap_tok(n.tok),
+                        "型 '" + ast.type_name(ot) + "' にメソッド '" + n.name +
+                        "' はありません",
+                        "このメソッドは存在しません", None, "",
+                        "list[T] で使えるのは append / pop / insert / remove / " +
+                        "index / reverse / clear / copy / extend です" +
+                        "（class のメソッドは自分で定義できます）")
+        return self.ty_int()
+
+    # lexer.make(1, "x") / lexer.Token(1, "x") — 他のモジュールの関数・クラス
+    def check_module_call(mut self, n: mut rc[ast.Node], ms: rc[types.ModuleSyms]) -> rc[ast.Type]:
+        mod_name: str = mod_name_of(ms)
+        n.mod_name = copy(mod_name)
+
+        # ★ 名前がクラスなら、これはインスタンス生成
+        c: rc[ast.Class] | None = self.lookup_class_in(ms, n.name)
+        if c is not None:
+            n.is_extern = ms != self.cur_syms()
+            return self.check_new(n, c)
+
+        f: rc[types.FuncSig] | None = self.lookup_func_in(ms, n.name)
+
+        # ★ 他のモジュールのジェネリック関数も実体化する。
+        #   ⚠️ 実体はテンプレートのモジュールに作られるので、呼ぶ側から見ると
+        #     ふつうの「他モジュールの関数」になる。
+        if f is not None and f.tmpl is not None:
+            f = self.instantiate_func(f, n)
+
+        if f is None:
+            hint: str = "そのモジュールのトップレベルに def があるか確認してください"
+            if self.lookup_global_in(ms, n.name) is not None:
+                hint = ("'" + n.name +
+                        "' はグローバル変数です。'()' を外してください")
+            diag.error_full(unwrap_tok(n.tok),
+                            "モジュール '" + mod_name + "' に関数 '" +
+                            n.name + "' はありません",
+                            "この関数は定義されていません", None, "", hint)
+            return self.ty_int()
+
+        n.ir_name = f.ir_name
+        n.is_extern = self.is_extern_owner(f.owner)
+        return self.check_call_sig(n, f, "関数")
+
+    # インスタンス生成 Token(1, "x") の検査
+    def check_new(mut self, n: mut rc[ast.Node], c0: rc[ast.Class]) -> rc[ast.Type]:
+        c: rc[ast.Class] = c0
+
+        # ★ ジェネリッククラスの生成。**どの実体を作るのかは
+        #   「代入される先の型」から決める**（設計 §1：推論は左辺からだけ）。
+        #
+        #     d: Dict[str, int] = Dict()
+        #                         ^^^^^^ ここには型引数を書かない
+        if c.node is not None and unwrap_node(c.node).targs is not None:
+            ok: bool = False
+            want: rc[ast.Type] | None = self.expected
+            if want is not None:
+                w: rc[ast.Type] = want
+                if w.kind == ast.TY_CLASS and w.cls is not None:
+                    wc0: rc[ast.Class] = unwrap_cls(w.cls)
+                    ft: rc[ast.Class] | None = wc0.from_template
+                    if ft is not None and same_class(ft, c):
+                        c = wc0
+                        ok = True
+            if not ok:
+                diag.error_full(unwrap_tok(n.tok),
+                                "'" + c.name + "' のどの実体を作るのか決められません",
+                                "型引数が決まりません", c.tok,
+                                "このクラスは型引数を取ります",
+                                "変数の型から決めます。'x: " + c.name +
+                                "[型, ...] = " + c.name +
+                                "(...)' の形で書いてください")
+
+        n.cls = c    # ★ codegen はこれを見て「生成」だと分かる
+
+        nargs: int = count_siblings(n.args)
+
+        # init が無いクラスは、引数なしでしか作れない
+        if not c.has_init:
+            if nargs != 0:
+                diag.error_full(unwrap_tok(n.tok),
+                                "クラス '" + c.name +
+                                "' には init が無いので引数を渡せません",
+                                str(nargs) + " 個の引数が渡されています",
+                                c.tok, "クラスの定義はここです",
+                                "引数を受け取るには init メソッドを定義して" +
+                                "ください:\n" +
+                                "             def init(self, ...) -> None:")
+            return unwrap_type(c.type)
+
+        # init があるなら、その引数と突き合わせる（self は飛ばす）
+        owner: rc[types.ModuleSyms] = self.syms_by_name(c.owner_name)
+        f: rc[types.FuncSig] = unwrap_sig(
+            self.lookup_func_in(owner, self.mangle(c.name, "init")))
+        if nargs != f.nparams - 1:
+            diag.error_full(unwrap_tok(n.tok),
+                            "'" + c.name + "' の生成には " + str(f.nparams - 1) +
+                            " 個の引数が必要ですが、" + str(nargs) +
+                            " 個渡されました",
+                            "引数の個数が違います",
+                            f.tok, "init はここで定義されています",
+                            "self は自動的に渡されるので、書く必要はありません")
+
+        i: int = 0
+        a: rc[ast.Node] | None = n.args
+        while a is not None:
+            arg: rc[ast.Node] = a
+            want: rc[ast.Type] = f.params[i + 1]
+            self.expected = want
+            at: rc[ast.Type] = self.check_expr(arg)
+            self.expected = None
+            if not ast.type_assignable(at, want):
+                diag.error_full(unwrap_tok(arg.tok),
+                                "'" + c.name + "' の生成の第 " + str(i + 1) +
+                                " 引数: 型 '" + ast.type_name(at) + "' を '" +
+                                ast.type_name(want) + "' に渡せません",
+                                "これは '" + ast.type_name(at) + "' 型です",
+                                f.tok,
+                                "引数 '" + f.pnames[i + 1] + "' は '" +
+                                ast.type_name(want) + "' 型です",
+                                self.no_implicit_hint(at, want))
+            i = i + 1
+            a = arg.next
+        return unwrap_type(c.type)
+
+    # 関数呼び出しの検査（型システム 5.7 の順序）
+    def check_call(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
+        # ★ 名前が **関数型の変数**なら間接呼び出し
+        #   ⚠️ 変数を先に見る（同名の関数があっても変数が勝つ）
+        fv: rc[types.VarEntry] | None = self.lookup(n.name)
+        if fv is not None and unwrap_type(fv.type).kind == ast.TY_FN:
+            ftv: rc[ast.Type] = unwrap_type(fv.type)
+            na2: int = count_siblings(n.args)
+            if na2 != len(ftv.params):
+                diag.error_full(unwrap_tok(n.tok),
+                                "'" + n.name + "' は " + str(len(ftv.params)) +
+                                " 個の引数を取りますが、" + str(na2) +
+                                " 個渡されました",
+                                "引数の個数が違います", None, "",
+                                "この変数の型は '" + ast.type_name(ftv) + "' です")
+            ai: int = 0
+            arg: rc[ast.Node] | None = n.args
+            while arg is not None:
+                an2: rc[ast.Node] = arg
+                self.expected = ftv.params[ai]
+                at2: rc[ast.Type] = self.check_expr(an2)
+                self.expected = None
+                if not ast.type_assignable(at2, ftv.params[ai]):
+                    diag.error_full(unwrap_tok(an2.tok),
+                                    str(ai + 1) + " 番目の引数の型が合いません",
+                                    "これは '" + ast.type_name(at2) + "' 型です",
+                                    None, "",
+                                    "ここには '" +
+                                    ast.type_name(ftv.params[ai]) +
+                                    "' が必要です")
+                ai = ai + 1
+                arg = an2.next
+            n.ir_name = fv.ir_name
+            n.is_indirect = True
+            n.type = ast.elem_of(ftv)
+            return ast.elem_of(ftv)
+
+        # ★ min / max（2 引数なので組み込みの表では表せない）
+        #   ⚠️ Python の min([1,2,3]) は入れていない（linalg.vmin を使う）
+        if (n.name == "min" or n.name == "max") and self.lookup_func(n.name) is None:
+            nm: int = count_siblings(n.args)
+            if nm != 2:
+                diag.error_at_hint(unwrap_tok(n.tok),
+                                   n.name + "(a, b) の形で使ってください",
+                                   n.name + " は 2 個の引数を取ります")
+            m0: rc[ast.Type] = self.check_expr(unwrap_node(n.args))
+            m1n: rc[ast.Node] = unwrap_node(unwrap_node(n.args).next)
+            m1: rc[ast.Type] = self.check_expr(m1n)
+            if not ast.type_equal(m0, m1):
+                diag.error_at(unwrap_tok(m1n.tok),
+                              n.name + " の 2 つの引数は同じ型である必要があります（'" +
+                              ast.type_name(m0) + "' と '" + ast.type_name(m1) + "'）")
+            if m0.kind != ast.TY_INT and m0.kind != ast.TY_FLOAT:
+                diag.error_at_hint(unwrap_tok(unwrap_node(n.args).tok),
+                                   "min / max が使えるのは int と float です",
+                                   "'" + ast.type_name(m0) + "' 型には使えません")
+            n.builtin = ""
+            n.ir_name = ""
+            n.is_minmax = True
+            n.type = m0
+            return m0
+
+        # ★ wrap_add / wrap_sub / wrap_mul。
+        #   **桁あふれを検査せず 2 の補数で折り返す**算術。
+        #   ⚠️ 既定の + - * は桁あふれで panic する。折り返しを
+        #     「そういう計算だ」として使いたいところ（法 2⁶⁴ の線形合同法など）
+        #     のための逃げ道で、**書いた人の意図が演算ごとに見える。**
+        #   ⚠️ min / max と同じく 2 引数なので、組み込みの表では表せない。
+        if is_wrap_name(n.name) and self.lookup_func(n.name) is None:
+            nargsw: int = count_siblings(n.args)
+            if nargsw != 2:
+                diag.error_at_hint(unwrap_tok(n.tok),
+                                   n.name + "(a, b) の形で使ってください",
+                                   n.name + " は 2 個の引数を取ります")
+            w0: rc[ast.Type] = self.check_expr(unwrap_node(n.args))
+            w1n: rc[ast.Node] = unwrap_node(unwrap_node(n.args).next)
+            w1: rc[ast.Type] = self.check_expr(w1n)
+            # ⚠️ **問題のある側の引数**を指す（2 つとも int でないときは左から）
+            if w0.kind != ast.TY_INT:
+                diag.error_at_hint(unwrap_tok(unwrap_node(n.args).tok),
+                                   "折り返す算術が使えるのは int だけです",
+                                   "'" + ast.type_name(w0) + "' 型には使えません")
+            if w1.kind != ast.TY_INT:
+                diag.error_at_hint(unwrap_tok(w1n.tok),
+                                   "折り返す算術が使えるのは int だけです",
+                                   "'" + ast.type_name(w1) + "' 型には使えません")
+            n.builtin = ""
+            n.ir_name = ""
+            n.is_wrap = True
+            n.type = self.ty_int()
+            return self.ty_int()
+
+        # ── rc(x) — 共有所有にくるむ ──
+        #
+        # ★ 型が「引数の型から作られる」ので、組み込み関数の表では表せません
+        if n.name == "rc" and self.lookup_func("rc") is None:
+            nargs0: int = count_siblings(n.args)
+            if nargs0 != 1:
+                diag.error_at_hint(unwrap_tok(n.tok), "rc(値) の形で使ってください",
+                                   "rc は 1 個の引数を取ります")
+                return self.ty_int()
+            at0: rc[ast.Type] = self.check_expr(unwrap_node(n.args))
+            if at0.kind != ast.TY_CLASS:
+                diag.error_at_hint(unwrap_tok(unwrap_node(n.args).tok),
+                                   "rc に入れられるのはクラスのインスタンスだけです",
+                                   "'" + ast.type_name(at0) + "' は rc に入れられません")
+            n.is_extern = False
+            return ast.type_rc(at0)
+
+        # ── spawn(f, a…) — 別スレッドで f(a…) を始める（A-18）──
+        #
+        # ★ 新しい構文は作りません。**呼び出しの形のまま**です。
+        # ★ 引数は**何個でも**渡せます。クロージャが無いので、もとは
+        #   「関数 + 引数 1 つ」でしたが、その形だと複数の値を渡すのにクラスへ
+        #   まとめるしかなく、**クラスは借りを保存できません**（E-BORROW-3）。
+        #   scope: を入れても借りを共有する形が書けないままだった、
+        #   というのが可変長にした理由です。
+        if n.name == "spawn" and self.lookup_func("spawn") is None:
+            nsp: int = count_siblings(n.args)
+            if nsp < 1:
+                diag.error_at_hint(unwrap_tok(n.tok),
+                                   "spawn(関数, 引数…) の形で使ってください",
+                                   "spawn には少なくとも関数が要ります")
+                return self.ty_int()
+            fa: rc[ast.Node] = unwrap_node(n.args)
+            ft: rc[ast.Type] = self.check_expr(fa)
+            if ft.kind != ast.TY_FN:
+                diag.error_at_hint(unwrap_tok(fa.tok),
+                                   "spawn の 1 つ目は関数です（例: spawn(work, job)）",
+                                   "'" + ast.type_name(ft) + "' は関数ではありません")
+                return self.ty_int()
+            if len(ft.params) != nsp - 1:
+                diag.error_at_hint(unwrap_tok(fa.tok),
+                                   "'" + ast.type_name(ft) + "' は " +
+                                   str(len(ft.params)) + " 個の引数を取ります",
+                                   "spawn に渡した引数が " + str(nsp - 1) + " 個です")
+                return self.ty_int()
+            ai: rc[ast.Node] | None = fa.next
+            kk: int = 0
+            while ai is not None:
+                an: rc[ast.Node] = ai
+                self.expected = ft.params[kk]
+                avt: rc[ast.Type] = self.check_expr(an)
+                self.expected = None
+                if not ast.type_assignable(avt, ft.params[kk]):
+                    diag.error_at_hint(unwrap_tok(an.tok),
+                                       "ここには '" + ast.type_name(ft.params[kk]) +
+                                       "' が必要です",
+                                       str(kk + 1) + " 番目の引数が '" +
+                                       ast.type_name(avt) + "' 型です")
+                kk = kk + 1
+                ai = an.next
+            n.is_extern = False
+            return ast.type_thread(ast.elem_of(ft))
+
+        # ── mutex(x) — 中身をロックの内側に閉じる ──
+        if n.name == "mutex" and self.lookup_func("mutex") is None:
+            nmx: int = count_siblings(n.args)
+            if nmx != 1:
+                diag.error_at_hint(unwrap_tok(n.tok), "mutex(値) の形で使ってください",
+                                   "mutex は 1 個の引数を取ります")
+                return self.ty_int()
+            mat: rc[ast.Type] = self.check_expr(unwrap_node(n.args))
+            if mat.kind != ast.TY_CLASS and mat.kind != ast.TY_LIST:
+                diag.error_at_hint(unwrap_tok(unwrap_node(n.args).tok),
+                                   "mutex に入れられるのはクラスかリストだけです",
+                                   "'" + ast.type_name(mat) + "' は mutex に入れられません")
+            n.is_extern = False
+            return ast.type_mutex(mat)
+
+        if self.is_builtin_name(n.name):
+            return self.check_builtin_call(n)
+
+        # ★ 名前がクラスなら、これはインスタンス生成
+        cls: rc[ast.Class] | None = self.lookup_class(n.name)
+        if cls is not None:
+            return self.check_new(n, cls)
+
+        # ① 定義されているか
+        f: rc[types.FuncSig] | None = self.lookup_func(n.name)
+
+        # ★ ジェネリック関数なら、実引数から型引数を決めて実体を作る
+        if f is not None and f.tmpl is not None:
+            f = self.instantiate_func(f, n)
+
+        if f is None:
+            diag.error_full(unwrap_tok(n.tok),
+                            "未定義の関数 '" + n.name + "' です",
+                            "この関数は定義されていません", None, "",
+                            "関数名の綴りを確認してください" +
+                            "（定義の順序は問いません。" +
+                            "後ろで定義した関数も呼べます）")
+            return self.ty_int()
+
+        # ★ 呼ぶ相手の IR 名（モジュール修飾済み）を codegen に渡す
+        n.ir_name = f.ir_name
+        n.is_extern = self.is_extern_owner(f.owner)
+
+        # ③④ 引数の個数と型
+        return self.check_call_sig(n, f, "関数")
+
+    # 呼び出しの引数を FuncSig と突き合わせる（③④）
+    def check_call_sig(mut self, n: mut rc[ast.Node], f: rc[types.FuncSig],
+                       what: str) -> rc[ast.Type]:
+        shown: str = f.name
+        if len(n.mod_name) > 0:
+            shown = n.mod_name + "." + n.name
+
+        self.check_can_fail(n, f, shown)
+        nargs: int = count_siblings(n.args)
+        if nargs != f.nparams:
+            diag.error_full(unwrap_tok(n.tok),
+                            what + " '" + shown + "' は " + str(f.nparams) +
+                            " 個の引数を取りますが、" + str(nargs) +
+                            " 個渡されました",
+                            "呼び出しの引数の個数が違います",
+                            f.tok, "この関数はここで定義されています", "")
+
+        i: int = 0
+        a: rc[ast.Node] | None = n.args
+        while a is not None:
+            arg: rc[ast.Node] = a
+            # ⚠️ 引数には期待型を渡さない
+            at: rc[ast.Type] = self.check_expr(arg)
+            want: rc[ast.Type] = f.params[i]
+            if not ast.type_assignable(at, want):
+                diag.error_full(unwrap_tok(arg.tok),
+                                what + " '" + shown + "' の第 " + str(i + 1) +
+                                " 引数: 型 '" + ast.type_name(at) + "' を '" +
+                                ast.type_name(want) + "' に渡せません",
+                                "これは '" + ast.type_name(at) + "' 型です",
+                                f.tok,
+                                "引数 '" + f.pnames[i] + "' は '" +
+                                ast.type_name(want) + "' 型です",
+                                self.no_implicit_hint(at, want))
+            i = i + 1
+            a = arg.next
+        return unwrap_type(f.ret)
+
+    # return の検査
+    # 分解代入 q, r = f()
+    #
+    # ★ **宣言も兼ねる。** 型は右辺のタプルから決まるので書かせない
+    #   （roadmap.md §0 の ③：右辺から決まるものは書かせない）。
+    def check_unpack(mut self, n: mut rc[ast.Node]) -> None:
+        rhs: rc[ast.Node] = unwrap_node(n.rhs)
+        rt: rc[ast.Type] = self.check_expr(rhs)
+        if rt.kind != ast.TY_TUPLE:
+            diag.error_full(unwrap_tok(rhs.tok),
+                            "分解代入の右辺がタプルではありません",
+                            "これは '" + ast.type_name(rt) + "' 型です", None, "",
+                            "分解できるのは (A, B) を返すものだけです" +
+                            "（複数の値を返す関数を書いてください）")
+
+        nvars: int = count_siblings(n.params)
+        if nvars != len(rt.params):
+            diag.error_full(unwrap_tok(n.tok),
+                            "受け取る数が合いません（" + str(nvars) + " 個と " +
+                            str(len(rt.params)) + " 個）",
+                            "ここは " + str(nvars) + " 個です", None, "",
+                            "右辺は '" + ast.type_name(rt) + "' です")
+
+        k: int = 0
+        vi: rc[ast.Node] | None = n.params
+        while vi is not None:
+            vn: rc[ast.Node] = vi
+            e: rc[types.VarEntry] = self.declare(vn.name, rt.params[k], vn.tok)
+            vn.ir_name = e.ir_name
+            vn.type = rt.params[k]
+            k = k + 1
+            vi = vn.next
+        n.type = rt
+
+    def check_return(mut self, n: rc[ast.Node]) -> None:
+        fn: rc[types.FuncSig] = unwrap_sig(self.cur_func)
+        want: rc[ast.Type] = unwrap_type(fn.ret)
+
+        if n.lhs is None:      # return（値なし）
+            if want.kind != ast.TY_NONE:
+                diag.error_full(unwrap_tok(n.tok),
+                                "関数 '" + fn.name + "' は '" +
+                                ast.type_name(want) + "' を返さなければなりません",
+                                "この return には値がありません",
+                                fn.tok, "戻り型はここで宣言されています", "")
+            return
+
+        val: rc[ast.Node] = unwrap_node(n.lhs)
+        self.expected = want     # ★ return [] のため
+        got: rc[ast.Type] = self.check_expr(val)
+        self.expected = None
+
+        if want.kind == ast.TY_NONE:
+            diag.error_full(unwrap_tok(val.tok),
+                            "戻り型が None の関数 '" + fn.name +
+                            "' は値を返せません",
+                            "型 '" + ast.type_name(got) + "' の式",
+                            fn.tok, "戻り型はここで宣言されています", "")
+        if not ast.type_assignable(got, want):
+            diag.error_full(unwrap_tok(val.tok),
+                            "return の型が戻り型と一致しません",
+                            "型 '" + ast.type_name(got) + "' の式",
+                            fn.tok,
+                            "関数 '" + fn.name + "' の戻り型は '" +
+                            ast.type_name(want) + "' です",
+                            self.no_implicit_hint(got, want))
+
+    # この while から抜ける break があるか
+    #
+    # ⚠️ 入れ子のループの中には降りない。そこの break は内側のループのもの。
+    #    if の中には降りる（break は条件付きで書くのが普通なので）。
+    def has_break(self, n: rc[ast.Node] | None) -> bool:
+        if n is None:
+            return False
+        node: rc[ast.Node] = n
+
+        if node.kind == ast.ND_BREAK:
+            return True
+
+        if node.kind == ast.ND_WHILE:
+            return False        # ★ 内側のループの break は、こちらには効かない
+
+        if node.kind == ast.ND_IF:
+            return self.has_break(node.body) or self.has_break(node.els)
+
+        if node.kind == ast.ND_BLOCK:
+            st: rc[ast.Node] | None = node.body
+            while st is not None:
+                if self.has_break(st):
+                    return True
+                st = st.next
+            return False
+
+        return False
+
+    # 戻らない組み込み（panic / exit）の呼び出しか
+    #
+    # ★ ランタイム側で _Noreturn が付いている 2 つと、ここの判定は対になっている。
+    #   片方だけ変えると「sema は通すのに実行時には戻ってくる」ことになる。
+    def never_returns_call(self, node: rc[ast.Node]) -> bool:
+        if node.kind != ast.ND_CALL:
+            return False
+        return node.builtin == "pl_panic" or node.builtin == "pl_exit"
+
+    # この文を実行したら、必ず関数から抜けるか（型システム 6.1）
+    def always_returns(self, n: rc[ast.Node] | None) -> bool:
+        if n is None:
+            return False
+        node: rc[ast.Node] = n
+
+        if node.kind == ast.ND_RETURN:
+            return True
+
+        # ★ raise もその経路を終わらせます（呼び出し元へ戻る）
+        if node.kind == ast.ND_RAISE:
+            return True
+
+        if node.kind == ast.ND_IF:
+            # else が無ければ、条件が偽のときに素通りする
+            if node.els is None:
+                return False
+            return self.always_returns(node.body) and self.always_returns(node.els)
+
+        if node.kind == ast.ND_BLOCK:
+            st: rc[ast.Node] | None = node.body
+            while st is not None:
+                if self.always_returns(st):
+                    return True
+                st = st.next
+            return False
+
+        if node.kind == ast.ND_WHILE:
+            # ★ while True: は break が無ければ抜けない。
+            #   条件が「True というリテラルそのもの」のときだけ見る。
+            #   変数や式は追わない（保守的でよい）。
+            if node.lhs is None:
+                return False
+            cond: rc[ast.Node] = unwrap_node(node.lhs)
+            if cond.kind != ast.ND_BOOL or cond.ival == 0:
+                return False
+            return not self.has_break(node.body)
+
+        if node.kind == ast.ND_CALL:
+            # ★ panic() / exit() を呼んだら、その先へは進まない。
+            return self.never_returns_call(node)
+
+        return False
+
+    # ── パス 1：宣言の登録 ──────────────────────────────────
+
+    # 1a：クラス名と Type を作る。中身はまだ見ない
+    def declare_class(self, n: mut rc[ast.Node]) -> None:
+        self.reject_module_name(n.name, n.tok, "クラス")
+        if self.type_from_name(n.name) is not None:
+            diag.error_at_hint(unwrap_tok(n.tok),
+                               "'" + n.name + "' は組み込みの型名です",
+                               "クラス名 '" + n.name + "' は使えません")
+        if self.is_builtin_name(n.name):
+            diag.error_at_hint(unwrap_tok(n.tok),
+                               "'" + n.name + "' は組み込み関数の名前です",
+                               "クラス名 '" + n.name + "' は使えません")
+
+        prev: rc[ast.Class] | None = self.lookup_class(n.name)
+        if prev is not None:
+            diag.error_full(unwrap_tok(n.tok),
+                            "クラス '" + n.name + "' は既に定義されています",
+                            "ここで再定義されています",
+                            prev.tok, "最初の定義はここです", "")
+
+        c: rc[ast.Class] = rc(ast.Class(n.name, n.tok))
+        c.ir_name = self.mod_mangle(n.name)      # ★ %lexer.Token.type になる
+        c.owner_name = self.cur_mod().name       # メソッドはこのモジュールの表
+        c.node = n
+        c.type = ast.type_class(n.name, c)       # ★ クラスにつき Type は 1 個
+
+        ms: rc[types.ModuleSyms] = self.cur_syms()
+        c.next = ms.classes
+        ms.classes = c
+
+        n.cls = c
+        n.type = c.type
+
+    # フィールドを並べて、オフセットとサイズを決める
+    def layout_class(self, c: mut rc[ast.Class]) -> None:
+        # ★ インタフェースを 1 つでも実装するなら、**先頭に隠しフィールド**
+        #   （vtable へのポインタ）を 1 つ置く。おかげでクラス → インタフェースの
+        #   変換が「何もしない」で済む。
+        #   ⚠️ codegen の gen_class_type と **並びを揃えること**。
+        offset: int = 0
+        max_align: int = 1
+        index: int = 0
+        if len(c.impls) > 0:
+            offset = 8
+            max_align = 8
+            index = 1
+        f: rc[ast.Field] | None = c.fields
+        while f is not None:
+            ft: rc[ast.Type] = unwrap_type(f.type)
+            a: int = ast.type_align(ft)
+            offset = align_up(offset, a)      # ★ パディングはここで入る
+            f.offset = offset
+            f.index = index
+            index = index + 1
+            offset = offset + ast.type_size(ft)
+            if a > max_align:
+                max_align = a
+            f = f.next
+        c.nfields = index
+        c.align = max_align
+        c.size = align_up(offset, max_align)
+
+    # メソッドを FuncSig として登録する（名前は "Token.show"）
+    def declare_method(mut self, c: mut rc[ast.Class],
+                       fn: mut rc[ast.Node]) -> None:
+        mname: str = self.mangle(c.name, fn.name)
+
+        prev: rc[types.FuncSig] | None = self.lookup_func(mname)
+        if prev is not None:
+            diag.error_full(unwrap_tok(fn.tok),
+                            "メソッド '" + mname + "' は既に定義されています",
+                            "ここで再定義されています",
+                            prev.tok, "最初の定義はここです", "")
+
+        clash: rc[ast.Field] | None = self.lookup_field(c, fn.name)
+        if clash is not None:
+            diag.error_full(unwrap_tok(fn.tok),
+                            "'" + fn.name + "' はフィールドと同じ名前です",
+                            "メソッド名がフィールド名と衝突しています",
+                            clash.tok, "同名のフィールドはここです",
+                            "t.f が「フィールド」か「メソッド」か" +
+                            "決められなくなるため禁止です")
+
+        ret: rc[ast.Type] = self.resolve_type(unwrap_node(fn.type_ref))
+
+        f: rc[types.FuncSig] = rc(types.FuncSig(mname, fn.tok))
+        f.ret = ret
+
+        pm: rc[ast.Node] | None = fn.params
+        while pm is not None:
+            p: rc[ast.Node] = pm
+            # ★ 第 1 引数 self には型注釈がない（parser が保証している）
+            pt: rc[ast.Type] = unwrap_type(c.type)
+            if p.type_ref is not None:
+                pt = self.resolve_type(unwrap_node(p.type_ref))
+            if pt.kind == ast.TY_NONE:
+                diag.error_at_hint(unwrap_tok(p.tok),
+                                   "None 型の値は存在しないので引数にできません",
+                                   "引数の型に None は使えません")
+            f.params.append(pt)
+            f.pnames.append(copy(p.name))
+            f.nparams = f.nparams + 1
+            p.type = pt
+            pm = p.next
+
+        # コンストラクタ init は値を返せない
+        if fn.name == "init":
+            if ret.kind != ast.TY_NONE:
+                diag.error_at_hint(unwrap_tok(fn.tok),
+                                   "init は戻り値を持てません" +
+                                   "（-> None と書いてください）",
+                                   "init の戻り型は None でなければなりません")
+            c.has_init = True
+
+        self.resolve_raises(fn, f)
+        if fn.name == "init" and len(f.raises_cls) > 0:
+            diag.error_at_hint(unwrap_tok(fn.tok),
+                               "init は失敗できません" +
+                               "（生成に失敗した値は誰も受け取れません）",
+                               "init に raises は書けません")
+
+        f.ir_name = self.mangle(c.ir_name, fn.name)   # "lexer.Token.show"
+        f.owner = self.cur_syms()
+        ms: rc[types.ModuleSyms] = self.cur_syms()
+        f.next = ms.funcs
+        ms.funcs = f
+
+        fn.ir_name = f.ir_name
+        fn.type = ret
+
+    # ── 未初期化フィールドの検査 ──────────────────────
+    #
+    # ⚠️ 構文的な検査です。init のどこかに self.f = ... があるかを見るだけで、
+    #    実行されるかまでは見ません。だからランタイム検査も残します。
+    def assigns_field(self, n: rc[ast.Node] | None, fname: str) -> bool:
+        if n is None:
+            return False
+        node: rc[ast.Node] = n
+
+        if node.kind == ast.ND_ASSIGN and node.lhs is not None:
+            lhs: rc[ast.Node] = unwrap_node(node.lhs)
+            if lhs.kind == ast.ND_FIELD and lhs.lhs is not None:
+                obj: rc[ast.Node] = unwrap_node(lhs.lhs)
+                if (obj.kind == ast.ND_VAR and obj.name == "self" and
+                        lhs.name == fname):
+                    return True
+
+        if self.assigns_field(node.lhs, fname):
+            return True
+        if self.assigns_field(node.rhs, fname):
+            return True
+        if self.assigns_field(node.els, fname):
+            return True
+        if self.assigns_field(node.incr, fname):
+            return True
+        st: rc[ast.Node] | None = node.body
+        while st is not None:
+            if self.assigns_field(st, fname):
+                return True
+            st = st.next
+        return False
+
+    def find_init(self, c: rc[ast.Class]) -> rc[ast.Node] | None:
+        node: rc[ast.Node] = unwrap_node(c.node)
+        m: rc[ast.Node] | None = node.body
+        while m is not None:
+            mm: rc[ast.Node] = m
+            if mm.kind == ast.ND_FUNC and mm.name == "init":
+                return mm
+            m = mm.next
+        return None
+
+    def check_fields_initialized(self, c: rc[ast.Class]) -> None:
+        init: rc[ast.Node] | None = self.find_init(c)
+
+        f: rc[ast.Field] | None = c.fields
+        while f is not None:
+            fld: rc[ast.Field] = f
+            ft: rc[ast.Type] = unwrap_type(fld.type)
+            # ★ 既定値を作れる型は対象外（int / str / list / T | None）
+            if ft.kind == ast.TY_CLASS:
+                assigned: bool = False
+                if init is not None:
+                    assigned = self.assigns_field(init.body, fld.name)
+                if not assigned:
+                    rel: rc[token.Token] | None = c.tok
+                    rel_label: str = "このクラスには init がありません"
+                    if init is not None:
+                        rel = init.tok
+                        rel_label = "init はここです"
+                    diag.error_full(unwrap_tok(fld.tok),
+                                    "フィールド '" + fld.name +
+                                    "' は init で代入されていません",
+                                    "このフィールドは None から始まってしまいます",
+                                    rel, rel_label,
+                                    "次のどちらかにしてください:\n" +
+                                    "             ・型を '" + ast.type_name(ft) +
+                                    " | None' にする\n" +
+                                    "             ・init の中で self." + fld.name +
+                                    " = ... と代入する")
+            f = fld.next
+
+    # 1b：フィールドとメソッドを解決する
+    # ── インタフェース ──────────────────────────────────
+    #
+    # ★ 表現：**vtable へのポインタをオブジェクトの先頭に隠しフィールドとして
+    #   持たせる**方式。ファットポインタ（2 語）にすると「値はどれも 8 バイト」
+    #   という前提が全部崩れるため。おかげでクラス → インタフェースの変換が
+    #   **何もしないで済む**（同じポインタ）。
+    #
+    # ⚠️ メソッドのスロット番号は **プログラム全体で一意**。1 つのクラスが
+    #   複数のインタフェースを実装できるようにするため。
+    def declare_iface(mut self, n: mut rc[ast.Node]) -> None:
+        if self.lookup_iface(n.name) is not None or self.lookup_class(n.name) is not None:
+            diag.error_full(unwrap_tok(n.tok),
+                            "'" + n.name + "' は既に定義されています",
+                            "ここで再定義されています", None, "", "")
+
+        ifc: rc[ast.Iface] = rc(ast.Iface(n.name, n.tok))
+        ifc.ir_name = self.mod_mangle(n.name)
+        ifc.owner_name = self.cur_mod().name
+
+        m: rc[ast.Node] | None = n.body
+        while m is not None:
+            mn: rc[ast.Node] = m
+            for q in ifc.methods:
+                if q.name == mn.name:
+                    diag.error_at_hint(unwrap_tok(mn.tok),
+                                       "同じ名前のメソッドを 2 度書くことはできません",
+                                       "メソッド '" + mn.name + "' が重複しています")
+            ifc.methods.append(rc(ast.IMethod(mn.name, mn, self.next_slot)))
+            self.next_slot = self.next_slot + 1
+            m = mn.next
+
+        cs: rc[types.ModuleSyms] = self.cur_syms()
+        ifc.next = cs.ifaces
+        cs.ifaces = ifc
+        n.type = ast.type_iface(n.name, ifc)
+
+    # 型注釈に書かれたインタフェース名を引く
+    def resolve_iface_ref(mut self, tr: rc[ast.Node]) -> rc[ast.Iface]:
+        if len(tr.mod_name) > 0:
+            ms: rc[types.ModuleSyms] | None = self.lookup_import(tr.mod_name)
+            if ms is None:
+                diag.error_at_hint(unwrap_tok(tr.tok),
+                                   "ファイルの先頭に 'import " + tr.mod_name +
+                                   "' を書いてください",
+                                   "モジュール '" + tr.mod_name +
+                                   "' を import していません")
+                return rc(ast.Iface("", None))
+            mi: rc[ast.Iface] | None = self.lookup_iface_in(ms, tr.name)
+            if mi is None:
+                diag.error_at_hint(unwrap_tok(tr.tok),
+                                   "インタフェース名を確認してください",
+                                   "モジュール '" + tr.mod_name +
+                                   "' にインタフェース '" + tr.name + "' はありません")
+                return rc(ast.Iface("", None))
+            return mi
+
+        i2: rc[ast.Iface] | None = self.lookup_iface(tr.name)
+        if i2 is None:
+            h: str = "interface で宣言してから使ってください"
+            if self.lookup_class(tr.name) is not None:
+                h = "'" + tr.name + "' はクラスです。継承はありません"
+            diag.error_full(unwrap_tok(tr.tok),
+                            "インタフェース '" + tr.name + "' が見つかりません",
+                            "ここに書けるのはインタフェース名だけです", None, "", h)
+            return rc(ast.Iface("", None))
+        return i2
+
+    # クラスが宣言どおりのメソッドを持っているかを確かめる
+    def check_implements(mut self, c: rc[ast.Class], ifc: rc[ast.Iface],
+                         at: rc[token.Token]) -> None:
+        for im in ifc.methods:
+            f: rc[types.FuncSig] | None = self.lookup_func(c.name + "." + im.name)
+            if f is None:
+                diag.error_full(at,
+                                "クラス '" + c.name + "' に '" + im.name +
+                                "' がありません",
+                                "'" + ifc.name + "' を実装すると宣言しています",
+                                unwrap_node(im.sig).tok, "このメソッドが必要です", "")
+                # ⚠️ ここには来ません（error_full は戻りません）。
+                #   絞り込みを続けるために、型を合わせて返します。
+                return
+
+            fs: rc[types.FuncSig] = f
+            sig: rc[ast.Node] = unwrap_node(im.sig)
+
+            want: int = count_siblings(sig.params)
+            if len(fs.params) != want:
+                diag.error_full(unwrap_tok(fs.tok),
+                                "'" + c.name + "." + im.name +
+                                "' の引数の数が宣言と違います",
+                                str(len(fs.params)) + " 個です", sig.tok,
+                                "宣言では " + str(want) + " 個です", "")
+                return
+
+            k: int = 0
+            pm: rc[ast.Node] | None = sig.params
+            while pm is not None:
+                pn: rc[ast.Node] = pm
+                if k > 0:
+                    wt: rc[ast.Type] = self.resolve_type(unwrap_node(pn.type_ref))
+                    if not ast.type_equal(fs.params[k], wt):
+                        diag.error_full(unwrap_tok(fs.tok),
+                                        "'" + c.name + "." + im.name + "' の " +
+                                        str(k) + " 番目の引数の型が宣言と違います",
+                                        "'" + ast.type_name(fs.params[k]) + "' 型です",
+                                        pn.tok,
+                                        "宣言では '" + ast.type_name(wt) + "' 型です",
+                                        "")
+                k = k + 1
+                pm = pn.next
+
+            wr: rc[ast.Type] = self.resolve_type(unwrap_node(sig.type_ref))
+            if not ast.type_equal(unwrap_type(fs.ret), wr):
+                diag.error_full(unwrap_tok(fs.tok),
+                                "'" + c.name + "." + im.name +
+                                "' の戻り型が宣言と違います",
+                                "'" + ast.type_name(unwrap_type(fs.ret)) + "' を返します",
+                                sig.tok,
+                                "宣言では '" + ast.type_name(wr) + "' です", "")
+            if len(fs.raises_cls) > 0:
+                diag.error_at_hint(unwrap_tok(fs.tok),
+                                   "インタフェース越しには呼べません" +
+                                   "（エラーの受け渡しを表せないため）",
+                                   "'" + c.name + "." + im.name + "' は raises します")
+
+    def declare_class_members(mut self, n: mut rc[ast.Node]) -> None:
+        c: rc[ast.Class] = unwrap_class(n.cls)
+
+        # ★ 実装するインタフェースを先に決める。
+        #   レイアウト（隠しフィールドの有無）がこれで変わるため。
+        #   ⚠️ メソッドの照合は、メソッドを登録した**後**に行う。
+        ir: rc[ast.Node] | None = n.ifaces
+        while ir is not None:
+            irn: rc[ast.Node] = ir
+            ifc0: rc[ast.Iface] = self.resolve_iface_ref(irn)
+            for prev in c.impls:
+                if prev == ifc0:
+                    diag.error_at_hint(unwrap_tok(irn.tok),
+                                       "同じインタフェースを 2 度書けません",
+                                       "'" + ifc0.name + "' は既に書かれています")
+            c.impls.append(ifc0)
+            ir = irn.next
+
+        # ① フィールド（宣言順に末尾へ足す。並び順がレイアウトになる）
+        head: rc[ast.Field] = rc(ast.Field("", None))
+        cur: rc[ast.Field] = head
+        m: rc[ast.Node] | None = n.body
+        while m is not None:
+            mm: rc[ast.Node] = m
+            if mm.kind == ast.ND_FIELDDECL:
+                prev: rc[ast.Field] | None = self.lookup_field(c, mm.name)
+                if prev is not None:
+                    diag.error_full(unwrap_tok(mm.tok),
+                                    "フィールド '" + mm.name +
+                                    "' は既に宣言されています",
+                                    "ここで再宣言されています",
+                                    prev.tok, "最初の宣言はここです", "")
+
+                ft: rc[ast.Type] = self.resolve_type(unwrap_node(mm.type_ref))
+                if ft.kind == ast.TY_NONE:
+                    diag.error_at_hint(unwrap_tok(mm.tok),
+                                       "None 型の値は存在しないので" +
+                                       "フィールドにできません",
+                                       "フィールドの型に None は使えません")
+
+                f: rc[ast.Field] = rc(ast.Field(mm.name, mm.tok))
+                f.type = ft
+                cur.next = f
+                cur = f
+                c.fields = head.next    # ★ lookup_field を回すためつなぎ直す
+                mm.type = ft
+            m = mm.next
+        c.fields = head.next
+        self.layout_class(c)
+
+        # ② メソッド
+        m2: rc[ast.Node] | None = n.body
+        while m2 is not None:
+            mm2: rc[ast.Node] = m2
+            if mm2.kind == ast.ND_FUNC:
+                self.declare_method(c, mm2)
+            m2 = mm2.next
+
+        # ③ クラス型のフィールドが None から始まらないか
+        self.check_fields_initialized(c)
+
+        # ④ 宣言したインタフェースを本当に実装しているか
+        ir2: rc[ast.Node] | None = n.ifaces
+        while ir2 is not None:
+            irn2: rc[ast.Node] = ir2
+            self.check_implements(c, self.resolve_iface_ref(irn2),
+                                  unwrap_tok(irn2.tok))
+            ir2 = irn2.next
+
+    # extern の引数と戻り値に使える型か
+    def check_extern_type(self, t: rc[ast.Type], tok: rc[token.Token] | None,
+                          what: str) -> None:
+        if t.kind != ast.TY_BOOL:
+            return
+        diag.error_full(unwrap_tok(tok),
+                        "extern の" + what + "に bool は使えません",
+                        "この型は C との境界を越えられません", None, "",
+                        "int で受け取り、本言語側で 'n == 1' と書いてください")
+
+    # ── ジェネリック関数の実体化 ──────────────────────
+    #
+    # ★ **実引数の型から型引数を決める。** クラスと違い、左辺の型からは
+    #   決められない（f(xs) の左辺には戻り値の型しかない）。
+    def instantiate_func(mut self, tmpl: rc[types.FuncSig],
+                         call: mut rc[ast.Node]) -> rc[types.FuncSig]:
+        tn: rc[ast.Node] = unwrap_node(tmpl.tmpl)
+
+        nargs: int = count_siblings(call.args)
+        want: int = count_siblings(tn.params)
+        if nargs != want:
+            diag.error_at_hint(unwrap_tok(call.tok),
+                               "'" + tmpl.name + "' は " + str(want) +
+                               " 個の引数を取ります",
+                               "引数の個数が違います（" + str(nargs) +
+                               " 個渡されました）")
+
+        # ── 実引数の型を先に求める ──
+        atypes: list[rc[ast.Type]] = []
+        a: rc[ast.Node] | None = call.args
+        while a is not None:
+            an: rc[ast.Node] = a
+            atypes.append(self.check_expr(an))
+            a = an.next
+
+        # ── 型引数を決める ──
+        args: list[rc[ast.Type]] = []
+        tp: rc[ast.Node] | None = tn.targs
+        while tp is not None:
+            tpn: rc[ast.Node] = tp
+            got: rc[ast.Type] | None = None
+            pi: int = 0
+            pm: rc[ast.Node] | None = tn.params
+            while pm is not None and got is None:
+                pmn: rc[ast.Node] = pm
+                got = self.unify_tparam(tpn.name, pmn.type_ref, atypes[pi])
+                pi = pi + 1
+                pm = pmn.next
+            if got is None:
+                diag.error_full(unwrap_tok(call.tok),
+                                "型引数 '" + tpn.name + "' を決められません",
+                                "実引数から決まりません", tn.tok,
+                                "この関数の定義です",
+                                "型引数は **引数の型から**決まります" +
+                                "（戻り型にしか現れない型引数は書けません）")
+            else:
+                args.append(got)
+            tp = tpn.next
+
+        iname: str = self.mangle_inst(tmpl.name, args)
+
+        ow0: rc[types.ModuleSyms] | None = tmpl.owner
+        owner: rc[types.ModuleSyms] = self.cur_syms()
+        if ow0 is not None:
+            owner = ow0
+        ex: rc[types.FuncSig] | None = self.lookup_func_in(owner, iname)
+        if ex is not None:
+            return ex
+
+        saved_mod: rc[types.ModuleSyms] = self.cur_syms()
+        saved_scope: rc[types.Scope] | None = self.scope
+        saved_tbind: rc[TBinds] | None = self.tbind
+        saved_func: rc[types.FuncSig] | None = self.cur_func
+        saved_used: rc[UsedNames] = self.used
+
+        self.enter_module(owner)
+
+        binds: rc[TBinds] = rc(TBinds())
+        ti: int = 0
+        tp2: rc[ast.Node] | None = tn.targs
+        while tp2 is not None:
+            tpn2: rc[ast.Node] = tp2
+            binds.names.append(copy(tpn2.name))
+            binds.types_.append(args[ti])
+            ti = ti + 1
+            tp2 = tpn2.next
+        self.tbind = binds
+
+        inst: rc[ast.Node] = unwrap_node(ast.ast_clone(tn))
+        inst.name = copy(iname)
+        inst.targs = None
+        inst.next = None
+
+        self.declare_func(inst)
+
+        omod: rc[module.Module] | None = owner.mod
+        root: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, None)
+        if omod is None:
+            panic("sema: モジュールがありません")
+        else:
+            root = unwrap_node(omod.ast)
+        last: rc[ast.Node] = unwrap_node(root.body)
+        nx: rc[ast.Node] | None = last.next
+        while nx is not None:
+            last = nx
+            nx = last.next
+        last.next = inst
+
+        self.pending.append(Instance(inst, owner, binds, unwrap_tok(call.tok),
+                                     copy(iname), True))
+
+        made: rc[types.FuncSig] | None = self.lookup_func(iname)
+
+        self.enter_module(saved_mod)
+        self.scope = saved_scope
+        self.cur_func = saved_func
+        self.used = saved_used
+        self.tbind = saved_tbind
+        if made is None:
+            panic("sema: 実体化した関数が見つかりません")
+            return tmpl
+        return made
+
+    def declare_func(mut self, n: mut rc[ast.Node]) -> None:
+        self.reject_module_name(n.name, n.tok, "関数")
+        clash: rc[ast.Class] | None = self.lookup_class(n.name)
+        if clash is not None:
+            diag.error_full(unwrap_tok(n.tok),
+                            "'" + n.name + "' はクラス名として使われています",
+                            "この名前の関数は定義できません",
+                            clash.tok, "クラスの定義はここです",
+                            "クラス名は「インスタンス生成」の呼び出しに" +
+                            "使われます（例: Token(1, \"x\")）")
+        if self.is_builtin_name(n.name):
+            diag.error_at_hint(unwrap_tok(n.tok),
+                               n.name + " は組み込み関数です。" +
+                               "別の名前を使ってください",
+                               "'" + n.name + "' は再定義できません")
+
+        prev: rc[types.FuncSig] | None = self.lookup_func(n.name)
+        if prev is not None:
+            diag.error_full(unwrap_tok(n.tok),
+                            "関数 '" + n.name + "' は既に定義されています",
+                            "ここで再定義されています",
+                            prev.tok, "最初の定義はここです", "")
+
+        # ★ ジェネリックなテンプレートは **型を解決しない**。
+        #   T が何なのかまだ決まっていない。名前だけ登録して、呼ばれたときに
+        #   実引数から決めて実体を作る。
+        if n.targs is not None:
+            t0: rc[types.FuncSig] = rc(types.FuncSig(n.name, n.tok))
+            t0.ir_name = copy(n.name)
+            t0.owner = self.cur_syms()
+            t0.tmpl = n
+            cs0: rc[types.ModuleSyms] = self.cur_syms()
+            t0.next = cs0.funcs
+            cs0.funcs = t0
+            return
+
+        ret: rc[ast.Type] = self.resolve_type(unwrap_node(n.type_ref))
+
+        f: rc[types.FuncSig] = rc(types.FuncSig(n.name, n.tok))
+        f.ret = ret
+
+        pm: rc[ast.Node] | None = n.params
+        while pm is not None:
+            p: rc[ast.Node] = pm
+            pt: rc[ast.Type] = self.resolve_type(unwrap_node(p.type_ref))
+            if pt.kind == ast.TY_NONE:
+                diag.error_at_hint(unwrap_tok(p.tok),
+                                   "None 型の値は存在しないので引数にできません",
+                                   "引数の型に None は使えません")
+            f.params.append(pt)
+            f.pnames.append(copy(p.name))
+            f.nparams = f.nparams + 1
+            p.type = pt
+            pm = p.next
+
+        # ★ extern は C 側で名前が決まっているので修飾しない
+        is_extern_decl: bool = n.body is None
+        if is_extern_decl:
+            self.check_extern_type(ret, n.tok, "戻り値")
+            pm2: rc[ast.Node] | None = n.params
+            while pm2 is not None:
+                p2: rc[ast.Node] = pm2
+                self.check_extern_type(unwrap_type(p2.type), p2.tok, "引数")
+                pm2 = p2.next
+
+        self.resolve_raises(n, f)
+        if is_extern_decl and len(f.raises_cls) > 0:
+            diag.error_at_hint(unwrap_tok(n.tok),
+                               "extern の関数は C 側の約束に従うので raises は書けません",
+                               "extern に raises は書けません")
+
+        if is_extern_decl:
+            f.ir_name = copy(n.name)
+        else:
+            f.ir_name = self.mod_mangle(n.name)
+        f.owner = self.cur_syms()
+        ms: rc[types.ModuleSyms] = self.cur_syms()
+        f.next = ms.funcs
+        ms.funcs = f
+        n.ir_name = f.ir_name
+        n.type = ret
+
+    # グローバル変数の登録（言語仕様 6.2）
+    def declare_global(mut self, n: mut rc[ast.Node]) -> None:
+        self.reject_module_name(n.name, n.tok, "グローバル変数")
+        declared: rc[ast.Type] = self.resolve_type(unwrap_node(n.type_ref))
+        if declared.kind == ast.TY_NONE:
+            diag.error_at_hint(unwrap_tok(n.tok),
+                               "None 型の値は存在しないので変数にできません",
+                               "変数の型に None は使えません")
+
+        prev: rc[types.VarEntry] | None = self.lookup_local(n.name)
+        if prev is not None:
+            diag.error_full(unwrap_tok(n.tok),
+                            "変数 '" + n.name + "' は既に宣言されています",
+                            "ここで再宣言されています",
+                            prev.decl_tok, "最初の宣言はここです", "")
+
+        # ⚠️ 初期化式はコンパイル時定数のみ（言語仕様 6.2 の v1 制限）
+        rhs: rc[ast.Node] = unwrap_node(n.rhs)
+        if (rhs.kind != ast.ND_INT and rhs.kind != ast.ND_BOOL and
+                rhs.kind != ast.ND_STR and rhs.kind != ast.ND_FLOAT):
+            diag.error_full(unwrap_tok(rhs.tok),
+                            "グローバル変数の初期化式は定数でなければなりません",
+                            "ここには整数・浮動小数点数・True / False・" +
+                            "文字列リテラルだけが書けます", None, "",
+                            "計算が必要なら main の中でローカル変数にしてください")
+
+        actual: rc[ast.Type] = self.check_expr(rhs)
+        if not ast.type_assignable(actual, declared):
+            diag.error_full(unwrap_tok(rhs.tok), "型が一致しません",
+                            "型 '" + ast.type_name(actual) + "' の式",
+                            n.tok,
+                            "変数 '" + n.name + "' は '" +
+                            ast.type_name(declared) + "' 型として宣言されています",
+                            "")
+
+        # グローバルの IR 名は @g.<モジュール>.<名前>
+        v: rc[types.VarEntry] = rc(types.VarEntry(n.name, n.tok))
+        v.ir_name = "@g." + self.cur_mod().name + "." + n.name
+        v.is_global = True
+        v.declared = declared
+        v.type = declared
+
+        sc: rc[types.Scope] = unwrap_scope(self.scope)
+        v.next = sc.vars
+        sc.vars = v
+
+        n.ir_name = v.ir_name
+        n.is_global = True
+        n.type = declared
+
+    # ── パス 2：本体の検査 ──────────────────────────────────
+
+    def check_func(mut self, n: mut rc[ast.Node]) -> None:
+        self.cur_func = self.lookup_func_by_ir(n.ir_name)
+        self.used = rc(UsedNames())   # IR 名は関数ごとに振り直す
+
+        self.scope_push()
+
+        # 引数をローカル変数として登録する
+        pm: rc[ast.Node] | None = n.params
+        while pm is not None:
+            p: rc[ast.Node] = pm
+            v: rc[types.VarEntry] = self.declare(p.name, unwrap_type(p.type), p.tok)
+            p.ir_name = v.ir_name
+            pm = p.next
+
+        body: rc[ast.Node] = unwrap_node(n.body)
+        self.check_stmt_list(body.body)
+        self.scope_pop()
+
+        # 全経路で return するか（型システム 6.1）
+        rt: rc[ast.Type] = unwrap_type(n.type)
+        if rt.kind != ast.TY_NONE and not self.always_returns(n.body):
+            diag.error_full(unwrap_tok(n.tok),
+                            "関数 '" + n.name + "' は値を返さずに終わる経路があります",
+                            "戻り型は '" + ast.type_name(rt) + "' です", None, "",
+                            "すべての経路で return してください" +
+                            "（if に else が無いと、条件が偽のとき素通りします）")
+        self.cur_func = None
+
+    # main の検査（言語仕様 6.1）
+    def check_main(self, root: rc[ast.Node]) -> None:
+        m: rc[types.FuncSig] | None = self.lookup_func("main")
+        if m is None:
+            diag.error_full(unwrap_tok(root.tok), "main 関数がありません",
+                            "このファイルには入口がありません", None, "",
+                            "プログラムの入口として次を定義してください:\n" +
+                            "             def main() -> int:\n" +
+                            "                 return 0")
+            return
+        if m.nparams != 0:
+            diag.error_at_hint(unwrap_tok(m.tok),
+                               "main は引数なしで定義してください" +
+                               "（def main() -> int:）",
+                               "main は引数を取れません")
+        if unwrap_type(m.ret).kind != ast.TY_INT:
+            diag.error_at_hint(unwrap_tok(m.tok),
+                               "main の戻り値がプロセスの終了コードになります",
+                               "main の戻り型は int でなければなりません")
+        # ★ R4：main の失敗を受け取る相手はいません
+        if len(m.raises_cls) > 0:
+            diag.error_code_full(unwrap_tok(m.tok), "E-RAISE-4",
+                                 "main は raises を宣言できません",
+                                 "この失敗を受け取る相手がいません", None, "",
+                                 "main の中で try で捕まえるか、panic で終わらせてください")
+
+    # モジュール 1 つぶんの宣言を登録する（パス 1a / 1b / 1c）
+    def declare_module(mut self, root: mut rc[ast.Node]) -> None:
+        # ★ インタフェースを最初に登録する（クラスが実装を宣言するため）
+        di: rc[ast.Node] | None = root.body
+        while di is not None:
+            ni: rc[ast.Node] = di
+            if ni.kind == ast.ND_IFACE:
+                self.declare_iface(ni)
+            di = ni.next
+
+        d: rc[ast.Node] | None = root.body
+        while d is not None:
+            n: rc[ast.Node] = d
+            if n.kind == ast.ND_CLASS:
+                self.declare_class(n)
+            d = n.next
+
+        d2: rc[ast.Node] | None = root.body
+        while d2 is not None:
+            n2: rc[ast.Node] = d2
+            # ⚠️ **ジェネリックなテンプレートはここでは並べない**。
+            #   K や V が何なのかまだ決まっていないので、大きさが決められない。
+            if n2.kind == ast.ND_CLASS and n2.targs is None:
+                self.declare_class_members(n2)
+            d2 = n2.next
+
+        d3: rc[ast.Node] | None = root.body
+        while d3 is not None:
+            n3: rc[ast.Node] = d3
+            if n3.kind == ast.ND_FUNC:
+                self.declare_func(n3)
+            elif n3.kind == ast.ND_VARDECL:
+                self.declare_global(n3)
+            d3 = n3.next
+
+    # モジュール 1 つぶんの本体を検査する（パス 2）
+    def check_module(mut self, root: mut rc[ast.Node]) -> None:
+        d: rc[ast.Node] | None = root.body
+        while d is not None:
+            n: rc[ast.Node] = d
+            if n.kind == ast.ND_FUNC:
+                # ⚠️ extern は本体を持たない。
+                #   ジェネリックなテンプレートも検査しない。
+                if n.body is not None and n.targs is None:
+                    self.check_func(n)
+            # ⚠️ ジェネリックなテンプレートの本体は検査しない。
+            #   実体ができてから、その実体の本体を検査する。
+            elif n.kind == ast.ND_CLASS and n.targs is None:
+                m: rc[ast.Node] | None = n.body
+                while m is not None:
+                    mm: rc[ast.Node] = m
+                    if mm.kind == ast.ND_FUNC:
+                        self.check_func(mm)
+                    m = mm.next
+            d = n.next
+
+    # ★ 「別のモジュールのものか」を 1 か所で判定する。
+    #   f.owner は型の上では None かもしれないので、ここで開きます。
+    def is_extern_owner(self, owner: rc[types.ModuleSyms] | None) -> bool:
+        if owner is None:
+            return False
+        return owner != self.cur_syms()
+
+    def syms_by_name(self, name: str) -> rc[types.ModuleSyms]:
+        i: int = 0
+        while i < len(self.mods):
+            ms: rc[types.ModuleSyms] = self.mods[i]
+            if mod_name_of(ms) == name:
+                return ms
+            i = i + 1
+        panic("sema: モジュール '" + name + "' のシンボル表がありません")
+        return rc(types.ModuleSyms(None))
+
+
+# ── 入口 ───────────────────────────────────────────────────
+
+def unwrap_iface(i: rc[ast.Iface] | None) -> rc[ast.Iface]:
+    if i is None:
+        panic("sema: インタフェースがありません")
+        return rc(ast.Iface("", None))
+    return i
+
+
+def unwrap_cls(c: rc[ast.Class] | None) -> rc[ast.Class]:
+    if c is None:
+        panic("sema: クラスがありません")
+        return rc(ast.Class("", None))
+    return c
+
+
+# 2 つのクラスが同じ定義かを比べる
+# ⚠️ 名前ではなく **定義そのもの**で比べます。
+def same_class(a: rc[ast.Class], b: rc[ast.Class]) -> bool:
+    return a == b
+
+
+def sema_program(mods: rc[module.Module] | None, entry: rc[module.Module] | None) -> None:
+    s: Sema = Sema()
+
+    # 各モジュールのシンボル表を用意する（この時点では空）
+    m: rc[module.Module] | None = mods
+    while m is not None:
+        mm: rc[module.Module] = m
+        s.mods.append(rc(types.ModuleSyms(mm)))
+        m = mm.next
+
+    # パス 1：依存が先に並んでいるので、この順で登録すれば
+    #         「他モジュールの型注釈」は必ず解決できる
+    i: int = 0
+    while i < len(s.mods):
+        ms: rc[types.ModuleSyms] = s.mods[i]
+        s.enter_module(ms)
+        s.declare_module(unwrap_node(mod_ast(ms)))
+        i = i + 1
+
+    # パス 2：本体
+    j: int = 0
+    while j < len(s.mods):
+        ms2: rc[types.ModuleSyms] = s.mods[j]
+        s.enter_module(ms2)
+        s.check_module(unwrap_node(mod_ast(ms2)))
+        j = j + 1
+
+    # ★ パス 3：実体化したクラスの本体を検査する
+    #
+    # ⚠️ 検査の途中で **さらに実体が増える**ことがある
+    #   （Dict[str, Box[int]] のように入れ子の場合）。増えなくなるまで繰り返す。
+    while len(s.pending) > 0:
+        batch: list[Instance] = s.pending
+        s.pending = []                  # ★ 先に外す（この回の分だけを処理する）
+        # ⚠️ **新しく積んだものから**処理する。C 版は連結リストの先頭に
+        #   足して先頭から辿るので、この向きでないと実体を出す順番が
+        #   C 版とずれる（IR が 1 バイト単位で一致しなくなる）。
+        k: int = len(batch) - 1
+        while k >= 0:
+            it: Instance = batch[k]
+            io2: rc[types.ModuleSyms] | None = it.owner
+            if io2 is not None:
+                s.enter_module(io2)
+            s.tbind = it.binds          # 型引数を戻してから本体を読む
+            s.inst_site = it.site       # ★ 発端を控える
+            s.inst_name = copy(it.iname)
+            inode: rc[ast.Node] = unwrap_node(it.node)
+            if it.is_func:
+                s.check_func(inode)          # 関数の実体
+            else:
+                mm3: rc[ast.Node] | None = inode.body
+                while mm3 is not None:
+                    m3: rc[ast.Node] = mm3
+                    if m3.kind == ast.ND_FUNC:
+                        s.check_func(m3)
+                    mm3 = m3.next
+            s.tbind = None
+            s.inst_site = None
+            k = k - 1
+
+    # ★ vtable の長さを codegen に伝える
+    ast.set_iface_slots(s.next_slot)
+
+    # main は入口モジュールにだけ要る
+    if entry is not None:
+        s.enter_module(s.syms_by_name(entry.name))
+        s.check_main(unwrap_node(entry.ast))
+
+
+# ── 小道具 ─────────────────────────────────────────────────
+#
+# ★ 「型の上では None かもしれないが、実際には必ずある」ものを 1 か所で開きます。
+#   C 版の UNREACHABLE() と同じ役目です。
+
+# ★ 折り返す算術の名前か（wrap_add / wrap_sub / wrap_mul）
+def is_wrap_name(name: str) -> bool:
+    return name == "wrap_add" or name == "wrap_sub" or name == "wrap_mul"
+
+def count_siblings(first: rc[ast.Node] | None) -> int:
+    n: int = 0
+    cur: rc[ast.Node] | None = first
+    while cur is not None:
+        c: rc[ast.Node] = cur
+        n = n + 1
+        cur = c.next
+    return n
+
+def align_up(offset: int, align: int) -> int:
+    return (offset + align - 1) // align * align
+
+def mod_name_of(ms: rc[types.ModuleSyms]) -> str:
+    m: rc[module.Module] | None = ms.mod
+    if m is None:
+        panic("sema: モジュールがありません")
+        return ""
+    else:
+        return copy(m.name)
+
+def mod_ast(ms: rc[types.ModuleSyms]) -> rc[ast.Node] | None:
+    m: rc[module.Module] | None = ms.mod
+    if m is None:
+        return None
+    else:
+        return m.ast
+
+# try のスタックから最後の 1 つを外す。
+#
+# ⚠️ list には pop がまだ無いので、module と同じ手（作り直す）を使います。
+def try_pop(xs: list[rc[ast.Node]]) -> list[rc[ast.Node]]:
+    out: list[rc[ast.Node]] = []
+    i: int = 0
+    while i < len(xs) - 1:
+        out.append(xs[i])
+        i = i + 1
+    return out
+
+# rc[T] は「中身のように」使える（Rust の Deref と同じ考え）
+def auto_deref(t: rc[ast.Type]) -> rc[ast.Type]:
+    if t.kind == ast.TY_RC:
+        return ast.elem_of(t)
+    return t
+
+def unwrap_node(n: rc[ast.Node] | None) -> rc[ast.Node]:
+    if n is None:
+        panic("sema: ノードがありません")
+        return ast.new_node(ast.ND_PASS, None)
+    else:
+        return n
+
+def unwrap_type(t: rc[ast.Type] | None) -> rc[ast.Type]:
+    if t is None:
+        panic("sema: 型がありません")
+        return rc(ast.Type(ast.TY_INT))
+    else:
+        return t
+
+def unwrap_class(c: rc[ast.Class] | None) -> rc[ast.Class]:
+    if c is None:
+        panic("sema: クラスがありません")
+        return rc(ast.Class("", None))
+    else:
+        return c
+
+def unwrap_sig(f: rc[types.FuncSig] | None) -> rc[types.FuncSig]:
+    if f is None:
+        panic("sema: 関数のシグネチャがありません")
+        return rc(types.FuncSig("", None))
+    else:
+        return f
+
+def unwrap_scope(sc: rc[types.Scope] | None) -> rc[types.Scope]:
+    if sc is None:
+        panic("sema: スコープがありません")
+        return rc(types.Scope(None))
+    else:
+        return sc
+
+def unwrap_tok(t: rc[token.Token] | None) -> rc[token.Token]:
+    if t is None:
+        panic("sema: トークンがありません")
+        return rc(token.Token(0, rc(token.SrcText("", "")), 0, 0, 0, 0))
+    else:
+        return t

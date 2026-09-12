@@ -1,0 +1,5 @@
+# ERROR: この式には代入できません
+# ERROR: 代入先にできるのは変数・添字 xs[i]・フィールド t.f だけです
+def main() -> int:
+    1 = 2
+    return 0

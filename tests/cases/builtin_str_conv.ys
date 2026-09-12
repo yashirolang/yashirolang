@@ -1,0 +1,6 @@
+# OUTPUT: n = 42
+# OUTPUT: True
+def main() -> int:
+    print("n = " + str(42))
+    print(str(True))
+    return 0

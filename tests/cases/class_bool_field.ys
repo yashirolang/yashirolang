@@ -1,0 +1,13 @@
+# OUTPUT: True
+# OUTPUT: False
+# bool フィールドはメモリ上 i8、値としては i1（R5 がそのまま効く）
+class Flags:
+    a: bool
+    b: bool
+
+def main() -> int:
+    f: Flags = Flags()
+    f.a = True
+    print(f.a)
+    print(f.b)
+    return 0

@@ -1,0 +1,76 @@
+# OUTPUT: 16302.58788
+# OUTPUT: ok
+# EXIT: 0
+# 添字が「関数呼び出し」に戻っていないこと
+#   ⚠️ xs[i] が pl_list_get_* の呼び出しだったころは、この 256³ の
+#     行列積に **0.53 秒**かかっていました（IR に展開して 0.16 秒）。
+#
+# ★ **時間を検査するようになりました。**
+#   それまでこの番人は出力しか見ておらず、10 倍遅くなっても通っていました
+#   （docs/roadmap.md §3-B4 の指摘）。lib/time が入ったので、
+#   「添字つきの行列積」と「添字を使わない同じ回数のループ」の**比**を見ます。
+#
+#   ⚠️ 絶対の時間ではなく比を見るのは、機械の速さに依らせないためです。
+#     いまの値は 3.5 前後、添字が呼び出しに戻ると 11 前後になります。
+#     しきい値 7.0 はその中間です。
+import math
+import time
+
+N: int = 256
+
+def make(seed: int) -> list[list[float]]:
+    m: list[list[float]] = []
+    s: int = seed
+    for i in range(N):
+        row: list[float] = []
+        for j in range(N):
+            s = (s * 1103515 + 12345) % 2147483648
+            row.append(float(s % 1000) / 1000.0)
+        m.append(row)
+    return m
+
+def main() -> int:
+    a: list[list[float]] = make(1)
+    b: list[list[float]] = make(7)
+
+    c: list[list[float]] = []
+    for i in range(N):
+        row: list[float] = []
+        for j in range(N):
+            row.append(0.0)
+        c.append(row)
+
+    t0: int = time.monotonic_ns()
+    for i in range(N):
+        for k in range(N):
+            aik: float = a[i][k]
+            for j in range(N):
+                c[i][j] = c[i][j] + aik * b[k][j]
+    t_idx: int = time.since_ns(t0)
+
+    # 基準：まったく同じ回数まわして、添字だけ使わないループ
+    t0 = time.monotonic_ns()
+    acc: float = 0.0
+    x: float = 1.000001
+    for i in range(N):
+        for k in range(N):
+            xk: float = x
+            for j in range(N):
+                acc = acc + xk * x
+    t_ref: int = time.since_ns(t0)
+
+    t: float = 0.0
+    for i in range(N):
+        t = t + c[i][i]
+    # ⚠️ 合計は近似値なので、丸めてから見ます
+    print(str(math.round_to(t, 5)))
+
+    ratio: float = float(t_idx) / float(t_ref)
+    if ratio > 7.0:
+        print("NG 添字が遅すぎます: 添字あり / 添字なし = " + str(ratio))
+        print("   （呼び出しに戻っていないか gen_index_addr を見てください）")
+        return 1
+    if acc <= 0.0:
+        return 1
+    print("ok")
+    return 0

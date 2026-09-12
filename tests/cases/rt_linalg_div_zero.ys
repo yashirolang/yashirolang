@@ -1,0 +1,13 @@
+# EXIT: 1
+# ライブラリは「どこで 0 で割ったか」を言います
+#
+#   ⚠️ ランタイムの "float division by zero" だけでは場所が分かりません。
+#     lib 側で先に確かめて、何番目の要素かを言うようにしています。
+import linalg
+
+def main() -> int:
+    a: list[float] = [1.0, 2.0, 3.0]
+    b: list[float] = [2.0, 4.0, 0.0]
+    v: list[float] = linalg.div(a, b)
+    print(str(v[0]))
+    return 0

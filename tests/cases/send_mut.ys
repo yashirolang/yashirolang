@@ -1,0 +1,23 @@
+# ERROR: E-SEND-4
+# ERROR: 可変借用 'xs' はスレッドに渡せません
+# STAGE0-ONLY: 所有権検査は C 版にしかありません
+# STAGE1-SKIP: 所有権検査（E-SEND-*）は C 版にしかないので、IR を比べられません
+# 可変借用はスレッドに渡せません（scope: の中でも）
+#
+# 🤔 なぜ scope: の中でも許さないのか
+#   scope: が保証するのは**寿命**だけです。同じ値への可変借用を 2 本の
+#   スレッドが持てば、寿命が足りていてもデータ競合になります。そして
+#   「配る先が重なっていないか」は、ループの中で spawn する形
+#   （まさに並列化したい形）では静的に分かりません。
+#
+# ★ 書き換えたいものは own で渡して join で受け取るか、mutex[…] に入れます。
+
+def fill(xs: mut list[int], v: int) -> None:
+    xs[0] = v
+
+def main() -> int:
+    xs: list[int] = [0, 0, 0]
+    scope:
+        t: Thread[None] = spawn(fill, xs, 5)
+        t.join()
+    return 0

@@ -1,0 +1,9 @@
+# OUTPUT: 1
+# OUTPUT: 2
+# OUTPUT: 3
+def main() -> int:
+    i: int = 1
+    while i <= 3:
+        print(i)
+        i += 1
+    return 0

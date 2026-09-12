@@ -1,0 +1,15 @@
+# OUTPUT: 1
+# OUTPUT: 
+# OUTPUT: 0
+# OUTPUT: 3
+# OUTPUT: ab
+# 境界条件：空文字列・空セパレータ・範囲外の substr
+import strings
+
+def main() -> int:
+    print(len(strings.split("", ",")))
+    print(strings.substr("abc", 5, 2))
+    print(strings.find("abc", ""))
+    print(len(strings.split("abc", "")))
+    print(strings.substr("ab", 0, 99))
+    return 0

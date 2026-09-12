@@ -1,0 +1,9 @@
+# ERROR: はクラス名として使われています
+class P:
+    x: int
+
+def P() -> int:
+    return 0
+
+def main() -> int:
+    return 0

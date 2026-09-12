@@ -1,0 +1,12 @@
+# EXIT: 1
+# 6 種類すべてが期待どおりなら True
+def main() -> int:
+    a: bool = 1 == 1
+    b: bool = 1 != 2
+    c: bool = 1 < 2
+    d: bool = 2 <= 2
+    e: bool = 3 > 2
+    f: bool = 3 >= 3
+    if a and b and c and d and e and f:
+        return 1
+    return 0

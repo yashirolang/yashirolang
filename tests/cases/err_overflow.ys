@@ -1,0 +1,4 @@
+# ERROR: 整数リテラルが int の範囲 (64bit) を超えています
+# ERROR: = ヒント: int が表せるのは
+def main() -> int:
+    return 99999999999999999999999

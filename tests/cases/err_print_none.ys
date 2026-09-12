@@ -1,0 +1,8 @@
+# ERROR: print は 'None' 型を受け取れません
+# ERROR: = ヒント: print が受け取れるのは int, str, bool, float です
+def nothing() -> None:
+    return
+
+def main() -> int:
+    print(nothing())
+    return 0

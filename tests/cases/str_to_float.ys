@@ -1,0 +1,79 @@
+# OUTPUT: 3.14
+# OUTPUT: -0.5
+# OUTPUT: 1.0e-7
+# OUTPUT: 1.7976931348623157e308
+# OUTPUT: 5.0e-324
+# OUTPUT: 2.2250738585072014e-308
+# OUTPUT: inf
+# OUTPUT: -inf
+# OUTPUT: nan
+# OUTPUT: -0.0
+# OUTPUT: 0.1
+# OUTPUT: round trip: True
+# OUTPUT: tie to even: True
+# OUTPUT: sticky: True
+# EXIT: 0
+# float(str)
+#   ★ **正しく丸めます**。素朴に「10 倍して足す」と誤差が積もり、
+#     float(str(x)) が x に戻らなくなります（対の保証です）。
+import math
+import strings
+
+# 2^-1075 を厳密な十進で作ります（0.000…0 のあと 5^1075 の桁が並ぶ）。
+#   ⚠️ 5^1075 を多倍長で作るので、10 進の桁を list[int] で持ちます。
+def midpoint_2_1075() -> str:
+    dig: list[int] = [1]        # dig[0] が下位
+    p: int = 0
+    while p < 1075:
+        carry: int = 0
+        i: int = 0
+        while i < len(dig):
+            t: int = dig[i] * 5 + carry
+            dig[i] = t % 10
+            carry = t // 10
+            i = i + 1
+        while carry > 0:
+            dig.append(carry % 10)
+            carry = carry // 10
+        p = p + 1
+    # 5^1075 を 10^1075 で割る → 小数点以下 1075 桁
+    parts: list[str] = ["0."]
+    z: int = 1075 - len(dig)
+    parts.append(strings.repeat("0", z))
+    i2: int = len(dig) - 1
+    while i2 >= 0:
+        parts.append(str(dig[i2]))
+        i2 = i2 - 1
+    return strings.join(parts, "")
+
+
+def main() -> int:
+    print(str(float("3.14")))
+    print(str(float("-0.5")))
+    print(str(float("1e-7")))
+    print(str(float("1.7976931348623157e308")))    # 最大の double
+    print(str(float("5e-324")))                    # 最小の非正規化数
+    print(str(float("2.2250738585072014e-308")))   # 最小の正規化数
+    print(str(float("1e400")))                     # あふれたら inf
+    print(str(float("  -Infinity  ")))             # 空白と別名
+    print(str(float("nan")))
+    print(str(float("-0.0")))                      # 符号つきゼロ
+    print(str(float("  0.1  ")))
+
+    # ① 往復：str で出して float で戻すと同じ値になる
+    xs: list[float] = [0.1, 0.2, 0.3, 1.0 / 3.0, 1.0e-300, 1.0e300,
+                       123456.789, -2.5e-17, 0.0]
+    ok: bool = True
+    for x in xs:
+        if float(str(x)) != x:
+            ok = False
+    print("round trip: " + str(ok))
+
+    # ② 桁がいくつ並んでも正しく丸まる
+    #   2^-1075 は「0 と最小の非正規化数のちょうど中点」で、厳密に書くと
+    #   1077 桁あります。ちょうど中点なら偶数寄せで 0、そこに 1 を足せば
+    #   最小の非正規化数になります。**落とした桁を無視すると両方 0 になります。**
+    mid: str = midpoint_2_1075()
+    print("tie to even: " + str(float(mid) == 0.0))
+    print("sticky: " + str(float(mid + "1") == 5.0e-324))
+    return 0

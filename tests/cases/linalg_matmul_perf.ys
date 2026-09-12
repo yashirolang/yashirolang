@@ -1,0 +1,87 @@
+# OUTPUT: 16302.58788
+# OUTPUT: ok
+# EXIT: 0
+# FLAGS: -O2
+# panic の経路がインライン化を止めていないこと
+#
+#   ⚠️ linalg.Matrix.get / set は小さなメソッドです。**外れの経路**
+#     （範囲外・桁あふれ・None）の呼び出しが増えると、LLVM のインライン化の
+#     見積り（cost）がしきい値を超え、内側ループに呼び出しが戻ります。
+#     実測でそれが 2 回起きました。
+#       ① check の中にメッセージ組み立てを直接書いていた（143 → 62 ms）
+#       ② 桁あふれ検査で分岐と呼び出しが 2 つ増えた（cost=225 / threshold=225）
+#
+#   ★ いま効いている 3 つ。どれが戻ってもここで遅くなります。
+#     ① codegen が panic / pl_index_fail などに付ける **cold**
+#     ② lib/linalg の Matrix.index_fail / len_fail への切り出し
+#     ③ 添字の中の桁あふれを**範囲検査に相乗り**させる（gen_index_expr）
+#
+# ★ **インライン化されたかどうかの判定は、ここではしません。**
+#
+#   時間の比で見ようとして 2 回失敗しました（どちらも CI が教えてくれました）。
+#
+#     ① linalg 対 二重リスト     … macOS 2.1 / Linux 4.28（並べ方まで違う）
+#     ② linalg 対 平坦の直書き   … macOS 1.07 / Linux 3.57
+#        （直書き側は N が定数畳み込みできるので、**同じ計算ではない**）
+#
+#   **機械と clang の版が変わると比が変わり、「畳まれていない」と区別できません。**
+#   正確な判定は **`make inline-check`**（clang に -Rpass-missed=inline で直接
+#   聞く。CI でも毎回走ります）に任せました。
+#
+#   ここは「**ひどく遅くなっていないか**」だけを見ます（しきい値 6.0）。
+#   ⚠️ -O0 では誰もインライン化しないので差が出ません。# FLAGS: -O2 が要ります。
+import linalg
+import math
+import time
+
+N: int = 256
+
+def make_flat(seed: int) -> list[float]:
+    d: list[float] = []
+    s: int = seed
+    for i in range(N * N):
+        s = (s * 1103515 + 12345) % 2147483648
+        d.append(float(s % 1000) / 1000.0)
+    return d
+
+def main() -> int:
+    # ── A: linalg.Matrix（get / set を通す）──
+    am: linalg.Matrix = linalg.Matrix(N, N, make_flat(1))
+    bm: linalg.Matrix = linalg.Matrix(N, N, make_flat(7))
+    t0: int = time.monotonic_ns()
+    cm: linalg.Matrix = linalg.matmul(am, bm)
+    t_mat: int = time.since_ns(t0)
+
+    # ── B: まったく同じ計算を、平坦な list[float] に直接書く ──
+    a: list[float] = make_flat(1)
+    b: list[float] = make_flat(7)
+    c: list[float] = []
+    for i in range(N * N):
+        c.append(0.0)
+    t0 = time.monotonic_ns()
+    for i in range(N):
+        for k in range(N):
+            aik: float = a[i * N + k]
+            for j in range(N):
+                c[i * N + j] = c[i * N + j] + aik * b[k * N + j]
+    t_flat: int = time.since_ns(t0)
+
+    t: float = 0.0
+    for i in range(N):
+        t = t + cm.get(i, i)
+    # ⚠️ 合計は近似値なので、丸めてから見ます
+    print(str(math.round_to(t, 5)))
+
+    # 答えが同じであること（速いが間違っている、を弾く）
+    if cm.get(1, 1) != c[N + 1]:
+        print("NG 答えが違います")
+        return 1
+
+    ratio: float = float(t_mat) / float(t_flat)
+    if ratio > 6.0:
+        print("NG linalg.Matrix の行列積がひどく遅いです: linalg / 直書き = " +
+              str(ratio))
+        print("   （まず make inline-check。畳まれているなら別の原因です）")
+        return 1
+    print("ok")
+    return 0

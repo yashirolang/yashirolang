@@ -1,0 +1,5 @@
+# EXIT: 1
+# 範囲外アクセスはランタイムで検査する（規約 R10）
+def main() -> int:
+    xs: list[int] = [1, 2]
+    return xs[5]

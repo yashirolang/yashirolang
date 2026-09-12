@@ -1,0 +1,31 @@
+# OUTPUT: ababab
+# OUTPUT: --------------------
+# OUTPUT: 3
+# OUTPUT: 4
+# OUTPUT: 3
+# OUTPUT: 6
+# OUTPUT: 3
+# OUTPUT: 7
+# OUTPUT: -5
+# OUTPUT: 2.5
+# OUTPUT: 1.5
+# OUTPUT: 3.5
+# EXIT: 0
+# Python でよく使う演算と組み込み
+#   ⚠️ 3 * "ab"（左右が逆）は認めません。「何を何回」の順を固定します
+def main() -> int:
+    print("ab" * 3)
+    print("-" * 20)
+    xs: list[int] = [1] + [2, 3]
+    print(len(xs))
+    ys: list[int] = [0] * 4
+    print(len(ys))
+    print(abs(-3))
+    print(sum([1, 2, 3]))
+    print(min(3, 7))
+    print(max(3, 7))
+    print(min(-1, -5))
+    print(max(1.5, 2.5))
+    print(min(1.5, 2.5))
+    print(abs(-3.5))
+    return 0

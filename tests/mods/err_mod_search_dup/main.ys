@@ -1,0 +1,9 @@
+# ERROR: モジュール 'greet' が複数の探索場所にあります
+# ERROR: どちらを指しているか決められません
+# ERROR: どちらかの名前を変えてください
+# FLAGS: -I @ROOT@/tests/mods/err_mod_search_dup/vendor
+# 入口のディレクトリと -I の両方にあったら、優先順位を決めずに断る
+import greet
+
+def main() -> int:
+    return greet.n()

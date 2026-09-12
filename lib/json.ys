@@ -1,0 +1,601 @@
+# json — JSON の読み書き
+#
+# ★ 「実践で使えるか」を分けるのは、たいてい**外の世界と話せるか**です。
+#   設定ファイル・API・ログのほとんどが JSON なので、これが無いと
+#   ほかの道具と繋がりません。**言語は 1 つも変えずに**書けています。
+#
+# 使い方:
+#
+#   r: json.Result = json.parse('{"n": 1, "xs": [true, null]}')
+#   if r.ok:
+#       v: rc[json.Value] = r.get()
+#       print(str(v.field("n").as_int()))       # 1
+#       print(str(v.field("xs").at(0).as_bool()))  # True
+#       print(json.dumps(v))
+#
+#   b: rc[json.Value] = json.object()
+#   b.put("name", json.of_str("world"))
+#
+# ⚠️ 数は**すべて float で持ちます**（JSON の数に整数・小数の区別が無いため）。
+#   整数として読むときは as_int() を使ってください。
+# ⚠️ 対応しているのは RFC 8259 の範囲です。末尾のカンマもコメントも読みません。
+import strings
+
+# 値の種類。⚠️ **末尾に足すこと**（番号がずれると読み書きが食い違います）
+KIND_NULL: int = 0
+KIND_BOOL: int = 1
+KIND_NUMBER: int = 2
+KIND_STRING: int = 3
+KIND_ARRAY: int = 4
+KIND_OBJECT: int = 5
+
+
+class Value:
+    kind: int
+    b: bool
+    num: float
+    text: str
+    items: list[rc[Value]]      # 配列の中身
+    keys: list[str]             # オブジェクトの鍵（**書かれた順**）
+    vals: list[rc[Value]]       # オブジェクトの値（keys と同じ並び）
+
+    def init(self, kind: int) -> None:
+        self.kind = kind
+        self.b = False
+        self.num = 0.0
+        self.text = ""
+        self.items = []
+        self.keys = []
+        self.vals = []
+
+    # ── 種類を訊く ──────────────────────────────────────────
+    def is_null(self) -> bool:
+        return self.kind == KIND_NULL
+
+    def is_bool(self) -> bool:
+        return self.kind == KIND_BOOL
+
+    def is_number(self) -> bool:
+        return self.kind == KIND_NUMBER
+
+    def is_string(self) -> bool:
+        return self.kind == KIND_STRING
+
+    def is_array(self) -> bool:
+        return self.kind == KIND_ARRAY
+
+    def is_object(self) -> bool:
+        return self.kind == KIND_OBJECT
+
+    # ── 中身を取り出す ──────────────────────────────────────
+    #
+    # ⚠️ 種類が違うと panic します。分からないときは先に is_* で確かめてください。
+    def as_bool(self) -> bool:
+        if self.kind != KIND_BOOL:
+            panic("json: bool ではありません（" + kind_name(self.kind) + "）")
+        return self.b
+
+    def as_float(self) -> float:
+        if self.kind != KIND_NUMBER:
+            panic("json: 数ではありません（" + kind_name(self.kind) + "）")
+        return self.num
+
+    def as_int(self) -> int:
+        return int(self.as_float())
+
+    def as_str(self) -> str:
+        if self.kind != KIND_STRING:
+            panic("json: 文字列ではありません（" + kind_name(self.kind) + "）")
+        return self.text
+
+    # 配列 / オブジェクトの要素数
+    def len(self) -> int:
+        if self.kind == KIND_ARRAY:
+            return len(self.items)
+        if self.kind == KIND_OBJECT:
+            return len(self.keys)
+        return 0
+
+    # 配列の i 番目
+    def at(self, i: int) -> rc[Value]:
+        if self.kind != KIND_ARRAY:
+            panic("json: 配列ではありません（" + kind_name(self.kind) + "）")
+        return self.items[i]
+
+    # オブジェクトの鍵。無ければ None
+    def get(self, key: str) -> rc[Value] | None:
+        if self.kind != KIND_OBJECT:
+            return None
+        i: int = 0
+        while i < len(self.keys):
+            if self.keys[i] == key:
+                return self.vals[i]
+            i = i + 1
+        return None
+
+    # オブジェクトの鍵。**無ければ panic**（あるはずのものを取るとき用）
+    def field(self, key: str) -> rc[Value]:
+        v: rc[Value] | None = self.get(key)
+        if v is None:
+            panic("json: 鍵 '" + key + "' がありません")
+            return rc(Value(KIND_NULL))
+        else:
+            return v
+
+    def has(self, key: str) -> bool:
+        return self.get(key) is not None
+
+    # ── 組み立てる ──────────────────────────────────────────
+    #
+    # ★ メソッドにしてあるのは、作った値が rc[Value] だからです。
+    #   `rc[Value]` は `mut Value` の引数には渡せませんが、メソッドは呼べます。
+    def push(mut self, x: rc[Value]) -> None:
+        if self.kind != KIND_ARRAY:
+            panic("json: 配列ではありません（" + kind_name(self.kind) + "）")
+        self.items.append(x)
+
+    # 鍵を入れる（同じ鍵が既にあれば置き換えます）
+    def put(mut self, key: str, x: rc[Value]) -> None:
+        if self.kind != KIND_OBJECT:
+            panic("json: オブジェクトではありません（" + kind_name(self.kind) + "）")
+        i: int = 0
+        while i < len(self.keys):
+            if self.keys[i] == key:
+                self.vals[i] = x
+                return
+            i = i + 1
+        self.keys.append(copy(key))
+        self.vals.append(x)
+
+
+def kind_name(k: int) -> str:
+    if k == KIND_NULL:
+        return "null"
+    if k == KIND_BOOL:
+        return "bool"
+    if k == KIND_NUMBER:
+        return "number"
+    if k == KIND_STRING:
+        return "string"
+    if k == KIND_ARRAY:
+        return "array"
+    return "object"
+
+
+# ── 作る ────────────────────────────────────────────────────
+
+def null() -> rc[Value]:
+    return rc(Value(KIND_NULL))
+
+def of_bool(b: bool) -> rc[Value]:
+    v: rc[Value] = rc(Value(KIND_BOOL))
+    v.b = b
+    return v
+
+def of_float(x: float) -> rc[Value]:
+    v: rc[Value] = rc(Value(KIND_NUMBER))
+    v.num = x
+    return v
+
+def of_int(n: int) -> rc[Value]:
+    return of_float(float(n))
+
+def of_str(s: str) -> rc[Value]:
+    v: rc[Value] = rc(Value(KIND_STRING))
+    v.text = copy(s)
+    return v
+
+def array() -> rc[Value]:
+    return rc(Value(KIND_ARRAY))
+
+def object() -> rc[Value]:
+    return rc(Value(KIND_OBJECT))
+
+
+
+# ── 読む ────────────────────────────────────────────────────
+
+class Result:
+    ok: bool
+    value: rc[Value] | None
+    error: str      # ok が False のときの説明
+    at: int         # 何バイト目で困ったか
+
+    def init(self) -> None:
+        self.ok = False
+        self.value = None
+        self.error = ""
+        self.at = 0
+
+    # 読めた値を取る（読めていなければ panic）
+    def get(self) -> rc[Value]:
+        v: rc[Value] | None = self.value
+        if v is None:
+            panic("json: 読めていません: " + self.error)
+            return rc(Value(KIND_NULL))
+        else:
+            return v
+
+
+class Parser:
+    src: str
+    pos: int
+    err: str
+
+    def init(self, src: str) -> None:
+        self.src = copy(src)
+        self.pos = 0
+        self.err = ""
+
+    def failed(self) -> bool:
+        return len(self.err) > 0
+
+    def fail(mut self, msg: str) -> None:
+        if len(self.err) == 0:
+            self.err = copy(msg)
+
+    def at_end(self) -> bool:
+        return self.pos >= len(self.src)
+
+    def peek(self) -> int:
+        if self.pos >= len(self.src):
+            return -1
+        return strings.byte_at(self.src, self.pos)
+
+    def skip_space(mut self) -> None:
+        while self.pos < len(self.src):
+            b: int = strings.byte_at(self.src, self.pos)
+            # 空白・タブ・改行・復帰だけ（JSON はこれ以外を空白と認めません）
+            if b == 32 or b == 9 or b == 10 or b == 13:
+                self.pos = self.pos + 1
+            else:
+                return
+
+    # 決まった語（true / false / null）を読む
+    def word(mut self, w: str) -> bool:
+        if strings.matches_at(self.src, w, self.pos):
+            self.pos = self.pos + len(w)
+            return True
+        return False
+
+    def parse_value(mut self) -> rc[Value]:
+        self.skip_space()
+        if self.failed():
+            return rc(Value(KIND_NULL))
+        b: int = self.peek()
+        if b < 0:
+            self.fail("値がありません")
+            return rc(Value(KIND_NULL))
+        if b == 123:    # {
+            return self.parse_object()
+        if b == 91:     # [
+            return self.parse_array()
+        if b == 34:     # "
+            v: rc[Value] = rc(Value(KIND_STRING))
+            v.text = self.parse_string()
+            return v
+        if b == 116:    # t
+            if self.word("true"):
+                return of_bool(True)
+        if b == 102:    # f
+            if self.word("false"):
+                return of_bool(False)
+        if b == 110:    # n
+            if self.word("null"):
+                return null()
+        if b == 45 or (b >= 48 and b <= 57):   # '-' か数字
+            return self.parse_number()
+        self.fail("読めない値です")
+        return rc(Value(KIND_NULL))
+
+    def parse_number(mut self) -> rc[Value]:
+        start: int = self.pos
+        if self.peek() == 45:
+            self.pos = self.pos + 1
+        digits: int = 0
+        while not self.at_end():
+            b: int = strings.byte_at(self.src, self.pos)
+            if b >= 48 and b <= 57:
+                digits = digits + 1
+                self.pos = self.pos + 1
+            elif b == 46 or b == 101 or b == 69 or b == 43 or b == 45:
+                # '.' 'e' 'E' '+' '-'
+                self.pos = self.pos + 1
+            else:
+                self.pos = self.pos
+                break
+        if digits == 0:
+            self.fail("数になっていません")
+            return rc(Value(KIND_NULL))
+        text: str = strings.substr(self.src, start, self.pos - start)
+        return of_float(float(text))
+
+    def parse_string(mut self) -> str:
+        if self.peek() != 34:
+            self.fail("文字列の始まりが '\"' ではありません")
+            return ""
+        self.pos = self.pos + 1
+        out: list[str] = []
+        while True:
+            if self.at_end():
+                self.fail("文字列が閉じていません")
+                return ""
+            b: int = strings.byte_at(self.src, self.pos)
+            if b == 34:
+                self.pos = self.pos + 1
+                return strings.join(out, "")
+            if b == 92:    # バックスラッシュ
+                self.pos = self.pos + 1
+                if self.at_end():
+                    self.fail("エスケープが途中で終わっています")
+                    return ""
+                e: int = strings.byte_at(self.src, self.pos)
+                self.pos = self.pos + 1
+                if e == 110:
+                    out.append("\n")
+                elif e == 116:
+                    out.append("\t")
+                elif e == 114:
+                    out.append("\r")
+                elif e == 98:
+                    out.append(chr(8))
+                elif e == 102:
+                    out.append(chr(12))
+                elif e == 117:    # \uXXXX
+                    out.append(self.parse_escape_u())
+                elif e == 34 or e == 92 or e == 47:
+                    out.append(chr(e))
+                else:
+                    self.fail("知らないエスケープです")
+                    return ""
+            else:
+                out.append(chr(b))
+                self.pos = self.pos + 1
+        return strings.join(out, "")
+
+    # \uXXXX を 1 文字（UTF-8）にする。
+    #
+    # ⚠️ サロゲートペア（😀 のような 2 個組）にも対応します。
+    def parse_escape_u(mut self) -> str:
+        cp: int = self.hex4()
+        if self.failed():
+            return ""
+        if cp >= 55296 and cp <= 56319:     # 上位サロゲート
+            if strings.matches_at(self.src, "\\u", self.pos):
+                self.pos = self.pos + 2
+                lo: int = self.hex4()
+                if self.failed():
+                    return ""
+                if lo >= 56320 and lo <= 57343:
+                    cp = 65536 + (cp - 55296) * 1024 + (lo - 56320)
+                else:
+                    self.fail("下位サロゲートが不正です")
+                    return ""
+            else:
+                self.fail("上位サロゲートの後が \\u ではありません")
+                return ""
+        return strings.from_code_point(cp)
+
+    def hex4(mut self) -> int:
+        if self.pos + 4 > len(self.src):
+            self.fail("\\u の後に 16 進 4 桁がありません")
+            return 0
+        n: int = 0
+        i: int = 0
+        while i < 4:
+            b: int = strings.byte_at(self.src, self.pos + i)
+            d: int = -1
+            if b >= 48 and b <= 57:
+                d = b - 48
+            elif b >= 97 and b <= 102:
+                d = b - 87
+            elif b >= 65 and b <= 70:
+                d = b - 55
+            if d < 0:
+                self.fail("\\u の後に 16 進 4 桁がありません")
+                return 0
+            n = n * 16 + d
+            i = i + 1
+        self.pos = self.pos + 4
+        return n
+
+    def parse_array(mut self) -> rc[Value]:
+        v: rc[Value] = array()
+        self.pos = self.pos + 1     # '['
+        self.skip_space()
+        if self.peek() == 93:       # ']'
+            self.pos = self.pos + 1
+            return v
+        while True:
+            item: rc[Value] = self.parse_value()
+            if self.failed():
+                return v
+            v.items.append(item)
+            self.skip_space()
+            b: int = self.peek()
+            if b == 44:             # ','
+                self.pos = self.pos + 1
+            elif b == 93:           # ']'
+                self.pos = self.pos + 1
+                return v
+            else:
+                self.fail("配列に ',' か ']' がありません")
+                return v
+        return v
+
+    def parse_object(mut self) -> rc[Value]:
+        v: rc[Value] = object()
+        self.pos = self.pos + 1     # '{'
+        self.skip_space()
+        if self.peek() == 125:      # '}'
+            self.pos = self.pos + 1
+            return v
+        while True:
+            self.skip_space()
+            key: str = self.parse_string()
+            if self.failed():
+                return v
+            self.skip_space()
+            if self.peek() != 58:   # ':'
+                self.fail("鍵の後に ':' がありません")
+                return v
+            self.pos = self.pos + 1
+            val: rc[Value] = self.parse_value()
+            if self.failed():
+                return v
+            v.keys.append(key)
+            v.vals.append(val)
+            self.skip_space()
+            b: int = self.peek()
+            if b == 44:             # ','
+                self.pos = self.pos + 1
+            elif b == 125:          # '}'
+                self.pos = self.pos + 1
+                return v
+            else:
+                self.fail("オブジェクトに ',' か '}' がありません")
+                return v
+        return v
+
+
+# 文字列を読む。**失敗しても panic しません**（Result を見てください）。
+def parse(text: str) -> Result:
+    r: Result = Result()
+    p: Parser = Parser(text)
+    v: rc[Value] = p.parse_value()
+    if p.failed():
+        r.error = copy(p.err)
+        r.at = p.pos
+        return r
+    p.skip_space()
+    if not p.at_end():
+        r.error = "値の後にごみがあります"
+        r.at = p.pos
+        return r
+    r.ok = True
+    r.value = v
+    return r
+
+
+# ── 書く ────────────────────────────────────────────────────
+
+# 文字列を JSON の書き方に直す（引用符ごと返します）
+def quote(s: str) -> str:
+    out: list[str] = []
+    out.append("\"")
+    i: int = 0
+    while i < len(s):
+        b: int = strings.byte_at(s, i)
+        if b == 34:
+            out.append("\\\"")
+        elif b == 92:
+            out.append("\\\\")
+        elif b == 10:
+            out.append("\\n")
+        elif b == 9:
+            out.append("\\t")
+        elif b == 13:
+            out.append("\\r")
+        elif b < 32:
+            # 制御文字は \u00XX で書く（そのまま出すと壊れた JSON になります）
+            out.append("\\u00")
+            out.append(hex2(b))
+        else:
+            out.append(chr(b))
+        i = i + 1
+    out.append("\"")
+    return strings.join(out, "")
+
+def hex2(b: int) -> str:
+    d: str = "0123456789abcdef"
+    hi: int = (b // 16) % 16
+    lo: int = b % 16
+    return strings.substr(d, hi, 1) + strings.substr(d, lo, 1)
+
+# 数の書き方。**整数なら小数点を出しません**（1.0 ではなく 1）。
+def number_text(x: float) -> str:
+    n: int = int(x)
+    if float(n) == x:
+        return str(n)
+    return str(x)
+
+# 1 行で書く
+def dumps(v: rc[Value]) -> str:
+    out: list[str] = []
+    write(v, out)
+    return strings.join(out, "")
+
+def write(v: rc[Value], out: mut list[str]) -> None:
+    if v.kind == KIND_NULL:
+        out.append("null")
+    elif v.kind == KIND_BOOL:
+        if v.b:
+            out.append("true")
+        else:
+            out.append("false")
+    elif v.kind == KIND_NUMBER:
+        out.append(number_text(v.num))
+    elif v.kind == KIND_STRING:
+        out.append(quote(v.text))
+    elif v.kind == KIND_ARRAY:
+        out.append("[")
+        i: int = 0
+        while i < len(v.items):
+            if i > 0:
+                out.append(",")
+            write(v.items[i], out)
+            i = i + 1
+        out.append("]")
+    else:
+        out.append("{")
+        k: int = 0
+        while k < len(v.keys):
+            if k > 0:
+                out.append(",")
+            out.append(quote(v.keys[k]))
+            out.append(":")
+            write(v.vals[k], out)
+            k = k + 1
+        out.append("}")
+
+# 読みやすく整形して書く（2 文字の字下げ）
+def dumps_pretty(v: rc[Value]) -> str:
+    out: list[str] = []
+    write_pretty(v, out, 0)
+    return strings.join(out, "")
+
+def write_pretty(v: rc[Value], out: mut list[str], depth: int) -> None:
+    if v.kind == KIND_ARRAY:
+        if len(v.items) == 0:
+            out.append("[]")
+            return
+        out.append("[\n")
+        i: int = 0
+        while i < len(v.items):
+            if i > 0:
+                out.append(",\n")
+            out.append(strings.repeat("  ", depth + 1))
+            write_pretty(v.items[i], out, depth + 1)
+            i = i + 1
+        out.append("\n")
+        out.append(strings.repeat("  ", depth))
+        out.append("]")
+    elif v.kind == KIND_OBJECT:
+        if len(v.keys) == 0:
+            out.append("{}")
+            return
+        out.append("{\n")
+        k: int = 0
+        while k < len(v.keys):
+            if k > 0:
+                out.append(",\n")
+            out.append(strings.repeat("  ", depth + 1))
+            out.append(quote(v.keys[k]))
+            out.append(": ")
+            write_pretty(v.vals[k], out, depth + 1)
+            k = k + 1
+        out.append("\n")
+        out.append(strings.repeat("  ", depth))
+        out.append("}")
+    else:
+        write(v, out)

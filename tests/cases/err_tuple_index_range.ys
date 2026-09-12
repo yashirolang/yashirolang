@@ -1,0 +1,10 @@
+# ERROR: タプルの添字が範囲外です（5）
+# ERROR: 要素は 2 個です
+# 範囲はコンパイル時に分かる
+def f() -> (int, str):
+    return 1, "a"
+
+def main() -> int:
+    t: (int, str) = f()
+    print(str(t[5]))
+    return 0

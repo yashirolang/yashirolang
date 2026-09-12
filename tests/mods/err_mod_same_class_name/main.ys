@@ -1,0 +1,9 @@
+# ERROR: 型が一致しません
+# ERROR: 'b.Box' と 'a.Box' は名前が同じだけの別のクラスです
+# 「type_equal は定義の同一性で比べる」がここで効く（フィールドが同じでも別の型）
+import a
+import b
+
+def main() -> int:
+    x: a.Box = b.Box()
+    return 0

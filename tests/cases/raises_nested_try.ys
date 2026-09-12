@@ -1,0 +1,30 @@
+# OUTPUT: inner は素通し
+# OUTPUT: outer が捕まえた: 7
+# EXIT: 0
+# 内側の try が捕まえない型は、外側の try へ渡る
+class IOError:
+    message: str
+
+    def init(self, message: own str) -> None:
+        self.message = message
+
+class ParseError:
+    line: int
+
+    def init(self, line: int) -> None:
+        self.line = line
+
+def boom() -> int raises ParseError:
+    raise ParseError(7)
+
+def main() -> int:
+    try:
+        try:
+            print(str(boom()))
+        except IOError as e:
+            print("io: " + e.message)
+        print("ここは実行されない")
+    except ParseError as p:
+        print("inner は素通し")
+        print("outer が捕まえた: " + str(p.line))
+    return 0

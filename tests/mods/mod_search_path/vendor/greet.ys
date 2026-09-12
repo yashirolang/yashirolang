@@ -1,0 +1,4 @@
+import shout
+
+def hello() -> str:
+    return shout.say("hi from vendor")

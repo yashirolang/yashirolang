@@ -1,0 +1,4 @@
+# ERROR: 未定義の関数 'nope' です
+# ERROR: この関数は定義されていません
+def main() -> int:
+    return nope(1)

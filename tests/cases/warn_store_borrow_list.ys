@@ -1,0 +1,18 @@
+# STAGE0-ONLY: 所有権検査は C 版だけ
+# WARN: warning[E-BORROW-7]: 借用した値 'a.name' をリストに保存しています
+# OUTPUT: pen
+# EXIT: 0
+# フィールドから読んだ値を list に溜めるのも、所有者が 2 つになります。
+#   正しい書き方: copy(a.name) を入れる。
+class Item:
+    name: str
+
+    def init(self, name: own str) -> None:
+        self.name = name
+
+def main() -> int:
+    a: Item = Item("pen")
+    names: list[str] = []
+    names.append(a.name)
+    print(names[0])
+    return 0

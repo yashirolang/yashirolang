@@ -1,0 +1,23 @@
+# STAGE0-ONLY: 所有権検査は C 版だけ
+# WARN: warning[E-BORROW-7]: 借用した値 'xs[…]' をフィールドに保存しています
+# OUTPUT: 3
+# EXIT: 0
+# 所有しているリストから読んだ要素を、別のオブジェクトのフィールドに入れると
+# 所有者が 2 つになります。⚠️ **誤検出ではありません** — --drop を付けると
+# xs の drop と a の drop が同じ実体を 2 回解放してセグフォします。
+#   正しい書き方: 入れる値をその場で作る（a.next = Node(3)）。
+class Node:
+    v: int
+    next: Node | None
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+def main() -> int:
+    xs: list[Node] = [Node(3)]
+    a: Node = Node(0)
+    a.next = xs[0]
+    nxt: Node | None = a.next
+    if nxt is not None:
+        print(nxt.v)
+    return 0

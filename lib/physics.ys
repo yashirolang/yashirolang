@@ -1,0 +1,207 @@
+# physics — 物理定数と単位換算
+#
+# ★ 値は **CODATA 2018 の推奨値**です。2019 年の SI 改定で、光速・プランク定数・
+#   電気素量・ボルツマン定数・アボガドロ定数は**定義値**（測定値ではなく決められた
+#   数）になりました。定義値には「厳密」と書いてあります。
+#
+# ⚠️ 定数は関数で返します。グローバル変数の初期化式はリテラルだけで、
+#   計算（例：hbar = h / 2π）が書けないためです（言語仕様 6.2）。
+#
+# ⚠️ 単位は **SI** に統一します。混ざると事故になるので、換算は明示的に
+#   celsius_to_kelvin のような関数を通してください。
+
+import math
+
+# ══════════════════════════════════════════════════════════
+#  基礎物理定数（SI）
+# ══════════════════════════════════════════════════════════
+
+# 真空中の光速 [m/s]（厳密）
+def c() -> float:
+    return 299792458.0
+
+# プランク定数 [J·s]（厳密）
+def h() -> float:
+    return 6.62607015e-34
+
+# ディラック定数 ℏ = h / 2π [J·s]
+def hbar() -> float:
+    return h() / math.tau()
+
+# 電気素量 [C]（厳密）
+def elementary_charge() -> float:
+    return 1.602176634e-19
+
+# ボルツマン定数 [J/K]（厳密）
+def k_B() -> float:
+    return 1.380649e-23
+
+# アボガドロ定数 [1/mol]（厳密）
+def N_A() -> float:
+    return 6.02214076e23
+
+# 気体定数 R = N_A · k_B [J/(mol·K)]
+def R() -> float:
+    return N_A() * k_B()
+
+# 万有引力定数 [m³/(kg·s²)]
+# ⚠️ **測定値**で、相対不確かさは 2.2e-5 と基礎定数の中でも特に大きいものです
+def G() -> float:
+    return 6.67430e-11
+
+# 真空の透磁率 [N/A²]
+def mu_0() -> float:
+    return 1.25663706212e-6
+
+# 真空の誘電率 ε₀ = 1/(μ₀c²) [F/m]
+def epsilon_0() -> float:
+    return 1.0 / (mu_0() * c() * c())
+
+# クーロン定数 k = 1/(4πε₀) [N·m²/C²]
+def coulomb() -> float:
+    return 1.0 / (4.0 * math.pi() * epsilon_0())
+
+# 標準重力加速度 [m/s²]（定義値）
+def g_0() -> float:
+    return 9.80665
+
+# 標準大気圧 [Pa]（定義値）
+def atm() -> float:
+    return 101325.0
+
+# シュテファン＝ボルツマン定数 [W/(m²·K⁴)]
+def sigma_SB() -> float:
+    return 5.670374419e-8
+
+# 微細構造定数（無次元）
+def alpha() -> float:
+    return 7.2973525693e-3
+
+# リュードベリ定数 [1/m]
+def rydberg() -> float:
+    return 10973731.568160
+
+
+# ── 粒子の質量 [kg] ─────────────────────────────────────────
+
+def electron_mass() -> float:
+    return 9.1093837015e-31
+
+def proton_mass() -> float:
+    return 1.67262192369e-27
+
+def neutron_mass() -> float:
+    return 1.67492749804e-27
+
+# 統一原子質量単位 [kg]
+def atomic_mass() -> float:
+    return 1.66053906660e-27
+
+
+# ══════════════════════════════════════════════════════════
+#  単位の換算
+# ══════════════════════════════════════════════════════════
+
+# ── 温度 ────────────────────────────────────────────────────
+
+def celsius_to_kelvin(t: float) -> float:
+    return t + 273.15
+
+def kelvin_to_celsius(t: float) -> float:
+    return t - 273.15
+
+def fahrenheit_to_celsius(t: float) -> float:
+    return (t - 32.0) * 5.0 / 9.0
+
+def celsius_to_fahrenheit(t: float) -> float:
+    return t * 9.0 / 5.0 + 32.0
+
+
+# ── エネルギー ──────────────────────────────────────────────
+
+def ev_to_joule(e: float) -> float:
+    return e * elementary_charge()
+
+def joule_to_ev(e: float) -> float:
+    return e / elementary_charge()
+
+# 質量とエネルギーの等価 E = mc²
+def mass_to_energy(m: float) -> float:
+    return m * c() * c()
+
+def energy_to_mass(e: float) -> float:
+    return e / (c() * c())
+
+
+# ── 長さ・時間 ──────────────────────────────────────────────
+
+# 光年 [m]（ユリウス年 365.25 日で計算）
+def light_year() -> float:
+    return c() * 365.25 * 86400.0
+
+# 天文単位 [m]（定義値）
+def au() -> float:
+    return 149597870700.0
+
+# パーセク [m]
+def parsec() -> float:
+    return au() * 648000.0 / math.pi()
+
+
+# ══════════════════════════════════════════════════════════
+#  よく使う関係式
+# ══════════════════════════════════════════════════════════
+#
+# ⚠️ ここに置くのは「定数を組み合わせるもの」だけです。
+#   f = m·a のような 1 行で書ける式は、使う側で書いてください。
+
+# ローレンツ因子 γ = 1/√(1 - v²/c²)
+# ⚠️ v ≥ c は物理的にありえないので panic します
+def lorentz_factor(v: float) -> float:
+    b: float = v / c()
+    if math.fabs(b) >= 1.0:
+        panic("physics.lorentz_factor: 速さが光速以上です")
+    return 1.0 / math.sqrt(1.0 - b * b)
+
+# 相対論的な運動エネルギー [J]
+def relativistic_ke(m: float, v: float) -> float:
+    return (lorentz_factor(v) - 1.0) * m * c() * c()
+
+# ド・ブロイ波長 λ = h / p [m]
+def de_broglie(p: float) -> float:
+    if p == 0.0:
+        panic("physics.de_broglie: 運動量が 0 です")
+    return h() / p
+
+# 黒体の放射発散度 j = σT⁴ [W/m²]
+def blackbody_flux(t_kelvin: float) -> float:
+    t2: float = t_kelvin * t_kelvin
+    return sigma_SB() * t2 * t2
+
+# 光子のエネルギー E = hc/λ [J]
+def photon_energy(wavelength: float) -> float:
+    if wavelength <= 0.0:
+        panic("physics.photon_energy: 波長は正の数です")
+    return h() * c() / wavelength
+
+# 2 体の万有引力 [N]
+def gravity(m1: float, m2: float, r: float) -> float:
+    if r <= 0.0:
+        panic("physics.gravity: 距離は正の数です")
+    return G() * m1 * m2 / (r * r)
+
+# 円軌道の速さ [m/s]（質量 m の天体のまわり、半径 r）
+def orbital_velocity(m: float, r: float) -> float:
+    if r <= 0.0:
+        panic("physics.orbital_velocity: 半径は正の数です")
+    return math.sqrt(G() * m / r)
+
+# 脱出速度 [m/s]
+def escape_velocity(m: float, r: float) -> float:
+    if r <= 0.0:
+        panic("physics.escape_velocity: 半径は正の数です")
+    return math.sqrt(2.0 * G() * m / r)
+
+# シュワルツシルト半径 [m]
+def schwarzschild_radius(m: float) -> float:
+    return 2.0 * G() * m / (c() * c())

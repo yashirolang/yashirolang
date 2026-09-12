@@ -1,0 +1,202 @@
+# complex — 複素数
+#
+# ★ **言語は変えていません。** 0.7.0 で入った演算子の多重定義
+#   （`__add__` など）だけで書けています。`z1 * z2 + z3` がそのまま書けます。
+#
+# ⚠️ **複素数はオブジェクトです**（`int` / `float` と違って「値」ではありません）。
+#   演算のたびに 1 つ確保します。内側ループで何万回も回すところでは、
+#   実部と虚部を `float` 2 本で持つほうが速くなります。
+#
+# ⚠️ **スカラー倍は `scale(z, k)`** です。`z * 2.0` とは書けません
+#   （多重定義は左辺の型だけで決まり、引数の型では選び分けないため）。
+
+import math
+
+class Complex:
+    re: float
+    im: float
+
+    def init(self, re: float, im: float) -> None:
+        self.re = re
+        self.im = im
+
+    # ── 演算子 ──────────────────────────────────────
+
+    def __add__(self, o: Complex) -> Complex:
+        return Complex(self.re + o.re, self.im + o.im)
+
+    def __sub__(self, o: Complex) -> Complex:
+        return Complex(self.re - o.re, self.im - o.im)
+
+    def __mul__(self, o: Complex) -> Complex:
+        return Complex(self.re * o.re - self.im * o.im,
+                       self.re * o.im + self.im * o.re)
+
+    # ⚠️ 0 で割ると **panic します**（float の割り算と同じです）。
+    #   絶対値が 0 かどうかは mag2(z) で先に確かめてください。
+    def __truediv__(self, o: Complex) -> Complex:
+        d: float = o.re * o.re + o.im * o.im
+        if d == 0.0:
+            panic("complex: 0 で割ろうとしました")
+        return Complex((self.re * o.re + self.im * o.im) / d,
+                       (self.im * o.re - self.re * o.im) / d)
+
+    def __neg__(self) -> Complex:
+        return Complex(-self.re, -self.im)
+
+    # ⚠️ float の比較なので、誤差は考慮しません（近さを見るなら isclose）。
+    def __eq__(self, o: Complex) -> bool:
+        return self.re == o.re and self.im == o.im
+
+    # "3.0+4.0i" の形にします（虚部が負なら "3.0-4.0i"）。
+    def show(self) -> str:
+        if self.im < 0.0:
+            return str(self.re) + "-" + str(-self.im) + "i"
+        return str(self.re) + "+" + str(self.im) + "i"
+
+
+# ── 作る ────────────────────────────────────────────────────
+
+# 実部と虚部から（Python の complex(re, im)）
+def rect(re: float, im: float) -> Complex:
+    return Complex(re, im)
+
+# 実数から（虚部 0）
+def real(x: float) -> Complex:
+    return Complex(x, 0.0)
+
+# 大きさと偏角から（Python の cmath.rect）
+def polar(r: float, theta: float) -> Complex:
+    return Complex(r * math.cos(theta), r * math.sin(theta))
+
+def zero() -> Complex:
+    return Complex(0.0, 0.0)
+
+def one() -> Complex:
+    return Complex(1.0, 0.0)
+
+# 虚数単位
+def i() -> Complex:
+    return Complex(0.0, 1.0)
+
+def copy_of(z: Complex) -> Complex:
+    return Complex(z.re, z.im)
+
+
+# ── 基本 ────────────────────────────────────────────────────
+
+# 大きさ |z|。⚠️ hypot なので、途中で桁があふれません。
+def mag(z: Complex) -> float:
+    return math.hypot(z.re, z.im)
+
+# |z|²（平方根を取らないぶん速く、誤差も入りません）
+def mag2(z: Complex) -> float:
+    return z.re * z.re + z.im * z.im
+
+# 偏角（-π 〜 π）。Python の cmath.phase
+def phase(z: Complex) -> float:
+    return math.atan2(z.im, z.re)
+
+# 共役
+def conj(z: Complex) -> Complex:
+    return Complex(z.re, -z.im)
+
+# スカラー倍。⚠️ z * 2.0 とは書けないので、これを使ってください
+def scale(z: Complex, k: float) -> Complex:
+    return Complex(z.re * k, z.im * k)
+
+def is_real(z: Complex) -> bool:
+    return z.im == 0.0
+
+def isclose(a: Complex, b: Complex, tol: float) -> bool:
+    return mag(a - b) <= tol
+
+
+# ── 初等関数 ────────────────────────────────────────────────
+#
+# ★ 名前は Python の cmath に合わせています（`complex.exp(z)` のように
+#   モジュール名が付くので、`math.exp` とぶつかりません）。
+
+# e^z = e^x (cos y + i sin y)
+def exp(z: Complex) -> Complex:
+    r: float = math.exp(z.re)
+    return Complex(r * math.cos(z.im), r * math.sin(z.im))
+
+# 主値の log（虚部は -π 〜 π）
+def log(z: Complex) -> Complex:
+    return Complex(math.log(mag(z)), phase(z))
+
+# 主値の平方根
+def sqrt(z: Complex) -> Complex:
+    if z.re == 0.0 and z.im == 0.0:
+        return zero()
+    r: float = mag(z)
+    a: float = math.sqrt((r + z.re) / 2.0)
+    b: float = math.sqrt((r - z.re) / 2.0)
+    if z.im < 0.0:
+        b = -b
+    return Complex(a, b)
+
+# z^w = exp(w · log z)。⚠️ 0^0 は 1 とします
+def pow(z: Complex, w: Complex) -> Complex:
+    if z.re == 0.0 and z.im == 0.0:
+        if w.re == 0.0 and w.im == 0.0:
+            return one()
+        return zero()
+    return exp(w * log(z))
+
+# 整数乗（2 乗ずつ。log 関数を通らないので誤差が入りません）
+def powi(z: Complex, n: int) -> Complex:
+    if n < 0:
+        return one() / powi(z, -n)
+    acc: Complex = one()
+    base: Complex = copy_of(z)
+    k: int = n
+    while k > 0:
+        if k % 2 == 1:
+            acc = acc * base
+        base = base * base
+        k = k // 2
+    return acc
+
+def sin(z: Complex) -> Complex:
+    return Complex(math.sin(z.re) * math.cosh(z.im),
+                   math.cos(z.re) * math.sinh(z.im))
+
+def cos(z: Complex) -> Complex:
+    return Complex(math.cos(z.re) * math.cosh(z.im),
+                   -math.sin(z.re) * math.sinh(z.im))
+
+def tan(z: Complex) -> Complex:
+    return sin(z) / cos(z)
+
+
+# ── 並び（list[Complex]）────────────────────────────────────
+
+# 実数の並びを複素数の並びに（虚部 0）
+def from_reals(xs: list[float]) -> list[Complex]:
+    out: list[Complex] = []
+    for x in xs:
+        out.append(Complex(x, 0.0))
+    return out
+
+# 実部だけを取り出す
+def reals(zs: list[Complex]) -> list[float]:
+    out: list[float] = []
+    for z in zs:
+        out.append(z.re)
+    return out
+
+# 虚部だけを取り出す
+def imags(zs: list[Complex]) -> list[float]:
+    out: list[float] = []
+    for z in zs:
+        out.append(z.im)
+    return out
+
+# 大きさの並び（スペクトルを見るときに使います）
+def mags(zs: list[Complex]) -> list[float]:
+    out: list[float] = []
+    for z in zs:
+        out.append(mag(z))
+    return out

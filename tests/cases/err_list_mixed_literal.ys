@@ -1,0 +1,5 @@
+# ERROR: リストの要素の型がそろっていません（第 2 要素）
+# ERROR: 最初の要素は 'int' 型です
+def main() -> int:
+    xs: list[int] = [1, "two"]
+    return 0

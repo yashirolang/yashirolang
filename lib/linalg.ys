@@ -1,0 +1,788 @@
+# linalg — ベクトルと行列（線形代数）
+#
+# ★ **完全に自作です。** 既存の数値計算ライブラリのコードは使っていません。
+#   中身はどれも教科書どおりの手順（ガウスの消去法・部分ピボット選択など）です。
+#
+# ★ ベクトルは `list[float]` をそのまま使います。専用の型を作りません。
+#   言語に既にある型で足りるものに、新しい型を足さないためです。
+#   行列だけは「行数・列数」を持たせる必要があるのでクラスにします。
+#
+# ⚠️ **形が合わないときは panic します。** 行列の積で列数と行数が食い違うのは
+#   実行時に回復できる状況ではなく、書いた人の間違いだからです
+#   （添字の範囲外と同じ扱い。言語仕様 8 節）。
+#
+# ⚠️ 添字は 0 から始まります。行列は **行優先**（row-major）で持ちます。
+
+import math
+import strings
+
+# ══════════════════════════════════════════════════════════
+#  ベクトル（list[float]）
+# ══════════════════════════════════════════════════════════
+
+# ── 作る ────────────────────────────────────────────────────
+
+def zeros(n: int) -> list[float]:
+    v: list[float] = []
+    i: int = 0
+    while i < n:
+        v.append(0.0)
+        i = i + 1
+    return v
+
+def full(n: int, x: float) -> list[float]:
+    v: list[float] = []
+    i: int = 0
+    while i < n:
+        v.append(x)
+        i = i + 1
+    return v
+
+def ones(n: int) -> list[float]:
+    return full(n, 1.0)
+
+# a から b まで n 個（両端を含む）
+def linspace(a: float, b: float, n: int) -> list[float]:
+    if n < 1:
+        panic("linalg.linspace: 個数は 1 以上です")
+    if n == 1:
+        return full(1, a)
+    v: list[float] = []
+    i: int = 0
+    while i < n:
+        v.append(a + (b - a) * float(i) / float(n - 1))
+        i = i + 1
+    return v
+
+# a から b の手前まで step 刻み
+def arange(a: float, b: float, step: float) -> list[float]:
+    if step == 0.0:
+        panic("linalg.arange: 刻みが 0 です")
+    v: list[float] = []
+    x: float = a
+    if step > 0.0:
+        while x < b:
+            v.append(x)
+            x = x + step
+        return v
+    while x > b:
+        v.append(x)
+        x = x + step
+    return v
+
+def vcopy(a: list[float]) -> list[float]:
+    v: list[float] = []
+    for x in a:
+        v.append(x)
+    return v
+
+
+# ── 要素ごとの計算 ──────────────────────────────────────────
+
+# ⚠️ 長さが違えば panic。黙って短いほうに合わせると、間違いが
+#   「動くが結果がおかしい」形で残ってしまいます。
+# ⚠️ ここは Matrix.check と違い、**切り出していません**。
+#   same_len は add / sub / mul の**ループの外**で 1 回呼ばれるだけなので、
+#   インライン化されてもされなくても速さは変わりません。
+#   実際に測ったら、切り出したほうが少し遅くなりました（0.31 → 0.34 秒）。
+def same_len(a: list[float], b: list[float], who: str) -> None:
+    if len(a) != len(b):
+        panic("linalg." + who + ": 長さが違います（" +
+              str(len(a)) + " と " + str(len(b)) + "）")
+
+def add(a: list[float], b: list[float]) -> list[float]:
+    same_len(a, b, "add")
+    v: list[float] = []
+    i: int = 0
+    while i < len(a):
+        v.append(a[i] + b[i])
+        i = i + 1
+    return v
+
+def sub(a: list[float], b: list[float]) -> list[float]:
+    same_len(a, b, "sub")
+    v: list[float] = []
+    i: int = 0
+    while i < len(a):
+        v.append(a[i] - b[i])
+        i = i + 1
+    return v
+
+# 要素ごとの積（アダマール積）。内積は dot です
+def mul(a: list[float], b: list[float]) -> list[float]:
+    same_len(a, b, "mul")
+    v: list[float] = []
+    i: int = 0
+    while i < len(a):
+        v.append(a[i] * b[i])
+        i = i + 1
+    return v
+
+# ⚠️ 0 で割ると実行時エラーです（float の / が止まるようになったため）。
+#   ここで**何番目の要素か**を言うために、先に自分で見ています。
+#   ランタイムの "float division by zero" だけでは場所が分かりません。
+def div(a: list[float], b: list[float]) -> list[float]:
+    same_len(a, b, "div")
+    v: list[float] = []
+    i: int = 0
+    while i < len(a):
+        if b[i] == 0.0:
+            panic("linalg.div: " + str(i) + " 番目の要素が 0 です（0 で割れません）")
+        v.append(a[i] / b[i])
+        i = i + 1
+    return v
+
+def scale(a: list[float], k: float) -> list[float]:
+    v: list[float] = []
+    for x in a:
+        v.append(x * k)
+    return v
+
+def offset(a: list[float], k: float) -> list[float]:
+    v: list[float] = []
+    for x in a:
+        v.append(x + k)
+    return v
+
+def neg(a: list[float]) -> list[float]:
+    return scale(a, -1.0)
+
+def vabs(a: list[float]) -> list[float]:
+    v: list[float] = []
+    for x in a:
+        v.append(math.fabs(x))
+    return v
+
+
+# ── まとめる ────────────────────────────────────────────────
+
+def vsum(a: list[float]) -> float:
+    s: float = 0.0
+    for x in a:
+        s = s + x
+    return s
+
+def vprod(a: list[float]) -> float:
+    s: float = 1.0
+    for x in a:
+        s = s * x
+    return s
+
+def vmin(a: list[float]) -> float:
+    if len(a) == 0:
+        panic("linalg.vmin: 空のベクトルです")
+    m: float = a[0]
+    for x in a:
+        m = math.fmin(m, x)
+    return m
+
+def vmax(a: list[float]) -> float:
+    if len(a) == 0:
+        panic("linalg.vmax: 空のベクトルです")
+    m: float = a[0]
+    for x in a:
+        m = math.fmax(m, x)
+    return m
+
+# 最小・最大の**位置**
+def argmin(a: list[float]) -> int:
+    if len(a) == 0:
+        panic("linalg.argmin: 空のベクトルです")
+    k: int = 0
+    i: int = 1
+    while i < len(a):
+        if a[i] < a[k]:
+            k = i
+        i = i + 1
+    return k
+
+def argmax(a: list[float]) -> int:
+    if len(a) == 0:
+        panic("linalg.argmax: 空のベクトルです")
+    k: int = 0
+    i: int = 1
+    while i < len(a):
+        if a[i] > a[k]:
+            k = i
+        i = i + 1
+    return k
+
+
+# ── 内積とノルム ────────────────────────────────────────────
+
+def dot(a: list[float], b: list[float]) -> float:
+    same_len(a, b, "dot")
+    s: float = 0.0
+    i: int = 0
+    while i < len(a):
+        s = s + a[i] * b[i]
+        i = i + 1
+    return s
+
+# ユークリッドノルム（L2）
+# ⚠️ 途中で溢れないよう、最大成分で割ってから足します
+def norm(a: list[float]) -> float:
+    m: float = 0.0
+    for x in a:
+        m = math.fmax(m, math.fabs(x))
+    if m == 0.0:
+        return 0.0
+    s: float = 0.0
+    for x in a:
+        r: float = x / m
+        s = s + r * r
+    return m * math.sqrt(s)
+
+def norm1(a: list[float]) -> float:
+    s: float = 0.0
+    for x in a:
+        s = s + math.fabs(x)
+    return s
+
+def norm_inf(a: list[float]) -> float:
+    m: float = 0.0
+    for x in a:
+        m = math.fmax(m, math.fabs(x))
+    return m
+
+def dist(a: list[float], b: list[float]) -> float:
+    return norm(sub(a, b))
+
+# 長さ 1 に揃える
+def normalize(a: list[float]) -> list[float]:
+    n: float = norm(a)
+    if n == 0.0:
+        panic("linalg.normalize: 零ベクトルは正規化できません")
+    return scale(a, 1.0 / n)
+
+# 3 次元の外積
+def cross(a: list[float], b: list[float]) -> list[float]:
+    if len(a) != 3 or len(b) != 3:
+        panic("linalg.cross: 3 次元ベクトルにだけ定義されます")
+    v: list[float] = []
+    v.append(a[1] * b[2] - a[2] * b[1])
+    v.append(a[2] * b[0] - a[0] * b[2])
+    v.append(a[0] * b[1] - a[1] * b[0])
+    return v
+
+# 2 つのベクトルのなす角（ラジアン）
+def angle(a: list[float], b: list[float]) -> float:
+    d: float = norm(a) * norm(b)
+    if d == 0.0:
+        panic("linalg.angle: 零ベクトルとの角度は定義されません")
+    c: float = dot(a, b) / d
+    # ⚠️ 丸めで |c| がわずかに 1 を超えることがあるので挟みます
+    c = math.fmax(-1.0, math.fmin(1.0, c))
+    return math.acos(c)
+
+
+# ══════════════════════════════════════════════════════════
+#  行列
+# ══════════════════════════════════════════════════════════
+
+# ★ 中身は 1 本の list[float] です（行優先）。二重の list にしないのは、
+#   行ごとに確保すると連続していないぶん遅く、転置なども書きにくいためです。
+#     (i, j) の位置 = i * cols + j
+class Matrix:
+    rows: int
+    cols: int
+    data: list[float]
+
+    def init(self, rows: int, cols: int, data: own list[float]) -> None:
+        if rows < 0 or cols < 0:
+            panic("linalg.Matrix: 行数・列数は 0 以上です")
+        self.rows = rows
+        self.cols = cols
+        self.data = data
+
+    def get(self, i: int, j: int) -> float:
+        self.check(i, j)
+        return self.data[i * self.cols + j]
+
+    def set(mut self, i: int, j: int, v: float) -> None:
+        self.check(i, j)
+        self.data[i * self.cols + j] = v
+
+    def check(self, i: int, j: int) -> None:
+        if i < 0 or i >= self.rows or j < 0 or j >= self.cols:
+            self.index_fail(i, j)
+
+    # ★ **メッセージの組み立てはここに切り出してあります。**
+    #   check の中に直接書くと、連結と str() の呼び出し 6 回ぶんが
+    #   check の大きさとして数えられ、check が get / set に
+    #   インライン化されなくなります。get / set は行列積の内側ループから
+    #   1 周に 3 回呼ばれるので、これだけで **2.4 倍** 遅くなりました。
+    #   ⚠️ 検査そのものは減らしていません。分けただけです。
+    def index_fail(self, i: int, j: int) -> None:
+        panic("linalg.Matrix: 添字が範囲外です（" + str(i) + ", " +
+              str(j) + "）")
+
+    # i 行目を取り出す（複製を返します）
+    def row(self, i: int) -> list[float]:
+        v: list[float] = []
+        j: int = 0
+        while j < self.cols:
+            v.append(self.get(i, j))
+            j = j + 1
+        return v
+
+    # j 列目を取り出す
+    def col(self, j: int) -> list[float]:
+        v: list[float] = []
+        i: int = 0
+        while i < self.rows:
+            v.append(self.get(i, j))
+            i = i + 1
+        return v
+
+    def size(self) -> int:
+        return self.rows * self.cols
+
+    def is_square(self) -> bool:
+        return self.rows == self.cols
+
+    # ── 演算子 ────────────────────────────────────────
+    #
+    # ★ これで行列の式がそのまま読めます。
+    #
+    #     c = a * b + d          （前は madd(matmul(a, b), d)）
+    #     print(str(m[i, j]))    （前は m.get(i, j)）
+    #
+    # ⚠️ **`*` は行列の積です（numpy とは違います）。**
+    #   numpy の `a * b` は要素ごとの積、`a @ b` が行列の積ですが、
+    #   本言語に `@` はありません。数学の書き方に合わせて `*` を
+    #   行列の積にしました。**要素ごとの積は `mmul(a, b)`** です。
+    #
+    # ⚠️ **スカラー倍は `mscale(a, k)`** です。`a * 2.0` とは書けません
+    #   （多重定義は左辺の型だけで決まり、引数の型では選び分けないため）。
+
+    def __add__(self, o: Matrix) -> Matrix:
+        return madd(self, o)
+
+    def __sub__(self, o: Matrix) -> Matrix:
+        return msub(self, o)
+
+    # ⚠️ 行列の積です（要素ごとの積は mmul）
+    def __mul__(self, o: Matrix) -> Matrix:
+        return matmul(self, o)
+
+    def __neg__(self) -> Matrix:
+        return mneg(self)
+
+    # 形と全要素が等しいか。⚠️ float の比較なので、誤差は考慮しません
+    #   （近いかを見たいときは msub してノルムを取ってください）。
+    def __eq__(self, o: Matrix) -> bool:
+        if self.rows != o.rows or self.cols != o.cols:
+            return False
+        i: int = 0
+        while i < self.size():
+            if self.data[i] != o.data[i]:
+                return False
+            i = i + 1
+        return True
+
+    # m[i, j] / m[i, j] = v
+    def __getitem__(self, i: int, j: int) -> float:
+        return self.get(i, j)
+
+    def __setitem__(mut self, i: int, j: int, v: float) -> None:
+        self.set(i, j, v)
+
+
+# ── 作る ────────────────────────────────────────────────────
+
+def mzeros(rows: int, cols: int) -> Matrix:
+    return Matrix(rows, cols, zeros(rows * cols))
+
+def mfull(rows: int, cols: int, x: float) -> Matrix:
+    return Matrix(rows, cols, full(rows * cols, x))
+
+# 単位行列
+def identity(n: int) -> Matrix:
+    m: Matrix = mzeros(n, n)
+    i: int = 0
+    while i < n:
+        m.set(i, i, 1.0)
+        i = i + 1
+    return m
+
+# 行の並びから作る
+def from_rows(rows: list[list[float]]) -> Matrix:
+    if len(rows) == 0:
+        return Matrix(0, 0, zeros(0))
+    c: int = len(rows[0])
+    data: list[float] = []
+    for r in rows:
+        if len(r) != c:
+            panic("linalg.from_rows: 行ごとに列数が違います")
+        for x in r:
+            data.append(x)
+    return Matrix(len(rows), c, data)
+
+# 対角成分から作る
+def diag(d: list[float]) -> Matrix:
+    n: int = len(d)
+    m: Matrix = mzeros(n, n)
+    i: int = 0
+    while i < n:
+        m.set(i, i, d[i])
+        i = i + 1
+    return m
+
+def mcopy(a: Matrix) -> Matrix:
+    return Matrix(a.rows, a.cols, vcopy(a.data))
+
+
+# ── 形の検査 ────────────────────────────────────────────────
+
+def same_shape(a: Matrix, b: Matrix, who: str) -> None:
+    if a.rows != b.rows or a.cols != b.cols:
+        panic("linalg." + who + ": 形が違います（" +
+              shape_str(a) + " と " + shape_str(b) + "）")
+
+def shape_str(a: Matrix) -> str:
+    return str(a.rows) + "x" + str(a.cols)
+
+def need_square(a: Matrix, who: str) -> None:
+    if not a.is_square():
+        panic("linalg." + who + ": 正方行列が必要です（" + shape_str(a) + "）")
+
+
+# ── 要素ごとの計算 ──────────────────────────────────────────
+
+def madd(a: Matrix, b: Matrix) -> Matrix:
+    same_shape(a, b, "madd")
+    return Matrix(a.rows, a.cols, add(a.data, b.data))
+
+def msub(a: Matrix, b: Matrix) -> Matrix:
+    same_shape(a, b, "msub")
+    return Matrix(a.rows, a.cols, sub(a.data, b.data))
+
+# 要素ごとの積。行列の積は matmul です
+def mmul(a: Matrix, b: Matrix) -> Matrix:
+    same_shape(a, b, "mmul")
+    return Matrix(a.rows, a.cols, mul(a.data, b.data))
+
+def mscale(a: Matrix, k: float) -> Matrix:
+    return Matrix(a.rows, a.cols, scale(a.data, k))
+
+def mneg(a: Matrix) -> Matrix:
+    return mscale(a, -1.0)
+
+
+# ── 行列の積・転置 ──────────────────────────────────────────
+
+# 行列の積（(n×m)·(m×p) → (n×p)）
+def matmul(a: Matrix, b: Matrix) -> Matrix:
+    if a.cols != b.rows:
+        panic("linalg.matmul: 形が合いません（" + shape_str(a) + " と " +
+              shape_str(b) + "）")
+    c: Matrix = mzeros(a.rows, b.cols)
+    i: int = 0
+    while i < a.rows:
+        k: int = 0
+        while k < a.cols:
+            # ★ 内側を j にすると b の行を順に舐めるので、
+            #   行優先の並びと相性がよくなります（i-k-j の順）
+            aik: float = a.get(i, k)
+            if aik != 0.0:
+                j: int = 0
+                while j < b.cols:
+                    c.set(i, j, c.get(i, j) + aik * b.get(k, j))
+                    j = j + 1
+            k = k + 1
+        i = i + 1
+    return c
+
+# 行列 × ベクトル
+def matvec(a: Matrix, v: list[float]) -> list[float]:
+    if a.cols != len(v):
+        panic("linalg.matvec: 形が合いません（" + shape_str(a) + " と 長さ " +
+              str(len(v)) + "）")
+    out: list[float] = []
+    i: int = 0
+    while i < a.rows:
+        s: float = 0.0
+        j: int = 0
+        while j < a.cols:
+            s = s + a.get(i, j) * v[j]
+            j = j + 1
+        out.append(s)
+        i = i + 1
+    return out
+
+def transpose(a: Matrix) -> Matrix:
+    t: Matrix = mzeros(a.cols, a.rows)
+    i: int = 0
+    while i < a.rows:
+        j: int = 0
+        while j < a.cols:
+            t.set(j, i, a.get(i, j))
+            j = j + 1
+        i = i + 1
+    return t
+
+# 対角成分の和
+def trace(a: Matrix) -> float:
+    need_square(a, "trace")
+    s: float = 0.0
+    i: int = 0
+    while i < a.rows:
+        s = s + a.get(i, i)
+        i = i + 1
+    return s
+
+# 行列の冪（整数乗）
+def mpow(a: Matrix, n: int) -> Matrix:
+    need_square(a, "mpow")
+    if n < 0:
+        panic("linalg.mpow: 負の冪には inverse を使ってください")
+    r: Matrix = identity(a.rows)
+    base: Matrix = mcopy(a)
+    k: int = n
+    while k > 0:
+        if k % 2 == 1:
+            r = matmul(r, base)
+        base = matmul(base, base)
+        k = k // 2
+    return r
+
+
+# ── 連立一次方程式・行列式・逆行列 ──────────────────────────
+#
+# ★ どれも **ガウスの消去法（部分ピボット選択つき）** で解きます。
+#
+#   🤔 なぜピボット選択が要るのか
+#     消去のときに「割る数」が 0 だと計算できません。0 でなくても、
+#     **極端に小さい数で割ると誤差が一気に膨らみます**。そこで各段で
+#     「その列でいちばん絶対値の大きい行」を選んで先頭に持ってきます。
+#     これだけで、教科書の素朴な消去法より桁違いに安定します。
+
+# 消去に使う作業用の行入れ替え
+def swap_rows(a: mut Matrix, i: int, j: int) -> None:
+    if i == j:
+        return
+    k: int = 0
+    while k < a.cols:
+        t: float = a.get(i, k)
+        a.set(i, k, a.get(j, k))
+        a.set(j, k, t)
+        k = k + 1
+
+# 行列式
+def det(a: Matrix) -> float:
+    need_square(a, "det")
+    n: int = a.rows
+    if n == 0:
+        return 1.0
+    m: Matrix = mcopy(a)
+    sign: float = 1.0
+
+    c: int = 0
+    while c < n:
+        # ピボット（この列で絶対値最大の行）を探す
+        p: int = c
+        r: int = c + 1
+        while r < n:
+            if math.fabs(m.get(r, c)) > math.fabs(m.get(p, c)):
+                p = r
+            r = r + 1
+        if m.get(p, c) == 0.0:
+            return 0.0                # 1 列まるごと 0 → 行列式は 0
+        if p != c:
+            swap_rows(m, p, c)
+            sign = -sign
+
+        piv: float = m.get(c, c)
+        r = c + 1
+        while r < n:
+            f: float = m.get(r, c) / piv
+            if f != 0.0:
+                k: int = c
+                while k < n:
+                    m.set(r, k, m.get(r, k) - f * m.get(c, k))
+                    k = k + 1
+            r = r + 1
+        c = c + 1
+
+    # 上三角になったので、対角の積が行列式
+    d: float = sign
+    i: int = 0
+    while i < n:
+        d = d * m.get(i, i)
+        i = i + 1
+    return d
+
+# A·x = b を解く
+def solve(a: Matrix, b: list[float]) -> list[float]:
+    need_square(a, "solve")
+    n: int = a.rows
+    if len(b) != n:
+        panic("linalg.solve: 右辺の長さが合いません（" + str(len(b)) +
+              " ではなく " + str(n) + "）")
+
+    # ★ [A | b] の拡大行列を作って前進消去 → 後退代入
+    m: Matrix = mzeros(n, n + 1)
+    i: int = 0
+    while i < n:
+        j: int = 0
+        while j < n:
+            m.set(i, j, a.get(i, j))
+            j = j + 1
+        m.set(i, n, b[i])
+        i = i + 1
+
+    c: int = 0
+    while c < n:
+        p: int = c
+        r: int = c + 1
+        while r < n:
+            if math.fabs(m.get(r, c)) > math.fabs(m.get(p, c)):
+                p = r
+            r = r + 1
+        if math.fabs(m.get(p, c)) < 1.0e-300:
+            panic("linalg.solve: 特異行列です（解が一意に定まりません）")
+        swap_rows(m, p, c)
+
+        piv: float = m.get(c, c)
+        r = c + 1
+        while r < n:
+            f: float = m.get(r, c) / piv
+            if f != 0.0:
+                k: int = c
+                while k <= n:
+                    m.set(r, k, m.get(r, k) - f * m.get(c, k))
+                    k = k + 1
+            r = r + 1
+        c = c + 1
+
+    # 後退代入
+    x: list[float] = zeros(n)
+    i = n - 1
+    while i >= 0:
+        s: float = m.get(i, n)
+        j: int = i + 1
+        while j < n:
+            s = s - m.get(i, j) * x[j]
+            j = j + 1
+        x[i] = s / m.get(i, i)
+        i = i - 1
+    return x
+
+# 逆行列（ガウス・ジョルダン法）
+#
+# ⚠️ **連立方程式を解くだけなら solve を使ってください。**
+#   逆行列を作ってから掛けるのは、遅いうえに誤差も大きくなります。
+def inverse(a: Matrix) -> Matrix:
+    need_square(a, "inverse")
+    n: int = a.rows
+
+    # [A | I] を作る
+    m: Matrix = mzeros(n, 2 * n)
+    i: int = 0
+    while i < n:
+        j: int = 0
+        while j < n:
+            m.set(i, j, a.get(i, j))
+            j = j + 1
+        m.set(i, n + i, 1.0)
+        i = i + 1
+
+    c: int = 0
+    while c < n:
+        p: int = c
+        r: int = c + 1
+        while r < n:
+            if math.fabs(m.get(r, c)) > math.fabs(m.get(p, c)):
+                p = r
+            r = r + 1
+        if math.fabs(m.get(p, c)) < 1.0e-300:
+            panic("linalg.inverse: 特異行列です（逆行列がありません）")
+        swap_rows(m, p, c)
+
+        # ピボット行を 1 に正規化
+        piv: float = m.get(c, c)
+        k: int = 0
+        while k < 2 * n:
+            m.set(c, k, m.get(c, k) / piv)
+            k = k + 1
+
+        # ★ ジョルダン法：上も下も消します（消去のあと後退代入が要らない）
+        r = 0
+        while r < n:
+            if r != c:
+                f: float = m.get(r, c)
+                if f != 0.0:
+                    k = 0
+                    while k < 2 * n:
+                        m.set(r, k, m.get(r, k) - f * m.get(c, k))
+                        k = k + 1
+            r = r + 1
+        c = c + 1
+
+    # 右半分が逆行列
+    inv: Matrix = mzeros(n, n)
+    i = 0
+    while i < n:
+        j: int = 0
+        while j < n:
+            inv.set(i, j, m.get(i, n + j))
+            j = j + 1
+        i = i + 1
+    return inv
+
+# 階数（ランク）
+def rank(a: Matrix) -> int:
+    m: Matrix = mcopy(a)
+    n: int = m.rows
+    cols: int = m.cols
+    r: int = 0
+    c: int = 0
+    while r < n and c < cols:
+        p: int = r
+        k: int = r + 1
+        while k < n:
+            if math.fabs(m.get(k, c)) > math.fabs(m.get(p, c)):
+                p = k
+            k = k + 1
+        if math.fabs(m.get(p, c)) < 1.0e-12:
+            c = c + 1
+            continue
+        swap_rows(m, p, r)
+        piv: float = m.get(r, c)
+        k = r + 1
+        while k < n:
+            f: float = m.get(k, c) / piv
+            j: int = c
+            while j < cols:
+                m.set(k, j, m.get(k, j) - f * m.get(r, j))
+                j = j + 1
+            k = k + 1
+        r = r + 1
+        c = c + 1
+    return r
+
+
+# ── 表示 ────────────────────────────────────────────────────
+
+# 1 行の文字列にする（[1, 2, 3] の形）
+def vec_str(v: list[float]) -> str:
+    parts: list[str] = []
+    for x in v:
+        parts.append(str(x))
+    return "[" + strings.join(parts, ", ") + "]"
+
+# 行ごとに改行した文字列にする
+def mat_str(a: Matrix) -> str:
+    lines: list[str] = []
+    i: int = 0
+    while i < a.rows:
+        lines.append(vec_str(a.row(i)))
+        i = i + 1
+    return strings.join(lines, "\n")
+
+def vprint(v: list[float]) -> None:
+    print(vec_str(v))
+
+def mprint(a: Matrix) -> None:
+    print(mat_str(a))

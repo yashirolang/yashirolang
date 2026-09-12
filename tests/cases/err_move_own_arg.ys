@@ -1,0 +1,12 @@
+# STAGE0-ONLY: 所有権検査は C 版だけ
+# FLAGS: --deny-move
+# ERROR: error[E-MOVE-1]: 移動済みの値 'name' を使っています
+# ERROR: 'name' はここで移動しました
+# own 引数へ渡すと移動する（既定の借用では移動しない）
+def take(s: own str) -> int:
+    return len(s)
+
+def main() -> int:
+    name: str = "world"
+    n: int = take(name)
+    return n + len(name)

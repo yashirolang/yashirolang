@@ -1,0 +1,425 @@
+# main — パッケージマネージャの入口
+#
+# ★ コマンド名をここに書かないこと。表示は必ず langinfo.pm() から取ります。
+#   下の <pm> は、実際には改名できるコマンド名（langinfo.pm()）に置き換わります。
+#
+#   <pm> init [名前]           package.pkg を作る
+#   <pm> add <名前> <URL> [版]  依存を足して取ってくる
+#   <pm> sync                  package.lock のとおりに deps/ を作る
+#   <pm> update [名前]         取れる最新のタグまで上げてロックを書き直す
+#   <pm> verify                deps/ の中身がロックと一致するか確かめる
+#   <pm> list                  いま選ばれている版を並べる
+#   <pm> build [--] [引数…]    コンパイラを -I deps で呼んで入口をビルドする
+#   <pm> clean                 deps/ とキャッシュを消す
+#
+# ★ レジストリはありません。依存は git のリポジトリを直に指します。
+#   「一度公開した版は変わらない」という保証は、中央のレジストリではなく
+#   **package.lock**（commit と tree の SHA）が持ちます。
+#
+# ⚠️ deps/ はパッケージマネージャのものです。sync のたびに作り直すので、手で置いたものは
+#   消えます。自分のコードは deps/ の外に置いてください。
+import io
+import strings
+import sys
+import lockfile
+import manifest
+import resolve
+import semver
+import shell
+import vcs
+import words
+import langinfo
+
+VERSION: str = "0.1.0"
+DEPS_DIR: str = "deps"
+
+def die(msg: str) -> None:
+    io.eprint(langinfo.pm() + ": " + msg + "\n")
+    exit(1)
+
+def usage(status: int) -> None:
+    print(langinfo.pm() + " " + VERSION + " — " + langinfo.name() + " のパッケージマネージャ")
+    print("")
+    print("使い方: " + langinfo.pm() + " <コマンド> [引数…]")
+    print("")
+    print("  init [名前]           package.pkg を作る")
+    print("  add <名前> <URL> [版]  依存を足して取ってくる（版を省くと最新のタグ）")
+    print("  sync                  package.lock のとおりに deps/ を作る")
+    print("  update [名前]         最新のタグまで上げてロックを書き直す")
+    print("  verify                deps/ の中身がロックと一致するか確かめる")
+    print("  list                  いま選ばれている版を並べる")
+    print("  build [引数…]         " + langinfo.cc() + " -I deps で入口をコンパイルする")
+    print("  clean                 deps/ とキャッシュを消す")
+    print("")
+    print("環境変数:")
+    print("  PLC_CC           使うコンパイラ（既定 " + langinfo.cc() + "）")
+    print("  PLC_CACHE   取ってきたリポジトリの置き場（既定 ~/.cache/plc）")
+    exit(status)
+
+
+# ── 取ってきたものを deps/ に展開する ──────────────────────────
+#
+# ★ 展開するのは **src/ の直下にあるソースだけ**です。入れ子のディレクトリを
+#   たどらないのは、この言語のモジュールが「1 ファイル = 1 名前」で
+#   入れ子を持たないからです。
+def module_names(e: lockfile.Entry, src: str) -> list[str]:
+    mods: list[str] = []
+    for f in vcs.files(e.url, e.rev, src):
+        if not strings.endswith(f, langinfo.ext()):
+            continue
+        name: str = strings.substr(f, 0, len(f) - langinfo.ext_len())
+        if not words.is_ident(name):
+            die("'" + e.name + "' の " + f +
+                " はモジュール名として使えません（識別子ではありません）")
+        mods.append(name)
+    return mods
+
+def path_in(src: str, name: str) -> str:
+    if src == "." or len(src) == 0:
+        return name + langinfo.ext()
+    return src + "/" + name + langinfo.ext()
+
+# 標準ライブラリが持っているモジュール名。
+#
+# ★ コンパイラの `--print-lib-dir` に訊きます。これが無いと、
+#   標準ライブラリと同じ名前のモジュールを入れてしまい、**コンパイルの
+#   ときに**初めて気づくことになります（実際 lib/ の json を足したときに
+#   起きました）。入れる前に、名前を出しているパッケージごと断ります。
+#
+# ⚠️ 訊けなかったときは空を返します（検査を飛ばすだけで、止めません）。
+#   コンパイラがまだ入っていない環境でも `sync` は動くべきだからです。
+def stdlib_mods() -> list[str]:
+    cc: str = sys.getenv("PLC_CC")
+    if len(cc) == 0:
+        cc = langinfo.cc()
+    r: sys.Output = shell.capture(shell.q(cc) + " --print-lib-dir")
+    out: list[str] = []
+    if r.code != 0:
+        return out
+    dir_: str = r.line()
+    if len(dir_) == 0 or not io.is_dir(dir_):
+        return out
+    for f in io.listdir(dir_):
+        if strings.endswith(f, langinfo.ext()):
+            out.append(strings.substr(f, 0, len(f) - langinfo.ext_len()))
+    return out
+
+# ロックの 1 行分を取ってきて中身を確かめる（rev と tree が一致するか）
+def check_out(e: lockfile.Entry) -> None:
+    vcs.ensure(e.url)
+    got: str = vcs.rev_of(e.url, e.rev)
+    if got != e.rev:
+        die("'" + e.name + "' の commit " + e.rev + " が " + e.url +
+            " にありません\n    履歴が書き換えられたか、URL が変わっています")
+    tree: str = vcs.tree_of(e.url, e.rev)
+    if tree != e.tree:
+        die("'" + e.name + "' の中身がロックと違います\n    期待 " + e.tree +
+            "\n    実際 " + tree + "\n    ロックを信じて中止しました")
+
+# deps/ を作り直す
+#
+# ★ 順番が大事です。**確かめ終わってから消します。**
+#   先に消してから落ちると、断ったつもりが deps/ を壊すことになります。
+def install(lk: lockfile.Lock) -> None:
+    # モジュール名の衝突は**ここで**止めます（コンパイラも止めますが、
+    # 原因の分かる場所で早く落ちたほうが直しやすいので）。
+    owner_mod: list[str] = []
+    owner_pkg: list[str] = []
+    std: list[str] = stdlib_mods()
+
+    for e in lk.entries:
+        check_out(e)
+        for m in e.mods:
+            for sm in std:
+                if sm == m:
+                    die("モジュール '" + m + "' は標準ライブラリにもあります（" +
+                        e.name + " が出しています）\n" +
+                        "    どちらを指すか決められないので、入れられません\n" +
+                        "    作者に名前を変えてもらってください")
+            i: int = 0
+            while i < len(owner_mod):
+                if owner_mod[i] == m:
+                    die("モジュール '" + m + "' を 2 つのパッケージが出しています\n    " +
+                        owner_pkg[i] + " と " + e.name +
+                        "\n    どちらかの作者に名前を変えてもらってください")
+                i = i + 1
+            if io.exists(m + langinfo.ext()):
+                die("モジュール '" + m + "' が自分のファイル " + m +
+                    langinfo.ext() + " と衝突します（" + e.name + " が出しています）")
+            owner_mod.append(copy(m))
+            owner_pkg.append(copy(e.name))
+
+    # ここまで来たら全部揃っています。作り直します。
+    shell.run_rm(DEPS_DIR)
+    shell.mkdir_p(DEPS_DIR)
+
+    for e in lk.entries:
+        src: str = src_dir(e)      # ★ 1 パッケージにつき 1 回だけ引く
+        for m in e.mods:
+            blob: vcs.Blob = vcs.show(e.url, e.rev, path_in(src, m))
+            if not blob.ok:
+                die("'" + e.name + "' から " + m + langinfo.ext() + " を読めませんでした")
+            io.write_file(DEPS_DIR + "/" + m + langinfo.ext(), blob.text)
+
+    print(langinfo.pm() + ": " + str(len(lk.entries)) + " 個のパッケージを " + DEPS_DIR +
+          "/ に入れました")
+
+# ロックには src を書きません（展開後は要らないため）。
+# 取り出すときだけ package.pkg を読み直します。
+def src_dir(e: lockfile.Entry) -> str:
+    blob: vcs.Blob = vcs.show(e.url, e.rev, manifest.FILENAME)
+    if not blob.ok:
+        return "."
+    return manifest.parse(blob.text, e.name + " の " + manifest.FILENAME).src
+
+
+# ── 解決してロックを組み立てる（まだ書きません）────────────────
+def plan(m: manifest.Manifest) -> lockfile.Lock:
+    sels: list[resolve.Sel] = resolve.resolve(m)
+    lk: lockfile.Lock = lockfile.Lock()
+    for d in m.deps:
+        lk.roots.append(lockfile.Root(d.name, d.url, d.min_))
+    for i in resolve.order(sels):
+        s: resolve.Sel = sels[i]
+        e: lockfile.Entry = lockfile.Entry(s.name, s.url, s.ver, s.rev, s.tree)
+        for name in module_names(e, s.src):
+            e.mods.append(copy(name))
+        if len(e.mods) == 0:
+            die("'" + s.name + "' に " + langinfo.ext() + " が 1 つもありません（src: " + s.src + "）")
+        lk.entries.append(e)
+    return lk
+
+# ★ 書き込むのは deps/ に入れ終えた後だけです。
+#   途中で断ったときに package.pkg と package.lock が
+#   「入っていないものを指す」状態にならないようにするためです。
+def apply_(m: manifest.Manifest, lk: lockfile.Lock) -> None:
+    install(lk)
+    lockfile.save(lockfile.FILENAME, lk)
+    manifest.save(manifest.FILENAME, m)
+
+# ロックが、いまの宣言から作られたものかどうか。
+#
+# ★ 「下限を満たしているか」ではなく **root 行と dep 行が同じか**を見ます。
+#   満たしているかどうかで判断すると、依存を**消した**ときに気づけません
+#   （消した分がロックに残ったまま入り続けます）。
+def lock_satisfies(m: manifest.Manifest, lk: lockfile.Lock) -> bool:
+    if len(lk.roots) != len(m.deps):
+        return False
+    for d in m.deps:
+        found: bool = False
+        for r in lk.roots:
+            if r.name == d.name and r.url == d.url and r.min_ == d.min_:
+                found = True
+        if not found:
+            return False
+    return True
+
+
+# ── 各コマンド ────────────────────────────────────────────────
+def cmd_init(args: list[str]) -> None:
+    if io.exists(manifest.FILENAME):
+        die(manifest.FILENAME + " は既にあります")
+    m: manifest.Manifest = manifest.Manifest()
+    m.name = "myapp"
+    if len(args) > 2:
+        m.name = copy(args[2])
+    if not words.is_ident(m.name):
+        die("パッケージ名 '" + m.name + "' は識別子ではありません")
+    m.version = "0.1.0"
+    m.entry = "main" + langinfo.ext()
+    manifest.save(manifest.FILENAME, m)
+    print(langinfo.pm() + ": " + manifest.FILENAME + " を作りました（name " + m.name + "）")
+
+def cmd_add(args: list[str]) -> None:
+    if len(args) < 4:
+        die("使い方: " + langinfo.pm() + " add <名前> <git の URL> [版]")
+    name: str = args[2]
+    url: str = args[3]
+    if not words.is_ident(name):
+        die("パッケージ名 '" + name + "' は識別子ではありません")
+
+    m: manifest.Manifest = manifest.load(manifest.FILENAME)
+    if m.find(name) >= 0:
+        die("'" + name + "' は既に依存に入っています")
+
+    ver: str = ""
+    if len(args) > 4:
+        v: semver.Ver = semver.parse(args[4])
+        if not v.ok:
+            die("版は 1.2.3 の形で書いてください: " + args[4])
+        ver = semver.show(v)
+    else:
+        ver = latest_tag(name, url)
+
+    m.deps.append(manifest.Dep(name, url, ver))
+    apply_(m, plan(m))
+    print(langinfo.pm() + ": " + name + " " + ver + " を足しました")
+
+# そのリポジトリでいちばん新しいタグ（v1.2.3 の形のものだけ見る）
+def latest_tag(name: str, url: str) -> str:
+    vcs.ensure(url)
+    vs: list[semver.Ver] = []
+    for t in vcs.tags(url):
+        v: semver.Ver = semver.parse(t)
+        if v.ok:
+            vs.append(v)
+    best: semver.Ver = semver.max_of(vs)
+    if not best.ok:
+        die("'" + name + "' に v1.2.3 の形のタグがありません（" + url + "）\n" +
+            "    作者にタグを付けてもらうか、版を明示してください")
+    return semver.show(best)
+
+def cmd_sync() -> None:
+    m: manifest.Manifest = manifest.load(manifest.FILENAME)
+    lk: lockfile.Lock = lockfile.load(lockfile.FILENAME)
+    if lock_satisfies(m, lk):
+        install(lk)
+        return
+    print(langinfo.pm() + ": 宣言が変わっているので解決し直します")
+    apply_(m, plan(m))
+
+# <pm> update [名前]
+#
+# ★ MVS では「上げる」＝**下限の要求を書き換える**ことです。だから
+#   間接の依存を上げたいときは、それを自分の宣言に直接書く必要があります
+#   （Go の go get が go.mod に require を足すのと同じ理由）。ここでは
+#   名前を指定されたら、間接の依存でも dep 行を足して上げます。
+def cmd_update(args: list[str]) -> None:
+    m: manifest.Manifest = manifest.load(manifest.FILENAME)
+    lk: lockfile.Lock = lockfile.load(lockfile.FILENAME)
+    one: str = ""
+    if len(args) > 2:
+        one = copy(args[2])
+        if m.find(one) < 0:
+            i: int = lk.find(one)
+            if i < 0:
+                die("'" + one + "' は依存にも " + lockfile.FILENAME +
+                    " にもありません")
+            url: str = lk.entries[i].url
+            newest: str = latest_tag(one, url)
+            print(langinfo.pm() + ": " + one + " は間接の依存です。" + newest +
+                  " を直接の依存として宣言に足します")
+            m.deps.append(manifest.Dep(one, url, newest))
+            apply_(m, plan(m))
+            return
+
+    n: int = 0
+    for d in m.deps:
+        if len(one) > 0 and d.name != one:
+            continue
+        newest2: str = latest_tag(d.name, d.url)
+        if newest2 != d.min_:
+            print(langinfo.pm() + ": " + d.name + " " + d.min_ + " → " + newest2)
+            d.min_ = copy(newest2)
+            n = n + 1
+    if n == 0:
+        print(langinfo.pm() + ": 直接の依存で上げられるものはありませんでした")
+        if len(one) == 0 and len(lk.entries) > len(m.deps):
+            print(langinfo.pm() + ": 間接の依存を上げるときは '" + langinfo.pm() +
+                  " update <名前>' と書いてください")
+    apply_(m, plan(m))
+
+def cmd_verify() -> None:
+    lk: lockfile.Lock = lockfile.load(lockfile.FILENAME)
+    if len(lk.entries) == 0:
+        print(langinfo.pm() + ": ロックが空です")
+        return
+    bad: int = 0
+    nmod: int = 0
+    for e in lk.entries:
+        check_out(e)
+        src: str = src_dir(e)
+        for m in e.mods:
+            nmod = nmod + 1
+            path: str = DEPS_DIR + "/" + m + langinfo.ext()
+            if not io.exists(path):
+                io.eprint(langinfo.pm() + ": 足りません: " + path + "\n")
+                bad = bad + 1
+                continue
+            blob: vcs.Blob = vcs.show(e.url, e.rev, path_in(src, m))
+            if not blob.ok or blob.text != io.read_file(path):
+                io.eprint(langinfo.pm() + ": 中身が違います: " + path + "（" + e.name + "）\n")
+                bad = bad + 1
+    if bad > 0:
+        die(str(bad) + " 件ずれています。'" + langinfo.pm() +
+            " sync' で入れ直してください")
+    print(langinfo.pm() + ": " + str(len(lk.entries)) + " パッケージ / " + str(nmod) +
+          " モジュールがロックと一致しています")
+
+def cmd_list() -> None:
+    lk: lockfile.Lock = lockfile.load(lockfile.FILENAME)
+    if len(lk.entries) == 0:
+        print(langinfo.pm() + ": 依存はありません")
+        return
+    for e in lk.entries:
+        print(e.name + " " + e.ver + "  " + strings.substr(e.rev, 0, 12) +
+              "  " + e.url)
+        print("    モジュール: " + strings.join(e.mods, " "))
+
+def cmd_build(args: list[str]) -> None:
+    m: manifest.Manifest = manifest.load(manifest.FILENAME)
+    if len(m.entry) == 0:
+        die(manifest.FILENAME + " に entry がありません（例: entry main" +
+            langinfo.ext() + "）")
+    if not io.exists(m.entry):
+        die("入口のファイルがありません: " + m.entry)
+    if len(lockfile.load(lockfile.FILENAME).entries) > 0 and not io.exists(DEPS_DIR):
+        cmd_sync()
+
+    cc: str = sys.getenv("PLC_CC")
+    if len(cc) == 0:
+        cc = langinfo.cc()
+    cmd: str = cc + " -I " + shell.q(DEPS_DIR)
+    i: int = 2
+    while i < len(args):
+        if args[i] != "--":
+            cmd = cmd + " " + shell.q(args[i])
+        i = i + 1
+    cmd = cmd + " " + shell.q(m.entry) + " -o " + shell.q(m.name)
+
+    print(langinfo.pm() + ": " + cmd)
+    if sys.run(cmd) != 0:
+        exit(1)
+    print(langinfo.pm() + ": " + m.name + " を作りました")
+
+def cmd_clean() -> None:
+    shell.run_rm(DEPS_DIR)
+    shell.run_rm(vcs.cache_root())
+    print(langinfo.pm() + ": " + DEPS_DIR + "/ とキャッシュを消しました")
+
+
+def main() -> int:
+    args: list[str] = sys.argv()
+    if len(args) < 2:
+        usage(1)
+    cmd: str = args[1]
+
+    if cmd == "-h" or cmd == "--help" or cmd == "help":
+        usage(0)
+    if cmd == "--version":
+        print(langinfo.pm() + " " + VERSION)
+        return 0
+
+    if not vcs.have_git():
+        die("git が見つかりません（依存の取得には git だけを使います）")
+
+    if cmd == "init":
+        cmd_init(args)
+    elif cmd == "add":
+        cmd_add(args)
+    elif cmd == "sync":
+        cmd_sync()
+    elif cmd == "update":
+        cmd_update(args)
+    elif cmd == "verify":
+        cmd_verify()
+    elif cmd == "list":
+        cmd_list()
+    elif cmd == "build":
+        cmd_build(args)
+    elif cmd == "clean":
+        cmd_clean()
+    else:
+        io.eprint(langinfo.pm() + ": 知らないコマンドです: " + cmd + "\n")
+        usage(1)
+    return 0

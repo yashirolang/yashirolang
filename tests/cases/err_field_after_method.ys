@@ -1,0 +1,11 @@
+# ERROR: フィールドはメソッドより前に書いてください
+# ERROR: 最初のメソッドはここです
+# ERROR: クラス本体は「フィールドを全部 → メソッドを全部」の順です
+class P:
+    def f(self) -> int:
+        return 1
+
+    x: int
+
+def main() -> int:
+    return 0

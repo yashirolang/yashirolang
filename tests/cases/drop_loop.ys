@@ -1,0 +1,28 @@
+# STAGE0-ONLY: 解放の挿入は C 版だけ
+# FLAGS: --drop
+# OUTPUT: drop r0
+# OUTPUT: drop r1
+# OUTPUT: drop r2
+# OUTPUT: after
+# EXIT: 0
+# break / continue で抜ける経路でも解放する
+class Res:
+    name: str
+
+    def init(self, name: own str) -> None:
+        self.name = name
+
+    def drop(self) -> None:
+        print("drop " + self.name)
+
+def main() -> int:
+    i: int = 0
+    while i < 5:
+        r: Res = Res("r" + str(i))
+        i = i + 1
+        if i == 2:
+            continue
+        if i == 3:
+            break
+    print("after")
+    return 0

@@ -1,0 +1,11 @@
+# ERROR: タプルの添字は整数リテラルでなければなりません
+# ERROR: 要素ごとに型が違う
+# 添字が実行時に決まると、式の型が決められない
+def f() -> (int, str):
+    return 1, "a"
+
+def main() -> int:
+    t: (int, str) = f()
+    i: int = 1
+    print(str(t[i]))
+    return 0

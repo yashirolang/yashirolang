@@ -1,0 +1,17 @@
+# OUTPUT: A
+# OUTPUT: B
+# 同名メソッドを持つ 2 つのクラス（名前修飾が効いているか）
+class Dog:
+    def speak(self) -> None:
+        print("A")
+
+class Cat:
+    def speak(self) -> None:
+        print("B")
+
+def main() -> int:
+    d: Dog = Dog()
+    c: Cat = Cat()
+    d.speak()
+    c.speak()
+    return 0

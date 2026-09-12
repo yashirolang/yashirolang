@@ -1,0 +1,12 @@
+# STAGE0-ONLY: 可変性の検査は C 版だけ
+# FLAGS: --deny-mut
+# ERROR: error[E-MUT-1]: 読み取り専用の借用 'xs[…]' を書き換えています
+# ERROR: この代入で書き換えています
+# 添字への代入も書き換え
+def zero(xs: list[int]) -> None:
+    xs[0] = 0
+
+def main() -> int:
+    a: list[int] = [1, 2]
+    zero(a)
+    return a[0]

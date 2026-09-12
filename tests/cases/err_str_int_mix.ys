@@ -1,0 +1,5 @@
+# ERROR: 型 'str' と 'int' に演算子 '+' は適用できません
+# ERROR: = ヒント: 本言語には暗黙の型変換がありません
+def main() -> int:
+    s: str = "n = " + 42
+    return 0

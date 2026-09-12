@@ -1,0 +1,7 @@
+# EXIT: 20
+# ★ 定義より前に呼べる（シグネチャの事前登録）
+def main() -> int:
+    return double(10)
+
+def double(x: int) -> int:
+    return x * 2

@@ -1,0 +1,5 @@
+# ERROR: 'continue' はループの外では使えません
+def main() -> int:
+    if True:
+        continue
+    return 0

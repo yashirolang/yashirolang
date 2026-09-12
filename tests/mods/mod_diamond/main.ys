@@ -1,0 +1,13 @@
+# OUTPUT: 11
+# OUTPUT: 12
+# OUTPUT: 7
+# ダイヤモンド依存（common が 2 回 import されるが、読み込みは 1 回だけ）
+import left
+import right
+import common
+
+def main() -> int:
+    print(left.get())
+    print(right.get())
+    print(common.COUNT)
+    return 0

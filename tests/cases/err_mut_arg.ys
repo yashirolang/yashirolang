@@ -1,0 +1,15 @@
+# STAGE0-ONLY: 可変性の検査は C 版だけ
+# FLAGS: --deny-mut
+# ERROR: error[E-MUT-1]: 読み取り専用の借用 'xs' を書き換えています
+# ERROR: この引数は 'mut' で受け取られます
+# 読み取り専用で借りたものを、mut 引数へ又貸しできない
+def fill(xs: mut list[int], v: int) -> None:
+    xs.append(v)
+
+def relay(xs: list[int]) -> None:
+    fill(xs, 1)
+
+def main() -> int:
+    a: list[int] = []
+    relay(a)
+    return len(a)

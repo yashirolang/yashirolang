@@ -1,0 +1,10 @@
+# ERROR: クラス 'P' に 'show' がありません
+# 宣言したメソッドを実装していない
+interface Show:
+    def show(self) -> str
+
+class P(Show):
+    x: int
+
+def main() -> int:
+    return 0

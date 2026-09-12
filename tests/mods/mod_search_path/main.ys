@@ -1,0 +1,9 @@
+# OUTPUT: hi from vendor!
+# FLAGS: -I @ROOT@/tests/mods/mod_search_path/vendor
+# -I で足した場所から import できる（パッケージマネージャの土台）
+# ★ vendor/ の中で更に import が解決されることも同時に確かめます。
+import greet
+
+def main() -> int:
+    print(greet.hello())
+    return 0

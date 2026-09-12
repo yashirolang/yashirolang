@@ -1,0 +1,10 @@
+# OUTPUT: 1
+# OUTPUT: 1
+# ★ list は参照型かつ可変なので、共有が観測できる（str と違う）
+def main() -> int:
+    xs: list[int] = []
+    ys: list[int] = xs
+    ys.append(1)
+    print(len(xs))
+    print(len(ys))
+    return 0

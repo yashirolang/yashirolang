@@ -1,0 +1,5 @@
+# ERROR: 演算子 'and' には bool が必要です
+# ERROR: これは 'int' 型です
+# ERROR: = ヒント: 本言語は int を真偽値として扱いません
+def main() -> int:
+    return 1 and 2

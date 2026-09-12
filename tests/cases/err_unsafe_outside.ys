@@ -1,0 +1,8 @@
+# STAGE0-ONLY: unsafe / ptr[T] は C 版だけ
+# STAGE1-SKIP: stage1 はまだ unsafe / ptr[T] を解析できない
+# ERROR: error[E-UNSAFE-1]: 'ptr_at' は unsafe: の中でしか使えません
+# ERROR: unsafe: ブロックで囲んでください
+# 生ポインタは unsafe: の外では触れない（仕様 v2 §10.1）
+def main() -> int:
+    p: ptr[int] = ptr_at(0)
+    return 0

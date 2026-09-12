@@ -1,0 +1,15 @@
+# STAGE0-ONLY: 所有権検査は C 版だけ
+# FLAGS: --deny-move
+# ERROR: error[E-MOVE-1]: 移動済みかもしれない値 'name' を使っています
+# ERROR: 'name' は前の繰り返しで、ここで移動しています
+# ループの中で移動すると、2 周目には値が無い（不動点反復で検出する）
+def take(s: own str) -> int:
+    return len(s)
+
+def main() -> int:
+    name: str = "abc"
+    i: int = 0
+    while i < 3:
+        print(take(name))
+        i = i + 1
+    return 0

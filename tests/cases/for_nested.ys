@@ -1,0 +1,10 @@
+# OUTPUT: 0
+# OUTPUT: 1
+# OUTPUT: 10
+# OUTPUT: 11
+# 隠し変数に連番を振っているので、入れ子でも衝突しない
+def main() -> int:
+    for i in range(2):
+        for j in range(2):
+            print(i * 10 + j)
+    return 0

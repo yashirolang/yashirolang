@@ -1,0 +1,14 @@
+# ERROR: hash は 'Node' 型を受け取れません
+# ERROR: note: この実体化（Dict$Node$int）で使われました
+# ERROR: = ヒント: hash が受け取れるのは str, int, float, bool です
+# クラスは dict の鍵にできない
+#   ★ エラーはライブラリの中で出ますが、**発端（この行）も示します**。
+#     型制約が無いので、テンプレートの時点では分かりません。
+import dict
+
+class Node:
+    v: int
+
+def main() -> int:
+    d: dict.Dict[Node, int] = dict.Dict()
+    return 0

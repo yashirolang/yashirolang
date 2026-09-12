@@ -1,0 +1,6 @@
+# ERROR: モジュール 'lib' にクラス 'Nope' はありません
+import lib
+
+def main() -> int:
+    b: lib.Nope = lib.Box()
+    return 0

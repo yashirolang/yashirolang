@@ -1,0 +1,27 @@
+# OUTPUT: world
+# OUTPUT: 2
+# OUTPUT: -1
+# OUTPUT: a / b / c
+# OUTPUT: hi|
+# OUTPUT: a+b+c
+# OUTPUT: True
+# OUTPUT: True
+# OUTPUT: False
+# OUTPUT: ababab
+# OUTPUT: 3
+# 標準ライブラリ（本言語で書かれている）。lib/ から自動で見つかる
+import strings
+
+def main() -> int:
+    print(strings.substr("hello world", 6, 5))
+    print(strings.find("hello", "ll"))
+    print(strings.find("hello", "zz"))
+    print(strings.join(strings.split("a,b,c", ","), " / "))
+    print(strings.strip("  hi  ") + "|")
+    print(strings.replace("a-b-c", "-", "+"))
+    print(strings.startswith("hello", "he"))
+    print(strings.endswith("hello", "lo"))
+    print(strings.contains("hello", "xy"))
+    print(strings.repeat("ab", 3))
+    print(len(strings.split("a,b,c", ",")))
+    return 0

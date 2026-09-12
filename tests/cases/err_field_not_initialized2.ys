@@ -1,0 +1,14 @@
+# ERROR: フィールド 'tok' は init で代入されていません
+# ERROR: init はここです
+# init はあるが、そのフィールドに代入していない
+class Token:
+    kind: int
+
+class Node:
+    tok: Token
+
+    def init(self) -> None:
+        print(0)
+
+def main() -> int:
+    return 0

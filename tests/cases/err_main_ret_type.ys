@@ -1,0 +1,3 @@
+# ERROR: main の戻り型は int でなければなりません
+def main() -> bool:
+    return True

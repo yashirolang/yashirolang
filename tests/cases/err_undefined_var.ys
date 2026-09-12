@@ -1,0 +1,6 @@
+# ERROR: 未定義の名前 'y' です
+# ERROR: この名前は宣言されていません
+# ERROR: = ヒント: 使う前に宣言してください（例: y: int = 0）
+def main() -> int:
+    x: int = 1
+    return x + y

@@ -1,0 +1,11 @@
+# OUTPUT: 2
+# OUTPUT: 1
+# EXIT: 0
+# 負の添字は **末尾から**数える（Python と同じ）。
+#   ★ v1 では「範囲外」にしていましたが、実用上よく使うので採用しました。
+def main() -> int:
+    xs: list[int] = [1, 2]
+    n: int = 0 - 1
+    print(xs[n])        # 末尾
+    print(xs[-2])       # 先頭
+    return 0

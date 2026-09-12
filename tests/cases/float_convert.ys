@@ -1,0 +1,12 @@
+# OUTPUT: 7.0
+# OUTPUT: 2
+# OUTPUT: -1
+# OUTPUT: 3.5
+# EXIT: 0
+# int ↔ float は明示的にだけ変換する（暗黙変換はしない）
+def main() -> int:
+    print(float(7))
+    print(int(2.9))
+    print(int(-1.7))
+    print(str(3.5))
+    return 0

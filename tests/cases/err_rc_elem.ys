@@ -1,0 +1,5 @@
+# ERROR: rc に入れられるのはクラスだけです（例: rc[Node]）
+# rc に入れるのはクラスだけ（共有したくなるのは木やグラフの節点）
+def main() -> int:
+    n: rc[int] = rc(1)
+    return 0

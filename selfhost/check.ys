@@ -1,0 +1,23 @@
+# check — stage1 の型検査器を動かす入口
+#
+#   ./build/stage1-check foo<拡張子>
+#
+# ★ C 版の `--check` と**同じ出力**を目指します。
+#   エラーが無ければ何も出さず、終了コード 0。
+import io
+import sys
+import module
+import sema
+import langinfo
+
+def main() -> int:
+    args: list[str] = sys.argv()
+    if len(args) < 2:
+        print("使い方: stage1-check <入力" + langinfo.ext() + ">")
+        return 1
+
+    path: str = args[1]
+    mods: rc[module.Module] | None = module.load_modules(path)
+    entry: rc[module.Module] | None = module.entry_of(mods, path)
+    sema.sema_program(mods, entry)
+    return 0

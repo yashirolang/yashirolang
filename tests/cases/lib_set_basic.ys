@@ -1,0 +1,26 @@
+# OUTPUT: 3 2
+# OUTPUT: True True False
+# OUTPUT: 4 1 2
+# OUTPUT: True True
+# OUTPUT: b,a,c
+# OUTPUT: True False True False
+# 集合（lib/set）。中身は dict.Dict[T, bool] です。
+import set
+import strings
+
+def main() -> int:
+    a: set.Set[int] = set.of([1, 2, 3, 3])
+    b: set.Set[int] = set.of([3, 4])
+    print(str(a.len()) + " " + str(b.len()))
+    print(str(a.has(2)) + " " + str(2 in a) + " " + str(9 in a))
+    print(str(set.union(a, b).len()) + " " +
+          str(set.intersection(a, b).len()) + " " +
+          str(set.difference(a, b).len()))
+    print(str(set.is_subset(set.of([1]), a)) + " " +
+          str(set.equals(a, set.of([3, 2, 1]))))
+    print(strings.join(set.dedup(["b", "a", "b", "c"]), ","))
+
+    s: set.Set[str] = set.Set()
+    print(str(s.add("x")) + " " + str(s.add("x")) + " " +
+          str(s.remove("x")) + " " + str(s.remove("x")))
+    return 0

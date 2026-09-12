@@ -1,0 +1,73 @@
+# time — 時刻と経過時間
+#
+# ★ **自分のプログラムの速さを測るための道具**です。
+#   これが無いあいだ、ロードマップの数字はすべて外側（bash の time）から
+#   測ったもので、プロセスの起動時間が混ざっていました
+#   （docs/roadmap.md §3-B1）。中から測れば、その混入がそもそも起きません。
+#
+#   🤔 なぜ単調時計（monotonic）と実時刻（wall）を分けるのか
+#     実時刻は **戻ることがあります**（NTP の補正・夏時間・利用者が時計を直す）。
+#     測っている最中に戻ると、経過時間が負になります。
+#     速さを測るときは monotonic、「いつ動いたか」を記録するときは now です。
+#
+# ⚠️ **ベアメタルでは使えません。** 時計は OS の持ち物なので、実体は
+#   runtime/hosted.c にあります（kernel/ はこれをリンクしません）。
+
+extern def pl_time_ns() -> int
+extern def pl_time_wall_ns() -> int
+
+NS_PER_SEC: float = 1000000000.0
+NS_PER_MS: float = 1000000.0
+
+
+# ── 単調時計（速さを測る）──────────────────────────────────
+
+# 単調時計の現在値（ナノ秒）。
+# ⚠️ **起点に意味はありません。** 2 つ取って引き算してください。
+def monotonic_ns() -> int:
+    return pl_time_ns()
+
+# 同じものを秒で。
+def monotonic() -> float:
+    return float(pl_time_ns()) / NS_PER_SEC
+
+
+# ── 実時刻（いつ動いたかを記録する）────────────────────────
+
+# 1970-01-01 00:00:00 UTC からのナノ秒。
+def now_ns() -> int:
+    return pl_time_wall_ns()
+
+# 同じものを秒で（Python の time.time() 相当）。
+def now() -> float:
+    return float(pl_time_wall_ns()) / NS_PER_SEC
+
+
+# ── 経過時間 ────────────────────────────────────────────────
+#
+# ★ 使い方はこの 2 行です。
+#
+#     t0: int = time.monotonic_ns()
+#     ...測りたい処理...
+#     print(str(time.since_ms(t0)) + " ms")
+
+# start_ns（monotonic_ns の戻り値）からの経過ナノ秒。
+def since_ns(start_ns: int) -> int:
+    return pl_time_ns() - start_ns
+
+# 同じものをミリ秒で。
+def since_ms(start_ns: int) -> float:
+    return float(pl_time_ns() - start_ns) / NS_PER_MS
+
+# 同じものを秒で。
+def since_sec(start_ns: int) -> float:
+    return float(pl_time_ns() - start_ns) / NS_PER_SEC
+
+
+# ── 単位の換算 ──────────────────────────────────────────────
+
+def ns_to_ms(ns: int) -> float:
+    return float(ns) / NS_PER_MS
+
+def ns_to_sec(ns: int) -> float:
+    return float(ns) / NS_PER_SEC

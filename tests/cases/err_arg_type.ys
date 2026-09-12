@@ -1,0 +1,7 @@
+# ERROR: 関数 'twice' の第 1 引数: 型 'bool' を 'int' に渡せません
+# ERROR: 引数 'x' は 'int' 型です
+def twice(x: int) -> int:
+    return x * 2
+
+def main() -> int:
+    return twice(True)

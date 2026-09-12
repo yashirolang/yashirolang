@@ -1,0 +1,22 @@
+# OUTPUT: 8.0
+# OUTPUT: 1.414214
+# OUTPUT: 1.0
+# OUTPUT: 0.25
+# EXIT: 0
+# float の '**'
+#
+# ⚠️ libc の pow は使えない（ベアメタルで動く必要がある）ので、
+#   ランタイムに pl_fpow を自前で置いている。
+#
+# ⚠️ **近似値は round_to で丸めてから表示する。**
+#   str(float) が最短の往復表記になったので、2.0 ** 0.5 をそのまま出すと
+#   自前の近似の下位桁まで見えます。機械や clang の版で最後の 1 桁が
+#   変わりうるので、テストとしては丸めた値を見ます。
+import math
+
+def main() -> int:
+    print(2.0 ** 3.0)
+    print(str(math.round_to(2.0 ** 0.5, 6)))
+    print(5.0 ** 0.0)
+    print(2.0 ** -2.0)
+    return 0

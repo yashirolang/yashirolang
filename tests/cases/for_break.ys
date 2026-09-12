@@ -1,0 +1,9 @@
+# OUTPUT: 0
+# OUTPUT: 1
+# OUTPUT: 2
+def main() -> int:
+    for i in range(100):
+        if i > 2:
+            break
+        print(i)
+    return 0

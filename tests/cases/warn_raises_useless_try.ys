@@ -1,0 +1,19 @@
+# WARN: warning[E-RAISE-5]: この try の中に、失敗しうる呼び出しがありません
+# WARN: except は決して実行されません
+# EXIT: 0
+# 失敗しない呼び出しだけの try は、書いた人の勘違い（R5。警告）
+class IOError:
+    message: str
+
+    def init(self, message: own str) -> None:
+        self.message = message
+
+def safe() -> int:
+    return 1
+
+def main() -> int:
+    try:
+        print(str(safe()))
+    except IOError as e:
+        print(e.message)
+    return 0

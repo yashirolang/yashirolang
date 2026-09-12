@@ -1,0 +1,7 @@
+# ERROR: トップレベルに実行文は書けません
+# ERROR: ここに書けるのは def / class / import / extern とグローバル変数だけです
+# ERROR: = ヒント: 処理は main の中に書いてください
+print(1)
+
+def main() -> int:
+    return 0

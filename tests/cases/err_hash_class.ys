@@ -1,0 +1,11 @@
+# ERROR: hash は 'Node' 型を受け取れません
+# クラスは hash できない（dict の鍵にできない）
+#   ⚠️ 型制約が無いので、テンプレートの時点では分かりません。
+#     **実体化したときに**初めて分かります。
+class Node:
+    v: int
+
+def main() -> int:
+    n: Node = Node()
+    print(hash(n))
+    return 0

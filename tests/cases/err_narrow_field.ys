@@ -1,0 +1,12 @@
+# ERROR: 型 'Node | None' の値にはフィールドがありません
+# ERROR: 一度ローカル変数に入れてから絞り込んでください
+# フィールドは絞り込まない（その間に書き換わらない保証ができないため）
+class Node:
+    v: int
+    next: Node | None
+
+def main() -> int:
+    a: Node = Node()
+    if a.next is not None:
+        print(a.next.v)
+    return 0

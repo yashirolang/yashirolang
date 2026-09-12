@@ -1,0 +1,10 @@
+# ERROR: 型が一致しません
+# ERROR: 型 'Box | None' の式
+# T | None を T に入れることはできない（一方向だけ許す）
+class Box:
+    v: int
+
+def main() -> int:
+    b: Box | None = None
+    c: Box = b
+    return 0

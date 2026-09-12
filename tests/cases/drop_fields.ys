@@ -1,0 +1,27 @@
+# STAGE0-ONLY: 解放の挿入は C 版だけ
+# FLAGS: --drop
+# OUTPUT: after
+# OUTPUT: bye box
+# EXIT: 2
+# クラスの解放は「drop メソッド → フィールド → 自分自身」の順（仕様 v2 §6.2）
+class Box:
+    tag: str
+    items: list[str]
+
+    def init(self, tag: own str) -> None:
+        self.tag = tag
+        self.items = []
+
+    def add(mut self, s: own str) -> None:
+        self.items.append(s)
+
+    def drop(self) -> None:
+        print("bye " + self.tag)
+
+def main() -> int:
+    b: Box = Box("box")
+    b.add("x")
+    b.add("y" + "z")
+    n: int = len(b.items)
+    print("after")
+    return n

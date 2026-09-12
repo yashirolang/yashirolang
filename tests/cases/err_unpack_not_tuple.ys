@@ -1,0 +1,9 @@
+# ERROR: 分解代入の右辺がタプルではありません
+# ERROR: = ヒント: 分解できるのは (A, B) を返すものだけです（複数の値を返す関数を書いてください）
+# タプル以外は分解できない
+def one() -> int:
+    return 1
+
+def main() -> int:
+    a, b = one()
+    return a + b

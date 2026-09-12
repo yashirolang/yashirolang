@@ -1,0 +1,6 @@
+# OUTPUT: 65
+# OUTPUT: A
+def main() -> int:
+    print(ord("A"))
+    print(chr(65))
+    return 0

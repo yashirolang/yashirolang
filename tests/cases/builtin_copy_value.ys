@@ -1,0 +1,12 @@
+# OUTPUT: 1 2.5 True x
+# copy は値型にも書ける（そのまま返す）。
+# ★ ジェネリックなコードでは T が int かもしれず、「str のときだけ copy」を
+#   書き分けられないので、値型でも通るようにしました。呼び出しは出ません。
+def keep[T](x: T) -> T:
+    return copy(x)
+
+def main() -> int:
+    a: int = 1
+    print(str(keep(a)) + " " + str(keep(2.5)) + " " + str(keep(True)) + " " +
+          keep("x"))
+    return 0

@@ -1,0 +1,6 @@
+# ERROR: extern の戻り値に bool は使えません
+# ERROR: int で受け取り、本言語側で 'n == 1' と書いてください
+extern def pl_file_exists(path: str) -> bool
+
+def main() -> int:
+    return 0

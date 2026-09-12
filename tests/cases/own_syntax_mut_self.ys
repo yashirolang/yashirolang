@@ -1,0 +1,22 @@
+# OUTPUT: 0
+# OUTPUT: 2
+# mut self（self には型注釈が無いので名前の前に書く）
+class Counter:
+    n: int
+
+    def init(self) -> None:
+        self.n = 0
+
+    def get(self) -> int:
+        return self.n
+
+    def bump(mut self) -> None:
+        self.n = self.n + 1
+
+def main() -> int:
+    c: Counter = Counter()
+    print(c.get())
+    c.bump()
+    c.bump()
+    print(c.get())
+    return 0

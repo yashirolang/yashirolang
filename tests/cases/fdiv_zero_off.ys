@@ -1,0 +1,18 @@
+# FLAGS: --no-overflow-check
+# OUTPUT: 0.5
+# OUTPUT: inf
+# OUTPUT: -inf
+# OUTPUT: nan
+# EXIT: 0
+# --no-overflow-check を付けると IEEE754 のまま（inf / nan）
+#
+#   ★ 数の実行時検査を外す逃げ道は 1 つにまとめてあります
+#     （整数の桁あふれと float の 0 除算）。
+def main() -> int:
+    a: float = 1.0
+    z: float = 0.0
+    print(str(a / 2.0))
+    print(str(a / z))
+    print(str(-a / z))
+    print(str(z / z))
+    return 0

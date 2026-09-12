@@ -1,0 +1,26 @@
+# OUTPUT: 0.5
+# OUTPUT: nan
+# OUTPUT: 0.0
+# OUTPUT: inf
+# EXIT: 1
+# float の 0 除算は panic します
+#
+#   ⚠️ **ここが 0.13.0 で変わったところです。** 1.0 / 0.0 は inf でした。
+#     整数の 1 // 0 は panic するのに float だけ通る、という穴でした
+#     （Python はどちらも ZeroDivisionError です）。
+#
+#   ★ 見ているのは**右辺が 0 かどうかだけ**です。nan や inf で割るのは
+#     そのまま通します（IEEE754 の答えが定まっているため）。
+import math
+
+def main() -> int:
+    a: float = 1.0
+    print(str(a / 2.0))            # ふつうの割り算
+    print(str(a / math.nan()))     # nan で割る → nan（止めない）
+    print(str(a / math.inf()))     # inf で割る → 0.0（止めない）
+    print(str(math.inf()))         # inf 自体は掛け算で作るので無事
+
+    # ⚠️ -0.0 でも止まります（fcmp oeq なので -0.0 == 0.0）
+    z: float = -0.0
+    print(str(a / z))              # panic
+    return 0

@@ -1,0 +1,15 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# FLAGS: --deny-borrow
+# ERROR: error[E-BORROW-3]: 借用した値 'name' をフィールドに保存できません
+# ERROR: 引数 'name' は借用です（既定）
+# ERROR: 引数を 'name: own str' にすると、所有権を受け取れます
+# 借用した引数はフィールドに保存できない（仕様 v2 §4.2）
+class Node:
+    name: str
+
+    def init(self, name: str) -> None:
+        self.name = name
+
+def main() -> int:
+    n: Node = Node("a")
+    return len(n.name)

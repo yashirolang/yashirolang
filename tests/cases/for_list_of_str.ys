@@ -1,0 +1,7 @@
+# OUTPUT: ab
+# OUTPUT: cd
+def main() -> int:
+    ws: list[str] = ["ab", "cd"]
+    for w in ws:
+        print(w)
+    return 0

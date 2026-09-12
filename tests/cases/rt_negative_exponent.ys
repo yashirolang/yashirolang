@@ -1,0 +1,4 @@
+# EXIT: 1
+def main() -> int:
+    n: int = 0 - 1
+    return 2 ** n

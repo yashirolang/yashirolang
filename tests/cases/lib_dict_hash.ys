@@ -1,0 +1,47 @@
+# OUTPUT: ok
+# EXIT: 0
+# ハッシュ表になった dict（3000 件で正しさを確かめる）
+#   ★ 線形探索のままだと 3000 件で目に見えて遅くなります
+import dict
+import linalg
+
+def main() -> int:
+    d: dict.Dict[str, int] = dict.Dict()
+    n: int = 3000
+    i: int = 0
+    while i < n:
+        d.set("k" + str(i), i * 2)
+        i = i + 1
+    # 全部引けるか
+    ok: bool = True
+    i = 0
+    while i < n:
+        if d.get("k" + str(i)) != i * 2:
+            ok = False
+        i = i + 1
+    # 上書き
+    d.set("k0", 999)
+    if d.get("k0") != 999:
+        ok = False
+    if d.len() != n:
+        ok = False
+    # 無い鍵
+    if d.has("nope") or d.get_or("nope", -1) != -1:
+        ok = False
+    # 挿入順
+    ks: list[str] = d.keys()
+    if ks[0] != "k0" or ks[1] != "k1" or ks[n-1] != "k" + str(n-1):
+        ok = False
+    if len(d.values()) != n:
+        ok = False
+    # int 鍵
+    e: dict.Dict[int, str] = dict.Dict()
+    e.set(1, "one")
+    e.set(1000000, "big")
+    if e.get(1) != "one" or e.get(1000000) != "big" or e.len() != 2:
+        ok = False
+    if ok:
+        print("ok")
+    else:
+        print("NG")
+    return 0

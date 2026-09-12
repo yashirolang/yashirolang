@@ -1,0 +1,8 @@
+# EXIT: 1
+def pick(flag: bool, a: int, b: int) -> int:
+    if flag:
+        return a
+    return b
+
+def main() -> int:
+    return pick(True, 1, 2)

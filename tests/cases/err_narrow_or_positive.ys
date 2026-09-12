@@ -1,0 +1,11 @@
+# ERROR: 型 'Box | None' の値にはフィールドがありません
+# ★ or の「成り立つ側」は絞り込めない（どちらか一方しか保証されない）。
+class Box:
+    v: int
+
+def main() -> int:
+    b: Box | None = None
+    c: Box | None = None
+    if b is None or c is None:
+        print(b.v)
+    return 0

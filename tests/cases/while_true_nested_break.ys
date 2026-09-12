@@ -1,0 +1,16 @@
+# EXIT: 6
+# ★ 内側のループの break は、外側の while True: には効かない。
+#   外側は break を持たないので、やはり抜けない。
+def f(n: int) -> int:
+    while True:
+        i: int = 0
+        while i < 10:
+            i = i + 1
+            if i > 2:
+                break          # ← これは内側のループの break
+        n = n + i
+        if n > 5:
+            return n
+
+def main() -> int:
+    return f(0)

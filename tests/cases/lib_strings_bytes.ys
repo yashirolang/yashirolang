@@ -1,0 +1,14 @@
+# OUTPUT: 97
+# OUTPUT: 10
+# OUTPUT: a-b-c
+# OUTPUT: 
+# byte_at（確保しない 1 バイトアクセス）と join（O(n) の連結）
+import strings
+
+def main() -> int:
+    print(strings.byte_at("abc", 0))
+    print(strings.byte_at("a\nb", 1))
+    print(strings.join(["a", "b", "c"], "-"))
+    empty: list[str] = []
+    print(strings.join(empty, ","))
+    return 0

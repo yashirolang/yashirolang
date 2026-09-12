@@ -1,0 +1,68 @@
+# emit_ir — stage1 のコード生成器を動かす入口
+#
+#   ./build/stage1-codegen [--no-overflow-check] foo<拡張子>
+#
+# ★ C 版の `-S` と**バイト単位で同じ出力**を目指します。
+#   ⚠️ だから C 版が受け取る「IR の中身を変えるオプション」は、
+#     ここでも受け取れる必要があります（--no-overflow-check）。
+import io
+import sys
+import strings
+import module
+import sema
+import codegen
+import langinfo
+
+def main() -> int:
+    args: list[str] = sys.argv()
+    if len(args) < 2:
+        print("使い方: stage1-codegen <入力" + langinfo.ext() + ">")
+        return 1
+
+    # ⚠️ 引数の形は C 版に合わせます（オプションは入力ファイルより前）。
+    path: str = ""
+    no_ovf: bool = False
+    ai: int = 1
+    while ai < len(args):
+        a: str = args[ai]
+        if a == "--no-overflow-check":
+            no_ovf = True
+        else:
+            path = a
+        ai = ai + 1
+    if len(path) == 0:
+        print("使い方: stage1-codegen [--no-overflow-check] <入力" + langinfo.ext() + ">")
+        return 1
+
+    # ⚠️ target triple はビルド時に埋め込めない（プリプロセッサが無い）ので、
+    #   環境変数から受け取ります。PLC_LIB_DIR と同じ手です。
+    triple: str = sys.getenv("PLC_TARGET_TRIPLE")
+
+    mods: rc[module.Module] | None = module.load_modules(path)
+    entry: rc[module.Module] | None = module.entry_of(mods, path)
+    sema.sema_program(mods, entry)
+
+    if entry is None:
+        panic("emit_ir: 入口モジュールがありません")
+        return 1
+
+    main_ir: str = entry.name + ".main"
+
+    # 複数モジュールなら区切りを入れて並べる（C 版の -S と同じ）
+    multi: bool = False
+    if mods is not None:
+        first: rc[module.Module] = mods
+        if first.next is not None:
+            multi = True
+
+    m: rc[module.Module] | None = mods
+    while m is not None:
+        mm: rc[module.Module] = m
+        if multi:
+            print("; ── module: " + mm.name + " ──")
+        name: str = ""
+        if mm.name == entry.name:
+            name = main_ir
+        io.print_raw(codegen.codegen(mm, name, triple, no_ovf))
+        m = mm.next
+    return 0

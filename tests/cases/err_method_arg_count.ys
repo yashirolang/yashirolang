@@ -1,0 +1,11 @@
+# ERROR: メソッド 'P.add' は 1 個の引数を取りますが、2 個渡されました
+# ERROR: self は自動的に渡されるので、書く必要はありません
+class P:
+    x: int
+
+    def add(self, n: int) -> int:
+        return self.x + n
+
+def main() -> int:
+    p: P = P()
+    return p.add(1, 2)

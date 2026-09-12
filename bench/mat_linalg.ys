@@ -1,0 +1,29 @@
+# 行列積 N³（linalg.Matrix ＝ 平坦な list[float] ＋ get/set）
+#
+# ★ 二重リスト版（mat）との差が、そのまま
+#   「小さなメソッドがインライン化されているか」の指標です。
+import linalg
+import time
+
+N: int = 512
+
+def make(seed: int) -> linalg.Matrix:
+    d: list[float] = []
+    s: int = seed
+    for i in range(N * N):
+        s = (s * 1103515 + 12345) % 2147483648
+        d.append(float(s % 1000) / 1000.0)
+    return linalg.Matrix(N, N, d)
+
+def main() -> int:
+    a: linalg.Matrix = make(1)
+    b: linalg.Matrix = make(7)
+    t0: int = time.monotonic_ns()
+    c: linalg.Matrix = linalg.matmul(a, b)
+    ms: float = time.since_ms(t0)
+    t: float = 0.0
+    for i in range(N):
+        t = t + c.get(i, i)
+    print("RESULT " + str(t))
+    print("TIME_MS " + str(ms))
+    return 0

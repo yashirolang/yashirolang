@@ -1,0 +1,16 @@
+# OUTPUT: 3
+# and で繋いだ条件は両方とも絞り込める
+class Box:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+def add(a: Box | None, b: Box | None) -> int:
+    if a is not None and b is not None:
+        return a.v + b.v
+    return 0
+
+def main() -> int:
+    print(add(Box(1), Box(2)))
+    return 0

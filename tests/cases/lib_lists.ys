@@ -1,0 +1,59 @@
+# STAGE0-ONLY: 所有権検査は C 版だけ
+# OUTPUT: 3
+# OUTPUT: 1
+# OUTPUT: 2
+# OUTPUT: False
+# OUTPUT: 2
+# OUTPUT: 3
+# OUTPUT: 2
+# OUTPUT: True
+# OUTPUT: True
+# OUTPUT: 1
+# OUTPUT: 2
+# OUTPUT: 3
+# OUTPUT: 0
+# OUTPUT: 1
+# OUTPUT: 2
+# OUTPUT: 2
+# OUTPUT: 1
+# OUTPUT: 3
+# OUTPUT: a
+# OUTPUT: b
+# OUTPUT: c
+# OUTPUT: 3
+# EXIT: 0
+# 型を問わないリスト操作（ジェネリック関数）
+#   ★ list[int] も list[str] も同じ関数で扱えます。
+#   ⚠️ **要素を別のリストに移すもの（filter / map / sorted）は書けません。**
+#     借りた要素を別の入れ物に保存することになり E-BORROW-3 になります。
+#     代わりに **添字を返す**ものを置いています（中身は元のリストが持ったまま）。
+import lists
+
+def is_pos(x: int) -> bool:
+    return x > 0
+
+def to_s(x: int) -> str:
+    return "<" + str(x) + ">"
+
+def main() -> int:
+    xs: list[int] = [3, 1, 2]
+    print(lists.max_of(xs))
+    print(lists.min_of(xs))
+    print(lists.index_of(xs, 2))
+    print(lists.contains(xs, 9))
+    print(lists.count_if([1, -2, 3], is_pos))
+    print(lists.first_or(xs, 0))
+    print(lists.last_or(xs, 0))
+    print(lists.all_of(xs, is_pos))
+    print(lists.any_of(xs, is_pos))
+    for i in lists.sorted_indices(xs):
+        print(xs[i])
+    for i in lists.indices_where(xs, is_pos):
+        print(i)
+    for i in lists.reversed_indices(xs):
+        print(xs[i])
+    ss: list[str] = ["b", "a", "c"]
+    for i in lists.sorted_indices(ss):
+        print(ss[i])
+    print(xs[0])
+    return 0

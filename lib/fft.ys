@@ -1,0 +1,102 @@
+# fft — 高速フーリエ変換
+#
+# ★ **これが「複素数が無いと書けない」ものの代表です**
+#   （ロードマップのレビュー D1）。言語は変えていません。
+#   `lib/complex` と、0.7.0 の演算子の多重定義だけで書けています。
+#
+# ⚠️ **長さは 2 のべき乗だけ**です（基数 2 の Cooley–Tukey）。
+#   ほかの長さは panic します。0 埋めしてから渡してください。
+#
+# ⚠️ **速さより読みやすさを取っています。** 複素数はオブジェクトなので、
+#   蝶形演算のたびに確保が起きます。大きな N を何度も変換するなら、
+#   実部と虚部を `list[float]` 2 本で持つ書き方のほうが速くなります。
+
+import complex
+import math
+
+def is_pow2(n: int) -> bool:
+    if n < 1:
+        return False
+    m: int = n
+    while m % 2 == 0:
+        m = m // 2
+    return m == 1
+
+def need_pow2(n: int, who: str) -> None:
+    if not is_pow2(n):
+        panic(who + ": 長さは 2 のべき乗でなければなりません（" + str(n) + "）")
+
+# 0 〜 n-1 を、log2(n) 桁のビット反転で並べ替えた位置
+def bit_reverse(i: int, bits: int) -> int:
+    r: int = 0
+    x: int = i
+    k: int = 0
+    while k < bits:
+        r = r * 2 + (x % 2)
+        x = x // 2
+        k = k + 1
+    return r
+
+def log2_exact(n: int) -> int:
+    b: int = 0
+    m: int = n
+    while m > 1:
+        m = m // 2
+        b = b + 1
+    return b
+
+# ── 変換 ────────────────────────────────────────────────────
+
+# 離散フーリエ変換。sign = -1 が順変換、+1 が逆変換の中身です。
+# ⚠️ 割り算（1/N）はしません。ifft がまとめて行います。
+def transform(zs: list[complex.Complex], sign: float) -> list[complex.Complex]:
+    n: int = len(zs)
+    need_pow2(n, "fft")
+    bits: int = log2_exact(n)
+
+    # ① ビット反転の順に並べ替える（複製を作るので、元の並びは変わりません）
+    out: list[complex.Complex] = []
+    for i in range(n):
+        out.append(complex.copy_of(zs[bit_reverse(i, bits)]))
+
+    # ② 蝶形演算を log2(n) 段
+    size: int = 2
+    while size <= n:
+        half: int = size // 2
+        # この段の回転因子 e^(sign · 2πi / size)
+        theta: float = sign * 2.0 * math.pi() / float(size)
+        start: int = 0
+        while start < n:
+            k: int = 0
+            while k < half:
+                w: complex.Complex = complex.polar(1.0, theta * float(k))
+                u: complex.Complex = complex.copy_of(out[start + k])
+                t: complex.Complex = w * out[start + k + half]
+                out[start + k] = u + t
+                out[start + k + half] = u - t
+                k = k + 1
+            start = start + size
+        size = size * 2
+    return out
+
+# 順変換
+def fft(zs: list[complex.Complex]) -> list[complex.Complex]:
+    return transform(zs, -1.0)
+
+# 逆変換（1/N を掛けます）
+def ifft(zs: list[complex.Complex]) -> list[complex.Complex]:
+    n: int = len(zs)
+    out: list[complex.Complex] = transform(zs, 1.0)
+    inv: float = 1.0 / float(n)
+    res: list[complex.Complex] = []
+    for z in out:
+        res.append(complex.scale(z, inv))
+    return res
+
+# 実数の並びをそのまま変換する
+def fft_real(xs: list[float]) -> list[complex.Complex]:
+    return fft(complex.from_reals(xs))
+
+# 振幅スペクトル（|X[k]|）
+def spectrum(xs: list[float]) -> list[float]:
+    return complex.mags(fft_real(xs))

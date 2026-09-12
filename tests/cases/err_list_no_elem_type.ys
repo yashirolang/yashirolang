@@ -1,0 +1,5 @@
+# ERROR: list には要素型が必要です
+# ERROR: = ヒント: 要素型を書いてください（例: list[int]）
+def main() -> int:
+    xs: list = []
+    return 0

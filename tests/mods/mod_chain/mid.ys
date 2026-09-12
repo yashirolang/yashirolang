@@ -1,0 +1,4 @@
+import base
+
+def two() -> int:
+    return base.one() + 1

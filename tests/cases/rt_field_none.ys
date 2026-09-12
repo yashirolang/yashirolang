@@ -1,0 +1,16 @@
+# EXIT: 1
+# 型検査をすり抜けた未初期化フィールド（15.6 節の「ほぼ」の中身）。
+# init に self.next = ... が「書いてある」ので静的検査は通るが、
+# 条件が偽なら代入は実行されない。そこをランタイムが受け止める。
+class N:
+    v: int
+    next: N
+
+    def init(self, ok: bool) -> None:
+        self.v = 1
+        if ok:
+            self.next = self
+
+def main() -> int:
+    a: N = N(False)
+    return a.next.v

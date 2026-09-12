@@ -1,0 +1,74 @@
+# sales_report — CSV を読んで、集計して、図にする
+#
+# ★ **pandas + matplotlib でやっていたことの全体**です。
+#   外部ライブラリはありません。`import` するだけで動きます。
+#
+#   実行:
+#     <cc> examples/sales_report<ext> -o /tmp/report && /tmp/report
+#   出来るもの:
+#     /tmp/sales_by_shop.svg   店ごとの売上（棒）
+#     /tmp/sales_trend.svg     日ごとの売上（折れ線）
+import frame
+import io
+import plot
+import strings
+
+CSV: str = ""
+
+def make_csv() -> str:
+    rows: list[str] = ["day,shop,amount"]
+    seed: int = 20260906
+    d: int = 1
+    while d <= 30:
+        s: int = 0
+        while s < 3:
+            seed = (seed * 1103515 + 12345) % 2147483648
+            amt: int = 50 + seed % 450
+            name: str = "A"
+            if s == 1:
+                name = "B"
+            if s == 2:
+                name = "C"
+            rows.append(str(d) + "," + name + "," + str(amt))
+            s = s + 1
+        d = d + 1
+    return strings.join(rows, "\n") + "\n"
+
+
+def main() -> int:
+    df: frame.Frame = frame.parse_csv(make_csv())
+    print(frame.describe(df))
+    print(df.show_head(5))
+
+    # ① 店ごとの合計 → 棒グラフ
+    g: frame.Frame = frame.group_by(df, "shop", "amount", "sum")
+    print(g.show())
+
+    p: plot.Plot = plot.Plot(560, 360)
+    p.title("店ごとの売上")
+    p.ylabel("円")
+    p.bar("合計", g.text("shop"), g.num("amount"))
+    p.save("/tmp/sales_by_shop.svg")
+
+    # ② 日ごとの合計 → 折れ線（店ごとに 1 本）
+    q: plot.Plot = plot.Plot(720, 380)
+    q.title("日ごとの売上")
+    q.xlabel("日")
+    q.ylabel("円")
+    for name in ["A", "B", "C"]:
+        one: frame.Frame = df.where(frame.eq_text(df.text("shop"), name))
+        q.line(name, one.num("day"), one.num("amount"))
+    q.save("/tmp/sales_trend.svg")
+
+    # ③ いちばん売れた日（★ 鍵の列は数値のままでかまいません）
+    day_sum: frame.Frame = frame.group_by(df, "day", "amount", "sum")
+    best: int = 0
+    xs: list[float] = day_sum.num("amount")
+    for i in range(len(xs)):
+        if xs[i] > xs[best]:
+            best = i
+    print("最高の日: " + str(int(day_sum.num("day")[best])) + " 日（" +
+          str(xs[best]) + " 円）")
+    print("図を書きました: /tmp/sales_by_shop.svg /tmp/sales_trend.svg")
+    return 0
+

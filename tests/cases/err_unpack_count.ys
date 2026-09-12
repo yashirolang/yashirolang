@@ -1,0 +1,9 @@
+# ERROR: 受け取る数が合いません（3 個と 2 個）
+# ERROR: = ヒント: 右辺は '(int, int)' です
+# 受け取る名前の数はタプルの要素数と同じでなければならない
+def two() -> (int, int):
+    return 1, 2
+
+def main() -> int:
+    a, b, c = two()
+    return a + b + c

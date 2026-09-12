@@ -1,0 +1,29 @@
+# OUTPUT: 20
+# OUTPUT: -1
+# 値に「list の添字」を入れる使い方
+#   ⚠️ **ジェネリクスで不要になりました**（dict.Dict[str, Symbol]
+#     が書けます。lib_dict_generic を参照）。この形も動き続けることを
+#     確かめるために残しています。
+import dict
+
+class Symbol:
+    name: str
+    value: int
+
+    def init(self, name: str, value: int) -> None:
+        self.name = name
+        self.value = value
+
+def main() -> int:
+    table: list[Symbol] = []
+    syms: dict.Dict[str, int] = dict.Dict()
+
+    table.append(Symbol("x", 10))
+    syms.set("x", len(table) - 1)
+    table.append(Symbol("y", 20))
+    syms.set("y", len(table) - 1)
+
+    i: int = syms.get_or("y", -1)
+    print(table[i].value)
+    print(syms.get_or("z", -1))
+    return 0

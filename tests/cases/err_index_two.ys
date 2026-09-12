@@ -1,0 +1,6 @@
+# ERROR: 型 'list[int]' に添字を 2 つ以上は書けません
+# 2 次元の添字が使えるのは __getitem__ を定義したクラスだけ
+def main() -> int:
+    xs: list[int] = [1, 2, 3]
+    print(str(xs[0, 1]))
+    return 0

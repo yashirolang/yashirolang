@@ -1,0 +1,23 @@
+# ERROR: E-SEND-2
+# ERROR: はスレッドに渡せません
+# STAGE0-ONLY: 所有権検査は C 版にしかありません
+# STAGE1-SKIP: 所有権検査（E-SEND-*）は C 版にしかないので、IR を比べられません
+# rc[T] はスレッドをまたげません（A-18。設計文書 2.2）
+#
+# ★ 参照数はただの整数の増減で、競合すると数が壊れます（早すぎる解放）。
+#   原子的な増減にすれば直りますが、**すべての rc[T] が遅くなります**。
+#   コンパイラ自身が rc[T] だらけなので、それは払えません。
+
+class Cell:
+    n: int
+
+    def init(mut self, n: int) -> None:
+        self.n = n
+
+def work(c: rc[Cell]) -> int:
+    return c.n
+
+def main() -> int:
+    r: rc[Cell] = rc(Cell(1))
+    t: Thread[int] = spawn(work, r)
+    return t.join()

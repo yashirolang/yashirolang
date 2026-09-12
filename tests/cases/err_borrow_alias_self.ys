@@ -1,0 +1,17 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# FLAGS: --deny-borrow
+# ERROR: error[E-BORROW-5]: 'b' を可変借用と共有借用で同時に渡しています
+# メソッド呼び出しは m(obj, args) と同じ。self も検査の対象に並べる
+class Bag:
+    items: list[int]
+
+    def init(self) -> None:
+        self.items = []
+
+    def push_len(mut self, other: list[int]) -> None:
+        self.items.append(len(other))
+
+def main() -> int:
+    b: Bag = Bag()
+    b.push_len(b.items)
+    return len(b.items)

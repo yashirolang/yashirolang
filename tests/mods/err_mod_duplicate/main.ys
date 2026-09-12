@@ -1,0 +1,7 @@
+# ERROR: 'lib' は既に import されています
+# ERROR: 重複した import です
+import lib
+import lib
+
+def main() -> int:
+    return lib.f(1)

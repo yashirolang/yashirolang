@@ -1,0 +1,666 @@
+# lexer — 字句解析器
+#
+# ★ src/lexer.c の移植です。**機械的に移しています。**
+#   関数名・判定の順序・表の並びを C 版と揃えてあるので、
+#   出力が食い違ったときに「どちらが違うか」を diff で追えます。
+#   docs/design/self-hosting.md 6 節
+#
+# ⚠️ ポインタが無いので、C 版の `const char *p` は `pos: int`（添字）です。
+#   トークンが指すソースの範囲も、部分文字列として複製して持ちます。
+import io
+import strings
+import diag
+import token
+
+# インデントの最大ネスト深さ（C 版の MAX_INDENT_DEPTH と同じ値）
+MAX_INDENT_DEPTH: int = 64
+
+# よく使うバイト（本言語には文字リテラルが無いので数値で持つ）
+B_NUL: int = 0
+B_TAB: int = 9
+B_LF: int = 10
+B_CR: int = 13
+B_SPACE: int = 32
+B_HASH: int = 35
+B_QUOTE: int = 34
+B_SQUOTE: int = 39
+B_BACKSLASH: int = 92
+B_UNDERSCORE: int = 95
+B_ZERO: int = 48
+B_NINE: int = 57
+B_DOT: int = 46
+B_PLUS: int = 43
+B_MINUS: int = 45
+B_LOWER_E: int = 101
+B_LOWER_F: int = 102
+B_UPPER_E: int = 69
+
+# エスケープのヒント（C 版とまったく同じ文字列）。
+# ⚠️ バックスラッシュだらけなので、定数にして 1 か所に閉じ込めます。
+ESCAPE_HINT: str = "使えるのは \\n \\t \\r \\0 \\\\ \\\" \\' です。バックスラッシュそのものを書くには \\\\ とします"
+
+# 16 進 2 桁（大文字）。C 版の "%02X" にあたる
+def hex2(v: int) -> str:
+    digits: str = "0123456789ABCDEF"
+    hi: int = (v // 16) % 16
+    lo: int = v % 16
+    return digits[hi] + digits[lo]
+
+
+# ── 浮動小数点リテラルの正規化 ──────────────────────────
+#
+# ★ C 版 src/lexer.c の normalize_float と**同じ文字列**を返すこと。
+#   ここがずれると 2 つの実装が違う IR を出し、tests/selfhost.sh の
+#   IR 比較と不動点が壊れます。
+#
+#   - 小数点が無ければ ".0" を足す（LLVM は 1e3 を double と認めない）
+#   - 小数点で始まる/終わるときは 0 を補う
+#   - 指数部は 'e' に統一する
+def normalize_float(digits: str, exp: str) -> str:
+    out: str = digits
+    if strings.startswith(out, "."):
+        out = "0" + out
+    if not strings.contains(out, "."):
+        out = out + ".0"
+    elif strings.endswith(out, "."):
+        out = out + "0"
+    if len(exp) > 0:
+        out = out + "e" + exp
+    return out
+
+# ── 文字の判定 ──────────────────────────────────────────────
+
+def is_digit(b: int) -> bool:
+    return b >= 48 and b <= 57
+
+def is_lower(b: int) -> bool:
+    return b >= 97 and b <= 122
+
+def is_upper(b: int) -> bool:
+    return b >= 65 and b <= 90
+
+def is_alpha(b: int) -> bool:
+    return is_lower(b) or is_upper(b)
+
+def is_ident_start(b: int) -> bool:
+    return is_alpha(b) or b == B_UNDERSCORE
+
+def is_ident_cont(b: int) -> bool:
+    return is_ident_start(b) or is_digit(b)
+
+# 基数 base における桁の値。桁でなければ -1
+#
+# ★ C 版は strtoll に任せていましたが、本言語の int() は 10 進だけなので
+#   自分で組みます。
+def digit_value(b: int) -> int:
+    if is_digit(b):
+        return b - 48
+    if is_lower(b):
+        return b - 97 + 10
+    if is_upper(b):
+        return b - 65 + 10
+    return -1
+
+def is_digit_of(b: int, base: int) -> bool:
+    v: int = digit_value(b)
+    return v >= 0 and v < base
+
+# エスケープの対応表（C 版の ESCAPES と同じ内容）。未知なら -1
+def escape_of(b: int) -> int:
+    if b == 110:
+        return B_LF
+    if b == 116:
+        return B_TAB
+    if b == 114:
+        return B_CR
+    if b == 48:
+        return B_NUL
+    if b == B_BACKSLASH:
+        return B_BACKSLASH
+    if b == B_QUOTE:
+        return B_QUOTE
+    if b == B_SQUOTE:
+        return B_SQUOTE
+    return -1
+
+
+class Lexer:
+    # ★ ファイル名とソース全体は **1 つの箱に入れて共有**します
+    #   （全トークンが同じものを指します。複製すると O(n²)）。
+    source: rc[token.SrcText]
+    pos: int          # ★ C 版の `const char *p`
+    line_start: int   # ★ C 版の `const char *line_start`
+    line: int
+
+    # 直前の行（EOF トークンの位置決めに使う）
+    prev_line_start: int
+    prev_line: int
+    has_prev_line: bool
+
+    # インデント幅のスタック。常に先頭は 0（トップレベル）
+    #
+    # ⚠️ 本言語の list には pop がありません（append だけ）。
+    #   C 版が固定長配列 + 長さで持っていたのと同じ形にします。
+    #   indent_len より後ろの要素は「使われていない古い値」です。
+    indent_stack: list[int]
+    indent_len: int
+
+    # 括弧の深さ。0 より大きいときは改行を無視する（論理行が続く）
+    paren_depth: int
+
+    out: list[rc[token.Token]]
+
+    # 表（C 版は static const 配列。本言語にはグローバルのリストが
+    # 書けないので、ここで 1 回だけ組み立てます）
+    keywords: list[str]
+    puncts: list[str]
+
+    def init(self, file: str, src: str) -> None:
+        self.source = rc(token.SrcText(copy(file), copy(src)))
+        self.pos = 0
+        self.line_start = 0
+        self.line = 1
+        self.prev_line_start = 0
+        self.prev_line = 0
+        self.has_prev_line = False
+        self.indent_stack = [0]
+        self.indent_len = 1
+        self.paren_depth = 0
+        self.out = []
+
+        # 言語仕様 2.5 の予約語。**現時点で使わないものも予約しておく。**
+        self.keywords = ["and", "as", "break", "class", "continue", "def",
+                         "elif", "else", "extern", "False", "for", "if",
+                         "import", "in", "is", "None", "not", "or", "pass",
+                         "return", "True", "while",
+                         # 言語仕様 v2（del / try / except / with は下で予約済み）
+                         "own", "mut", "raises", "unsafe", "pragma",
+                         # インタフェース
+                         "interface",
+                         "assert", "const", "del", "except", "finally", "from",
+                         "global", "lambda", "match", "nonlocal", "raise",
+                         "try", "with", "yield"]
+
+        # ★ 長い記号を先に並べること（最長一致）。C 版の PUNCTS と同じ順序。
+        self.puncts = ["//=",
+                       "//", "**", "<<", ">>", "+=", "-=", "*=", "%=",
+                       "==", "!=", "<=", ">=",
+                       "->",
+                       "+", "-", "*", "/", "%", "&", "|", "^", "~", "(", ")",
+                       ":", "=", "<", ">", ",", "[", "]", "."]
+
+    # ── ソースの読み取り ────────────────────────────────────
+
+    # 現在位置のバイト。終端なら 0（C の '\0' と同じ扱い）
+    def at(self) -> int:
+        if self.pos >= len(self.source.text):
+            return B_NUL
+        return strings.byte_at(self.source.text, self.pos)
+
+    def at_off(self, off: int) -> int:
+        i: int = self.pos + off
+        if i >= len(self.source.text):
+            return B_NUL
+        return strings.byte_at(self.source.text, i)
+
+    def col_of(self, at: int) -> int:
+        return at - self.line_start + 1
+
+    def is_keyword(self, s: str) -> bool:
+        i: int = 0
+        while i < len(self.keywords):
+            if self.keywords[i] == s:
+                return True
+            i = i + 1
+        return False
+
+    # ── トークンの追加 ──────────────────────────────────────
+    #
+    # 位置情報はここで一括して埋めるので、呼び出し側は kind と値だけを見る。
+    def push(mut self, kind: int, at: int, raw: str) -> rc[token.Token]:
+        t: rc[token.Token] = rc(token.Token(kind, self.source, self.line,
+                                            self.col_of(at),
+                                            self.line_start, len(raw)))
+        t.raw = copy(raw)
+        self.out.append(t)
+        return t
+
+    # エラー報告のために、指定範囲を指す一時トークンを組み立てる
+    # （C 版の span_token と同じ。本物のトークンを push する前でもエラーを出せる）
+    def span(self, start: int, end: int) -> rc[token.Token]:
+        n: int = end - start
+        if n < 1:
+            n = 1
+        return rc(token.Token(token.TK_EOF, self.source, self.line,
+                              self.col_of(start), self.line_start, n))
+
+    # ★ 診断の描画を diag に移しました（C 版と同じ形）
+    def fail(self, at: int, msg: str) -> None:
+        diag.error_at(self.span(at, at + 1), msg)
+
+    def fail_span(self, start: int, end: int, msg: str, hint: str) -> None:
+        diag.error_at_hint(self.span(start, end), hint, msg)
+
+    # タブは 2 か所から報告するので関数にする（C 版と同じ文言）
+    def fail_tab(self) -> None:
+        self.fail_span(self.pos, self.pos + 1, "タブ文字は使えません",
+                       "タブ幅の解釈によってインデントの意味が変わるのを防ぐため、" +
+                       "本言語ではタブを禁止しています（半角スペース 4 個を推奨）")
+
+    # '\n' を 1 つ読み進め、行番号と行頭を更新する
+    def advance_newline(mut self) -> None:
+        self.prev_line_start = self.line_start
+        self.prev_line = self.line
+        self.has_prev_line = True
+
+        self.pos = self.pos + 1
+        self.line = self.line + 1
+        self.line_start = self.pos
+
+    # ── 数値リテラル ────────────────────────────────────────
+
+    def read_int(mut self) -> None:
+        start: int = self.pos
+
+        # 基数の接頭辞（言語仕様 2.7）
+        base: int = 10
+        if self.at() == B_ZERO and self.at_off(1) != B_NUL:
+            c: int = self.at_off(1)
+            if c == 120 or c == 88:
+                base = 16
+            elif c == 111 or c == 79:
+                base = 8
+            elif c == 98 or c == 66:
+                base = 2
+            if base != 10:
+                self.pos = self.pos + 2
+
+        # 桁区切りの '_' を飛ばしながら値を組み立てる（1_000 == 1000）
+        v: int = 0
+        n: int = 0
+        overflow: bool = False
+        while is_digit_of(self.at(), base) or self.at() == B_UNDERSCORE:
+            if self.at() == B_UNDERSCORE:
+                self.pos = self.pos + 1
+                continue
+            d: int = digit_value(self.at())
+            # ⚠️ C 版は strtoll + errno。ここは自分で検出する。
+            if v > (9223372036854775807 - d) // base:
+                overflow = True
+            # ★ あふれると分かったら**積むのをやめる**。
+            #   以前は積み続けて 2 の補数で折り返していたが、
+            #   いまは `*` が桁あふれで panic する。
+            #   ⚠️ あふれた時点で v は使わない（下で overflow を見て失敗させる）。
+            if not overflow:
+                v = v * base + d
+            n = n + 1
+            self.pos = self.pos + 1
+
+        if n == 0:
+            valid: str = "0-1"
+            if base == 16:
+                valid = "0-9 a-f A-F"
+            elif base == 8:
+                valid = "0-7"
+            self.fail_span(start, self.pos,
+                           "数値リテラルに数字がありません",
+                           "基数 " + str(base) + " で使える数字は " + valid + " です")
+        # ── 浮動小数点リテラルか？（10 進のときだけ）──
+        #
+        # ⚠️ **'.' の後に数字があるときだけ** float にします（C 版と同じ）。
+        #    `1.` を float にすると `1.foo` と区別できなくなるためです。
+        if base == 10:
+            mant: str = strings.substr(self.source.text, start, self.pos - start)
+            expo: str = ""
+            is_float: bool = False
+
+            if self.at() == B_DOT and is_digit(self.at_off(1)):
+                self.pos = self.pos + 1
+                fstart: int = self.pos
+                while is_digit(self.at()) or self.at() == B_UNDERSCORE:
+                    self.pos = self.pos + 1
+                mant = mant + "." + strings.replace(
+                    strings.substr(self.source.text, fstart, self.pos - fstart), "_", "")
+                is_float = True
+
+            # 指数部 e / E。'e' の後が数字か 符号+数字 のときだけ
+            e0: int = self.at()
+            if e0 == B_LOWER_E or e0 == B_UPPER_E:
+                s1: int = self.at_off(1)
+                ok: bool = is_digit(s1)
+                if s1 == B_PLUS or s1 == B_MINUS:
+                    ok = is_digit(self.at_off(2))
+                if ok:
+                    self.pos = self.pos + 1
+                    estart: int = self.pos
+                    if self.at() == B_PLUS or self.at() == B_MINUS:
+                        self.pos = self.pos + 1
+                    while is_digit(self.at()) or self.at() == B_UNDERSCORE:
+                        self.pos = self.pos + 1
+                    expo = strings.replace(
+                        strings.substr(self.source.text, estart, self.pos - estart), "_", "")
+                    is_float = True
+
+            if is_float:
+                if is_alpha(self.at()) or self.at() == B_UNDERSCORE:
+                    self.fail_span(start, self.pos + 1,
+                                   "数値リテラルの直後に文字が続いています",
+                                   "数値と識別子の間に空白が必要かもしれません")
+                ft: rc[token.Token] = self.push(token.TK_FLOAT, start,
+                                            strings.substr(self.source.text, start,
+                                                           self.pos - start))
+                ft.text = normalize_float(strings.replace(mant, "_", ""), expo)
+                return
+
+        if is_alpha(self.at()) or self.at() == B_UNDERSCORE:
+            self.fail_span(start, self.pos + 1,
+                           "数値リテラルの直後に文字が続いています",
+                           "数値と識別子の間に空白が必要かもしれません")
+        if overflow:
+            self.fail_span(start, self.pos,
+                           "整数リテラルが int の範囲 (64bit) を超えています",
+                           "int が表せるのは -9223372036854775808 〜 " +
+                           "9223372036854775807 です")
+
+        t: rc[token.Token] = self.push(token.TK_INT, start,
+                                   strings.substr(self.source.text, start,
+                                                  self.pos - start))
+        t.ival = v
+
+    # ── インデント（この章の核心）──────────────────────────
+
+    # 空行・コメント行を読み飛ばし、内容のある行のインデント幅を返す。
+    # 入力が終わったら -1
+    def scan_indent(mut self) -> int:
+        while True:
+            width: int = 0
+            while self.at() == B_SPACE:
+                width = width + 1
+                self.pos = self.pos + 1
+
+            if self.at() == B_TAB:
+                self.fail_tab()
+
+            if self.at() == B_LF:
+                self.advance_newline()
+                continue
+            if self.at() == B_HASH:
+                while self.at() != B_NUL and self.at() != B_LF:
+                    self.pos = self.pos + 1
+                if self.at() == B_LF:
+                    self.advance_newline()
+                    continue
+                return -1
+            if self.at() == B_NUL:
+                return -1
+
+            return width
+
+        # ⚠️ ここには来ません（上の while は True で回っています）。
+        #   stage0 の到達可能性検査は「while True は抜けない」を判定しないので、
+        #   番人の return が要ります（v1 の割り切り。src/sema.c の always_returns）。
+        return -1
+
+    def indent_top(self) -> int:
+        return self.indent_stack[self.indent_len - 1]
+
+    def indent_push(mut self, width: int) -> None:
+        if self.indent_len < len(self.indent_stack):
+            self.indent_stack[self.indent_len] = width
+        else:
+            self.indent_stack.append(width)
+        self.indent_len = self.indent_len + 1
+
+    def emit_indent_tokens(mut self, width: int) -> None:
+        top: int = self.indent_top()
+
+        if width > top:
+            # ⚠️ 「4 段深くなったから INDENT 4 個」ではない。1 段 = 1 個。
+            if self.indent_len >= MAX_INDENT_DEPTH:
+                self.fail(self.pos, "インデントが深すぎます（最大 " +
+                          str(MAX_INDENT_DEPTH - 1) + " 段）")
+            self.indent_push(width)
+            # ⚠️ self.push は self を可変借用します。同じ呼び出しの中で
+            #   self.pos を読むと「可変と共有を同時」になるので、先に読みます。
+            at_in: int = self.pos
+            self.push(token.TK_INDENT, at_in, "")
+            return
+
+        if width < top:
+            # ★ DEDENT は一度に複数個出ることがある
+            while self.indent_len > 1 and self.indent_top() > width:
+                self.indent_len = self.indent_len - 1
+                at_de: int = self.pos
+                self.push(token.TK_DEDENT, at_de, "")
+
+            if self.indent_top() != width:
+                self.fail_span(self.line_start, self.pos,
+                               "インデントが揃っていません" +
+                               "（どのブロックにも対応しません）",
+                               "外側のブロックのインデント幅と" +
+                               "正確に一致させてください")
+
+    # ── 識別子・キーワード ──────────────────────────────────
+
+    def read_ident(mut self) -> None:
+        start: int = self.pos
+        while is_ident_cont(self.at()):
+            self.pos = self.pos + 1
+
+        raw: str = strings.substr(self.source.text, start, self.pos - start)
+        kind: int = token.TK_IDENT
+        if self.is_keyword(raw):
+            kind = token.TK_KEYWORD
+
+        # ⚠️ push は raw を預かる（複製する）ので、ここでも使うなら
+        #   長さを**先に**取っておきます（str は共有できません）。
+        rlen: int = len(raw)
+        t: rc[token.Token] = self.push(kind, start, raw)
+        t.text = copy(t.raw)
+        t.slen = rlen
+
+    # ── 文字列リテラル ──────────────────────────────────────
+
+    # ★ is_f が真なら f"..."。TK_FSTRING として出し、
+    #   **波括弧はそのまま残します**（中身の式はパーサが読みます）。
+    def read_string_kind(mut self, is_f: bool) -> None:
+        start: int = self.pos
+        if is_f:
+            self.pos = self.pos + 1        # 'f' を読み飛ばす
+        quote: int = self.at()
+        self.pos = self.pos + 1
+
+        parts: list[str] = []
+        n: int = 0
+
+        while True:
+            c: int = self.at()
+
+            # ⚠️ 行をまたがない（エラー位置が遠くなるため）
+            if c == B_NUL or c == B_LF:
+                self.fail_span(start, start + 1, "文字列が閉じられていません",
+                               "文字列は同じ行の中で閉じてください")
+
+            if c == quote:
+                self.pos = self.pos + 1
+                break
+
+            if c == B_BACKSLASH:
+                e: int = self.at_off(1)
+                to: int = escape_of(e)
+                if to < 0:
+                    self.fail_span(self.pos, self.pos + 2,
+                                   "未知のエスケープシーケンス '\\" + chr(e) + "' です",
+                                   ESCAPE_HINT)
+                parts.append(chr(to))
+                n = n + 1
+                self.pos = self.pos + 2
+                continue
+
+            parts.append(chr(c))
+            n = n + 1
+            self.pos = self.pos + 1
+
+        kind: int = token.TK_STR
+        if is_f:
+            kind = token.TK_FSTRING
+        t: rc[token.Token] = self.push(kind, start,
+                                   strings.substr(self.source.text, start,
+                                                  self.pos - start))
+        t.text = strings.join(parts, "")
+        t.slen = n
+
+    def read_string(mut self) -> None:
+        self.read_string_kind(False)
+
+    # ── 記号 ────────────────────────────────────────────────
+
+    def read_punct(mut self) -> bool:
+        i: int = 0
+        while i < len(self.puncts):
+            op: str = self.puncts[i]
+            if strings.matches_at(self.source.text, op, self.pos):
+                at_op: int = self.pos
+                self.push(token.TK_PUNCT, at_op, op)
+
+                # 括弧の深さを追う（括弧の中では改行を無視する）
+                if len(op) == 1:
+                    if op == "(" or op == "[":
+                        self.paren_depth = self.paren_depth + 1
+                    elif op == ")" or op == "]":
+                        # ⚠️ 負にしない（対応しない ')' は構文解析器が報告する）
+                        if self.paren_depth > 0:
+                            self.paren_depth = self.paren_depth - 1
+
+                self.pos = self.pos + len(op)
+                return True
+            i = i + 1
+        return False
+
+    # ── 本体 ────────────────────────────────────────────────
+
+    def run(mut self) -> list[rc[token.Token]]:
+        at_line_start: bool = True
+
+        while self.at() != B_NUL:
+            # ① 行頭：インデントを測って INDENT / DEDENT を出す
+            if at_line_start and self.paren_depth == 0:
+                width: int = self.scan_indent()
+                if width < 0:
+                    break
+                self.emit_indent_tokens(width)
+                at_line_start = False
+                continue
+            at_line_start = False
+
+            # ② 改行
+            if self.at() == B_LF:
+                if self.paren_depth == 0:
+                    at_nl: int = self.pos
+                    self.push(token.TK_NEWLINE, at_nl, "")
+                    at_line_start = True
+                self.advance_newline()
+                continue
+
+            if self.at() == B_SPACE:
+                self.pos = self.pos + 1
+                continue
+
+            if self.at() == B_TAB:
+                self.fail_tab()
+
+            if self.at() == B_HASH:
+                while self.at() != B_NUL and self.at() != B_LF:
+                    self.pos = self.pos + 1
+                continue
+
+            if is_digit(self.at()):
+                self.read_int()
+                continue
+
+            # ★ f"..." は識別子より **先に**判定する
+            #   （後にすると 'f' が識別子として読まれる）
+            if self.at() == B_LOWER_F:
+                q0: int = self.at_off(1)
+                if q0 == B_QUOTE or q0 == B_SQUOTE:
+                    self.read_string_kind(True)
+                    continue
+
+            # ⚠️ 数値より後に判定する（順序を C 版と揃える）
+            if is_ident_start(self.at()):
+                self.read_ident()
+                continue
+
+            if self.at() == B_QUOTE or self.at() == B_SQUOTE:
+                self.read_string()
+                continue
+
+            if self.read_punct():
+                continue
+
+            c2: int = self.at()
+            if c2 < 32 or c2 >= 127:
+                self.fail(self.pos, "解釈できない文字です (0x" + hex2(c2) + ")")
+            self.fail(self.pos, "解釈できない文字です: '" + chr(c2) + "'")
+
+        # ★ EOF の位置に一手間かける。
+        #   現在行が空なら、直前の行の末尾を指す。
+        end_loc: int = self.pos
+        if self.pos == self.line_start and self.has_prev_line:
+            self.line_start = self.prev_line_start
+            self.line = self.prev_line
+            eol: int = self.prev_line_start
+            while eol < len(self.source.text) and strings.byte_at(self.source.text, eol) != B_LF:
+                eol = eol + 1
+            end_loc = eol
+
+        # ★ ファイル末尾では、開いているインデントぶんの DEDENT を全部出す
+        while self.indent_len > 1:
+            self.indent_len = self.indent_len - 1
+            self.push(token.TK_DEDENT, end_loc, "")
+
+        self.push(token.TK_EOF, end_loc, "")
+        return self.out
+
+
+def tokenize(file: str, src: str) -> list[rc[token.Token]]:
+    lx: Lexer = Lexer(file, src)
+    return lx.run()
+
+
+# ソースファイルを読む。**C 版の src/util.c :: read_file と対になります。**
+#
+# ⚠️ 言語仕様 2.1 は「`\r\n` は読み込み時に `\n` に正規化する」と決めています。
+#   C 版はこれを read_file の中でやっていましたが、こちら側は io.read_file を
+#   そのまま呼んでいたため、**Windows で checkout した CRLF のソースが
+#   stage1 でだけ字句エラーになっていました**（`解釈できない文字です (0x0D)`）。
+#
+# ★ io.read_file 側では正規化しません。利用者が読む「ただのファイル」の
+#   中身を処理系の都合で書き換えてしまうためです。
+def read_source(path: str) -> str:
+    src: str = io.read_file(path)
+    n: int = len(src)
+
+    # ★ CR が無いのが普通なので、まず探すだけ。無ければ複製もしません。
+    i: int = 0
+    while i < n:
+        if strings.byte_at(src, i) == B_CR:
+            break
+        i = i + 1
+    if i == n:
+        return src
+
+    parts: list[str] = []
+    start: int = 0
+    i = 0
+    while i < n:
+        if strings.byte_at(src, i) == B_CR:
+            parts.append(strings.substr(src, start, i - start))
+            parts.append("\n")
+            # \r\n は 2 バイトで 1 つの改行。単独の \r も改行として扱います。
+            if i + 1 < n and strings.byte_at(src, i + 1) == B_LF:
+                i = i + 1
+            start = i + 1
+        i = i + 1
+    parts.append(strings.substr(src, start, n - start))
+    return strings.join(parts, "")

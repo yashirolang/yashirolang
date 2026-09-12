@@ -1,0 +1,13 @@
+# OUTPUT: 1:hello
+# OUTPUT: 9
+# OUTPUT: direct
+# ゴール。関数・クラス・グローバル変数を修飾して使う
+import lexer
+
+def main() -> int:
+    t: lexer.Token = lexer.make(1, "hello")
+    t.show()
+    print(lexer.MAX_KIND)
+    u: lexer.Token = lexer.Token(2, "direct")
+    print(u.text)
+    return 0

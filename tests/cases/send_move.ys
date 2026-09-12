@@ -1,0 +1,27 @@
+# ERROR: E-MOVE-1
+# ERROR: 移動済みの値
+# STAGE0-ONLY: 所有権検査は C 版にしかありません
+# STAGE1-SKIP: 所有権検査（E-SEND-*）は C 版にしかないので、IR を比べられません
+# spawn した値は移動します（A-18）
+#
+# ★ ここも**新しい規則ではありません**。spawn の引数を「ムーブされた」と
+#   記録するだけで、あとは既存の E-MOVE-1 が仕事をします。
+#
+# ⚠️ そして **spawn を使ったファイルでは所有権検査がエラーに上がります**
+#   （設計文書 §5）。既定が警告のままだと「データ競合が無い」という保証も
+#   警告どまりになるためです。spawn は新機能なので、既存コードは壊れません。
+
+class Job:
+    n: int
+
+    def init(mut self, n: int) -> None:
+        self.n = n
+
+def work(j: own Job) -> int:
+    return j.n
+
+def main() -> int:
+    j: Job = Job(7)
+    t: Thread[int] = spawn(work, j)
+    print(j.n)
+    return t.join()

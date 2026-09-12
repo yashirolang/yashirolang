@@ -1,0 +1,4 @@
+import main
+
+def f() -> int:
+    return 1

@@ -1,0 +1,8 @@
+# EXIT: 11
+# 引数に代入できる（規約 R8：引数を alloca にコピーしている）
+def inc(a: int) -> int:
+    a = a + 1
+    return a
+
+def main() -> int:
+    return inc(10)

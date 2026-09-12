@@ -1,0 +1,3 @@
+# ERROR: 型 'bool' に演算子 '<<' は適用できません
+def main() -> int:
+    return True << False

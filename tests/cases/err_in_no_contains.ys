@@ -1,0 +1,13 @@
+# ERROR: 'P' 型に 'in' は使えません
+# ERROR: __contains__(self, x) -> bool
+# __contains__ が無いクラスには 'in' を使えない
+class P:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+def main() -> int:
+    p: P = P(1)
+    print(str(1 in p))
+    return 0

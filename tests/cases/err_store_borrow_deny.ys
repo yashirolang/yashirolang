@@ -1,0 +1,18 @@
+# STAGE0-ONLY: 所有権検査は C 版だけ
+# FLAGS: --deny-store-borrow
+# ERROR: error[E-BORROW-7]: 借用した値 'xs[…]' をフィールドに保存しています
+# --deny-store-borrow を付けると、E-BORROW-7 は警告ではなくエラーになります。
+#   ★ 決定 D12：昇格のスイッチは検査ごとに分けます。この検査は selfhost/ に
+#     まだ残っているので、--deny-borrow には混ぜていません。
+class Node:
+    v: int
+    next: Node | None
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+def main() -> int:
+    xs: list[Node] = [Node(3)]
+    a: Node = Node(0)
+    a.next = xs[0]
+    return 0

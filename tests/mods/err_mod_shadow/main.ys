@@ -1,0 +1,7 @@
+# ERROR: 'lib' は import したモジュールの名前です
+# ERROR: モジュール名と同じ名前を使うと 'lib.x' が曖昧になります
+import lib
+
+def main() -> int:
+    lib: int = 1
+    return lib

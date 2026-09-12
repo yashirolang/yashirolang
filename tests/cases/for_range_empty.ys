@@ -1,0 +1,7 @@
+# OUTPUT: done
+# 1 度も回らない
+def main() -> int:
+    for i in range(0):
+        print(i)
+    print("done")
+    return 0

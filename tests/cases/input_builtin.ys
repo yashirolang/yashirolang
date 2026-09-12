@@ -1,0 +1,16 @@
+# STDIN: 17
+# STDIN: shota
+# OUTPUT: 数: 34
+# OUTPUT: hello, shota
+# EXIT: 0
+# input() — Python と同じ形
+#
+# ⚠️ EOF では panic する。読めないかもしれない場面では
+#   io.read_line()（None が返る）を使う。
+
+def main() -> int:
+    n: int = int(input("数: "))
+    print(str(n * 2))
+    name: str = input()
+    print("hello, " + name)
+    return 0

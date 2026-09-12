@@ -1,0 +1,46 @@
+# OUTPUT: 1 3.5 3
+# OUTPUT: True True a/b v False
+# OUTPUT: {"n":1,"pi":3.5,"xs":[true,null,"a\nb"],"o":{"k":"v"}}
+# OUTPUT: ng 読めない値です 5
+# OUTPUT: ng 値の後にごみがあります 6
+# OUTPUT: ok "あい" ok "😀"
+# OUTPUT: {"name":"あ\"b","xs":[1,0.5]}
+# JSON の読み書き（lib/json）。**言語は 1 つも変えていません**。
+import json
+import strings
+
+def status(text: str) -> str:
+    r: json.Result = json.parse(text)
+    if r.ok:
+        return "ok " + json.dumps(r.get())
+    return "ng " + r.error + " " + str(r.at)
+
+def main() -> int:
+    src: str = "{\"n\": 1, \"pi\": 3.5, \"xs\": [true, null, \"a\\nb\"], \"o\": {\"k\": \"v\"}}"
+    r: json.Result = json.parse(src)
+    if not r.ok:
+        print("読めませんでした: " + r.error)
+        return 1
+    v: rc[json.Value] = r.get()
+    print(str(v.field("n").as_int()) + " " + str(v.field("pi").as_float()) +
+          " " + str(v.field("xs").len()))
+    print(str(v.field("xs").at(0).as_bool()) + " " +
+          str(v.field("xs").at(1).is_null()) + " " +
+          strings.replace(copy(v.field("xs").at(2).as_str()), "\n", "/") + " " +
+          v.field("o").field("k").as_str() + " " + str(v.has("nope")))
+    print(json.dumps(v))
+
+    # 末尾のカンマもコメントも読みません（RFC 8259 の範囲だけ）
+    print(status("[1,2,]"))
+    print(status("[1,2] junk"))
+    # \uXXXX はサロゲートペアも読みます
+    print(status("\"\\u3042\\u3044\"") + " " + status("\"\\ud83d\\ude00\""))
+
+    b: rc[json.Value] = json.object()
+    b.put("name", json.of_str("あ\"b"))
+    b.put("xs", json.array())
+    xs: rc[json.Value] = b.field("xs")
+    xs.push(json.of_int(1))
+    xs.push(json.of_float(0.5))
+    print(json.dumps(b))
+    return 0

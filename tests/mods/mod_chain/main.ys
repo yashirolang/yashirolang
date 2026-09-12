@@ -1,0 +1,10 @@
+# OUTPUT: 2
+# OUTPUT: 1
+# 依存が 2 段（main → mid → base）。読み込み順は base, mid, main
+import mid
+import base
+
+def main() -> int:
+    print(mid.two())
+    print(base.one())
+    return 0

@@ -1,0 +1,37 @@
+# STAGE0-ONLY: 所有権検査は C 版だけ
+# OUTPUT: 5
+# OUTPUT: -1
+# OUTPUT: a
+# OUTPUT: 2
+# OUTPUT: 0
+# EXIT: 0
+# ジェネリック関数 def f[T](...)
+#   ★ クラスと違い、**呼び出し側の実引数から型引数を決めます**。
+#     左辺の型からは決められないためです（f(xs) の左辺には戻り値の型しかない）。
+#   ⚠️ 「引数の型に型引数がそのまま現れる」場合だけ推論します。
+def first[T](xs: list[T], default: own T) -> T:
+    if len(xs) == 0:
+        return default
+    return xs[0]
+
+def count_if[T](xs: list[T], pred: fn(T) -> bool) -> int:
+    n: int = 0
+    for x in xs:
+        if pred(x):
+            n = n + 1
+    return n
+
+def swap[A, B](a: own A, b: own B) -> int:
+    return 0
+
+def is_pos(x: int) -> bool:
+    return x > 0
+
+def main() -> int:
+    print(first([5, 6], 0))
+    empty: list[int] = []
+    print(first(empty, -1))
+    print(first(["a", "b"], "z"))
+    print(count_if([1, -2, 3], is_pos))
+    print(swap(1, "x"))
+    return 0

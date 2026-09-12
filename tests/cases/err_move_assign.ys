@@ -1,0 +1,10 @@
+# STAGE0-ONLY: 所有権検査は C 版だけ
+# FLAGS: --deny-move
+# ERROR: error[E-MOVE-1]: 移動済みの値 'xs' を使っています
+# ERROR: ここで使われています
+# ERROR: 'xs' はここで移動しました
+# 代入は移動（言語仕様 v2 §3.1）
+def main() -> int:
+    xs: list[int] = [1, 2]
+    ys: list[int] = xs
+    return len(xs) + len(ys)

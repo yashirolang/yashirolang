@@ -1,0 +1,3418 @@
+# codegen — LLVM IR の生成
+#
+# ★ src/codegen.c（1288 行）の移植です。**機械的に移しています。**
+#   一時値・ラベルの連番、文字列リテラルの割り当て順、declare を出す順序まで
+#   C 版と一致させます。1 つでもずれると diff に出ます。
+#
+# 生成規約は docs/design/ir-conventions.md にあります。
+import strings
+import ast
+import langinfo
+import module
+import token
+import types
+
+
+# ── 別名解析（TBAA）のタグ。 ─────────────────────────────
+# ⚠️ 番号は C 版（src/codegen.c の TBAA_*）と**必ず同じ**にすること。
+#   2 実装が 1 バイト違わない IR を出す約束（ロードマップ §4-5）。
+TBAA_NONE: str = ""
+TBAA_FIELD: str = ", !tbaa !4"
+TBAA_LISTHDR: str = ", !tbaa !5"
+TBAA_LISTELEM: str = ", !tbaa !6"
+
+# ★ グローバル変数にもタグを付ける（当初の宿題②）。
+#
+# 🤔 なぜ付けるのか
+#   `while i < N:` の N がグローバルだと、LLVM は「本体の書き込みが N を
+#   書き換えるかもしれない」と見て**毎回読み直す**。するとループ回数が
+#   不定になり（uncountable loop）、ベクトル化できない。
+#   実測：512³ の行列積で 109 ms → 53 ms。
+#
+# ⚠️ 健全性：グローバルは .data にあり、pl_alloc が返すヒープのオブジェクト
+#   （field / listhdr / listelem）とは**決して重ならない**。
+#   ⚠️ グローバルどうしは同じタグなので互いに別名かもしれない（安全側）。
+#   ⚠️ unsafe: の生ポインタはタグ無しのまま（タグ無しは何とでも別名）。
+TBAA_GLOBAL: str = ", !tbaa !8"
+
+
+# break / continue の飛び先（規約 6.5）
+class LoopCtx:
+    outer: rc[LoopCtx] | None
+    break_label: str
+    continue_label: str
+
+    def init(self, outer: rc[LoopCtx] | None, break_label: str,
+             continue_label: str) -> None:
+        self.outer = outer
+        self.break_label = copy(break_label)
+        self.continue_label = copy(continue_label)
+
+
+# 出力済みの文字列リテラル（同じ内容は 1 つにまとめる）
+class StrLit:
+    bytes_: str
+    label: str
+    next: rc[StrLit] | None
+
+    def init(self, bytes_: str, label: str) -> None:
+        self.bytes_ = copy(bytes_)
+        self.label = copy(label)
+
+
+class Emitter:
+    # ── 出力バッファ（ 4 本に分けた） ──
+    header: list[str]   # source_filename, target triple, 型定義
+    globals_: list[str] # グローバル変数・文字列定数
+    decls: list[str]    # declare（外部関数宣言）
+    body: list[str]     # 完成した関数定義
+
+    # ── 生成中の関数用（関数ごとにリセット）──
+    allocas: list[str]  # entry ブロックに置く alloca
+    fn: list[str]       # 関数本体の命令列
+
+    tmp_counter: int
+    label_counter: int
+    terminated: bool    # 現在の基本ブロックが終端済みか（規約 R6）
+
+    loop: rc[LoopCtx] | None
+
+    strs: rc[StrLit] | None      # 文字列リテラルの共有
+    decled: list[str]        # declare の重複排除
+    emitted_types: list[str]     # 型定義の重複排除
+    emitted_vtables: list[str]   # vtable の重複排除
+    str_counter: int
+
+    triple: str
+
+    # ── エラー処理 ──
+    fn_raises: bool          # 生成中の関数が raises を宣言しているか
+    fn_ret: rc[ast.Type] | None  # 生成中の関数の戻り型（失敗時の既定値に使う）
+    err_slot_done: bool      # この関数で %err.slot を alloca 済みか
+    err_type_emitted: bool   # %pl.err の型定義を出したか
+    prop_used: bool          # 伝播ブロックが使われたか
+    try_stack: list[rc[ast.Node]]      # 今いる try（入れ子）
+    try_labels: list[str]          # その振り分けラベル
+
+    # ── 整数の桁あふれ検査 ──
+    no_ovf: bool             # --no-overflow-check（検査を出さない）
+
+    # ── 添字の中で貯めた「あふれの旗」（空文字列なら無し）──
+    # ⚠️ C 版（src/codegen.c）は out 引数で渡しています。この言語に
+    #   out 引数が無いのでフィールドにしていますが、**出す IR は同じ**です。
+    ovf_flag: str
+    last_ovf: str            # gen_arith_ovf が作った直近の旗
+
+    # ── 添字の範囲をループの外で 1 回だけ確かめる ──
+    nobc: bool          # 速い側の本体を生成中（境界検査を出さない）
+    iv_ir: str          # その版分けの誘導変数（増分の桁あふれ検査も外す）
+    subst_ir: str       # ガードの計算中だけ、この変数を…
+    subst_val: str      #   …この値に読み替える
+
+    # ── 並行実行（A-18）──
+    # ★ 生成した @pl.thunk.* はモジュール末尾に出す（C 版と同じ位置）。
+    thunkdefs: list[str]
+    thunk_keys: list[str]    # シグネチャ（重複排除の鍵）
+    thunk_names: list[str]   # それに対応する @pl.thunk.N
+    thunk_counter: int
+
+    def init(self, triple: str) -> None:
+        self.nobc = False
+        self.iv_ir = ""
+        self.subst_ir = ""
+        self.subst_val = ""
+        self.thunkdefs = []
+        self.thunk_keys = []
+        self.thunk_names = []
+        self.thunk_counter = 0
+        self.header = []
+        self.globals_ = []
+        self.decls = []
+        self.body = []
+        self.allocas = []
+        self.fn = []
+        self.tmp_counter = 0
+        self.label_counter = 0
+        self.terminated = False
+        self.decled = []
+        self.emitted_types = []
+        self.emitted_vtables = []
+        self.str_counter = 0
+        self.triple = copy(triple)
+        # ──
+        self.fn_raises = False
+        self.err_slot_done = False
+        self.err_type_emitted = False
+        self.prop_used = False
+        self.try_stack = []
+        self.try_labels = []
+        self.no_ovf = False     # codegen() が上書きする
+        self.ovf_flag = ""
+        self.last_ovf = ""
+
+    # プリミティブ型（型検査は終わっているので、ここでは「表現」だけ要る）
+    def int_type(self) -> rc[ast.Type]:
+        return rc(ast.Type(ast.TY_INT))
+
+    def bool_type(self) -> rc[ast.Type]:
+        return rc(ast.Type(ast.TY_BOOL))
+
+    # ⚠️ 名前に '.' を入れる（利用者の変数と衝突しないため）
+    def new_tmp(mut self) -> str:
+        t: str = "%t." + str(self.tmp_counter)
+        self.tmp_counter = self.tmp_counter + 1
+        return t
+
+    def emit(mut self, line: str) -> None:
+        self.fn.append(copy(line))
+
+    # ── 型のマッピング ──────────────────────────────────────
+
+    # 値（レジスタ）としての LLVM 型
+    def llvm_type(self, t: rc[ast.Type]) -> str:
+        if t.kind == ast.TY_INT:
+            return "i64"
+        if t.kind == ast.TY_FLOAT:
+            return "double"
+        if t.kind == ast.TY_FN:
+            return "ptr"          # 関数へのポインタ
+        if t.kind == ast.TY_IFACE:
+            return "ptr"          # 実体へのポインタ
+        if t.kind == ast.TY_TUPLE:
+            return "ptr"          # 構造体へのポインタ
+        if t.kind == ast.TY_BOOL:
+            return "i1"
+        if t.kind == ast.TY_NONE:
+            return "void"
+        if t.kind == ast.TY_STR:
+            return "ptr"
+        if t.kind == ast.TY_LIST:
+            return "ptr"
+        if t.kind == ast.TY_CLASS:
+            return "ptr"
+        if t.kind == ast.TY_OPT:
+            return "ptr"
+        if t.kind == ast.TY_RC:
+            return "ptr"
+        if t.kind == ast.TY_THREAD:
+            return "ptr"          # Thread[R]
+        if t.kind == ast.TY_MUTEX:
+            return "ptr"          # mutex[T]
+        if t.kind == ast.TY_NULL:
+            return "ptr"
+        panic("codegen: 未知の型です")
+        return "i64"
+
+    # メモリ（alloca / load / store）としての LLVM 型
+    # ⚠️ 規約 R5：bool はメモリ上 i8
+    def llvm_mem_type(self, t: rc[ast.Type]) -> str:
+        if t.kind == ast.TY_INT:
+            return "i64"
+        if t.kind == ast.TY_FLOAT:
+            return "double"
+        if t.kind == ast.TY_FN:
+            return "ptr"
+        if t.kind == ast.TY_IFACE:
+            return "ptr"
+        if t.kind == ast.TY_TUPLE:
+            return "ptr"
+        if t.kind == ast.TY_BOOL:
+            return "i8"
+        if t.kind == ast.TY_STR:
+            return "ptr"
+        if t.kind == ast.TY_LIST:
+            return "ptr"
+        if t.kind == ast.TY_CLASS:
+            return "ptr"
+        if t.kind == ast.TY_OPT:
+            return "ptr"
+        if t.kind == ast.TY_RC:
+            return "ptr"
+        if t.kind == ast.TY_THREAD:
+            return "ptr"
+        if t.kind == ast.TY_MUTEX:
+            return "ptr"
+        panic("codegen: メモリ上の表現を持たない型です")
+        return "i64"
+
+    # 二項演算子に対応する LLVM 命令
+    # ⚠️ int は符号付きなので 's' の付く命令を使う（sdiv / ashr）
+    # ★ float は別命令（fadd など）。整数の add とはビット列の意味が違う。
+    def llvm_binop_f(self, op: int) -> str:
+        if op == ast.OP_ADD:
+            return "fadd"
+        if op == ast.OP_SUB:
+            return "fsub"
+        if op == ast.OP_MUL:
+            return "fmul"
+        if op == ast.OP_TRUEDIV:
+            return "fdiv"
+        panic("codegen: この演算子は float に来ません")
+        return "fadd"
+
+    # float の比較述語（ordered。NaN が絡むと必ず False）
+    def fcmp_pred(self, op: int) -> str:
+        if op == ast.OP_EQ:
+            return "oeq"
+        # ⚠️ '!=' だけ unordered（une）。a != b は「a == b ではない」なので、
+        #    NaN が絡むと True でなければならない（x != x が NaN の判定）
+        if op == ast.OP_NE:
+            return "une"
+        if op == ast.OP_LT:
+            return "olt"
+        if op == ast.OP_LE:
+            return "ole"
+        if op == ast.OP_GT:
+            return "ogt"
+        if op == ast.OP_GE:
+            return "oge"
+        panic("codegen: 比較演算子ではありません")
+        return "oeq"
+
+    def llvm_binop(self, op: int) -> str:
+        if op == ast.OP_ADD:
+            return "add"
+        if op == ast.OP_SUB:
+            return "sub"
+        if op == ast.OP_MUL:
+            return "mul"
+        if op == ast.OP_BITAND:
+            return "and"
+        if op == ast.OP_BITOR:
+            return "or"
+        if op == ast.OP_BITXOR:
+            return "xor"
+        if op == ast.OP_SHL:
+            return "shl"
+        if op == ast.OP_SHR:
+            return "ashr"
+        panic("codegen: この演算子はここに来ません")
+        return "add"
+
+    # 比較演算子に対応する icmp の述語
+    # ⚠️ i1 の符号付き比較は逆になるので、bool は符号なしを使う
+    def icmp_pred(self, op: int, operand_type: rc[ast.Type]) -> str:
+        sign: bool = operand_type.kind == ast.TY_INT
+        if op == ast.OP_EQ:
+            return "eq"
+        if op == ast.OP_NE:
+            return "ne"
+        if op == ast.OP_LT:
+            if sign:
+                return "slt"
+            return "ult"
+        if op == ast.OP_LE:
+            if sign:
+                return "sle"
+            return "ule"
+        if op == ast.OP_GT:
+            if sign:
+                return "sgt"
+            return "ugt"
+        if op == ast.OP_GE:
+            if sign:
+                return "sge"
+            return "uge"
+        panic("codegen: 比較演算子ではありません")
+        return "eq"
+
+    # ── メモリとレジスタの境界（規約 R5）──────────────────
+    #
+    # ★ zext / trunc はこの 2 つの関数の中だけに閉じ込める
+
+    # ── 別名解析のタグ（TBAA） ─────────────────────────
+    #
+    # ★ LLVM は既定で「ポインタはどれも同じ場所を指すかもしれない」と考える。
+    #   そのため c.data[i] = v を書くと、その後の self.cols の読み出しが
+    #   **書き換わったかもしれない**と見なされ、ループの外に出せない。
+    #
+    # ★ 重ならない 3 種類に名前を付けて、LLVM に「別物だ」と言い切る。
+    #   field / listhdr（data と len）/ listelem。
+    #   健全性：pl_list_new はヘッダと要素配列を**別々に確保**し、
+    #   クラスのオブジェクトもまた別の確保なので、決して重ならない。
+    #
+    # ⚠️ **タグを付けないアクセスは「何とでも別名かもしれない」**と扱われる。
+    #   ローカル変数・グローバル・文字列・unsafe: の生ポインタ・extern には
+    #   付けない（付けないほうが安全側）。
+    #   ⚠️ 番号は C 版（src/codegen.c の TBAA_*）と同じにすること。
+
+    def gen_load_tb(mut self, ty: rc[ast.Type], ptr: str, tb: str) -> str:
+        t: str = self.new_tmp()
+        self.emit("  " + t + " = load " + self.llvm_mem_type(ty) + ", ptr " +
+                  ptr + tb + "\n")
+        if ty.kind != ast.TY_BOOL:
+            return t
+        t2: str = self.new_tmp()
+        self.emit("  " + t2 + " = trunc i8 " + t + " to i1\n")
+        return t2
+
+    # ★ '@' で始まる場所はグローバル（sema が付ける IR 名の約束）
+    def tbaa_for(self, ptr: str) -> str:
+        if len(ptr) > 0 and strings.startswith(ptr, "@"):
+            return copy(TBAA_GLOBAL)
+        return copy(TBAA_NONE)
+
+    def gen_load(mut self, ty: rc[ast.Type], ptr: str) -> str:
+        return self.gen_load_tb(ty, ptr, self.tbaa_for(ptr))
+
+    def gen_store_tb(mut self, ty: rc[ast.Type], val: str, ptr: str,
+                     tb: str) -> None:
+        v: str = val
+        if ty.kind == ast.TY_BOOL:
+            t: str = self.new_tmp()
+            self.emit("  " + t + " = zext i1 " + v + " to i8\n")
+            v = t
+        self.emit("  store " + self.llvm_mem_type(ty) + " " + v + ", ptr " +
+                  ptr + tb + "\n")
+
+    def gen_store(mut self, ty: rc[ast.Type], val: str, ptr: str) -> None:
+        self.gen_store_tb(ty, val, ptr, self.tbaa_for(ptr))
+
+    # ── 基本ブロック（規約 R6 / R7）────────────────────────
+
+    def emit_label(mut self, label: str) -> None:
+        if not self.terminated:
+            self.emit("  br label %" + label + "\n")
+        self.emit(label + ":\n")
+        self.terminated = False
+
+    def emit_br(mut self, label: str) -> None:
+        self.emit("  br label %" + label + "\n")
+        self.terminated = True
+
+    def emit_cond_br(mut self, cond: str, then_l: str, else_l: str) -> None:
+        self.emit("  br i1 " + cond + ", label %" + then_l + ", label %" +
+                  else_l + "\n")
+        self.terminated = True
+
+    # 終端済みのブロックの後ろにコードを置くときのラベル（規約 R7）
+    def ensure_block(mut self) -> None:
+        if not self.terminated:
+            return
+        l: str = "dead." + str(self.label_counter)
+        self.label_counter = self.label_counter + 1
+        self.emit_label(l)
+
+    # ── 文字列リテラル ─────────────────────────────────
+
+    # IR の文字列に 1 バイト出力する
+    # ⚠️ ASCII 印字可能文字以外はすべて \XX にする
+    def emit_ir_byte(self, parts: mut list[str], c: int) -> None:
+        if c >= 32 and c < 127 and c != 34 and c != 92:
+            parts.append(chr(c))
+        else:
+            parts.append("\\" + hex2(c))
+
+    def intern_str(mut self, bytes_: str) -> str:
+        sl: rc[StrLit] | None = self.strs
+        while sl is not None:
+            s: rc[StrLit] = sl
+            if s.bytes_ == bytes_:
+                return s.label
+            sl = s.next
+
+        lab: str = "@.str." + str(self.str_counter)
+        self.str_counter = self.str_counter + 1
+
+        n: int = len(bytes_)
+        parts: list[str] = []
+        parts.append(lab + " = private unnamed_addr constant { i64, [" +
+                     str(n + 1) + " x i8] } { i64 " + str(n) + ", [" +
+                     str(n + 1) + " x i8] c\"")
+        i: int = 0
+        while i < n:
+            self.emit_ir_byte(parts, strings.byte_at(bytes_, i))
+            i = i + 1
+        parts.append("\\00\" }\n")
+        self.globals_.append(strings.join(parts, ""))
+
+        # 値として使うのはデータ部のアドレス（定数式でそのまま書ける）
+        ref: str = ("getelementptr inbounds ({ i64, [" + str(n + 1) +
+                    " x i8] }, ptr " + lab + ", i32 0, i32 1)")
+
+        lit: rc[StrLit] = rc(StrLit(bytes_, ref))
+        lit.next = self.strs
+        self.strs = lit
+        return ref
+
+
+    # ── 並行実行（A-18）の道具 ──────────────────────────
+    #
+    # ランタイム（runtime/hosted.c）との ABI は「i64 を 2 つ取って i64 を返す」
+    # の 1 種類だけ。型のある世界とその ABI の橋渡しをここでやる。
+
+    # 値（型 t）を i64 に詰める
+    def pack_i64(mut self, t: rc[ast.Type], v: str) -> str:
+        if t.kind == ast.TY_INT:
+            return copy(v)
+        r: str = self.new_tmp()
+        if t.kind == ast.TY_BOOL:
+            self.emit("  " + r + " = zext i1 " + v + " to i64\n")
+            return r
+        if t.kind == ast.TY_FLOAT:
+            # ⚠️ fptosi ではない。**ビットをそのまま**運ぶ。
+            self.emit("  " + r + " = bitcast double " + v + " to i64\n")
+            return r
+        self.emit("  " + r + " = ptrtoint ptr " + v + " to i64\n")
+        return r
+
+    # i64 から値（型 t）を取り出す
+    def unpack_i64(mut self, t: rc[ast.Type], v: str) -> str:
+        if t.kind == ast.TY_INT:
+            return copy(v)
+        r: str = self.new_tmp()
+        if t.kind == ast.TY_BOOL:
+            self.emit("  " + r + " = trunc i64 " + v + " to i1\n")
+            return r
+        if t.kind == ast.TY_FLOAT:
+            self.emit("  " + r + " = bitcast i64 " + v + " to double\n")
+            return r
+        self.emit("  " + r + " = inttoptr i64 " + v + " to ptr\n")
+        return r
+
+    # fn(A) -> R を「i64 2 つを取って i64 を返す」形に見せる中継関数を出す。
+    #
+    # ★ シグネチャごとに 1 つだけ作る（同じ形の関数が何本 spawn されても 1 つ）。
+    #
+    # 🤔 なぜ thunk が要るのか
+    #   「全部 i64 として直接呼べばいい」ように見えるが、**呼び出し規約は
+    #   型で決まる**。float は整数と別のレジスタで渡され、None を返す関数には
+    #   戻り値レジスタが無い。型を偽って呼ぶと、その 2 つで静かに壊れる。
+    def thunk_for(mut self, fnty: rc[ast.Type]) -> str:
+        key: str = ast.type_name(fnty)
+        i: int = 0
+        while i < len(self.thunk_keys):
+            if self.thunk_keys[i] == key:
+                return copy(self.thunk_names[i])
+            i = i + 1
+
+        name: str = "@pl.thunk." + str(self.thunk_counter)
+        self.thunk_counter = self.thunk_counter + 1
+
+        rt: rc[ast.Type] = ast.elem_of(fnty)
+
+        b: list[str] = []
+        b.append("\ndefine internal i64 " + name + "(i64 %f, ptr %a) {\n")
+        b.append("entry:\n")
+        b.append("  %fp = inttoptr i64 %f to ptr\n")
+
+        # 引数を i64 の配列から本来の型へ 1 つずつ取り出す
+        argl: list[str] = []
+        k: int = 0
+        while k < len(fnty.params):
+            at: rc[ast.Type] = fnty.params[k]
+            b.append("  %p" + str(k) + " = getelementptr i64, ptr %a, i64 " +
+                     str(k) + "\n")
+            b.append("  %w" + str(k) + " = load i64, ptr %p" + str(k) + "\n")
+            use: str = "%w" + str(k)
+            if at.kind == ast.TY_BOOL:
+                b.append("  %x" + str(k) + " = trunc i64 %w" + str(k) + " to i1\n")
+                use = "%x" + str(k)
+            elif at.kind == ast.TY_FLOAT:
+                b.append("  %x" + str(k) + " = bitcast i64 %w" + str(k) +
+                         " to double\n")
+                use = "%x" + str(k)
+            elif at.kind != ast.TY_INT:
+                b.append("  %x" + str(k) + " = inttoptr i64 %w" + str(k) +
+                         " to ptr\n")
+                use = "%x" + str(k)
+            sep: str = ", "
+            if k == 0:
+                sep = ""
+            argl.append(sep + self.llvm_type(at) + " " + use)
+            k = k + 1
+        args: str = strings.join(argl, "")
+
+        # 本来の型で呼び、戻り値を i64 に詰め直す
+        if rt.kind == ast.TY_NONE:
+            b.append("  call void %fp(" + args + ")\n")
+            b.append("  ret i64 0\n")
+        else:
+            b.append("  %r = call " + self.llvm_type(rt) + " %fp(" + args + ")\n")
+            if rt.kind == ast.TY_INT:
+                b.append("  ret i64 %r\n")
+            elif rt.kind == ast.TY_BOOL:
+                b.append("  %ri = zext i1 %r to i64\n  ret i64 %ri\n")
+            elif rt.kind == ast.TY_FLOAT:
+                b.append("  %ri = bitcast double %r to i64\n  ret i64 %ri\n")
+            else:
+                b.append("  %ri = ptrtoint ptr %r to i64\n  ret i64 %ri\n")
+        b.append("}\n")
+
+        self.thunkdefs.append(strings.join(b, ""))
+        self.thunk_keys.append(copy(key))
+        self.thunk_names.append(copy(name))
+        return name
+
+    # ランタイム関数を宣言する（1 回だけ）
+    def declare_rt(mut self, sig: str) -> None:
+        i: int = 0
+        while i < len(self.decled):
+            if self.decled[i] == sig:
+                return
+            i = i + 1
+        self.decls.append("declare " + sig + "\n")
+        self.decled.append(copy(sig))
+
+    # 別モジュールの関数を declare する（引数の型は呼び出しから作る）
+    def declare_extern(mut self, ret: str, ir_name: str, param_types: str) -> None:
+        self.declare_rt(ret + " @" + ir_name + "(" + param_types + ")")
+
+    # ── 式の生成 ────────────────────────────────────────────
+    #
+    # gen_expr の約束：
+    #   「式を評価する命令列を fn に出力し、結果が入っている場所の名前を返す」
+    #
+    # ⚠️ 値を返さない式（void の呼び出し）は "" を返します。
+    #   C 版は NULL を返しますが、本言語では str の None を避けて空文字列に
+    #   しました（**呼び出し側は結果を使わないと分かっている**場所だけです）。
+
+    def gen_expr(mut self, n: rc[ast.Node]) -> str:
+        if n.kind == ast.ND_INT:
+            # 整数リテラルは命令を出す必要すらない（即値をそのまま書ける）
+            return str(n.ival)
+
+        if n.kind == ast.ND_FLOAT:
+            # ★ 字句解析器が正規化した文字列を**そのまま**出す。
+            #   double を経由しないので、C 版と 1 バイトもずれない。
+            return copy(n.sval)
+
+        if n.kind == ast.ND_COND:
+            return self.gen_cond(n)
+
+        if n.kind == ast.ND_SLICE:
+            return self.gen_slice(n)
+
+        if n.kind == ast.ND_TUPLE:
+            return self.gen_tuple(n)
+
+        if n.kind == ast.ND_BINOP:
+            return self.gen_binop(n)
+
+        if n.kind == ast.ND_BOOL:
+            if n.ival != 0:
+                return "true"
+            return "false"
+
+        if n.kind == ast.ND_NONE:
+            # ★ None は「null というポインタ即値」
+            return "null"
+
+        if n.kind == ast.ND_STR:
+            return self.intern_str(n.sval)
+
+        if n.kind == ast.ND_LOGICAL:
+            return self.gen_logical(n)
+
+        if n.kind == ast.ND_CALL:
+            return self.gen_call(n)
+
+        if n.kind == ast.ND_LIST:
+            return self.gen_list_lit(n)
+
+        if n.kind == ast.ND_INDEX:
+            return self.gen_index(n)
+
+        if n.kind == ast.ND_METHOD:
+            return self.gen_method(n)
+
+        if n.kind == ast.ND_FIELD:
+            return self.gen_field(n)
+
+        if n.kind == ast.ND_VAR:
+            # ★ ガードの計算中は、誘導変数を「両端の値」に読み替える。
+            #   ⚠️ 添字の式をもう一度そのまま生成するので、置き換えは
+            #     ここ 1 か所で足りる（式の形を分解する必要がない）。
+            if len(self.subst_ir) > 0 and n.ir_name == self.subst_ir:
+                return copy(self.subst_val)
+            # ★ 関数の名前を値として使う場合。箱から読むのではなく、
+            #   **関数のラベルそのもの**が値です。
+            if n.is_func_ref:
+                return "@" + n.ir_name
+            # 変数の読み出し（規約 R2）。sema が割り当てた ir_name を使う
+            return self.gen_load(type_of(n), n.ir_name)
+
+        if n.kind == ast.ND_UNARY:
+            return self.gen_unary(n)
+
+        if n.kind == ast.ND_LISTCOMP:
+            return self.gen_listcomp(n)
+
+        panic("codegen: 式ではないノードです")
+        return ""
+
+    # 三項演算子 a if c else b
+    #
+    # ★ 作りは and / or の短絡評価と同じ。箱を 1 つ用意して、
+    #   選ばれた側だけがそこに書く（規約 R3：phi を使わない）。
+    def gen_cond(mut self, n: rc[ast.Node]) -> str:
+        idn: int = self.label_counter
+        self.label_counter = self.label_counter + 1
+        sid: str = str(idn)
+        then_l: str = "cond.then." + sid
+        else_l: str = "cond.else." + sid
+        end_l: str = "cond.end." + sid
+        res: str = "%cond.result." + sid
+
+        nt: rc[ast.Type] = type_of(n)
+        self.allocas.append("  " + res + " = alloca " +
+                            self.llvm_mem_type(nt) + "\n")
+
+        c: str = self.gen_expr(node_of(n.lhs))
+        self.emit_cond_br(c, then_l, else_l)
+
+        self.emit_label(then_l)
+        self.gen_store(nt, self.gen_expr(node_of(n.rhs)), res)
+        self.emit_br(end_l)
+
+        self.emit_label(else_l)
+        self.gen_store(nt, self.gen_expr(node_of(n.els)), res)
+        self.emit_br(end_l)
+
+        self.emit_label(end_l)
+        return self.gen_load(nt, res)
+
+    # 探索関数に渡す形にする。⚠️ float は **double のまま**（数値として比べる）
+    def elem_to_slot_cmp(mut self, elem: rc[ast.Type], v: str) -> str:
+        if elem.kind != ast.TY_BOOL:
+            return copy(v)
+        t: str = self.new_tmp()
+        self.emit("  " + t + " = zext i1 " + v + " to i64\n")
+        return t
+
+    # 探索に使うランタイム関数の名前と引数型（in と index で共用）
+    def index_fn(self, el: rc[ast.Type]) -> str:
+        if el.kind == ast.TY_FLOAT:
+            return "pl_list_index_f64"
+        if el.kind == ast.TY_STR:
+            return "pl_list_index_str"
+        if self.elem_is_ptr(el):
+            return "pl_list_index_ptr"
+        return "pl_list_index_i64"
+
+    def index_arg_ty(self, el: rc[ast.Type]) -> str:
+        if el.kind == ast.TY_FLOAT:
+            return "double"
+        if el.kind == ast.TY_STR:
+            return "ptr"
+        if self.elem_is_ptr(el):
+            return "ptr"
+        return "i64"
+
+    # x in xs / sub in s
+    #
+    # ★ どちらも **位置を返すランタイム関数**（無ければ -1）に落として、
+    #   その結果を 0 と比べるだけ。IR に分岐が 1 つも出ない（規約 R10）。
+    def gen_in(mut self, n: rc[ast.Node]) -> str:
+        lhs: rc[ast.Node] = node_of(n.lhs)
+        rhs: rc[ast.Node] = node_of(n.rhs)
+        rt: rc[ast.Type] = type_of(rhs)
+        pos: str = self.new_tmp()
+
+        if rt.kind == ast.TY_STR:
+            self.declare_rt("i64 @pl_str_find(ptr, ptr)")
+            hay: str = self.gen_expr(rhs)
+            nee: str = self.gen_expr(lhs)
+            self.emit("  " + pos + " = call i64 @pl_str_find(ptr " + hay +
+                      ", ptr " + nee + ")\n")
+        else:
+            el: rc[ast.Type] = ast.elem_of(rt)
+            fname: str = self.index_fn(el)
+            aty: str = self.index_arg_ty(el)
+            self.declare_rt("i64 @" + fname + "(ptr, " + aty + ")")
+            lst: str = self.gen_expr(rhs)
+            v: str = self.elem_to_slot_cmp(el, self.gen_expr(lhs))
+            self.emit("  " + pos + " = call i64 @" + fname + "(ptr " + lst +
+                      ", " + aty + " " + v + ")\n")
+
+        pred: str = "slt"
+        if n.op == ast.OP_IN:
+            pred = "sge"
+        t: str = self.new_tmp()
+        self.emit("  " + t + " = icmp " + pred + " i64 " + pos + ", 0\n")
+        return t
+
+    # xs[a:b] / s[a:b]
+    #
+    # ★ 省略された端は「先頭（0）」と「末尾（長さ）」に置き換えてから、
+    #   ランタイムの 1 つの関数に渡す。範囲の丸めもランタイム側の仕事。
+    # タプルの LLVM 型を作る（{i64, ptr} のような無名の構造体）
+    #
+    # ★ 名前を付けない。タプルは「並びが同じなら同じ型」なので、
+    #   クラスのように定義を指す必要がないため。
+    def tuple_ty(self, t: rc[ast.Type]) -> str:
+        out: str = "{ "
+        i: int = 0
+        while i < len(t.params):
+            if i > 0:
+                out = out + ", "
+            out = out + self.llvm_mem_type(t.params[i])
+            i = i + 1
+        return out + " }"
+
+    # タプル式 (a, b)
+    #
+    # ★ ヒープに確保して要素を書き込む。クラスと同じ扱いなので、
+    #   list に入れる・引数で渡す・返す がすべてそのまま通る。
+    def gen_tuple(mut self, n: rc[ast.Node]) -> str:
+        t: rc[ast.Type] = type_of(n)
+        size: int = 0
+        si: int = 0
+        while si < len(t.params):
+            size = size + ast.type_size(t.params[si])
+            si = si + 1
+
+        self.declare_rt("ptr @pl_alloc(i64)")
+        obj: str = self.new_tmp()
+        self.emit("  " + obj + " = call ptr @pl_alloc(i64 " + str(size) + ")\n")
+
+        ty: str = self.tuple_ty(t)
+        k: int = 0
+        xi: rc[ast.Node] | None = n.body
+        while xi is not None:
+            xn: rc[ast.Node] = xi
+            v: str = self.gen_expr(xn)
+            pt: str = self.new_tmp()
+            self.emit("  " + pt + " = getelementptr " + ty + ", ptr " + obj +
+                      ", i32 0, i32 " + str(k) + "\n")
+            self.gen_store(t.params[k], v, pt)
+            k = k + 1
+            xi = xn.next
+        return obj
+
+    def gen_slice(mut self, n: rc[ast.Node]) -> str:
+        lhs: rc[ast.Node] = node_of(n.lhs)
+        is_str: bool = type_of(lhs).kind == ast.TY_STR
+        obj: str = self.gen_expr(lhs)
+
+        lo: str = "0"
+        if n.rhs is not None:
+            lo = self.gen_expr(node_of(n.rhs))
+
+        hi: str = ""
+        if n.els is not None:
+            hi = self.gen_expr(node_of(n.els))
+        else:
+            lenfn: str = "pl_list_len"
+            if is_str:
+                lenfn = "pl_str_len"
+            self.declare_rt("i64 @" + lenfn + "(ptr)")
+            hi = self.new_tmp()
+            self.emit("  " + hi + " = call i64 @" + lenfn + "(ptr " + obj + ")\n")
+
+        slfn: str = "pl_list_slice"
+        if is_str:
+            slfn = "pl_str_slice"
+        self.declare_rt("ptr @" + slfn + "(ptr, i64, i64)")
+        t: str = self.new_tmp()
+        self.emit("  " + t + " = call ptr @" + slfn + "(ptr " + obj + ", i64 " +
+                  lo + ", i64 " + hi + ")\n")
+        return t
+
+    def gen_binop(mut self, n: rc[ast.Node]) -> str:
+        # ★ in / not in。⚠️ **左右をここで評価してはいけない**
+        #   （渡す形が要素の型で変わるので gen_in の中で作る）
+        if n.op == ast.OP_IN or n.op == ast.OP_NOTIN:
+            return self.gen_in(n)
+
+        lhs: rc[ast.Node] = node_of(n.lhs)
+        rhs: rc[ast.Node] = node_of(n.rhs)
+
+        # ★ is / is not は「null と比べる」だけ。1 命令で済む
+        if n.op == ast.OP_IS or n.op == ast.OP_ISNOT:
+            v: str = self.gen_expr(lhs)
+            t0: str = self.new_tmp()
+            pred: str = "ne"
+            if n.op == ast.OP_IS:
+                pred = "eq"
+            self.emit("  " + t0 + " = icmp " + pred + " ptr " + v + ", null\n")
+            return t0
+
+        # ★ 左辺 → 右辺の順に生成する（仕様 4.5）
+        l: str = self.gen_expr(lhs)
+        r: str = self.gen_expr(rhs)
+        t: str = self.new_tmp()
+
+        # ⚠️ オペランドの型は「結果の型」ではない（比較の結果は bool）
+        ot: rc[ast.Type] = type_of(lhs)
+
+        # ★ 繰り返しと list の連結（新しい値を作る）
+        if n.op == ast.OP_MUL and ot.kind == ast.TY_STR:
+            self.declare_rt("ptr @pl_str_repeat(ptr, i64)")
+            self.emit("  " + t + " = call ptr @pl_str_repeat(ptr " + l +
+                      ", i64 " + r + ")\n")
+            return t
+        if ot.kind == ast.TY_LIST and (n.op == ast.OP_ADD or n.op == ast.OP_MUL):
+            if n.op == ast.OP_ADD:
+                self.declare_rt("ptr @pl_list_concat(ptr, ptr)")
+                self.emit("  " + t + " = call ptr @pl_list_concat(ptr " + l +
+                          ", ptr " + r + ")\n")
+            else:
+                self.declare_rt("ptr @pl_list_repeat(ptr, i64)")
+                self.emit("  " + t + " = call ptr @pl_list_repeat(ptr " + l +
+                          ", i64 " + r + ")\n")
+            return t
+
+        # ── 文字列──
+        if ot.kind == ast.TY_STR:
+            if n.op == ast.OP_ADD:
+                self.declare_rt("ptr @pl_str_concat(ptr, ptr)")
+                self.emit("  " + t + " = call ptr @pl_str_concat(ptr " + l +
+                          ", ptr " + r + ")\n")
+                return t
+            # ⚠️ 比較は「内容」で行う（言語仕様 4.3）
+            self.declare_rt("i64 @pl_str_cmp(ptr, ptr)")
+            c: str = self.new_tmp()
+            self.emit("  " + c + " = call i64 @pl_str_cmp(ptr " + l + ", ptr " +
+                      r + ")\n")
+            self.emit("  " + t + " = icmp " +
+                      self.icmp_pred(n.op, self.int_type()) + " i64 " + c +
+                      ", 0\n")
+            return t
+
+        # ★ float の '**' はランタイムの pl_fpow に落とす。
+        #   ⚠️ libc の pow は使えない（ベアメタルで動く必要があるため）。
+        if n.op == ast.OP_POW and ot.kind == ast.TY_FLOAT:
+            self.declare_rt("double @pl_fpow(double, double)")
+            self.emit("  " + t + " = call double @pl_fpow(double " + l +
+                      ", double " + r + ")\n")
+            return t
+
+        # ── 検査つきの算術（規約 R10）──
+        if n.op == ast.OP_FLOORDIV or n.op == ast.OP_MOD or n.op == ast.OP_POW:
+            fname: str = "pl_ipow"
+            if n.op == ast.OP_FLOORDIV:
+                fname = "pl_floordiv"
+            elif n.op == ast.OP_MOD:
+                fname = "pl_mod"
+            self.declare_rt("i64 @" + fname + "(i64, i64)")
+            self.emit("  " + t + " = call i64 @" + fname + "(i64 " + l +
+                      ", i64 " + r + ")\n")
+            return t
+
+        # ★ float の比較は fcmp、算術は fadd などの別命令
+        if ast.is_compare(n.op) and ot.kind == ast.TY_FLOAT:
+            self.emit("  " + t + " = fcmp " + self.fcmp_pred(n.op) +
+                      " double " + l + ", " + r + "\n")
+        elif ast.is_compare(n.op):
+            self.emit("  " + t + " = icmp " + self.icmp_pred(n.op, ot) + " " +
+                      self.llvm_type(ot) + " " + l + ", " + r + "\n")
+        elif ot.kind == ast.TY_FLOAT:
+            # ★ float の 0 除算は panic（`//` `%` と揃える）
+            if n.op == ast.OP_TRUEDIV and not self.no_ovf:
+                return self.gen_checked_fdiv(l, r)
+            self.emit("  " + t + " = " + self.llvm_binop_f(n.op) +
+                      " double " + l + ", " + r + "\n")
+        else:
+            # ★ int の + - * は桁あふれを検査する。
+            #   ⚠️ 意図的に折り返したいときは wrap_add / wrap_sub / wrap_mul
+            #     を使う（そちらは gen_call で出す）。
+            intr: str = ""
+            if ot.kind == ast.TY_INT and not self.no_ovf:
+                intr = self.ovf_intr(n.op)
+            if intr != "":
+                code: int = 2
+                if n.op == ast.OP_ADD:
+                    code = 0
+                elif n.op == ast.OP_SUB:
+                    code = 1
+                return self.gen_checked_arith(intr, l, r, code)
+            self.emit("  " + t + " = " + self.llvm_binop(n.op) + " " +
+                      self.llvm_type(ot) + " " + l + ", " + r + "\n")
+        return t
+
+    def gen_unary(mut self, n: rc[ast.Node]) -> str:
+        v: str = self.gen_expr(node_of(n.lhs))
+
+        # +x は何もしない
+        if n.op == ast.OP_POS:
+            return v
+
+        t: str = self.new_tmp()
+        nt: rc[ast.Type] = type_of(n)
+        if n.op == ast.OP_NEG and nt.kind == ast.TY_FLOAT:
+            # ★ float には専用の否定命令 fneg がある（符号ビットの反転）
+            self.emit("  " + t + " = fneg double " + v + "\n")
+        elif n.op == ast.OP_NEG:
+            # ⚠️ LLVM に整数の neg 命令は無い。0 からの減算で表す
+            # ★ -(-9223372036854775808) は表せないので検査する
+            if not self.no_ovf:
+                return self.gen_checked_arith("ssub", "0", v, 3)
+            self.emit("  " + t + " = sub i64 0, " + v + "\n")
+        elif n.op == ast.OP_BITNOT:
+            self.emit("  " + t + " = xor i64 " + v + ", -1\n")
+        elif n.op == ast.OP_NOT:
+            self.emit("  " + t + " = xor i1 " + v + ", true\n")
+        else:
+            panic("codegen: 未知の単項演算子です")
+        return t
+
+    # ── 短絡評価（規約 6.6）────────────────────────────────
+    #
+    # 🤔 なぜ phi を使わないのか（規約 R3）
+    #   alloca に置いて最後に読む方式なら「どのブロックから来たか」を
+    #   覚えなくて済みます。mem2reg が phi に変換してくれます。
+    def gen_logical(mut self, n: rc[ast.Node]) -> str:
+        # ⚠️ 番号は最初に 1 回だけ確保する
+        id_: int = self.label_counter
+        self.label_counter = self.label_counter + 1
+
+        kind: str = "or"
+        if n.op == ast.OP_AND:
+            kind = "and"
+
+        rhs_l: str = kind + ".rhs." + str(id_)
+        end_l: str = kind + ".end." + str(id_)
+        res: str = "%" + kind + ".result." + str(id_)
+
+        # 結果を入れる箱。★ alloca は entry ブロックへ（規約 R1）
+        self.allocas.append("  " + res + " = alloca i8\n")
+
+        # ① 左辺を評価し、その値をいったん結果として置く
+        l: str = self.gen_expr(node_of(n.lhs))
+        self.gen_store(self.bool_type(), l, res)
+
+        # ② 右辺を評価すべきか分岐する（and と or で真偽が逆）
+        if n.op == ast.OP_AND:
+            self.emit_cond_br(l, rhs_l, end_l)
+        else:
+            self.emit_cond_br(l, end_l, rhs_l)
+
+        # ③ 右辺（飛ばされることがあるブロック）
+        self.emit_label(rhs_l)
+        r: str = self.gen_expr(node_of(n.rhs))
+        self.gen_store(self.bool_type(), r, res)
+        self.emit_br(end_l)
+
+        # ④ 合流点
+        self.emit_label(end_l)
+        return self.gen_load(self.bool_type(), res)
+
+    # ── list[T] ────────────────────────────────────────
+
+    # ★ インタフェースの値も「実体へのポインタ」1 個
+    def elem_is_ptr(self, elem: rc[ast.Type]) -> bool:
+        return (elem.kind == ast.TY_STR or elem.kind == ast.TY_LIST or
+                elem.kind == ast.TY_CLASS or elem.kind == ast.TY_OPT or
+                elem.kind == ast.TY_RC or elem.kind == ast.TY_NULL or
+                elem.kind == ast.TY_IFACE or elem.kind == ast.TY_TUPLE or
+                elem.kind == ast.TY_THREAD or elem.kind == ast.TY_MUTEX)
+
+    def slot_ty(self, elem: rc[ast.Type]) -> str:
+        if self.elem_is_ptr(elem):
+            return "ptr"
+        return "i64"
+
+    # 要素の値を「ランタイムに渡す形」にする（bool は i64 に広げる）
+    # ★ float はビットパターンのまま i64 のスロットに入れる（list の作りを
+    #   変えずに済む）。⚠️ 数値変換（sitofp）ではなく bitcast。
+    def elem_to_slot(mut self, elem: rc[ast.Type], v: str) -> str:
+        if elem.kind == ast.TY_FLOAT:
+            tf: str = self.new_tmp()
+            self.emit("  " + tf + " = bitcast double " + v + " to i64\n")
+            return tf
+        if elem.kind != ast.TY_BOOL:
+            return copy(v)
+        t: str = self.new_tmp()
+        self.emit("  " + t + " = zext i1 " + v + " to i64\n")
+        return t
+
+    def slot_to_elem(mut self, elem: rc[ast.Type], v: str) -> str:
+        if elem.kind == ast.TY_FLOAT:
+            tf: str = self.new_tmp()
+            self.emit("  " + tf + " = bitcast i64 " + v + " to double\n")
+            return tf
+        if elem.kind != ast.TY_BOOL:
+            return copy(v)
+        t: str = self.new_tmp()
+        self.emit("  " + t + " = trunc i64 " + v + " to i1\n")
+        return t
+
+    # [1, 2, 3] は「空リストを作って append を繰り返す」に脱糖する
+    def gen_list_lit(mut self, n: rc[ast.Node]) -> str:
+        elem: rc[ast.Type] = ast.elem_of(type_of(n))
+
+        self.declare_rt("ptr @pl_list_new()")
+        l: str = self.new_tmp()
+        self.emit("  " + l + " = call ptr @pl_list_new()\n")
+
+        sty: str = self.slot_ty(elem)
+        push: str = "pl_list_push_i64"
+        if self.elem_is_ptr(elem):
+            push = "pl_list_push_ptr"
+        self.declare_rt("void @" + push + "(ptr, " + sty + ")")
+
+        el: rc[ast.Node] | None = n.body
+        while el is not None:
+            e: rc[ast.Node] = el
+            v: str = self.elem_to_slot(elem, self.gen_expr(e))
+            self.emit("  call void @" + push + "(ptr " + l + ", " + sty + " " +
+                      v + ")\n")
+            el = e.next
+        return l
+
+    # ── 内包表記 ──────────────────────────────────────
+    #
+    #   [ E for x in xs if C ]   /   [ E for i in range(a, b) ]
+    #
+    # ★ **式の位置でループを組み立てる。** 構文解析で文に持ち上げると、
+    #   三項演算子や and / or の右側に書かれたときに「評価されないはずのもの」を
+    #   評価してしまうため。
+    #
+    # ⚠️ 隠し変数の alloca は collect_allocas が n.body から拾っている。
+    #   ここでは名前を使うだけ。
+    def gen_listcomp(mut self, n: rc[ast.Node]) -> str:
+        lv: rc[ast.Node] = node_of(n.body)       # ループ変数
+        res: rc[ast.Node] = node_of(lv.next)     # 結果の list
+        ix: rc[ast.Node] = node_of(res.next)     # 添字
+        elem: rc[ast.Type] = ast.elem_of(type_of(n))
+
+        id_: int = self.label_counter
+        self.label_counter = self.label_counter + 1
+        cond_l: str = "comp.cond." + str(id_)
+        body_l: str = "comp.body." + str(id_)
+        next_l: str = "comp.next." + str(id_)
+        end_l: str = "comp.end." + str(id_)
+        keep_l: str = "comp.keep." + str(id_)
+
+        # 結果の list を作る
+        self.declare_rt("ptr @pl_list_new()")
+        lst: str = self.new_tmp()
+        self.emit("  " + lst + " = call ptr @pl_list_new()\n")
+        self.emit("  store ptr " + lst + ", ptr " + res.ir_name + "\n")
+
+        sty: str = self.slot_ty(elem)
+        push: str = "pl_list_push_i64"
+        if self.elem_is_ptr(elem):
+            push = "pl_list_push_ptr"
+        self.declare_rt("void @" + push + "(ptr, " + sty + ")")
+
+        # ⚠️ 対象（list）と range の端は **ループの外で 1 回だけ**評価する
+        it: str = ""
+        stop: str = ""
+        if n.args is not None:
+            a1: rc[ast.Node] = node_of(n.args)
+            start: str = self.gen_expr(a1)
+            stop = self.gen_expr(node_of(a1.next))
+            self.emit("  store i64 " + start + ", ptr " + ix.ir_name + "\n")
+        else:
+            it = self.gen_expr(node_of(n.rhs))
+            self.emit("  store i64 0, ptr " + ix.ir_name + "\n")
+
+        self.emit_label(cond_l)
+        i: str = self.new_tmp()
+        self.emit("  " + i + " = load i64, ptr " + ix.ir_name + "\n")
+        go: str = self.new_tmp()
+        if n.args is not None:
+            # 増分の符号で向きが変わる（構文解析器が定数だと確かめている）
+            pred: str = "sgt"
+            if n.ival > 0:
+                pred = "slt"
+            self.emit("  " + go + " = icmp " + pred + " i64 " + i + ", " +
+                      stop + "\n")
+        else:
+            lenp: str = self.new_tmp()
+            self.emit("  " + lenp + " = getelementptr i8, ptr " + it +
+                      ", i64 8\n")
+            ln: str = self.new_tmp()
+            self.emit("  " + ln + " = load i64, ptr " + lenp + TBAA_LISTHDR +
+                      "\n")
+            self.emit("  " + go + " = icmp slt i64 " + i + ", " + ln + "\n")
+        self.emit_cond_br(go, body_l, end_l)
+
+        self.emit_label(body_l)
+        # ループ変数に束縛する
+        if n.args is not None:
+            self.emit("  store i64 " + i + ", ptr " + lv.ir_name + "\n")
+        else:
+            ep: str = self.gen_index_addr(it, i, sty, False, "")
+            v: str = self.new_tmp()
+            self.emit("  " + v + " = load " + sty + ", ptr " + ep +
+                      TBAA_LISTELEM + "\n")
+            self.gen_store(elem, self.slot_to_elem(elem, v), lv.ir_name)
+
+        # if の条件（あれば）
+        if n.els is not None:
+            c: str = self.gen_expr(node_of(n.els))
+            self.emit_cond_br(c, keep_l, next_l)
+            self.emit_label(keep_l)
+
+        val: str = self.elem_to_slot(elem, self.gen_expr(node_of(n.lhs)))
+        lst2: str = self.new_tmp()
+        self.emit("  " + lst2 + " = load ptr, ptr " + res.ir_name + "\n")
+        self.emit("  call void @" + push + "(ptr " + lst2 + ", " + sty + " " +
+                  val + ")\n")
+
+        self.emit_label(next_l)
+        i2: str = self.new_tmp()
+        self.emit("  " + i2 + " = load i64, ptr " + ix.ir_name + "\n")
+        i3: str = self.new_tmp()
+        # ⚠️ ここは桁あふれ検査を出さない（長さ／終端までしか進まないため）
+        stepv: int = 1
+        if n.args is not None:
+            stepv = n.ival
+        self.emit("  " + i3 + " = add i64 " + i2 + ", " + str(stepv) + "\n")
+        self.emit("  store i64 " + i3 + ", ptr " + ix.ir_name + "\n")
+        self.emit("  br label %" + cond_l + "\n")
+        self.terminated = True
+
+        self.emit_label(end_l)
+        out: str = self.new_tmp()
+        self.emit("  " + out + " = load ptr, ptr " + res.ir_name + "\n")
+        return out
+
+    # None の検査を IR に展開する。
+    #
+    # ⚠️ クラス型のフィールドは NULL から始まる（12.6 節）。
+    #   NULL 参照を segfault ではなく親切なメッセージに変えるための検査。
+    #
+    # ★ もとは pl_check_not_none への**呼び出し 1 回**だった。
+    #   フィールド参照はこの言語で最も回数の多い操作で、
+    #   linalg.Matrix.get のような小さなメソッドでは 1 回の呼び出しに
+    #   つき 2 回払っていた。ランタイムは別リンクなのでインライン化
+    #   されない。検査ごと IR に出して呼び出しを無くす。
+    #
+    # ★ 検査は消えない。null なら pl_none_fail へ飛ぶ。
+    def gen_not_none(mut self, obj: str) -> str:
+        self.declare_rt("void @pl_none_fail() noreturn cold")
+
+        id_: int = self.label_counter    # ★ 番号は最初に 1 回だけ確保する
+        self.label_counter = self.label_counter + 1
+        ok_l: str = "none.ok." + str(id_)
+        bad_l: str = "none.bad." + str(id_)
+
+        isn: str = self.new_tmp()
+        self.emit("  " + isn + " = icmp eq ptr " + obj + ", null\n")
+        self.emit_cond_br(isn, bad_l, ok_l)
+
+        self.emit_label(bad_l)
+        self.emit("  call void @pl_none_fail()\n")
+        self.emit("  unreachable\n")
+        self.terminated = True
+
+        self.emit_label(ok_l)
+        return copy(obj)
+
+    # ── 添字を IR に展開する ──────────────────────
+    #
+    # ⚠️ ここがこの言語の最大のボトルネックだった。
+    #   xs[i] はもともと pl_list_len / pl_norm_index / pl_list_get_* の
+    #   **関数呼び出し 3 回**だった。ランタイムは runtime.a として
+    #   別にリンクされ、LTO を使っていないので -O2 でも
+    #   インライン化されない。行列積の内側ループが呼び出し 5 回に
+    #   なり、C の 61 倍遅くなっていた。
+    #
+    # ★ **検査は外さない**（方針 §0-②）。遅いのは検査ではなく
+    #   呼び出しなので、検査ごと IR に出す。こうすると LLVM が
+    #   ループの外へ持ち上げたり、範囲が自明なときに消したりできる。
+    #
+    # PlList の並びは { ptr data; i64 len; i64 cap }（runtime/core.c）。
+    # data がオフセット 0、len が 8。
+    #
+    # ★ 範囲検査は **符号なしの比較 1 回**で済む。
+    #   len >= 0 なので、i を符号なしとして見れば負の i は巨大な値に
+    #   なり、i < 0 も i >= len も icmp ult ひとつで捕まる。
+    #
+    # ── 整数の桁あふれを検査する──
+    #
+    # ★ これまでと同じ考え方で、**検査ごと IR に出す**（規約 R10 の例外）。
+    #   ランタイム関数を呼ぶ形にすると、+ と * はこの言語で最も回数の多い
+    #   演算なので、呼び出しの費用が支配的になる。
+    #
+    # ★ 当たりの経路は llvm.*.with.overflow 1 命令 ＋ 予測の当たる分岐だけ。
+    #   実測で 2.4%（整数ループ 2000 万回が 166 → 170 ms）。
+    #
+    # ⚠️ 外れの経路の pl_overflow_fail は **noreturn cold**。cold が無いと
+    #   この分岐の費用が囲む関数のインライン化の見積りに入る。
+    #
+    # op は pl_overflow_fail に渡す番号（0:+ 1:- 2:* 3:単項-）。
+    # ★ ここは「値と、あふれた旗（i1）を作る」だけ。**分岐は出さない。**
+    #   分岐まで出す形（gen_checked_arith）と、旗だけ受け取って範囲検査に
+    #   相乗りさせる形（gen_index_expr）の 2 通りに使い分ける。
+    #   ⚠️ 旗は self.last_ovf に置く（この言語に out 引数が無いため）。
+    def gen_arith_ovf(mut self, intr: str, l: str, r: str) -> str:
+        self.declare_rt("{i64, i1} @llvm." + intr +
+                        ".with.overflow.i64(i64, i64)")
+
+        pair: str = self.new_tmp()
+        self.emit("  " + pair + " = call {i64, i1} @llvm." + intr +
+                  ".with.overflow.i64(i64 " + l + ", i64 " + r + ")\n")
+        val: str = self.new_tmp()
+        self.emit("  " + val + " = extractvalue {i64, i1} " + pair + ", 0\n")
+        bad: str = self.new_tmp()
+        self.emit("  " + bad + " = extractvalue {i64, i1} " + pair + ", 1\n")
+        self.last_ovf = bad
+        return val
+
+    # 旗を見てその場で分岐する形（添字の外の算術は全部こちら）。
+    def gen_checked_arith(mut self, intr: str, l: str, r: str, op: int) -> str:
+        self.declare_rt("void @pl_overflow_fail(i64) noreturn cold")
+        val: str = self.gen_arith_ovf(intr, l, r)
+        bad: str = self.last_ovf
+
+        id_: int = self.label_counter    # ★ 番号は最初に 1 回だけ確保する
+        self.label_counter = self.label_counter + 1
+        ok_l: str = "ovf.ok." + str(id_)
+        bad_l: str = "ovf.bad." + str(id_)
+        self.emit_cond_br(bad, bad_l, ok_l)
+
+        self.emit_label(bad_l)
+        self.emit("  call void @pl_overflow_fail(i64 " + str(op) + ")\n")
+        self.emit("  unreachable\n")
+        self.terminated = True
+
+        self.emit_label(ok_l)
+        return val
+
+    # ★ float の 0 除算を検査する。
+    #
+    #   ⚠️ 整数の `//` と `%` は 0 除算で panic するのに、`1.0 / 0.0` は
+    #     inf になっていた。**同じ「割る」で挙動が違う**のは穴なので、
+    #     Python と同じく両方 panic に揃えた。
+    #
+    #   ⚠️ 規約 R13：外れの経路の**呼び出し**が 1 つ増える（約 25 点）。
+    #     費用は測りました（float 除算が主のループで +9.8%）。
+    def gen_checked_fdiv(mut self, l: str, r: str) -> str:
+        self.declare_rt("void @pl_fdiv_zero_fail() noreturn cold")
+        z: str = self.new_tmp()
+        # ⚠️ oeq を使う。-0.0 も 0.0 と等しく、割れば ±inf になるため。
+        #   NaN で割るのは NaN なので、ここでは止めない（0 だけを見る）。
+        self.emit("  " + z + " = fcmp oeq double " + r + ", 0.000000e+00\n")
+
+        id_: int = self.label_counter
+        self.label_counter = self.label_counter + 1
+        ok_l: str = "fdiv.ok." + str(id_)
+        bad_l: str = "fdiv.zero." + str(id_)
+        self.emit_cond_br(z, bad_l, ok_l)
+
+        self.emit_label(bad_l)
+        self.emit("  call void @pl_fdiv_zero_fail()\n")
+        self.emit("  unreachable\n")
+        self.terminated = True
+
+        self.emit_label(ok_l)
+        t: str = self.new_tmp()
+        self.emit("  " + t + " = fdiv double " + l + ", " + r + "\n")
+        return t
+
+    # 貯めた「あふれの旗」で 1 回だけ分岐する（相乗りできる範囲検査が無いとき）。
+    # op は 4 ＝「添字の計算」。
+    def gen_ovf_br(mut self, flag: str) -> None:
+        self.declare_rt("void @pl_overflow_fail(i64) noreturn cold")
+        id_: int = self.label_counter
+        self.label_counter = self.label_counter + 1
+        ok_l: str = "ovf.ok." + str(id_)
+        bad_l: str = "ovf.bad." + str(id_)
+        self.emit_cond_br(flag, bad_l, ok_l)
+        self.emit_label(bad_l)
+        self.emit("  call void @pl_overflow_fail(i64 4)\n")
+        self.emit("  unreachable\n")
+        self.terminated = True
+        self.emit_label(ok_l)
+
+    # 整数の + - * に対応する桁あふれ検査つき命令の名前。無ければ ""。
+    def ovf_intr(self, op: int) -> str:
+        if op == ast.OP_ADD:
+            return "sadd"
+        if op == ast.OP_SUB:
+            return "ssub"
+        if op == ast.OP_MUL:
+            return "smul"
+        return ""
+
+    # normalize が True なら負の添字を末尾から数え直す。
+    # 戻り値は要素へのポインタ。
+    # ovf は「添字の計算で桁があふれた」ことを表す i1 の値（無ければ ""）。
+    # ★ あふれの報告をこの範囲検査に**相乗り**させる。
+    #   理由は gen_index_expr の説明を見ること。
+    def gen_index_addr(mut self, obj: str, idx0: str, sty: str,
+                       normalize: bool, ovf: str) -> str:
+        # ★ 版分けの速い側。ループの外で
+        #   「全反復ぶんの添字が 0 以上・長さ未満」を確かめてあるので、
+        #   ここでは検査も**負の添字の正規化も**出さない。
+        #
+        # 🤔 正規化（select）を消すのが要点。検査だけ消しても
+        #   アドレスが `data + idx + (idx<0 ? len : 0)` のままで、
+        #   LLVM から見ると添字が 1 ずつ進むと分からず、ベクトル化できない。
+        if self.nobc:
+            data0: str = self.new_tmp()
+            self.emit("  " + data0 + " = load ptr, ptr " + obj + TBAA_LISTHDR + "\n")
+            ep0: str = self.new_tmp()
+            self.emit("  " + ep0 + " = getelementptr " + sty + ", ptr " + data0 +
+                      ", i64 " + idx0 + "\n")
+            return ep0
+
+        self.declare_rt("void @pl_index_fail(i64, i64, i64) noreturn cold")
+
+        lenp: str = self.new_tmp()
+        self.emit("  " + lenp + " = getelementptr i8, ptr " + obj + ", i64 8\n")
+        ln: str = self.new_tmp()
+        self.emit("  " + ln + " = load i64, ptr " + lenp + TBAA_LISTHDR + "\n")
+
+        idx: str = idx0
+        if normalize:
+            isneg: str = self.new_tmp()
+            self.emit("  " + isneg + " = icmp slt i64 " + idx + ", 0\n")
+            plus: str = self.new_tmp()
+            self.emit("  " + plus + " = add i64 " + idx + ", " + ln + "\n")
+            ni: str = self.new_tmp()
+            self.emit("  " + ni + " = select i1 " + isneg + ", i64 " + plus +
+                      ", i64 " + idx + "\n")
+            idx = ni
+
+        id_: int = self.label_counter    # ★ 番号は最初に 1 回だけ確保する
+        self.label_counter = self.label_counter + 1
+        ok_l: str = "idx.ok." + str(id_)
+        bad_l: str = "idx.bad." + str(id_)
+
+        inb0: str = self.new_tmp()
+        self.emit("  " + inb0 + " = icmp ult i64 " + idx + ", " + ln + "\n")
+
+        # ★ 桁あふれがあったら、範囲内に見えても失敗させる。
+        #   （折り返した添字がたまたま範囲内に入ることがあるため。
+        #     ここを and で潰しておくのが健全性の要。）
+        inb: str = copy(inb0)
+        ovf_arg: str = "0"
+        if ovf != "":
+            nov: str = self.new_tmp()
+            self.emit("  " + nov + " = xor i1 " + ovf + ", true\n")
+            both: str = self.new_tmp()
+            self.emit("  " + both + " = and i1 " + inb0 + ", " + nov + "\n")
+            z: str = self.new_tmp()
+            self.emit("  " + z + " = zext i1 " + ovf + " to i64\n")
+            inb = both
+            ovf_arg = z
+        self.emit_cond_br(inb, ok_l, bad_l)
+
+        self.emit_label(bad_l)
+        self.emit("  call void @pl_index_fail(i64 " + idx + ", i64 " + ln +
+                  ", i64 " + ovf_arg + ")\n")
+        # ⚠️ pl_index_fail は戻ってこない。unreachable を置かないと
+        #   LLVM は「戻るかも」と見て、検査をループ外へ出せなくなる。
+        self.emit("  unreachable\n")
+        self.terminated = True
+
+        self.emit_label(ok_l)
+        data: str = self.new_tmp()
+        self.emit("  " + data + " = load ptr, ptr " + obj + TBAA_LISTHDR + "\n")
+        ep: str = self.new_tmp()
+        self.emit("  " + ep + " = getelementptr " + sty + ", ptr " + data +
+                  ", i64 " + idx + "\n")
+        return ep
+
+    # ── 添字の式を、あふれの旗を貯めながら生成する──
+    #
+    # ★ **なぜ添字だけ特別扱いするのか。**
+    #   self.data[i * self.cols + j] のような小さなメソッドが、桁あふれ検査を
+    #   入れた 0.6.0 で**インライン化されなくなった**（linalg.Matrix の
+    #   行列積が 2.6 倍遅くなった原因）。LLVM の見積りを実測すると
+    #   Matrix.get は **cost=225 / threshold=225** で、**1 点足りずに**落ちていた。
+    #   内訳は、外れの経路の**呼び出し 1 つにつき約 25 点**（cold でも引かれない）。
+    #
+    # ★ そこで、**あふれの報告を範囲検査に相乗りさせる。**
+    #   添字の計算の + - * は分岐せず旗（i1）だけを立て、最後に
+    #   「範囲内 かつ あふれていない」を 1 回だけ分岐する。失敗の呼び出しは
+    #   **もともと 1 つある pl_index_fail だけ**になり、分岐も呼び出しも増えない。
+    #
+    #   ⚠️ **健全性**：折り返した添字がたまたま範囲内に入っても、旗が
+    #     立っているので必ず失敗する（gen_index_addr の and）。
+    #   ⚠️ **意味の違いが 1 つ**：あふれた時点ではなく添字の計算が終わった
+    #     時点で止まる。xs[a * b + f()] は a * b があふれても f() が呼ばれる。
+    #
+    # 旗は self.ovf_flag に貯まる（呼ぶ前に "" にしておくこと）。
+    def gen_index_expr(mut self, n: rc[ast.Node]) -> str:
+        intr: str = ""
+        if n.kind == ast.ND_BINOP and not self.no_ovf:
+            lt: rc[ast.Type] = type_of(node_of(n.lhs))
+            if lt.kind == ast.TY_INT:
+                intr = self.ovf_intr(n.op)
+
+        # ⚠️ 単項 - も同じ扱い（-INT_MIN があふれる）
+        neg: bool = False
+        if n.kind == ast.ND_UNARY and n.op == ast.OP_NEG and not self.no_ovf:
+            nt: rc[ast.Type] = type_of(n)
+            neg = nt.kind == ast.TY_INT
+
+        if intr == "" and not neg:
+            return self.gen_expr(n)      # 算術以外は普通に生成する
+
+        l: str = "0"
+        r: str = ""
+        if neg:
+            r = self.gen_index_expr(node_of(n.lhs))
+            intr = "ssub"
+        else:
+            l = self.gen_index_expr(node_of(n.lhs))
+            r = self.gen_index_expr(node_of(n.rhs))
+
+        val: str = self.gen_arith_ovf(intr, l, r)
+        bad: str = self.last_ovf
+        if self.ovf_flag != "":
+            o: str = self.new_tmp()
+            self.emit("  " + o + " = or i1 " + self.ovf_flag + ", " + bad + "\n")
+            self.ovf_flag = o
+        else:
+            self.ovf_flag = copy(bad)
+        return val
+
+    def gen_index(mut self, n: rc[ast.Node]) -> str:
+        obj_node: rc[ast.Node] = node_of(n.lhs)
+        ot: rc[ast.Type] = type_of(obj_node)
+        obj: str = self.gen_expr(obj_node)
+        # ⚠️ 入れ子（xs[ys[i * 2]]）に備えて、貯め場所を退避してから使う
+        saved: str = self.ovf_flag
+        self.ovf_flag = ""
+        idx0: str = self.gen_index_expr(node_of(n.rhs))
+        ovf: str = self.ovf_flag
+        self.ovf_flag = copy(saved)
+
+        # str の添字は 1 文字の str を返す。
+        # ★ こちらは 1 文字の str を**新しく作る**ので、どのみち確保が
+        #   入る。展開しても利かないので従来どおり呼び出す。
+        if ot.kind == ast.TY_STR:
+            # ⚠️ str の添字は pl_norm_index / pl_str_index に任せるので、
+            #   相乗りさせる範囲検査がここには無い。旗が立っていたら
+            #   ここで 1 回だけ分岐して報告する。
+            if ovf != "":
+                self.gen_ovf_br(ovf)
+            self.declare_rt("i64 @pl_str_len(ptr)")
+            self.declare_rt("i64 @pl_norm_index(i64, i64)")
+            ln0: str = self.new_tmp()
+            self.emit("  " + ln0 + " = call i64 @pl_str_len(ptr " + obj + ")\n")
+            ni0: str = self.new_tmp()
+            self.emit("  " + ni0 + " = call i64 @pl_norm_index(i64 " + idx0 +
+                      ", i64 " + ln0 + ")\n")
+            self.declare_rt("ptr @pl_str_index(ptr, i64)")
+            t0: str = self.new_tmp()
+            self.emit("  " + t0 + " = call ptr @pl_str_index(ptr " + obj +
+                      ", i64 " + ni0 + ")\n")
+            return t0
+
+        # ★ タプルの添字は「構造体の何番目か」。範囲は意味解析で確認済み
+        if ot.kind == ast.TY_TUPLE:
+            k: int = node_of(n.rhs).ival
+            pt: str = self.new_tmp()
+            self.emit("  " + pt + " = getelementptr " + self.tuple_ty(ot) +
+                      ", ptr " + obj + ", i32 0, i32 " + str(k) + "\n")
+            return self.gen_load(ot.params[k], pt)
+
+        elem: rc[ast.Type] = ast.elem_of(ot)
+        sty: str = self.slot_ty(elem)
+        ep: str = self.gen_index_addr(obj, idx0, sty, True, ovf)
+        t: str = self.new_tmp()
+        self.emit("  " + t + " = load " + sty + ", ptr " + ep + TBAA_LISTELEM +
+                  "\n")
+        return self.slot_to_elem(elem, t)
+
+    def gen_index_store(mut self, target: rc[ast.Node], val: str) -> None:
+        obj_node: rc[ast.Node] = node_of(target.lhs)
+        elem: rc[ast.Type] = ast.elem_of(type_of(obj_node))
+        obj: str = self.gen_expr(obj_node)
+        saved: str = self.ovf_flag
+        self.ovf_flag = ""
+        idx: str = self.gen_index_expr(node_of(target.rhs))
+        ovf: str = self.ovf_flag
+        self.ovf_flag = copy(saved)
+
+        sty: str = self.slot_ty(elem)
+        # ⚠️ 代入側は負の添字を正規化しない。
+        #   pl_list_set_* を呼んでいたころからそうだった（xs[-1] = v は panic）。
+        #   ここで変えると意味が変わるので、振る舞いはそのままにする。
+        ep: str = self.gen_index_addr(obj, idx, sty, False, ovf)
+        v: str = self.elem_to_slot(elem, val)
+        self.emit("  store " + sty + " " + v + ", ptr " + ep + TBAA_LISTELEM +
+                  "\n")
+
+    # ── 呼び出し ────────────────────────────────────────────
+
+    # 引数を評価して "型 値, 型 値" と "型, 型"（declare 用）を作る
+    def gen_args(mut self, args: rc[ast.Node] | None, vals: mut list[str], atypes: mut list[str],
+                 first: bool) -> None:
+        is_first: bool = first
+        a: rc[ast.Node] | None = args
+        while a is not None:
+            arg: rc[ast.Node] = a
+            v: str = self.gen_expr(arg)
+            sep: str = ", "
+            if is_first:
+                sep = ""
+            vals.append(sep + self.llvm_type(type_of(arg)) + " " + v)
+            atypes.append(sep + self.llvm_type(type_of(arg)))
+            is_first = False
+            a = arg.next
+
+    # 呼び出しを 1 行出す（戻り値が None なら値を返さない）
+    def emit_call(mut self, n: rc[ast.Node], args: str) -> str:
+        rt: rc[ast.Type] = type_of(n)
+
+        # ── 失敗しうる呼び出し ──
+        #   ① タグを 0 にする ② スロットを渡す ③ 戻ってタグを見る
+        full: str = args
+        slot: str = ""
+        if n.can_fail:
+            slot = self.err_slot()
+            tp: str = self.new_tmp()
+            self.emit("  " + tp + " = getelementptr %pl.err, ptr " + slot +
+                      ", i32 0, i32 0\n")
+            self.emit("  store i64 0, ptr " + tp + "\n")
+            if len(args) > 0:
+                full = args + ", ptr " + slot
+            else:
+                full = "ptr " + slot
+
+        t: str = ""
+        if rt.kind == ast.TY_NONE:
+            self.emit("  call void @" + n.ir_name + "(" + full + ")\n")
+        else:
+            t = self.new_tmp()
+            self.emit("  " + t + " = call " + self.llvm_type(rt) + " @" +
+                      n.ir_name + "(" + full + ")\n")
+
+        if n.can_fail:
+            cid: int = self.label_counter
+            self.label_counter = self.label_counter + 1
+            ok_l: str = "call.ok." + str(cid)
+            tag: str = self.load_tag(slot)
+            bad: str = self.new_tmp()
+            self.emit("  " + bad + " = icmp ne i64 " + tag + ", 0\n")
+            fl: str = self.fail_label()
+            if len(fl) > 0:
+                self.emit_cond_br(bad, fl, ok_l)
+            else:
+                # 到達しない経路（sema が保証）。専用ブロックに落とす
+                un_l: str = "call.unreach." + str(cid)
+                self.emit_cond_br(bad, un_l, ok_l)
+                self.emit_label(un_l)
+                self.emit("  unreachable\n")
+                self.terminated = True
+            self.emit_label(ok_l)
+        return t
+
+    def gen_method(mut self, n: rc[ast.Node]) -> str:
+        # ★ '.' の左がモジュールだった場合
+        if len(n.mod_name) > 0:
+            if n.cls is not None:
+                return self.gen_new(n)      # lexer.Token(1, "x")
+
+            vals: list[str] = []
+            atypes: list[str] = []
+            self.gen_args(n.args, vals, atypes, True)
+            if n.is_extern:
+                ats0: str = strings.join(atypes, "")
+                if n.can_fail:
+                    if len(ats0) > 0:
+                        ats0 = ats0 + ", ptr"
+                    else:
+                        ats0 = "ptr"
+                self.declare_extern(self.llvm_type(type_of(n)), n.ir_name, ats0)
+            return self.emit_call(n, strings.join(vals, ""))
+
+        obj_node: rc[ast.Node] = node_of(n.lhs)
+        ot: rc[ast.Type] = type_of(obj_node)
+
+        # ★ Thread[R].join() / mutex[T].lock(f)（A-18）
+        if ot.kind == ast.TY_THREAD:
+            jh: str = self.gen_expr(obj_node)
+            self.declare_rt("i64 @pl_thread_join(ptr)")
+            jr: str = self.new_tmp()
+            self.emit("  " + jr + " = call i64 @pl_thread_join(ptr " + jh + ")\n")
+            if ast.elem_of(ot).kind == ast.TY_NONE:
+                return ""
+            return self.unpack_i64(ast.elem_of(ot), jr)
+
+        if ot.kind == ast.TY_MUTEX:
+            lfn: rc[ast.Node] = node_of(n.args)
+            lfnty: rc[ast.Type] = type_of(lfn)
+            lh: str = self.gen_expr(obj_node)
+            lfv: str = self.gen_expr(lfn)
+            lth: str = self.thunk_for(lfnty)
+            lfi: str = self.new_tmp()
+            self.emit("  " + lfi + " = ptrtoint ptr " + lfv + " to i64\n")
+            self.declare_rt("i64 @pl_mutex_with(ptr, ptr, i64)")
+            lr: str = self.new_tmp()
+            self.emit("  " + lr + " = call i64 @pl_mutex_with(ptr " + lh +
+                      ", ptr " + lth + ", i64 " + lfi + ")\n")
+            if type_of(n).kind == ast.TY_NONE:
+                return ""
+            return self.unpack_i64(type_of(n), lr)
+
+        # ★ インタフェース越しの呼び出し。
+        #   ① 実体の先頭から vtable を読む ② スロットの関数ポインタを読む ③ 呼ぶ
+        #   ⚠️ 呼び先はコンパイル時には決まらない（実行時の型で決まる）。
+        if n.is_iface_call:
+            iobj: str = self.gen_expr(obj_node)
+            iok: str = self.gen_not_none(iobj)
+            ivt: str = self.new_tmp()
+            self.emit("  " + ivt + " = load ptr, ptr " + iok + "\n")
+            islotp: str = self.new_tmp()
+            self.emit("  " + islotp + " = getelementptr [" +
+                      str(ast.iface_slots()) + " x ptr], ptr " + ivt +
+                      ", i32 0, i32 " + str(n.iface_slot) + "\n")
+            ifp: str = self.new_tmp()
+            self.emit("  " + ifp + " = load ptr, ptr " + islotp + "\n")
+
+            iargs2: list[str] = []
+            itypes2: list[str] = []
+            iargs2.append("ptr " + iok)
+            self.gen_args(n.args, iargs2, itypes2, False)
+            ia2: str = strings.join(iargs2, "")
+            if type_of(n).kind == ast.TY_NONE:
+                self.emit("  call void " + ifp + "(" + ia2 + ")\n")
+                return ""
+            it2: str = self.new_tmp()
+            self.emit("  " + it2 + " = call " + self.llvm_type(type_of(n)) +
+                      " " + ifp + "(" + ia2 + ")\n")
+            return it2
+
+        # クラスのメソッド。self を第 1 引数に渡すだけ
+        # ★ rc[T] の中身のメソッドも同じように呼べる
+        if ot.kind == ast.TY_CLASS or ot.kind == ast.TY_RC:
+            obj: str = self.deref_rc(ot, self.gen_expr(obj_node))
+
+            vals2: list[str] = []
+            atypes2: list[str] = []
+            vals2.append("ptr " + obj)
+            atypes2.append("ptr")
+            self.gen_args(n.args, vals2, atypes2, False)
+
+            # ★ import したクラスのメソッドは declare が要る
+            if n.is_extern:
+                ats2: str = strings.join(atypes2, "")
+                if n.can_fail:
+                    ats2 = ats2 + ", ptr"
+                self.declare_extern(self.llvm_type(type_of(n)), n.ir_name, ats2)
+            return self.emit_call(n, strings.join(vals2, ""))
+
+        # ── list のメソッド（append とその他）──
+        #
+        # ★ ランタイム側は **すべて i64 のスロット**で扱う。list の中身が
+        #   「ポインタ 1 個か i64 1 個」という当初の作りのままなので、
+        #   pop / insert / remove は 1 つの関数で全部の要素型に効く。
+        elem: rc[ast.Type] = ast.elem_of(ot)
+        obj2: str = self.gen_expr(obj_node)
+
+        if n.name == "pop" or n.name == "remove":
+            t1: str = self.new_tmp()
+            if n.name == "pop":
+                self.declare_rt("i64 @pl_list_pop(ptr)")
+                self.emit("  " + t1 + " = call i64 @pl_list_pop(ptr " + obj2 +
+                          ")\n")
+            else:
+                self.declare_rt("i64 @pl_list_remove_at(ptr, i64)")
+                iv0: str = self.gen_expr(node_of(n.args))
+                self.emit("  " + t1 +
+                          " = call i64 @pl_list_remove_at(ptr " + obj2 +
+                          ", i64 " + iv0 + ")\n")
+            if self.elem_is_ptr(elem):
+                pt: str = self.new_tmp()
+                self.emit("  " + pt + " = inttoptr i64 " + t1 + " to ptr\n")
+                return pt
+            return self.slot_to_elem(elem, t1)
+
+        if n.name == "insert":
+            self.declare_rt("void @pl_list_insert(ptr, i64, i64)")
+            ipos: str = self.gen_expr(node_of(n.args))
+            v2: str = self.elem_to_slot(elem,
+                                        self.gen_expr(node_of(
+                                            node_of(n.args).next)))
+            iv2: str = copy(v2)
+            if self.elem_is_ptr(elem):
+                iv2 = self.new_tmp()
+                self.emit("  " + iv2 + " = ptrtoint ptr " + v2 + " to i64\n")
+            self.emit("  call void @pl_list_insert(ptr " + obj2 + ", i64 " +
+                      ipos + ", i64 " + iv2 + ")\n")
+            return ""
+
+        if n.name == "index":
+            fname: str = self.index_fn(elem)
+            aty: str = self.index_arg_ty(elem)
+            self.declare_rt("i64 @" + fname + "(ptr, " + aty + ")")
+            v3: str = self.elem_to_slot_cmp(elem, self.gen_expr(node_of(n.args)))
+            t3: str = self.new_tmp()
+            self.emit("  " + t3 + " = call i64 @" + fname + "(ptr " + obj2 +
+                      ", " + aty + " " + v3 + ")\n")
+            return t3
+
+        if n.name == "reverse":
+            self.declare_rt("void @pl_list_reverse(ptr)")
+            self.emit("  call void @pl_list_reverse(ptr " + obj2 + ")\n")
+            return ""
+        if n.name == "clear":
+            self.declare_rt("void @pl_list_clear(ptr)")
+            self.emit("  call void @pl_list_clear(ptr " + obj2 + ")\n")
+            return ""
+        if n.name == "copy":
+            self.declare_rt("ptr @pl_list_copy(ptr)")
+            t4: str = self.new_tmp()
+            self.emit("  " + t4 + " = call ptr @pl_list_copy(ptr " + obj2 +
+                      ")\n")
+            return t4
+        if n.name == "extend":
+            self.declare_rt("void @pl_list_extend(ptr, ptr)")
+            o2: str = self.gen_expr(node_of(n.args))
+            self.emit("  call void @pl_list_extend(ptr " + obj2 + ", ptr " +
+                      o2 + ")\n")
+            return ""
+
+        sty: str = self.slot_ty(elem)
+        push: str = "pl_list_push_i64"
+        if self.elem_is_ptr(elem):
+            push = "pl_list_push_ptr"
+        self.declare_rt("void @" + push + "(ptr, " + sty + ")")
+
+        v: str = self.elem_to_slot(elem, self.gen_expr(node_of(n.args)))
+        self.emit("  call void @" + push + "(ptr " + obj2 + ", " + sty + " " +
+                  v + ")\n")
+        return ""
+
+    # ── class の生成 ──────────────────────────────────
+
+    # フィールドのアドレスを求める（読み出しにも代入にも使う）
+    def gen_field_ptr(mut self, n: rc[ast.Node]) -> str:
+        obj_node: rc[ast.Node] = node_of(n.lhs)
+        ot0: rc[ast.Type] = type_of(obj_node)
+        # ★ rc[T] は中身のように使える
+        cty: rc[ast.Type] = ot0
+        if ot0.kind == ast.TY_RC:
+            cty = ast.elem_of(ot0)
+        c: rc[ast.Class] = class_of(cty.cls)
+        obj: str = self.deref_rc(ot0, self.gen_expr(obj_node))
+
+        # ⚠️ クラス型のフィールドは NULL から始まる（12.6 節）
+        # ★ 検査を IR に展開する（規約 R10 の例外。理由は gen_not_none）
+        ok: str = self.gen_not_none(obj)
+
+        # ⚠️ 第 1 インデックスは常に 0（「Token の配列の何個目か」）
+        t: str = self.new_tmp()
+        self.emit("  " + t + " = getelementptr %" + self.class_type(c) +
+                  ".type, ptr " + ok + ", i32 0, i32 " +
+                  str(field_of(n.field).index) + "\n")
+        return t
+
+    # 他モジュールのグローバル変数は external で宣言する
+    def declare_extern_global(mut self, n: rc[ast.Node]) -> None:
+        sig: str = (n.ir_name + " = external global " +
+                    self.llvm_mem_type(type_of(n)))
+        i: int = 0
+        while i < len(self.decled):
+            if self.decled[i] == sig:
+                return
+            i = i + 1
+        self.globals_.append(sig + "\n")
+        self.decled.append(sig)
+
+    def gen_field(mut self, n: rc[ast.Node]) -> str:
+        # ★ math.sin のように他モジュールの関数を値として使う場合。
+        #   ⚠️ 呼ぶわけではないので **declare だけ**出して、ラベルを値にする。
+        if n.is_func_ref:
+            ftt: rc[ast.Type] = type_of(n)
+            ps: list[str] = []
+            for pt in ftt.params:
+                ps.append(self.llvm_type(pt))
+            self.declare_extern(self.llvm_type(ast.elem_of(ftt)), n.ir_name,
+                                strings.join(ps, ", "))
+            return "@" + n.ir_name
+
+        # ★ '.' の左がモジュールなら、グローバル変数の読み出し
+        if len(n.mod_name) > 0:
+            if n.is_extern:
+                self.declare_extern_global(n)
+            return self.gen_load(type_of(n), n.ir_name)
+
+        # ★ ここは「クラスのフィールド」だと LLVM に伝える（TBAA）
+        return self.gen_load_tb(type_of(n), self.gen_field_ptr(n), TBAA_FIELD)
+
+    # インスタンス生成 Token(1, "x")
+    # ── vtable ──────────────────────────────────────────
+    #
+    # ★ クラス 1 つにつき **1 本**の表を出す。中身は「プログラム全体の
+    #   インタフェース・メソッドのスロット数」ぶんの関数ポインタの配列で、
+    #   そのクラスが実装しているスロットだけが埋まり、残りは null。
+    #
+    # 🤔 なぜスロットを全体で一意にするのか
+    #   1 つのクラスが複数のインタフェースを実装できるようにするため。
+    #   インタフェースごとに 0 から振ると、呼ぶ側（インタフェースしか
+    #   知らない）がどの表のどこを見ればよいか決められない。
+    #   ⚠️ 代わりに表は疎になる。
+    def gen_vtable(mut self, c: rc[ast.Class]) -> None:
+        if len(c.impls) == 0:
+            return
+        vi: int = 0
+        while vi < len(self.emitted_vtables):
+            if self.emitted_vtables[vi] == c.ir_name:
+                return
+            vi = vi + 1
+        self.emitted_vtables.append(copy(c.ir_name))
+
+        n2: int = ast.iface_slots()
+        parts: list[str] = []
+        parts.append("@vt." + c.ir_name + " = private constant [" + str(n2) +
+                     " x ptr] [")
+        i: int = 0
+        while i < n2:
+            fn: str = ""
+            for l in c.impls:
+                for im in l.methods:
+                    if im.slot == i:
+                        fn = c.ir_name + "." + im.name
+            sep: str = ", "
+            if i == 0:
+                sep = ""
+            if len(fn) > 0:
+                parts.append(sep + "ptr @" + fn)
+            else:
+                parts.append(sep + "ptr null")
+            i = i + 1
+        parts.append("]\n")
+        self.globals_.append(strings.join(parts, ""))
+
+    def gen_new(mut self, n: rc[ast.Node]) -> str:
+        c: rc[ast.Class] = class_of(n.cls)
+
+        self.declare_rt("ptr @pl_alloc(i64)")
+        obj: str = self.new_tmp()
+        self.emit("  " + obj + " = call ptr @pl_alloc(i64 " + str(c.size) + ")\n")
+
+        # ★ インタフェースを実装するなら、先頭に vtable を入れる。
+        #   ⚠️ ここを忘れると、インタフェース越しの呼び出しが null を呼ぶ。
+        if len(c.impls) > 0:
+            self.gen_vtable(c)
+            vp: str = self.new_tmp()
+            self.emit("  " + vp + " = getelementptr %" + c.ir_name +
+                      ".type, ptr " + obj + ", i32 0, i32 0\n")
+            self.emit("  store ptr @vt." + c.ir_name + ", ptr " + vp + "\n")
+
+        # ★ ゼロ初期化では足りない型に、有効な値を入れておく（12.6 節）
+        f: rc[ast.Field] | None = c.fields
+        while f is not None:
+            fld: rc[ast.Field] = f
+            ft: rc[ast.Type] = type_of_field(fld)
+            if ft.kind == ast.TY_STR or ft.kind == ast.TY_LIST:
+                val: str = ""
+                if ft.kind == ast.TY_STR:
+                    val = self.intern_str("")
+                else:
+                    self.declare_rt("ptr @pl_list_new()")
+                    val = self.new_tmp()
+                    self.emit("  " + val + " = call ptr @pl_list_new()\n")
+                p: str = self.new_tmp()
+                self.emit("  " + p + " = getelementptr %" + self.class_type(c) +
+                          ".type, ptr " + obj + ", i32 0, i32 " +
+                          str(fld.index) + "\n")
+                self.emit("  store ptr " + val + ", ptr " + p + "\n")
+            f = fld.next
+
+        if not c.has_init:
+            return obj
+
+        # init は「self を第 1 引数に取るふつうの関数」
+        vals: list[str] = []
+        atypes: list[str] = []
+        vals.append("ptr " + obj)
+        atypes.append("ptr")
+        self.gen_args(n.args, vals, atypes, False)
+
+        init_name: str = c.ir_name + ".init"
+
+        # ★ 別モジュールのクラスなら declare が要る
+        if n.is_extern:
+            self.declare_extern("void", init_name, strings.join(atypes, ""))
+
+        self.emit("  call void @" + init_name + "(" + strings.join(vals, "") +
+                  ")\n")
+        return obj
+
+    # クラスの型定義を出す：%lexer.Token.type = type { i64, ptr }
+    #
+    # ⚠️ LLVM の型定義はモジュールローカル。import したクラスを使う
+    #   モジュールにも、同じ定義を書き直す必要があります（13.7 節）。
+    def gen_class_type(mut self, c: rc[ast.Class]) -> None:
+        i: int = 0
+        while i < len(self.emitted_types):
+            if self.emitted_types[i] == c.ir_name:
+                return
+            i = i + 1
+        self.emitted_types.append(copy(c.ir_name))
+
+        parts: list[str] = []
+        parts.append("%" + c.ir_name + ".type = type { ")
+        first: bool = True
+        # ★ インタフェースを実装するなら、先頭に vtable へのポインタ。
+        #   ⚠️ sema の layout_class と **並びを揃えること**（ずれると全部壊れる）。
+        if len(c.impls) > 0:
+            parts.append("ptr")
+            first = False
+        f: rc[ast.Field] | None = c.fields
+        while f is not None:
+            fld: rc[ast.Field] = f
+            sep: str = ", "
+            if first:
+                sep = ""
+            parts.append(sep + self.llvm_mem_type(type_of_field(fld)))
+            first = False
+            f = fld.next
+        parts.append(" }\n")
+        self.header.append(strings.join(parts, ""))
+
+    # クラスの型名を返す（まだ出していなければ定義も出す）
+    def class_type(mut self, c: rc[ast.Class]) -> str:
+        self.gen_class_type(c)
+        return copy(c.ir_name)
+
+    # ── 制御構文（規約 6.3 / 6.4 / 6.5）────────────────────
+
+    def gen_if(mut self, n: rc[ast.Node]) -> None:
+        id_: int = self.label_counter    # ★ 番号は最初に 1 回だけ確保する
+        self.label_counter = self.label_counter + 1
+
+        then_l: str = "if.then." + str(id_)
+        else_l: str = "if.else." + str(id_)
+        end_l: str = "if.end." + str(id_)
+
+        cond: str = self.gen_expr(node_of(n.lhs))
+        # else が無ければ else ブロックを作らず、直接 end へ分岐する
+        #
+        # ⚠️ `target = end_l` と別名を作ると、str は共有できないので
+        #   「移動」になります（rc[str] はありません）。**作り直して**渡します。
+        target: str = "if.end." + str(id_)
+        if n.els is not None:
+            target = "if.else." + str(id_)
+        self.emit_cond_br(cond, then_l, target)
+
+        self.emit_label(then_l)
+        self.gen_stmt(node_of(n.body))
+        # ⚠️ then 節が break / continue で終わっていたら既に終端済み
+        if not self.terminated:
+            self.emit_br(end_l)
+
+        if n.els is not None:
+            self.emit_label(else_l)
+            self.gen_stmt(node_of(n.els))
+            if not self.terminated:
+                self.emit_br(end_l)
+
+        self.emit_label(end_l)
+
+    def gen_while_plain(mut self, n: rc[ast.Node]) -> None:
+        id_: int = self.label_counter
+        self.label_counter = self.label_counter + 1
+
+        cond_l: str = "while.cond." + str(id_)
+        body_l: str = "while.body." + str(id_)
+        end_l: str = "while.end." + str(id_)
+
+        # ⚠️ 条件ブロックに「入る」ための br が必要（規約 6.4）
+        self.emit_br(cond_l)
+
+        self.emit_label(cond_l)
+        cond: str = self.gen_expr(node_of(n.lhs))   # ★ 条件は毎回評価される
+        self.emit_cond_br(cond, body_l, end_l)
+
+        # ★ 増分があるなら continue の飛び先は「増分ブロック」
+        # ⚠️ LoopCtx に預ける文字列は**作り直します**（str は共有できません）
+        incr_l: str = "for.incr." + str(id_)
+        cont_l: str = "while.cond." + str(id_)
+        if n.incr is not None:
+            cont_l = "for.incr." + str(id_)
+
+        # break / continue の飛び先を積む
+        ctx: rc[LoopCtx] = rc(LoopCtx(self.loop, copy(end_l), cont_l))
+        self.loop = ctx
+
+        self.emit_label(body_l)
+        self.gen_stmt(node_of(n.body))
+
+        if n.incr is not None:
+            # ★ emit_label が br を補うので、本体から増分へは自動で繋がる
+            self.emit_label(incr_l)
+            self.gen_stmt(node_of(n.incr))
+        if not self.terminated:
+            self.emit_br(cond_l)      # ループバック
+
+        self.loop = ctx.outer         # ★ 対で戻す
+
+        self.emit_label(end_l)
+
+
+    # ── ループの版分け（C 版 src/codegen.c の gen_while と対）──
+
+    # ループが版分けできるなら誘導変数の IR 名を返す（できなければ ""）
+    def vz_analyze(mut self, n: rc[ast.Node], sites: mut list[rc[ast.Node]]) -> str:
+        # ⚠️ --drop のときは外す（本体を 2 回出すと解放の記録が二重になる）。
+        #   セルフホスト版に --drop はないが、C 版と条件を揃えておく。
+        if n.kind != ast.ND_WHILE:
+            return ""
+
+        # ① 形：while v < L:
+        if n.lhs is None:
+            return ""
+        c: rc[ast.Node] = node_of(n.lhs)
+        if c.kind != ast.ND_BINOP or c.op != ast.OP_LT or c.lhs is None:
+            return ""
+        v: rc[ast.Node] = node_of(c.lhs)
+        if v.kind != ast.ND_VAR or v.is_global or len(v.ir_name) == 0:
+            return ""
+        if type_of(v).kind != ast.TY_INT:
+            return ""
+        iv: str = copy(v.ir_name)
+
+        # ② 上限 L は副作用の無い式で、本体で書き換わらないこと
+        if c.rhs is None:
+            return ""
+        big_l: rc[ast.Node] = node_of(c.rhs)
+        l_ok: bool = vz_pure_index(c.rhs)
+        if not l_ok and big_l.kind == ast.ND_CALL and big_l.name == "len":
+            if big_l.args is not None:
+                a0: rc[ast.Node] = node_of(big_l.args)
+                if a0.next is None and vz_place(big_l.args):
+                    l_ok = True    # ★ while i < len(xs): は非常に多いので通す
+        if not l_ok:
+            return ""
+        if vz_count(c.rhs, iv) != 0:
+            return ""
+        if not vz_invariant(c.rhs, iv, n.body):   # 上限も不変であること
+            return ""
+
+        # ③ 本体：呼び出し・入れ子ループ・脱出が無いこと
+        if not vz_body_ok(n.body):
+            return ""
+        if n.incr is not None and not vz_body_ok(n.incr):
+            return ""
+
+        # ④ 増分は v = v + 1 ただ 1 つ
+        step: rc[ast.Node] | None = vz_last_stmt(n.body)
+        if n.incr is not None:
+            ic: rc[ast.Node] = node_of(n.incr)
+            step = n.incr
+            if ic.kind == ast.ND_BLOCK:
+                step = vz_last_stmt(n.incr)
+        if not vz_is_step1(step, iv):
+            return ""
+
+        # ⑤ v への代入はその 1 本だけ
+        nassign: int = vz_count_assign(n.body, iv)
+        if n.incr is not None:
+            nassign = nassign + vz_count_assign(n.incr, iv)
+        if nassign != 1:
+            return ""
+
+        # ⑥ 添字を集める。1 つも無ければ版分けする意味がない
+        if not vz_sites(n.body, iv, n.body, sites):
+            return ""
+        if n.incr is not None and not vz_sites(n.incr, iv, n.body, sites):
+            return ""
+        if len(sites) == 0:
+            return ""
+
+        # ⑦ 添字の対象になっている list が本体で書き換わらないこと
+        for st in sites:
+            root: rc[ast.Node] = node_of(st.lhs)
+            while root.kind == ast.ND_FIELD:
+                root = node_of(root.lhs)
+            if len(root.ir_name) == 0:
+                return ""
+            if vz_assigns(n.body, root.ir_name):
+                return ""
+        # ⚠️ 上限に len(xs) を使っているなら、その xs も不変であること
+        if big_l.kind == ast.ND_CALL:
+            lr: rc[ast.Node] = node_of(big_l.args)
+            while lr.kind == ast.ND_FIELD:
+                lr = node_of(lr.lhs)
+            if len(lr.ir_name) == 0:
+                return ""
+            if vz_assigns(n.body, lr.ir_name):
+                return ""
+        return iv
+
+    # 添字 1 つぶんの「両端が範囲内か」を計算して、ガードに and する
+    def vz_check_at(mut self, site: rc[ast.Node], iv: str, val: str, ln: str,
+                    acc: str) -> str:
+        self.subst_ir = copy(iv)
+        self.subst_val = copy(val)
+        # ⚠️ 入れ子（xs[ys[i * 2]]）に備えて、貯め場所を退避してから使う。
+        #   ★ copy が要ります（借りたものはフィールドに戻せません。E-BORROW-3）。
+        saved: str = copy(self.ovf_flag)
+        self.ovf_flag = ""
+        idx: str = self.gen_index_expr(node_of(site.rhs))
+        ovf: str = copy(self.ovf_flag)
+        self.ovf_flag = saved
+        self.subst_ir = ""
+        self.subst_val = ""
+
+        # ★ 符号なしで比べると「0 以上」と「長さ未満」が 1 回で済む
+        #   （負の数は符号なしでは巨大な値になるため）
+        inb: str = self.new_tmp()
+        self.emit("  " + inb + " = icmp ult i64 " + idx + ", " + ln + "\n")
+
+        # ⚠️ 両端の計算で桁あふれしたら、ガードを落として遅い側へ行かせる
+        #    （そちらが正しい位置で正しく panic する）
+        cur: str = copy(inb)
+        if ovf != "":
+            nov: str = self.new_tmp()
+            self.emit("  " + nov + " = xor i1 " + ovf + ", true\n")
+            both: str = self.new_tmp()
+            self.emit("  " + both + " = and i1 " + inb + ", " + nov + "\n")
+            cur = both
+        if acc == "":
+            return cur
+        a: str = self.new_tmp()
+        self.emit("  " + a + " = and i1 " + acc + ", " + cur + "\n")
+        return a
+
+    def gen_while(mut self, n: rc[ast.Node]) -> None:
+        sites: list[rc[ast.Node]] = []
+        iv: str = self.vz_analyze(n, sites)
+        if len(iv) == 0:
+            self.gen_while_plain(n)
+            return
+
+        id_: int = self.label_counter
+        self.label_counter = self.label_counter + 1
+        fast_l: str = "vz.fast." + str(id_)
+        slow_l: str = "vz.slow." + str(id_)
+        done_l: str = "vz.done." + str(id_)
+
+        # ── ガード：入口で 1 回だけ確かめる ──
+        #
+        # ★ 見るのは**両端だけ**。添字は誘導変数についてアフィンなので、
+        #   途中の値は必ず両端のあいだに入る。
+        cnd: rc[ast.Node] = node_of(n.lhs)
+        v0: str = self.gen_load(self.int_type(), node_of(cnd.lhs).ir_name)
+        lv: str = self.gen_expr(node_of(cnd.rhs))
+        lm1: str = self.new_tmp()
+        self.emit("  " + lm1 + " = sub i64 " + lv + ", 1\n")
+
+        acc: str = ""
+        for site in sites:
+            obj: str = self.gen_expr(node_of(site.lhs))
+            lenp: str = self.new_tmp()
+            self.emit("  " + lenp + " = getelementptr i8, ptr " + obj + ", i64 8\n")
+            ln: str = self.new_tmp()
+            self.emit("  " + ln + " = load i64, ptr " + lenp + TBAA_LISTHDR + "\n")
+            acc = self.vz_check_at(site, iv, v0, ln, acc)
+            acc = self.vz_check_at(site, iv, lm1, ln, acc)
+        self.emit_cond_br(acc, fast_l, slow_l)
+
+        # ── 速い側：検査も正規化も出さない（ここがベクトル化される）──
+        self.emit_label(fast_l)
+        self.nobc = True
+        self.iv_ir = copy(iv)
+        self.gen_while_plain(n)
+        self.nobc = False
+        self.iv_ir = ""
+        if not self.terminated:
+            self.emit_br(done_l)
+
+        # ── 遅い側：今までどおり（診断もそのまま）──
+        self.emit_label(slow_l)
+        self.gen_while_plain(n)
+        if not self.terminated:
+            self.emit_br(done_l)
+
+        self.emit_label(done_l)
+
+    # ── 組み込み関数の呼び出し ───────────────────────
+
+    # ── len は呼び出しではなく load 1 つ ─────────────────
+    #
+    # ★ **`for x in xs:` の条件が毎回の関数呼び出しだった。**
+    #   脱糖した形は `for.ix.N < len(for.it.N)`。ここが呼び出しだと LLVM は
+    #   「メモリを書くかもしれない」と見てループの外へ出せない。さらに悪いことに、
+    #   **本体の境界検査は同じ長さを load で読む**。呼び出しと load は
+    #   「同じ値」だと分からないので、**明らかに範囲内なのに検査が残る**。
+    #
+    #   load に揃えると、LLVM が長さの読み出しをループの外へ持ち上げ、
+    #   条件 `i < len` から `i <u len` が常に真だと導いて**検査を消す**。
+    #   実測：3000000 要素の総和 10 回が 51 → 18 ms。
+    #
+    # ⚠️ list の長さはヘッダのオフセット 8（PlList { ptr data; i64 len; i64 cap }）。
+    # ⚠️ str の長さは**ポインタの 8 バイト手前**。最上位側の 1 ビットが
+    #   「静的な文字列か」の印なので落とす（runtime/core.c の PL_STR_STATIC）。
+    def gen_len(mut self, n: rc[ast.Node], at: rc[ast.Type]) -> str:
+        obj: str = self.gen_expr(node_of(n.args))
+        if at.kind == ast.TY_LIST:
+            p: str = self.new_tmp()
+            self.emit("  " + p + " = getelementptr i8, ptr " + obj + ", i64 8\n")
+            t: str = self.new_tmp()
+            self.emit("  " + t + " = load i64, ptr " + p + TBAA_LISTHDR + "\n")
+            return t
+        # str：ptr[-8] を読んで、PL_STR_STATIC（1 << 62）を落とす
+        p2: str = self.new_tmp()
+        self.emit("  " + p2 + " = getelementptr i8, ptr " + obj + ", i64 -8\n")
+        raw: str = self.new_tmp()
+        self.emit("  " + raw + " = load i64, ptr " + p2 + "\n")
+        t2: str = self.new_tmp()
+        self.emit("  " + t2 + " = and i64 " + raw + ", -4611686018427387905\n")
+        return t2
+
+    def gen_builtin_call(mut self, n: rc[ast.Node]) -> str:
+        arg_node: rc[ast.Node] = node_of(n.args)
+        at: rc[ast.Type] = type_of(arg_node)
+        rt: rc[ast.Type] = type_of(n)
+
+        # ★ len は IR に展開する（呼び出しにしない）
+        if n.builtin == "pl_list_len" or n.builtin == "pl_str_len":
+            return self.gen_len(n, at)
+
+        # ★ 値型の copy は「そのまま」。呼び出しを出さない
+        #   （int の複製に関数呼び出しを 1 つ払うのは筋が通らない）。
+        #   対になる定義: src/codegen.c の gen_builtin_call
+        if n.builtin == "pl_copy_id":
+            return self.gen_expr(arg_node)
+
+        # ⚠️ bool は C 側で long long で受け取るので、境界で i64 に広げる
+        argty: str = self.llvm_type(at)
+        if at.kind == ast.TY_BOOL:
+            argty = "i64"
+
+        # ★ **cold** も付ける。noreturn は「戻らない」ことしか言わず、
+        #   インライン化の見積りには効かない。panic の手前に並ぶ
+        #   メッセージ組み立て（連結・数値→文字列）が呼び出し 6 回ぶんの
+        #   費用として数えられ、それを含む小さな検査メソッドが
+        #   **丸ごとインライン化を諦められて**いた。
+        #   cold を付けると、その経路は「まず通らない」ものとして扱われる。
+        #
+        # ★ **戻らない**組み込み（panic / exit）には noreturn を付ける。
+        #   付けないと LLVM は「戻ってくるかもしれない」と見なし、
+        #     ① panic の後ろの経路を生かしたままにする
+        #     ② panic までに並ぶ文字列連結を「メモリを書くかもしれない呼び出し」
+        #        として扱い、**ループ内の load を外に持ち上げられなくなる**
+        #   の 2 つが起きる。
+        #   ⚠️ ②「linalg.Matrix.check の self.rows / self.cols / self.data が
+        #     ループ外に出せない」と当初は書いていたが、**間違いだった**。
+        #     測ったところ、あの遅さの原因はインライン化のほう。
+        #   ⚠️ sema の never_returns_call と対になっている。片方だけ変えないこと。
+        nr: str = ""
+        if n.builtin == "pl_panic" or n.builtin == "pl_exit":
+            nr = " noreturn cold"
+        self.declare_rt(self.llvm_type(rt) + " @" + n.builtin + "(" + argty + ")" + nr)
+
+        v: str = self.gen_expr(arg_node)
+        if at.kind == ast.TY_BOOL:
+            z: str = self.new_tmp()
+            self.emit("  " + z + " = zext i1 " + v + " to i64\n")
+            v = z
+
+        if rt.kind == ast.TY_NONE:
+            self.emit("  call void @" + n.builtin + "(" + argty + " " + v + ")\n")
+            return ""
+        t: str = self.new_tmp()
+        self.emit("  " + t + " = call " + self.llvm_type(rt) + " @" + n.builtin +
+                  "(" + argty + " " + v + ")\n")
+        return t
+
+    # ── エラー処理の道具 ──────────────────────────────
+    #
+    # ★ 失敗しうる関数は、末尾に「エラー出力ポインタ」を 1 本余分に取ります。
+    #   %pl.err = type { i64, ptr }  … { タグ, エラーオブジェクト }
+    #   タグ 0 は「エラー無し」に予約。
+
+    def ensure_err_type(mut self) -> None:
+        if self.err_type_emitted:
+            return
+        self.err_type_emitted = True
+        self.header.append("%pl.err = type { i64, ptr }\n")
+
+    def err_slot(mut self) -> str:
+        self.ensure_err_type()
+        if not self.err_slot_done:
+            self.err_slot_done = True
+            self.allocas.append("  %err.slot = alloca %pl.err\n")
+        return "%err.slot"
+
+    # 型ごとの「使われない戻り値」（設計 §2 の表）。void なら空文字
+    def default_value(self, t: rc[ast.Type]) -> str:
+        if t.kind == ast.TY_NONE:
+            return ""
+        if t.kind == ast.TY_INT:
+            return "0"
+        if t.kind == ast.TY_BOOL:
+            return "false"
+        return "null"
+
+    def emit_default_ret(mut self) -> None:
+        rt: rc[ast.Type] = type_or_none(self.fn_ret)
+        dv: str = self.default_value(rt)
+        if len(dv) == 0:
+            self.emit("  ret void\n")
+        else:
+            self.emit("  ret " + self.llvm_type(rt) + " " + dv + "\n")
+        self.terminated = True
+
+    # 失敗したときの飛び先。無ければ空文字（到達しない）
+    def fail_label(mut self) -> str:
+        if len(self.try_labels) > 0:
+            return self.try_labels[len(self.try_labels) - 1]
+        if not self.fn_raises:
+            return ""
+        self.prop_used = True
+        return "err.propagate"
+
+    def emit_fail_br(mut self) -> None:
+        l: str = self.fail_label()
+        if len(l) > 0:
+            self.emit_br(l)
+        else:
+            self.emit("  unreachable\n")
+            self.terminated = True
+
+    def store_err(mut self, slot: str, tag: int, obj: str) -> None:
+        self.ensure_err_type()
+        tp: str = self.new_tmp()
+        self.emit("  " + tp + " = getelementptr %pl.err, ptr " + slot +
+                  ", i32 0, i32 0\n")
+        self.emit("  store i64 " + str(tag) + ", ptr " + tp + "\n")
+        pp: str = self.new_tmp()
+        self.emit("  " + pp + " = getelementptr %pl.err, ptr " + slot +
+                  ", i32 0, i32 1\n")
+        self.emit("  store ptr " + obj + ", ptr " + pp + "\n")
+
+    def load_tag(mut self, slot: str) -> str:
+        tp: str = self.new_tmp()
+        self.emit("  " + tp + " = getelementptr %pl.err, ptr " + slot +
+                  ", i32 0, i32 0\n")
+        tv: str = self.new_tmp()
+        self.emit("  " + tv + " = load i64, ptr " + tp + "\n")
+        return tv
+
+    def load_payload(mut self, slot: str) -> str:
+        pp: str = self.new_tmp()
+        self.emit("  " + pp + " = getelementptr %pl.err, ptr " + slot +
+                  ", i32 0, i32 1\n")
+        pv: str = self.new_tmp()
+        self.emit("  " + pv + " = load ptr, ptr " + pp + "\n")
+        return pv
+
+    # rc[T] なら中身を取り出す（自動デリファレンス）
+    #
+    # ★ **呼び出しではなく IR に展開する**（同じ手）。
+    #   コンパイラ自身を rc[T] へ移したら、フィールド参照とメソッド呼び出しの
+    #   たびに call @pl_rc_get が出て、stage1 が 5〜10% 遅くなった。
+    #   中身は**オフセット 16 の load 1 つ**（PlRc { i64 strong; i64 borrow;
+    #   ptr value }。runtime/core.c）。
+    #
+    # ⚠️ **null の検査は外さない**（方針 §0-②）。移動済みのスロットは null に
+    #   なるので（決定 D17）、黙って隣を読むわけにはいかない。
+    def deref_rc(mut self, t: rc[ast.Type], v: str) -> str:
+        if t.kind != ast.TY_RC:
+            return copy(v)
+        self.declare_rt("void @pl_rc_none_fail() noreturn cold")
+
+        id_: int = self.label_counter
+        self.label_counter = self.label_counter + 1
+        ok_l: str = "rc.ok." + str(id_)
+        bad_l: str = "rc.bad." + str(id_)
+
+        isnull: str = self.new_tmp()
+        self.emit("  " + isnull + " = icmp eq ptr " + v + ", null\n")
+        self.emit_cond_br(isnull, bad_l, ok_l)
+
+        self.emit_label(bad_l)
+        self.emit("  call void @pl_rc_none_fail()\n")
+        self.emit("  unreachable\n")
+        self.terminated = True
+
+        self.emit_label(ok_l)
+        vp: str = self.new_tmp()
+        self.emit("  " + vp + " = getelementptr i8, ptr " + v + ", i64 16\n")
+        g: str = self.new_tmp()
+        self.emit("  " + g + " = load ptr, ptr " + vp + "\n")
+        return g
+
+    def gen_call(mut self, n: rc[ast.Node]) -> str:
+        # ★ min / max。**分岐を作らず select 1 命令**で済ませる
+        # ★ wrap_add / wrap_sub / wrap_mul。
+        #   **桁あふれを検査せず 2 の補数で折り返す。**
+        #   法 2⁶⁴ の計算（線形合同法など）を書くための逃げ道。
+        #   ⚠️ min / max と同じく 2 引数なので、組み込みの表では表せない。
+        if n.is_wrap:
+            wa: str = self.gen_expr(node_of(n.args))
+            wb: str = self.gen_expr(node_of(node_of(n.args).next))
+            wins: str = "mul"
+            if n.name == "wrap_add":
+                wins = "add"
+            elif n.name == "wrap_sub":
+                wins = "sub"
+            wt: str = self.new_tmp()
+            self.emit("  " + wt + " = " + wins + " i64 " + wa + ", " + wb + "\n")
+            return wt
+
+        if n.is_minmax:
+            ma: str = self.gen_expr(node_of(n.args))
+            mb: str = self.gen_expr(node_of(node_of(n.args).next))
+            nt2: rc[ast.Type] = type_of(n)
+            isf: bool = nt2.kind == ast.TY_FLOAT
+            pr: str = "sgt"
+            if n.name == "min":
+                pr = "slt"
+            if isf:
+                pr = "ogt"
+                if n.name == "min":
+                    pr = "olt"
+            mc: str = self.new_tmp()
+            cmpop: str = "icmp"
+            if isf:
+                cmpop = "fcmp"
+            self.emit("  " + mc + " = " + cmpop + " " + pr + " " +
+                      self.llvm_type(nt2) + " " + ma + ", " + mb + "\n")
+            mt: str = self.new_tmp()
+            self.emit("  " + mt + " = select i1 " + mc + ", " +
+                      self.llvm_type(nt2) + " " + ma + ", " +
+                      self.llvm_type(nt2) + " " + mb + "\n")
+            return mt
+
+        # ★ print(xs) / str(xs)
+        if n.is_list_str:
+            el: rc[ast.Type] = ast.elem_of(type_of(node_of(n.args)))
+            kind: int = 0
+            if el.kind == ast.TY_FLOAT:
+                kind = 1
+            elif el.kind == ast.TY_STR:
+                kind = 2
+            elif el.kind == ast.TY_BOOL:
+                kind = 3
+            lv: str = self.gen_expr(node_of(n.args))
+            if n.name == "print":
+                self.declare_rt("void @pl_print_list(ptr, i64)")
+                self.emit("  call void @pl_print_list(ptr " + lv + ", i64 " +
+                          str(kind) + ")\n")
+                return ""
+            self.declare_rt("ptr @pl_list_str(ptr, i64)")
+            lt: str = self.new_tmp()
+            self.emit("  " + lt + " = call ptr @pl_list_str(ptr " + lv +
+                      ", i64 " + str(kind) + ")\n")
+            return lt
+
+        if len(n.builtin) > 0:
+            return self.gen_builtin_call(n)
+        if n.cls is not None:
+            return self.gen_new(n)     # ★ インスタンス生成
+
+        # ★ 関数ポインタ越しの呼び出し。
+        #   ⚠️ LLVM では呼び先がラベルでもレジスタでも書き方が同じなので、
+        #     箱から読んだ値をそのまま置くだけ。declare も要らない。
+        #   ⚠️ **ptr として読むこと**（i64 で読むと呼び先が整数になる）。
+        if n.is_indirect:
+            fp: str = self.new_tmp()
+            self.emit("  " + fp + " = load ptr, ptr " + n.ir_name + "\n")
+            iargs: list[str] = []
+            itypes: list[str] = []
+            self.gen_args(n.args, iargs, itypes, True)
+            # ⚠️ gen_args は **区切りを要素に埋め込む**ので、
+            #    ここは "" で連結すること（", " だと二重になる）
+            ia: str = strings.join(iargs, "")
+            if type_of(n).kind == ast.TY_NONE:
+                self.emit("  call void " + fp + "(" + ia + ")\n")
+                return ""
+            it: str = self.new_tmp()
+            self.emit("  " + it + " = call " + self.llvm_type(type_of(n)) + " " +
+                      fp + "(" + ia + ")\n")
+            return it
+
+        # ★ spawn(f, a) — 別スレッドで f(a) を始める（A-18）
+        if len(n.ir_name) == 0 and type_of(n).kind == ast.TY_THREAD:
+            sfa: rc[ast.Node] = node_of(n.args)
+            sfnty: rc[ast.Type] = type_of(sfa)
+            sfv: str = self.gen_expr(sfa)
+            na: int = len(sfnty.params)
+            nabuf: int = na
+            if nabuf < 1:
+                nabuf = 1
+
+            # ★ 引数は i64 の配列にして渡す。⚠️ この箱は entry ブロックの
+            #   alloca（規約 R1）。ランタイムが**写しを取ってから**スレッドを
+            #   作るので、呼び出しのあいだだけ生きていれば足りる。
+            sbuf: str = self.new_tmp()
+            self.allocas.append("  " + sbuf + " = alloca [" + str(nabuf) +
+                                " x i64]\n")
+
+            sai: rc[ast.Node] | None = sfa.next
+            sk: int = 0
+            while sai is not None:
+                san: rc[ast.Node] = sai
+                sav: str = self.gen_expr(san)
+                spk: str = self.pack_i64(sfnty.params[sk], sav)
+                ssp: str = self.new_tmp()
+                self.emit("  " + ssp + " = getelementptr [" + str(nabuf) +
+                          " x i64], ptr " + sbuf + ", i64 0, i64 " + str(sk) + "\n")
+                self.emit("  store i64 " + spk + ", ptr " + ssp + "\n")
+                sk = sk + 1
+                sai = san.next
+
+            sth: str = self.thunk_for(sfnty)
+            sfi: str = self.new_tmp()
+            self.emit("  " + sfi + " = ptrtoint ptr " + sfv + " to i64\n")
+            self.declare_rt("ptr @pl_thread_spawn(ptr, i64, ptr, i64)")
+            stt: str = self.new_tmp()
+            self.emit("  " + stt + " = call ptr @pl_thread_spawn(ptr " + sth +
+                      ", i64 " + sfi + ", ptr " + sbuf + ", i64 " + str(na) + ")\n")
+            return stt
+
+        # ★ mutex(x) — 中身をロックの内側に閉じる
+        if len(n.ir_name) == 0 and type_of(n).kind == ast.TY_MUTEX:
+            mvn: rc[ast.Node] = node_of(n.args)
+            mv: str = self.gen_expr(mvn)
+            mvi: str = self.pack_i64(type_of(mvn), mv)
+            self.declare_rt("ptr @pl_mutex_new(i64)")
+            mtt: str = self.new_tmp()
+            self.emit("  " + mtt + " = call ptr @pl_mutex_new(i64 " + mvi + ")\n")
+            return mtt
+
+        # ★ rc(x) — 数え札を付けてくるむ（sema が ir_name を付けない目印）
+        if len(n.ir_name) == 0 and n.name == "rc":
+            rv: str = self.gen_expr(node_of(n.args))
+            self.declare_rt("ptr @pl_rc_new(ptr)")
+            rt2: str = self.new_tmp()
+            self.emit("  " + rt2 + " = call ptr @pl_rc_new(ptr " + rv + ")\n")
+            return rt2
+
+        # 引数を左から順に評価する（言語仕様 4.5）
+        vals: list[str] = []
+        atypes: list[str] = []
+        self.gen_args(n.args, vals, atypes, True)
+
+        # ★ 呼ぶ名前は sema が修飾済み
+        if n.is_extern:
+            ats: str = strings.join(atypes, "")
+            # ★ 失敗しうる関数は、エラー出力の ptr が 1 本増えている
+            if n.can_fail:
+                if len(ats) > 0:
+                    ats = ats + ", ptr"
+                else:
+                    ats = "ptr"
+            self.declare_extern(self.llvm_type(type_of(n)), n.ir_name, ats)
+        return self.emit_call(n, strings.join(vals, ""))
+
+    # ── 文の生成 ────────────────────────────────────────────
+
+    def gen_stmt(mut self, n: rc[ast.Node]) -> str:
+        # 終端済みブロックの後ろに来たら、到達不能ブロックを開く（規約 R7）
+        self.ensure_block()
+
+        if n.kind == ast.ND_BLOCK:
+            last: str = ""
+            st: rc[ast.Node] | None = n.body
+            while st is not None:
+                s: rc[ast.Node] = node_of(st)
+                v: str = self.gen_stmt(s)
+                if len(v) > 0:
+                    last = v
+                st = s.next
+            return last
+
+        # ★ scope: ブロック（A-18 の scoped spawn）。
+        #   入口で枠を開き、出口で「まだ待っていないスレッド」を全部 join する。
+        #   ⚠️ 途中から抜ける道（return / break / continue / 失敗の伝播）は
+        #     sema が禁じているので、出口はここ 1 か所だけ。
+        if n.kind == ast.ND_SCOPE:
+            self.declare_rt("void @pl_scope_begin()")
+            self.declare_rt("void @pl_scope_end()")
+            self.emit("  call void @pl_scope_begin()\n")
+            blk: rc[ast.Node] = node_of(n.body)
+            sst: rc[ast.Node] | None = blk.body
+            while sst is not None:
+                ss: rc[ast.Node] = node_of(sst)
+                self.gen_stmt(ss)
+                sst = ss.next
+            self.ensure_block()
+            self.emit("  call void @pl_scope_end()\n")
+            return ""
+
+        if n.kind == ast.ND_IF:
+            self.gen_if(n)
+            return ""
+
+        if n.kind == ast.ND_WHILE:
+            self.gen_while(n)
+            return ""
+
+        if n.kind == ast.ND_RETURN:
+            if n.lhs is None:
+                self.emit("  ret void\n")      # 規約 R9
+            else:
+                val: rc[ast.Node] = node_of(n.lhs)
+                v2: str = self.gen_expr(val)
+                self.emit("  ret " + self.llvm_type(type_of(val)) + " " + v2 +
+                          "\n")
+            self.terminated = True
+            return ""
+
+        # ── try / except ──
+        #
+        #   try の本体で失敗したら「振り分け」へ飛び、タグを見て except を選ぶ。
+        #   どの except にも当たらなければ、外側の飛び先（外の try か伝播）へ。
+        if n.kind == ast.ND_TRY:
+            tid: int = self.label_counter
+            self.label_counter = self.label_counter + 1
+            disp_l: str = "try.dispatch." + str(tid)
+            end_l: str = "try.end." + str(tid)
+
+            self.try_stack.append(n)
+            self.try_labels.append(copy(disp_l))
+            self.gen_stmt(node_of(n.body))
+            self.try_stack = pop_nodes(self.try_stack)
+            self.try_labels = pop_strs(self.try_labels)
+            if not self.terminated:
+                self.emit_br(end_l)
+
+            # ── 振り分け ──
+            self.emit_label(disp_l)
+            slot2: str = self.err_slot()
+            tag2: str = self.load_tag(slot2)
+
+            k: int = 0
+            ex2: rc[ast.Node] | None = n.els
+            while ex2 is not None:
+                e3: rc[ast.Node] = ex2
+                hit_l: str = "except." + str(tid) + "." + str(k)
+                next_l: str = "try.next." + str(tid) + "." + str(k)
+                c2: str = self.new_tmp()
+                self.emit("  " + c2 + " = icmp eq i64 " + tag2 + ", " +
+                          str(e3.err_tag) + "\n")
+                self.emit_cond_br(c2, hit_l, next_l)
+                self.emit_label(next_l)
+                k = k + 1
+                ex2 = e3.next
+            # どの except にも当たらなかった → 外側へ渡す
+            self.emit_fail_br()
+
+            # ── 各 except の本体 ──
+            k2: int = 0
+            ex3: rc[ast.Node] | None = n.els
+            while ex3 is not None:
+                e4: rc[ast.Node] = ex3
+                hit2: str = "except." + str(tid) + "." + str(k2)
+                self.emit_label(hit2)
+                if len(e4.ir_name) > 0:
+                    pv2: str = self.load_payload(slot2)
+                    self.emit("  store ptr " + pv2 + ", ptr " + e4.ir_name + "\n")
+                self.gen_stmt(node_of(e4.body))
+                if not self.terminated:
+                    self.emit_br(end_l)
+                k2 = k2 + 1
+                ex3 = e4.next
+
+            self.emit_label(end_l)
+            return ""
+
+        # ── raise ──
+        if n.kind == ast.ND_RAISE:
+            obj: str = self.gen_expr(node_of(n.lhs))
+
+            # ★ 同じ関数の中の try が捕まえるなら、そこへ飛ぶ（Python と同じ）
+            catcher: int = -1
+            i2: int = len(self.try_stack) - 1
+            while i2 >= 0:
+                t2: rc[ast.Node] = self.try_stack[i2]
+                exf: rc[ast.Node] | None = t2.els
+                while exf is not None:
+                    e5: rc[ast.Node] = exf
+                    if e5.err_tag == n.err_tag and catcher < 0:
+                        catcher = i2
+                    exf = e5.next
+                i2 = i2 - 1
+
+            if catcher >= 0:
+                self.store_err(self.err_slot(), n.err_tag, obj)
+                # ⚠️ emit_br は self を可変借用するので、先に読みます
+                catch_l: str = copy(self.try_labels[catcher])
+                self.emit_br(catch_l)
+            else:
+                self.store_err("%err.out", n.err_tag, obj)
+                self.emit_default_ret()
+            return ""
+
+        if n.kind == ast.ND_PASS:
+            return ""                          # 本当に何も出さない
+
+        # 飛び先は sema が保証している
+        if n.kind == ast.ND_BREAK:
+            self.emit_br(loop_of(self.loop).break_label)
+            return ""
+        if n.kind == ast.ND_CONTINUE:
+            self.emit_br(loop_of(self.loop).continue_label)
+            return ""
+
+        if n.kind == ast.ND_VARDECL:
+            # alloca は entry ブロックに出済み（規約 R1）。ここでは store だけ
+            v3: str = self.gen_expr(node_of(n.rhs))
+            self.gen_store(type_of(n), v3, n.ir_name)
+            return ""
+
+        # ★ 分解代入 q, r = f()
+        #   右辺を **1 回だけ**評価し、各要素を取り出してそれぞれの箱に入れる。
+        if n.kind == ast.ND_UNPACK:
+            uobj: str = self.gen_expr(node_of(n.rhs))
+            uty: str = self.tuple_ty(type_of(n))
+            uk: int = 0
+            uvi: rc[ast.Node] | None = n.params
+            while uvi is not None:
+                uvn: rc[ast.Node] = uvi
+                upt: str = self.new_tmp()
+                self.emit("  " + upt + " = getelementptr " + uty + ", ptr " +
+                          uobj + ", i32 0, i32 " + str(uk) + "\n")
+                uval: str = self.gen_load(type_of(uvn), upt)
+                self.gen_store(type_of(uvn), uval, uvn.ir_name)
+                uk = uk + 1
+                uvi = uvn.next
+            return ""
+
+        if n.kind == ast.ND_ASSIGN:
+            # ★ 版分けの速い側では、誘導変数の増分の桁あふれ検査を
+            #   外す。`v < L` のあいだ回るので、v が最後に取る値は L で、
+            #   L は i64 に収まっている（＝あふれない）。
+            #   ⚠️ 外すのは**この 1 本だけ**。本体の他の足し算は今までどおり。
+            saved_ovf67: bool = self.no_ovf
+            tgt0: rc[ast.Node] = node_of(n.lhs)
+            if self.nobc and len(self.iv_ir) > 0 and tgt0.kind == ast.ND_VAR:
+                if tgt0.ir_name == self.iv_ir:
+                    self.no_ovf = True
+            v4: str = self.gen_expr(node_of(n.rhs))
+            self.no_ovf = saved_ovf67
+            target: rc[ast.Node] = node_of(n.lhs)
+
+            # 添字への代入 xs[i] = v
+            if target.kind == ast.ND_INDEX:
+                self.gen_index_store(target, v4)
+                return ""
+
+            # フィールドへの代入 t.kind = v
+            if target.kind == ast.ND_FIELD:
+                # lexer.counter = v は他モジュールのグローバルへの代入
+                if len(target.mod_name) > 0:
+                    if target.is_extern:
+                        self.declare_extern_global(target)
+                    self.gen_store(type_of(n), v4, target.ir_name)
+                    return ""
+                self.gen_store_tb(type_of(n), v4, self.gen_field_ptr(target),
+                                  TBAA_FIELD)
+                return ""
+
+            self.gen_store(type_of(n), v4, target.ir_name)
+            return ""
+
+        return self.gen_expr(n)                # 式文
+
+    # ── alloca の収集（規約 R1）────────────────────────────
+
+    def collect_allocas(mut self, n: rc[ast.Node] | None) -> None:
+        if n is None:
+            return
+        node: rc[ast.Node] = n
+
+        # ⚠️ グローバル変数は alloca しない
+        if node.kind == ast.ND_VARDECL and not node.is_global:
+            self.allocas.append("  " + node.ir_name + " = alloca " +
+                                self.llvm_mem_type(type_of(node)) + "\n")
+
+        # ★ 分解代入で受け取る名前も、ふつうの局所変数と同じ箱が要る
+        if node.kind == ast.ND_UNPACK:
+            avi: rc[ast.Node] | None = node.params
+            while avi is not None:
+                avn: rc[ast.Node] = avi
+                self.allocas.append("  " + avn.ir_name + " = alloca " +
+                                    self.llvm_mem_type(type_of(avn)) + "\n")
+                avi = avn.next
+
+        # ★ except ... as e で束縛する変数にも箱が要る
+        if node.kind == ast.ND_EXCEPT and len(node.ir_name) > 0:
+            self.allocas.append("  " + node.ir_name + " = alloca " +
+                                self.llvm_mem_type(type_of(node)) + "\n")
+
+        # ⚠️ except の並びは next で繋がっている（2 番目以降をここでたどる）
+        if node.kind == ast.ND_TRY and node.els is not None:
+            ex: rc[ast.Node] | None = node_of(node.els).next
+            while ex is not None:
+                e2: rc[ast.Node] = ex
+                self.collect_allocas(e2)
+                ex = e2.next
+
+        self.collect_allocas(node.lhs)
+        self.collect_allocas(node.rhs)
+        self.collect_allocas(node.els)
+        # ★ 実引数もたどる。内包表記は**式**なので、
+        #   f([x for x in xs]) のように呼び出しの引数の中に現れる。
+        #   その隠し変数の箱を見落とすと、生成した IR が壊れる。
+        ag: rc[ast.Node] | None = node.args
+        while ag is not None:
+            a2: rc[ast.Node] = ag
+            self.collect_allocas(a2)
+            ag = a2.next
+        st: rc[ast.Node] | None = node.body
+        while st is not None:
+            s: rc[ast.Node] = node_of(st)
+            self.collect_allocas(s)
+            st = s.next
+
+    # ── 関数の生成 ──────────────────────────────────────────
+
+    def gen_func(mut self, n: rc[ast.Node]) -> None:
+        # 関数ごとに状態をリセットする
+        self.tmp_counter = 0
+        self.label_counter = 0
+        self.terminated = False
+        self.loop = None
+        self.allocas = []
+        self.fn = []
+
+        # ── エラー処理の状態 ──
+        self.fn_raises = n.err_types is not None
+        self.fn_ret = n.type
+        self.err_slot_done = False
+        self.try_stack = []
+        self.try_labels = []
+        self.prop_used = False
+        if self.fn_raises:
+            self.ensure_err_type()
+
+        ir_name: str = n.ir_name
+
+        # ① 引数を alloca にコピーする（規約 R8）
+        pm: rc[ast.Node] | None = n.params
+        while pm is not None:
+            p: rc[ast.Node] = pm
+            self.allocas.append("  " + p.ir_name + " = alloca " +
+                                self.llvm_mem_type(type_of(p)) + "\n")
+            self.gen_store(type_of(p), "%" + p.name + ".arg", p.ir_name)
+            pm = p.next
+
+        # ② ローカル変数の alloca
+        self.collect_allocas(n.body)
+
+        # ③ 本体
+        self.gen_stmt(node_of(n.body))
+
+        # ── 伝播ブロック（呼び出し元へエラーをそのまま返す）──
+        #
+        # ★ 使われたときだけ出します（使わないブロックは LLVM が嫌がる）
+        if self.prop_used:
+            self.emit_label("err.propagate")
+            self.ensure_err_type()
+            ev: str = self.new_tmp()
+            self.emit("  " + ev + " = load %pl.err, ptr %err.slot\n")
+            self.emit("  store %pl.err " + ev + ", ptr %err.out\n")
+            self.emit_default_ret()
+
+        # ④ 終端されていなければ終端する（規約 R6）
+        if not self.terminated:
+            if type_of(n).kind == ast.TY_NONE:
+                self.emit("  ret void\n")      # 規約 R9
+            else:
+                # 全経路 return は sema が保証済み
+                self.emit("  unreachable\n")
+
+        # ⑤ 組み立て
+        out: list[str] = []
+        out.append("\ndefine " + self.llvm_type(type_of(n)) + " @" + ir_name +
+                   "(")
+        first: bool = True
+        pm2: rc[ast.Node] | None = n.params
+        while pm2 is not None:
+            p2: rc[ast.Node] = pm2
+            sep: str = ", "
+            if first:
+                sep = ""
+            out.append(sep + self.llvm_type(type_of(p2)) + " %" + p2.name +
+                       ".arg")
+            first = False
+            pm2 = p2.next
+        # ★ 失敗しうる関数は、エラー出力ポインタを 1 本余分に取る
+        if self.fn_raises:
+            sep2: str = ", "
+            if first:
+                sep2 = ""
+            out.append(sep2 + "ptr %err.out")
+        out.append(") {\nentry:\n")
+        out.append(strings.join(self.allocas, ""))
+        out.append(strings.join(self.fn, ""))
+        out.append("}\n")
+        self.body.append(strings.join(out, ""))
+
+    # グローバル変数を出力する（言語仕様 6.2）
+    def gen_global(mut self, n: rc[ast.Node]) -> None:
+        rhs: rc[ast.Node] = node_of(n.rhs)
+        if type_of(n).kind == ast.TY_STR:
+            lab: str = self.intern_str(rhs.sval)
+            self.globals_.append(n.ir_name + " = global ptr " + lab + "\n")
+            return
+        # ★ float は値ではなく、字句解析器が正規化した文字列を出す
+        if type_of(n).kind == ast.TY_FLOAT:
+            self.globals_.append(n.ir_name + " = global double " +
+                                 rhs.sval + "\n")
+            return
+        self.globals_.append(n.ir_name + " = global " +
+                             self.llvm_mem_type(type_of(n)) + " " +
+                             str(rhs.ival) + "\n")
+
+    # C の main を出力する（ir-conventions.md 7 節の方式 A）
+    #
+    # ⚠️ これを出すのは入口モジュールだけ
+    def gen_c_main(mut self, main_ir_name: str) -> None:
+        self.tmp_counter = 0
+
+        # ★ argc / argv を受け取り、ランタイムに預ける
+        self.declare_rt("void @pl_set_args(i64, ptr)")
+
+        out: list[str] = []
+        out.append("\n")
+        out.append("define i32 @main(i32 %argc, ptr %argv) {\n")
+        out.append("entry:\n")
+
+        a: str = self.new_tmp()
+        out.append("  " + a + " = sext i32 %argc to i64\n")
+        out.append("  call void @pl_set_args(i64 " + a + ", ptr %argv)\n")
+
+        t0: str = self.new_tmp()
+        out.append("  " + t0 + " = call i64 @" + main_ir_name + "()\n")
+
+        t1: str = self.new_tmp()
+        out.append("  " + t1 + " = trunc i64 " + t0 + " to i32\n")
+
+        # ★ 下位 8 ビットに切り詰める（言語仕様 6.1）。
+        #   POSIX は終了コードを勝手に & 0xFF するが、Windows は 32 ビットを
+        #   そのまま返すので、揃えておかないと OS で結果が変わる。
+        t2: str = self.new_tmp()
+        out.append("  " + t2 + " = and i32 " + t1 + ", 255\n")
+
+        out.append("  ret i32 " + t2 + "\n")
+        out.append("}\n")
+        self.body.append(strings.join(out, ""))
+
+
+# ── 入口 ───────────────────────────────────────────────────
+#
+# モジュール 1 つぶんの IR を作る（★ 1 ファイル = 1 モジュール = 1 つの .ll）
+def codegen(mod: rc[module.Module], main_ir_name: str, triple: str,
+            no_ovf: bool) -> str:
+    root: rc[ast.Node] = node_of(mod.ast)
+    e: Emitter = Emitter(triple)
+    e.no_ovf = no_ovf
+    # ① ヘッダ
+    e.header.append("; Generated by " + langinfo.cc() + "\n")
+    e.header.append("source_filename = \"" + mod.path + "\"\n")
+
+    # ⚠️ 規約 R11：target triple は必ず出力する
+    if len(triple) > 0:
+        e.header.append("target triple = \"" + triple + "\"\n")
+
+    # ② クラスの型定義（★ 使う側より先に、モジュールの先頭に出す）
+    d: rc[ast.Node] | None = root.body
+    while d is not None:
+        n: rc[ast.Node] = d
+        # ⚠️ ジェネリックなテンプレートは出さない。
+        #   K や V が何なのか決まっていないので、構造体の形が作れない。
+        #   出すのは実体（Box$int など）だけ。
+        if n.kind == ast.ND_CLASS and n.targs is None:
+            e.gen_class_type(class_of(n.cls))
+        d = n.next
+
+    # ⑤ グローバル変数と関数定義
+    d2: rc[ast.Node] | None = root.body
+    while d2 is not None:
+        n2: rc[ast.Node] = d2
+        if n2.kind == ast.ND_VARDECL:
+            e.gen_global(n2)
+        d2 = n2.next
+
+    d3: rc[ast.Node] | None = root.body
+    while d3 is not None:
+        n3: rc[ast.Node] = d3
+        if n3.kind == ast.ND_FUNC:
+            # ★ extern は宣言だけを出す
+            if n3.body is None:
+                atypes: list[str] = []
+                first: bool = True
+                pm: rc[ast.Node] | None = n3.params
+                while pm is not None:
+                    p: rc[ast.Node] = pm
+                    sep: str = ", "
+                    if first:
+                        sep = ""
+                    atypes.append(sep + e.llvm_type(type_of(p)))
+                    first = False
+                    pm = p.next
+                e.declare_extern(e.llvm_type(type_of(n3)), n3.name,
+                                 strings.join(atypes, ""))
+            elif n3.targs is None:
+                # ⚠️ ジェネリックなテンプレートは出さない
+                e.gen_func(n3)
+        elif n3.kind == ast.ND_CLASS and n3.targs is None:
+            m: rc[ast.Node] | None = n3.body
+            while m is not None:
+                mm: rc[ast.Node] = m
+                if mm.kind == ast.ND_FUNC:
+                    e.gen_func(mm)
+                m = mm.next
+        d3 = n3.next
+
+    # ⚠️ C の main を出すのは入口モジュールだけ
+    if len(main_ir_name) > 0:
+        e.gen_c_main(main_ir_name)
+
+    # 4 つのバッファを規定の順に連結する
+    out: list[str] = []
+    out.append(strings.join(e.header, ""))
+    out.append(strings.join(e.globals_, ""))
+    out.append(strings.join(e.decls, ""))
+    out.append(strings.join(e.body, ""))
+    out.append(strings.join(e.thunkdefs, ""))
+    # ⑥ 別名解析（TBAA）の型タグ。
+    #   ⚠️ 番号は固定。**2 実装が同じ IR を出す**ため、使っていなくても
+    #     常にこの 7 行を出す。
+    out.append("\n!0 = !{!\"" + langinfo.name() + "\"}\n")
+    out.append("!1 = !{!\"field\", !0}\n")
+    out.append("!2 = !{!\"listhdr\", !0}\n")
+    out.append("!3 = !{!\"listelem\", !0}\n")
+    out.append("!4 = !{!1, !1, i64 0}\n")
+    out.append("!5 = !{!2, !2, i64 0}\n")
+    out.append("!6 = !{!3, !3, i64 0}\n")
+    out.append("!7 = !{!\"global\", !0}\n")
+    out.append("!8 = !{!7, !7, i64 0}\n")
+    return strings.join(out, "")
+
+
+# ── 小道具 ─────────────────────────────────────────────────
+
+def hex2(v: int) -> str:
+    digits: str = "0123456789ABCDEF"
+    return digits[(v // 16) % 16] + digits[v % 16]
+
+def node_of(n: rc[ast.Node] | None) -> rc[ast.Node]:
+    if n is None:
+        panic("codegen: ノードがありません")
+        return ast.new_node(ast.ND_PASS, None)
+    else:
+        return n
+
+def type_of(n: rc[ast.Node]) -> rc[ast.Type]:
+    t: rc[ast.Type] | None = n.type
+    if t is None:
+        panic("codegen: 型が埋まっていません（sema を通していない？）")
+        return rc(ast.Type(ast.TY_INT))
+    else:
+        return t
+
+# 生成中の関数の戻り型（まだ関数の外なら None 型として扱う）
+# スタックから最後の 1 つを外す（list に pop がまだ無いため）
+def pop_nodes(xs: list[rc[ast.Node]]) -> list[rc[ast.Node]]:
+    out: list[rc[ast.Node]] = []
+    i: int = 0
+    while i < len(xs) - 1:
+        out.append(xs[i])
+        i = i + 1
+    return out
+
+def pop_strs(xs: list[str]) -> list[str]:
+    out: list[str] = []
+    i: int = 0
+    while i < len(xs) - 1:
+        out.append(copy(xs[i]))
+        i = i + 1
+    return out
+
+def type_or_none(t: rc[ast.Type] | None) -> rc[ast.Type]:
+    if t is None:
+        return rc(ast.Type(ast.TY_NONE))
+    else:
+        return t
+
+def type_of_field(f: rc[ast.Field]) -> rc[ast.Type]:
+    t: rc[ast.Type] | None = f.type
+    if t is None:
+        panic("codegen: フィールドの型がありません")
+        return rc(ast.Type(ast.TY_INT))
+    else:
+        return t
+
+def class_of(c: rc[ast.Class] | None) -> rc[ast.Class]:
+    if c is None:
+        panic("codegen: クラスがありません")
+        return rc(ast.Class("", None))
+    else:
+        return c
+
+def field_of(f: rc[ast.Field] | None) -> rc[ast.Field]:
+    if f is None:
+        panic("codegen: フィールドが解決されていません")
+        return rc(ast.Field("", None))
+    else:
+        return f
+
+def loop_of(l: rc[LoopCtx] | None) -> rc[LoopCtx]:
+    if l is None:
+        panic("codegen: ループの外に break / continue があります")
+        return rc(LoopCtx(None, "", ""))
+    else:
+        return l
+
+# ── 添字の範囲をループの外で 1 回だけ確かめる（loop versioning）──
+#
+# 🤔 なぜこれを入れたか
+#   平坦な list[float] の三重ループ（512×512 の行列積）を測ったら、
+#   **境界検査が 4 倍**の費用だった（365 ms → 89 ms）。当初の
+#   「外しても 1.5 倍」は list[list[float]] での数字で、平坦な配列では桁が違う。
+#   さらに検査を外すだけでは足りず、**負の添字の正規化（select）も消さないと
+#   SIMD が 1 つも出ない**。どちらも「添字が全反復で 0 以上・長さ未満」と
+#   分かれば消せる。
+#
+# ★ やること：数える形のループを 2 つに分け、入口で 1 回だけ確かめる。
+#
+#     if 全部の添字が両端で範囲内:  検査なしの版（ここがベクトル化される）
+#     else:                        今までどおりの版（診断もそのまま）
+#
+# ⚠️ **診断は変わらない。** 範囲外になるループは今までどおり、ちょうどその
+#    反復で、同じメッセージで止まる。
+#
+# ★ 両端だけ見れば足りるのは、添字が誘導変数について**アフィン**（A*v + B）
+#   だから。アフィンなら単調なので、途中の値は必ず両端のあいだに入る。
+#   だから v が 1 回しか現れない形に限る。
+#
+# ⚠️ **C 版 src/codegen.c の vz_* と 1 対 1 に対応させること。**
+#   出す IR が 1 バイトでも違うと tests/selfhost.sh が落ちる。
+
+VZ_MAX_SITES: int = 16
+
+# 添字の式に使ってよい形か（整数リテラル・局所の int 変数・+ - * だけ）
+def vz_pure_index(n: rc[ast.Node] | None) -> bool:
+    if n is None:
+        return False
+    q: rc[ast.Node] = node_of(n)
+    if q.kind == ast.ND_INT:
+        return True
+    if q.kind == ast.ND_VAR:
+        # ★ グローバルも通す。本体に呼び出しが無いので、**この本体の中の
+        #   代入以外に書き換える経路がない**（スレッドからのグローバル
+        #   書き換えは E-SEND-3 が止めている）。実際に書き換えていないかは
+        #   vz_invariant が確かめる。
+        if q.is_func_ref:
+            return False
+        return type_of(q).kind == ast.TY_INT
+    if q.kind == ast.ND_BINOP:
+        if q.op != ast.OP_ADD and q.op != ast.OP_SUB and q.op != ast.OP_MUL:
+            return False
+        return vz_pure_index(q.lhs) and vz_pure_index(q.rhs)
+    return False
+
+# 添字の対象に使ってよい形か（x / x.f / x.f.g のような「場所」だけ）
+def vz_place(n: rc[ast.Node] | None) -> bool:
+    if n is None:
+        return False
+    q: rc[ast.Node] = node_of(n)
+    if q.kind == ast.ND_VAR:
+        return not q.is_func_ref and not q.is_global
+    if q.kind == ast.ND_FIELD:
+        if len(q.mod_name) > 0:
+            return False
+        return vz_place(q.lhs)
+    return False
+
+# 式・文の木を歩いて、ir_name への代入があるか
+def vz_assigns(n: rc[ast.Node] | None, ir: str) -> bool:
+    q: rc[ast.Node] | None = n
+    while q is not None:
+        c: rc[ast.Node] = node_of(q)
+        if c.kind == ast.ND_ASSIGN or c.kind == ast.ND_VARDECL:
+            if c.ir_name == ir:
+                return True
+        if c.kind == ast.ND_ASSIGN and c.lhs is not None:
+            lh: rc[ast.Node] = node_of(c.lhs)
+            if lh.kind == ast.ND_VAR and lh.ir_name == ir:
+                return True
+        if vz_assigns(c.lhs, ir) or vz_assigns(c.rhs, ir):
+            return True
+        if vz_assigns(c.els, ir) or vz_assigns(c.incr, ir):
+            return True
+        if vz_assigns(c.body, ir) or vz_assigns(c.args, ir):
+            return True
+        q = c.next
+    return False
+
+# 式に出てくる変数（誘導変数を除く）が、この本体で書き換わらないか
+#
+# ⚠️ **これが無いと健全性が壊れる。** 例えば
+#
+#     while j < n:
+#         s = s + xs[k]
+#         k = k + 1        ← k がループ内で変わる
+#         j = j + 1
+#
+#   の添字 `k` は「j についてアフィン」ではある（j が現れない＝定数項）が、
+#   **両端で確かめた値と実際の値が違う**。範囲外を読んで通ってしまう。
+#   だから「誘導変数以外は不変」を要求する。
+def vz_invariant(e: rc[ast.Node] | None, iv: str, body: rc[ast.Node] | None) -> bool:
+    if e is None:
+        return True
+    q: rc[ast.Node] = node_of(e)
+    if q.kind == ast.ND_VAR and q.ir_name != iv:
+        if vz_assigns(body, q.ir_name):
+            return False
+    return vz_invariant(q.lhs, iv, body) and vz_invariant(q.rhs, iv, body)
+
+# 変数 ir が式の中に何回現れるか（アフィンかどうかの判定に使う）
+def vz_count(n: rc[ast.Node] | None, ir: str) -> int:
+    if n is None:
+        return 0
+    q: rc[ast.Node] = node_of(n)
+    if q.kind == ast.ND_VAR and q.ir_name == ir:
+        return 1
+    return vz_count(q.lhs, ir) + vz_count(q.rhs, ir)
+
+# 版分けしてよい本体か
+#
+# ⚠️ **呼び出しがあってはいけない。** 呼んだ先が list に append すれば長さが
+#    変わり、入口で確かめた前提が崩れる。
+# ⚠️ 入れ子のループ・break / continue / return も外す。
+def vz_body_ok(n: rc[ast.Node] | None) -> bool:
+    q: rc[ast.Node] | None = n
+    while q is not None:
+        c: rc[ast.Node] = node_of(q)
+        if not vz_node_ok(c):
+            return False
+        q = c.next
+    return True
+
+def vz_node_ok(c: rc[ast.Node]) -> bool:
+    k: int = c.kind
+    if k == ast.ND_INT or k == ast.ND_FLOAT or k == ast.ND_BOOL:
+        return True
+    if k == ast.ND_STR or k == ast.ND_NONE or k == ast.ND_PASS:
+        return True
+    if k == ast.ND_VAR:
+        return not c.is_func_ref
+    if k == ast.ND_FIELD:
+        if len(c.mod_name) > 0:
+            return False
+        return vz_body_ok(c.lhs)
+    if k == ast.ND_BLOCK:
+        return vz_body_ok(c.body)
+    if k == ast.ND_IF:
+        return vz_body_ok(c.lhs) and vz_body_ok(c.body) and vz_body_ok(c.els)
+    if k == ast.ND_COND:
+        return vz_body_ok(c.lhs) and vz_body_ok(c.rhs) and vz_body_ok(c.els)
+    if k == ast.ND_LOGICAL:
+        return vz_body_ok(c.lhs) and vz_body_ok(c.rhs)
+    if k == ast.ND_UNARY:
+        # ⚠️ 単項マイナスは int だと桁あふれ検査（分岐）が出るが、
+        #    正しさには関わらない（速い側でも検査は残る）。
+        return vz_body_ok(c.lhs)
+    if k == ast.ND_BINOP:
+        # ⚠️ ** // % は実体がランタイム関数の呼び出し。str / list の + * も同じ。
+        if c.op == ast.OP_IN or c.op == ast.OP_NOTIN or c.op == ast.OP_POW:
+            return False
+        if c.op == ast.OP_FLOORDIV or c.op == ast.OP_MOD:
+            return False
+        lt: rc[ast.Type] = type_of(node_of(c.lhs))
+        if lt.kind == ast.TY_STR or lt.kind == ast.TY_LIST:
+            return False
+        return vz_body_ok(c.lhs) and vz_body_ok(c.rhs)
+    if k == ast.ND_INDEX:
+        # ⚠️ str の添字はランタイム関数を呼ぶ（pl_str_index）
+        ot: rc[ast.Type] = type_of(node_of(c.lhs))
+        if ot.kind == ast.TY_STR:
+            return False
+        return vz_body_ok(c.lhs) and vz_body_ok(c.rhs)
+    if k == ast.ND_ASSIGN:
+        # ⚠️ フィールドやリスト変数への代入は外す。代入されると
+        #    「入口で見た list と同じものか」が言えなくなる。
+        tg: rc[ast.Node] = node_of(c.lhs)
+        if tg.kind == ast.ND_FIELD:
+            return False
+        if tg.kind == ast.ND_VAR:
+            at: rc[ast.Type] = type_of(c)
+            if at.kind == ast.TY_LIST or at.kind == ast.TY_STR:
+                return False
+        return vz_body_ok(c.lhs) and vz_body_ok(c.rhs)
+    if k == ast.ND_VARDECL:
+        dt: rc[ast.Type] = type_of(c)
+        if dt.kind == ast.TY_LIST or dt.kind == ast.TY_STR:
+            return False
+        return vz_body_ok(c.rhs)
+    # 呼び出し・入れ子ループ・break / continue / return・try・unsafe・
+    # 内包表記・スライス・タプル…… すべて外す
+    return False
+
+# 本体の中の「list への添字」を集める。1 つでも証明できなければ False
+def vz_sites(n: rc[ast.Node] | None, iv: str, body: rc[ast.Node] | None,
+             out: mut list[rc[ast.Node]]) -> bool:
+    q: rc[ast.Node] | None = n
+    while q is not None:
+        c: rc[ast.Node] = node_of(q)
+        if c.kind == ast.ND_INDEX:
+            ot: rc[ast.Type] = type_of(node_of(c.lhs))
+            if ot.kind == ast.TY_LIST:
+                # 対象は「場所」で、添字は誘導変数についてアフィンで、
+                # 誘導変数以外は不変であること
+                if not vz_place(c.lhs):
+                    return False
+                if not vz_pure_index(c.rhs):
+                    return False
+                if vz_count(c.rhs, iv) > 1:
+                    return False       # アフィンでない（v*v など）
+                if not vz_invariant(c.rhs, iv, body):
+                    return False
+                if len(out) >= VZ_MAX_SITES:
+                    return False
+                out.append(node_of(c))
+        if not vz_sites(c.lhs, iv, body, out) or not vz_sites(c.rhs, iv, body, out):
+            return False
+        if not vz_sites(c.els, iv, body, out) or not vz_sites(c.incr, iv, body, out):
+            return False
+        if not vz_sites(c.body, iv, body, out) or not vz_sites(c.args, iv, body, out):
+            return False
+        q = c.next
+    return True
+
+# 「v = v + 1」の形か
+def vz_is_step1(st: rc[ast.Node] | None, iv: str) -> bool:
+    if st is None:
+        return False
+    s: rc[ast.Node] = node_of(st)
+    if s.kind != ast.ND_ASSIGN or s.lhs is None:
+        return False
+    lh: rc[ast.Node] = node_of(s.lhs)
+    if lh.kind != ast.ND_VAR or lh.ir_name != iv:
+        return False
+    if s.rhs is None:
+        return False
+    r: rc[ast.Node] = node_of(s.rhs)
+    if r.kind != ast.ND_BINOP or r.op != ast.OP_ADD or r.lhs is None:
+        return False
+    rl: rc[ast.Node] = node_of(r.lhs)
+    if rl.kind != ast.ND_VAR or rl.ir_name != iv:
+        return False
+    if r.rhs is None:
+        return False
+    rr: rc[ast.Node] = node_of(r.rhs)
+    return rr.kind == ast.ND_INT and rr.ival == 1
+
+# ループの本体の最後の文を返す（ND_BLOCK の末尾）
+def vz_last_stmt(body: rc[ast.Node] | None) -> rc[ast.Node] | None:
+    if body is None:
+        return None
+    b: rc[ast.Node] = node_of(body)
+    if b.kind != ast.ND_BLOCK:
+        return None
+    last: rc[ast.Node] | None = None
+    st: rc[ast.Node] | None = b.body
+    while st is not None:
+        sc: rc[ast.Node] = node_of(st)
+        last = sc
+        st = sc.next
+    return last
+
+# 誘導変数への代入が本体全体で何回あるか（増分の 1 本だけであること）
+def vz_count_assign(n: rc[ast.Node] | None, iv: str) -> int:
+    total: int = 0
+    q: rc[ast.Node] | None = n
+    while q is not None:
+        c: rc[ast.Node] = node_of(q)
+        if c.kind == ast.ND_ASSIGN and c.lhs is not None:
+            lh: rc[ast.Node] = node_of(c.lhs)
+            if lh.kind == ast.ND_VAR and lh.ir_name == iv:
+                total = total + 1
+        if c.kind == ast.ND_VARDECL and c.ir_name == iv:
+            total = total + 1
+        total = total + vz_count_assign(c.body, iv)
+        total = total + vz_count_assign(c.els, iv)
+        q = c.next
+    return total

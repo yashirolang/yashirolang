@@ -1,0 +1,8 @@
+# ERROR: の第 1 引数は self でなければなりません
+# ERROR: ここに self が必要です
+class P:
+    def f(n: int) -> int:
+        return n
+
+def main() -> int:
+    return 0

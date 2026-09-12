@@ -1,0 +1,9 @@
+# ERROR: 型 'Box | None' の値にはフィールドがありません
+# ERROR: if b is not None:
+# 絞り込まずに触ると止まる（これが narrowing の入口）
+class Box:
+    v: int
+
+def main() -> int:
+    b: Box | None = None
+    return b.v

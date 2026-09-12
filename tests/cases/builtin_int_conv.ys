@@ -1,0 +1,4 @@
+# OUTPUT: 124
+def main() -> int:
+    print(int("123") + 1)
+    return 0

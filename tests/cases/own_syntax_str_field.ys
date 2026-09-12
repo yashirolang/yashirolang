@@ -1,0 +1,15 @@
+# OUTPUT: hello world
+# own は str やクラスにも書ける（受け取り方が変わるだけ）
+class Greeter:
+    name: str
+
+    def init(self, name: own str) -> None:
+        self.name = name
+
+    def greet(self, sep: str) -> str:
+        return self.name + sep + "world"
+
+def main() -> int:
+    g: Greeter = Greeter("hello")
+    print(g.greet(" "))
+    return 0

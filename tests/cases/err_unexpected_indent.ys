@@ -1,0 +1,4 @@
+# ERROR: 予期しないインデントです
+# ERROR: この行が余分に字下げされています
+# ERROR: = ヒント: トップレベルに書けるのは def / class / import / extern とグローバル変数だけです
+    x: int = 1

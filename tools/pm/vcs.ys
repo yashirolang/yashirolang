@@ -1,0 +1,163 @@
+# vcs — git からパッケージを取ってくる
+#
+# ★ **作業ツリーを一切作りません。** bare clone したうえで
+#   `git show` / `git ls-tree` だけで中身を読みます。これは速さのためでは
+#   なく、安全のためです。チェックアウトしないので
+#
+#     ・フック（.git/hooks）が走らない
+#     ・サブモジュールが引かれない
+#     ・シンボリックリンクが作られない
+#
+#   ＝ **インストールの過程でパッケージのコードは 1 行も実行されません**。
+#   これが npm の postinstall / pip の setup.py / cargo の build.rs に
+#   相当する穴を最初から塞ぐ、この設計のいちばん大事な性質です（§6）。
+import io
+import strings
+import sys
+import shell
+import words
+
+# 取ってきたものを置く場所（$PLC_CACHE か ~/.cache/plc）
+def cache_root() -> str:
+    env: str = sys.getenv("PLC_CACHE")
+    if len(env) > 0:
+        return env
+    home: str = sys.getenv("HOME")
+    if len(home) == 0:
+        return ".plc-cache"
+    return home + "/.cache/plc"
+
+# URL を安全なディレクトリ名にする（英数字以外は _）
+def slug(url: str) -> str:
+    out: list[str] = []
+    i: int = 0
+    while i < len(url):
+        b: int = strings.byte_at(url, i)
+        ok: bool = ((b >= 97 and b <= 122) or (b >= 65 and b <= 90) or
+                    (b >= 48 and b <= 57) or b == 45 or b == 46 or b == 95)
+        if ok:
+            out.append(chr(b))
+        else:
+            out.append("_")
+        i = i + 1
+    return strings.join(out, "")
+
+def repo_dir(url: str) -> str:
+    name: str = slug(url)
+    # ⚠️ "." と ".." はディレクトリ名にできません（キャッシュの外を指します）。
+    #   slug は "/" を "_" にするので経路にはなりませんが、この 2 つだけは
+    #   そのまま残るので、ここで潰します。
+    if name == "." or name == "..":
+        name = "_"
+    return cache_root() + "/git/" + name
+
+# ★ すべての git 呼び出しがここを通ります。
+#   ext:: 転送方式（任意のコマンドを起動できる）を殺し、フックの場所を
+#   空にしておきます。**外から来た URL を渡す前に必ず通してください。**
+def git(dir_: str, args: str) -> str:
+    base: str = "git -c core.hooksPath=/dev/null -c protocol.ext.allow=never"
+    if len(dir_) > 0:
+        return base + " -C " + shell.q(dir_) + " " + args
+    return base + " " + args
+
+def have_git() -> bool:
+    return shell.capture("command -v git").code == 0
+
+# 1 回の実行で同じリポジトリを何度も取りに行かないための覚え書き。
+#
+# ⚠️ グローバルの list[str] は書けないので（初期化式は定数だけ）、
+#   改行で挟んだ 1 本の文字列に畳んで持ちます。selfhost/module と同じ手です。
+ENSURED: str = ""
+
+# キャッシュを最新にする（無ければ bare clone、あれば fetch）
+#
+# ★ 依存の解決は不動点に達するまで何周かします。毎周 fetch すると
+#   周回数 × パッケージ数だけ通信することになるので、1 回で覚えます。
+def ensure(url: str) -> None:
+    key: str = "\n" + slug(url) + "\n"
+    if strings.contains(ENSURED, key):
+        return
+    ENSURED = ENSURED + key
+
+    dir_: str = repo_dir(url)
+    if io.exists(dir_ + "/HEAD"):
+        shell.must(git(dir_, "fetch --quiet --prune --force origin " +
+                       shell.q("+refs/heads/*:refs/heads/*") + " " +
+                       shell.q("+refs/tags/*:refs/tags/*")),
+                   url + " の取得")
+        return
+    shell.mkdir_p(cache_root() + "/git")
+    shell.must(git("", "clone --bare --quiet " + shell.q(url) + " " + shell.q(dir_)),
+               url + " の複製")
+
+# タグの一覧（"v1.2.3" のような文字列のまま返す）
+def tags(url: str) -> list[str]:
+    return shell.capture(git(repo_dir(url), "tag --list")).lines()
+
+# ref（タグでも SHA でも）を commit の SHA に直す。無ければ ""
+def rev_of(url: str, ref: str) -> str:
+    r: sys.Output = shell.capture(
+        git(repo_dir(url), "rev-parse --verify --quiet " + shell.q(ref + "^{commit}")))
+    if r.code != 0:
+        return ""
+    got: str = strings.strip(r.out)
+    if not words.is_sha(got):
+        return ""
+    return got
+
+# その commit の tree の SHA。無ければ ""
+def tree_of(url: str, rev: str) -> str:
+    r: sys.Output = shell.capture(
+        git(repo_dir(url), "rev-parse --verify --quiet " + shell.q(rev + "^{tree}")))
+    if r.code != 0:
+        return ""
+    got: str = strings.strip(r.out)
+    if not words.is_sha(got):
+        return ""
+    return got
+
+# <rev>:<path> の中身。無ければ ok=False
+class Blob:
+    ok: bool
+    text: str
+
+    def init(self, ok: bool, text: str) -> None:
+        self.ok = ok
+        self.text = copy(text)
+
+def show(url: str, rev: str, path: str) -> Blob:
+    r: sys.Output = shell.capture(
+        git(repo_dir(url), "show " + shell.q(rev + ":" + path)))
+    if r.code != 0:
+        return Blob(False, "")
+    return Blob(True, r.out)
+
+# <rev>:<dir> にある「ふつうのファイル」の名前を並べる。
+#
+# ⚠️ ls-tree の 1 行は "100644 blob <sha>\t<名前>" です。**mode を見ます**：
+#   120000（シンボリックリンク）と 040000（ディレクトリ）を落とすためです。
+#   名前だけで判断すると、リンクをソースの名前で置かれたときに気づけません。
+def files(url: str, rev: str, dir_: str) -> list[str]:
+    spec: str = rev + ":"
+    if dir_ != "." and len(dir_) > 0:
+        spec = rev + ":" + dir_
+    r: sys.Output = shell.capture(git(repo_dir(url), "ls-tree " + shell.q(spec)))
+    out: list[str] = []
+    if r.code != 0:
+        return out
+    for line in strings.split(r.out, "\n"):
+        if len(strings.strip(line)) == 0:
+            continue
+        halves: list[str] = strings.split(line, "\t")
+        if len(halves) != 2:
+            continue
+        meta: list[str] = words.fields(halves[0])
+        if len(meta) < 2:
+            continue
+        if meta[1] != "blob":
+            continue
+        # 100644（ふつう）と 100755（実行可）だけ。120000（リンク）は捨てる
+        if meta[0] != "100644" and meta[0] != "100755":
+            continue
+        out.append(strings.strip(halves[1]))
+    return out

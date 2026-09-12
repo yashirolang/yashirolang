@@ -1,0 +1,7 @@
+# ERROR: クラス 'P' には init が無いので引数を渡せません
+class P:
+    x: int
+
+def main() -> int:
+    p: P = P(1)
+    return 0

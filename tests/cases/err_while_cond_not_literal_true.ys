@@ -1,0 +1,12 @@
+# ERROR: 関数 'f' は値を返さずに終わる経路があります
+# ★ 条件が「True というリテラルそのもの」でなければ追わない。
+#   変数に入れた True は、保守的に「抜けるかもしれない」と扱う。
+def f(n: int) -> int:
+    forever: bool = True
+    while forever:
+        if n > 3:
+            return n
+        n = n + 1
+
+def main() -> int:
+    return f(0)

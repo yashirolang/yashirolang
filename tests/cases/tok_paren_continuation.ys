@@ -1,0 +1,4 @@
+# TOKENS: PUNCT INT PUNCT INT PUNCT NEWLINE EOF
+# ★ 括弧の中の改行では NEWLINE を出さない（論理行が続く）
+(1 +
+ 2)

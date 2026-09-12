@@ -1,0 +1,9 @@
+# ERROR: 変数 'x' は外側のスコープの変数を隠しています
+# ERROR: シャドーイングは禁止されています
+# ERROR: 外側の宣言はここです
+def main() -> int:
+    x: int = 1
+    if True:
+        x: int = 2
+        print(x)
+    return 0

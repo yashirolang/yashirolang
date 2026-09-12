@@ -1,0 +1,10 @@
+# ERROR: 'x' はフィールドと同じ名前です
+# ERROR: t.f が「フィールド」か「メソッド」か決められなくなるため禁止です
+class P:
+    x: int
+
+    def x(self) -> int:
+        return 0
+
+def main() -> int:
+    return 0

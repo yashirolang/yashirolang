@@ -1,0 +1,16 @@
+# STAGE0-ONLY: unsafe / ptr[T] は C 版だけ
+# STAGE1-SKIP: stage1 はまだ unsafe / ptr[T] を解析できない（のちに移植）
+# EXIT: 10
+# unsafe: の中では生ポインタを触れる（OS 開発の入口）
+#         ★ (65 + 12345) % 200 = 10
+extern def pl_alloc(size: int) -> int
+
+def main() -> int:
+    total: int = 0
+    unsafe:
+        base: int = pl_alloc(16)
+        p: ptr[int] = ptr_at(base)
+        poke8(p, 0, 65)
+        poke64(p, 1, 12345)
+        total = peek8(p, 0) + peek64(p, 1)
+    return total % 200

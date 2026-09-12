@@ -1,0 +1,6 @@
+# ERROR: モジュール 'lib' に関数 'nope' はありません
+# ERROR: そのモジュールのトップレベルに def があるか確認してください
+import lib
+
+def main() -> int:
+    return lib.nope()

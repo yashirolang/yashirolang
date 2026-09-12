@@ -1,0 +1,15 @@
+# OUTPUT: True
+# OUTPUT: False
+# OUTPUT: True
+# クラスの == / != は参照（アドレス）の比較。中身は見ない（言語仕様 4.3）
+class C:
+    v: int
+
+def main() -> int:
+    a: C = C()
+    b: C = C()
+    c: C = a
+    print(a == c)
+    print(a == b)
+    print(a != b)
+    return 0

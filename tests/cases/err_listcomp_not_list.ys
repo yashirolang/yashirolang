@@ -1,0 +1,8 @@
+# ERROR: 'int' 型は内包表記の対象にできません
+# ERROR: 対象にできるのは list[T] と range(...) です
+# 対象は list か range だけ
+def main() -> int:
+    n: int = 3
+    ys: list[int] = [x for x in n]
+    print(str(len(ys)))
+    return 0

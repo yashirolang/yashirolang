@@ -1,0 +1,5 @@
+# ERROR: 型 'int' にフィールドはありません
+# ERROR: '.' でフィールドを読めるのは class のインスタンスだけです
+def main() -> int:
+    n: int = 1
+    return n.x

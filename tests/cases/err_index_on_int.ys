@@ -1,0 +1,5 @@
+# ERROR: 型 'int' は添字を取れません
+# ERROR: = ヒント: 添字が使えるのは list[T] と str です
+def main() -> int:
+    x: int = 1
+    return x[0]

@@ -1,0 +1,21 @@
+# OUTPUT: 10
+# OUTPUT: 4
+# own / mut を引数に書ける（構文だけ。意味づけは意味づけはのちに）
+def total(xs: list[int]) -> int:
+    s: int = 0
+    for x in xs:
+        s = s + x
+    return s
+
+def take(xs: own list[int]) -> int:
+    return len(xs)
+
+def fill(xs: mut list[int], n: int) -> None:
+    xs.append(n)
+
+def main() -> int:
+    xs: list[int] = [1, 2, 3]
+    fill(xs, 4)
+    print(total(xs))
+    print(take(xs))
+    return 0

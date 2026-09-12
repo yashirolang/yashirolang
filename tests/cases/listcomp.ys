@@ -1,0 +1,56 @@
+# OUTPUT: 2,4,6,8,10
+# OUTPUT: 1,3,5
+# OUTPUT: 0,1,4,9,16
+# OUTPUT: 10,7,4,1
+# OUTPUT: 9,16,25
+# OUTPUT: 0.5 5
+# OUTPUT: 0
+# OUTPUT: 11,21,31,41,51
+# OUTPUT: 3
+# OUTPUT: size 1
+# EXIT: 0
+# 内包表記 [E for x in xs if C]
+#
+#   ★ **構文解析での脱糖にはできません。** for 文やカンマ代入と違って、
+#     内包表記は**式の位置**に現れます。文に持ち上げて書くと、三項演算子や
+#     and / or の右側に置かれたときに「評価されないはずのもの」を
+#     評価してしまいます。だから節点（ND_LISTCOMP）を足して、
+#     意味解析と codegen がその場でループを組み立てます。
+#
+#   ⚠️ 最後の 2 つが、その「評価されない側」の確認です。
+import strings
+
+def sq(x: int) -> int:
+    return x * x
+
+def noisy(x: int) -> int:
+    print("NG 評価されてはいけません")
+    return x
+
+def main() -> int:
+    xs: list[int] = [1, 2, 3, 4, 5]
+
+    print(strings.join([str(v) for v in [x * 2 for x in xs]], ","))
+    print(strings.join([str(v) for v in xs if v % 2 == 1], ","))
+    print(strings.join([str(i * i) for i in range(5)], ","))
+    print(strings.join([str(i) for i in range(10, 0, -3)], ","))
+    print(strings.join([str(sq(x)) for x in xs if x > 2], ","))
+
+    f: list[float] = [float(x) / 2.0 for x in xs]
+    print(str(f[0]) + " " + str(len(f)))
+
+    # 空でも動く
+    print(str(len([x for x in xs if x > 100])))
+
+    # 入れ子（内側を式として書ける）
+    print(strings.join([str(v + 1) for v in [y * 10 for y in xs]], ","))
+
+    # 文字列の要素（所有する値）
+    ss: list[str] = ["v" + str(x) for x in xs if x == 3]
+    print(ss[0][1:2])
+
+    # ★ 三項演算子の「選ばれない側」は評価されないこと
+    cond: bool = False
+    k: list[int] = [0] if not cond else [noisy(x) for x in xs]
+    print("size " + str(len(k)))
+    return 0

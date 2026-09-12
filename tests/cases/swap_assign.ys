@@ -1,0 +1,34 @@
+# OUTPUT: 2 1
+# OUTPUT: 3 2 1
+# OUTPUT: 5 1
+# OUTPUT: yx
+# OUTPUT: 55
+# EXIT: 0
+# `a, b = b, a`（カンマで並べる代入）
+#   ★ 右辺を**先に全部**隠し変数に入れてから書くので、入れ替えが正しく動きます。
+#   ⚠️ こちらは「代入」です。宣言も兼ねるのは q, r = f()（右辺がタプル 1 つ）。
+def main() -> int:
+    a: int = 1
+    b: int = 2
+    a, b = b, a
+    print(str(a) + " " + str(b))
+
+    c: int = 3
+    a, b, c = c, a, b          # 3 つの巡回
+    print(str(a) + " " + str(b) + " " + str(c))
+
+    a, b = a + b, a - b        # 式も書ける（右辺は先に全部読む）
+    print(str(a) + " " + str(b))
+
+    s: str = "x"
+    t: str = "y"
+    s, t = t, s
+    print(s + t)
+
+    # ループの中（フィボナッチ）
+    x: int = 0
+    y: int = 1
+    for i in range(10):
+        x, y = y, x + y
+    print(str(x))
+    return 0

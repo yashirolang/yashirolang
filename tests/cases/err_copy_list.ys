@@ -1,0 +1,8 @@
+# ERROR: copy は 'list[int]' 型を受け取れません
+# ERROR: copy が受け取れるのは str, int, float, bool です
+# copy を値型に広げても、list はまだ受け取りません
+#要素の所有まで考える必要があるため。但し書きのまま
+def main() -> int:
+    xs: list[int] = [1, 2]
+    ys: list[int] = copy(xs)
+    return len(ys)

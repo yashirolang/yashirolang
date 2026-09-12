@@ -1,0 +1,28 @@
+# STAGE0-ONLY: 解放の挿入は C 版だけ
+# FLAGS: --drop
+# OUTPUT: drop inner
+# OUTPUT: drop outer
+# OUTPUT: 1
+# OUTPUT: done
+# EXIT: 0
+# 早期 return の経路でも、抜けるスコープを全部解放する
+class Res:
+    name: str
+
+    def init(self, name: own str) -> None:
+        self.name = name
+
+    def drop(self) -> None:
+        print("drop " + self.name)
+
+def f(flag: bool) -> int:
+    outer: Res = Res("outer")
+    if flag:
+        inner: Res = Res("inner")
+        return 1
+    return 0
+
+def main() -> int:
+    print(str(f(True)))
+    print("done")
+    return 0

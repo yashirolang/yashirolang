@@ -1,0 +1,8 @@
+# ERROR: 変数 'x' は既に宣言されています
+# ERROR: ここで再宣言されています
+# ERROR: note: 最初の宣言はここです
+# ERROR: = ヒント: 既存の変数に代入するなら型注釈を外してください
+def main() -> int:
+    x: int = 1
+    x: int = 2
+    return x

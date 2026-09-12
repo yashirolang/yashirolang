@@ -1,0 +1,4 @@
+# ERROR: 型の '|' の後ろに書けるのは None だけです（共用体型はありません）
+def main() -> int:
+    x: int | str = 1
+    return 0

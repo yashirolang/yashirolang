@@ -1,0 +1,7 @@
+# ERROR: '->' と戻り型が必要です
+# ERROR: = ヒント: 戻り型は省略できません。値を返さないなら -> None と書きます
+def f():
+    return 1
+
+def main() -> int:
+    return f()

@@ -1,0 +1,401 @@
+# main — stage1 のドライバ
+#
+# ★ src/main.c の移植です。これで stage1 が**コンパイラとして完結**します。
+#
+#   <コンパイラ> [オプション] <入力><拡張子>
+#
+# パイプライン：
+#   load_modules（import をたどって読み込み・構文解析）
+#     → sema_program（全モジュールをまとめて検査）
+#     → codegen（モジュールごとに .ll）
+#     → clang（.ll を全部渡してリンク）
+import io
+import strings
+import sys
+import ast
+import langinfo
+import lexer
+import module
+import parser
+import sema
+import token
+import codegen
+
+# 実行するステージ（C 版の Stage と同じ）
+STAGE_ALL: int = 0          # 実行ファイルまで作る
+STAGE_DUMP_TOKENS: int = 1  # 字句解析まで
+STAGE_DUMP_AST: int = 2     # 構文解析まで
+STAGE_EMIT_IR: int = 3      # コード生成まで（-S）
+STAGE_CHECK: int = 4        # 意味解析まで（--check）
+
+
+class Options:
+    input_: str
+    output: str
+    opt_level: str
+    stage: int
+    keep_ll: bool
+    no_ovf: bool     # --no-overflow-check
+    jobs: int        # -j N（clang を同時に何本走らせるか。0 = コア数）
+    inc: list[str]   # -I <dir>（import を探す場所。何度でも書ける）
+
+    def init(self) -> None:
+        self.input_ = ""
+        self.output = "a.out"
+        self.opt_level = "-O0"
+        self.stage = STAGE_ALL
+        self.keep_ll = False
+        self.no_ovf = False
+        self.jobs = 0
+        self.inc = []
+
+
+# ★ --version が出す内容。対になる定義: src/main.c の print_version
+#
+#   版番号だけでなく **stage と target triple** も出します。この処理系は
+#   C 製（stage0）とセルフホスト製（stage1 以降）の 2 つがあり、
+#   「どれを使っているのか」が不具合の報告で最初に要る情報だからです。
+def print_version() -> None:
+    print(langinfo.cc() + " " + langinfo.version() + " (stage1)")
+    print("target: " + target_triple())
+
+
+def usage(status: int) -> None:
+    print(langinfo.name() + " コンパイラ (stage1)")
+    print("")
+    print("使い方: " + langinfo.cc() + " [オプション] <入力" + langinfo.ext() + ">")
+    print("")
+    print("オプション:")
+    print("  -o <file>       出力する実行ファイル名（既定: a.out）")
+    print("  -S              LLVM IR を標準出力に書いて終了")
+    print("  --dump-tokens   トークン列を表示して終了（字句解析のデバッグ用）")
+    print("  --dump-ast      AST を S 式で表示して終了（構文解析のデバッグ用）")
+    print("  --keep-ll       実行ファイル生成後も .ll を残す")
+    print("  --check         型検査までで止める（エラーが無ければ何も出さない）")
+    print("  --no-overflow-check")
+    print("                  数の実行時検査を外す（既定は検査する）:")
+    print("                  整数の + - * の桁あふれ／float の 0 除算")
+    print("  -I <dir>        import を探す場所を足す（何度でも書ける）")
+    print("                  パッケージマネージャ " + langinfo.pm() + " が使います")
+    print("  -j <N>          clang を同時に何本走らせるか（既定: コア数）")
+    print("                  出来上がる実行ファイルは並列度で変わりません")
+    print("  -O0|-O1|-O2|-O3 clang に渡す最適化レベル（既定: -O0）")
+    print("  -h, --help      この使い方を表示")
+    print("  --version       版番号と target triple を表示")
+    print("  --print-lib-dir 標準ライブラリの場所を表示（" + langinfo.pm() + " が使います）")
+    exit(status)
+
+
+def parse_args(args: list[str]) -> Options:
+    o: Options = Options()
+
+    i: int = 1
+    while i < len(args):
+        a: str = args[i]
+
+        if a == "-h" or a == "--help":
+            usage(0)
+
+        if a == "--version":
+            print_version()
+            exit(0)
+
+        # ★ 標準ライブラリの場所を教える（パッケージマネージャが衝突検査に使います）。
+        #   対になる定義: src/main.c
+        if a == "--print-lib-dir":
+            print(module.lib_dir())
+            exit(0)
+
+        if a == "-o":
+            if i + 1 >= len(args):
+                panic("-o の後に出力ファイル名が必要です")
+            i = i + 1
+            o.output = copy(args[i])
+        # ★ import を探す場所を足す（-I deps / -Ideps のどちらでも）
+        elif a == "-I":
+            if i + 1 >= len(args):
+                panic("-I の後にディレクトリ名が必要です")
+            i = i + 1
+            if len(args[i]) == 0:
+                panic("-I に空のディレクトリは指定できません")
+            o.inc.append(copy(args[i]))
+        elif len(a) > 2 and strings.startswith(a, "-I"):
+            o.inc.append(strings.substr(a, 2, len(a) - 2))
+        elif a == "-S":
+            o.stage = STAGE_EMIT_IR
+        elif a == "--dump-tokens":
+            o.stage = STAGE_DUMP_TOKENS
+        elif a == "--dump-ast":
+            o.stage = STAGE_DUMP_AST
+        elif a == "--keep-ll":
+            o.keep_ll = True
+        elif a == "--check":
+            o.stage = STAGE_CHECK
+        # ★ 既定は検査あり。速さのために外したいときだけ付ける。
+        elif a == "--no-overflow-check":
+            o.no_ovf = True
+        # ★ -j2 のように数をくっつけて書く（C 版 src/main.c と対）
+        elif len(a) > 2 and strings.startswith(a, "-j"):
+            o.jobs = int(strings.substr(a, 2, len(a) - 2))
+            if o.jobs < 0:
+                panic("-j には 0 以上を指定してください: " + a)
+        elif strings.startswith(a, "--jobs="):
+            o.jobs = int(strings.substr(a, 7, len(a) - 7))
+            if o.jobs < 0:
+                panic("--jobs には 0 以上を指定してください: " + a)
+        elif a == "-O0" or a == "-O1" or a == "-O2" or a == "-O3":
+            o.opt_level = copy(a)
+        elif len(a) > 1 and strings.startswith(a, "-"):
+            panic("不明なオプション: " + a)
+        else:
+            if len(o.input_) > 0:
+                panic("入力ファイルが複数指定されています: " + o.input_ + " と " + a)
+            o.input_ = copy(a)
+        i = i + 1
+
+    if len(o.input_) == 0:
+        usage(1)
+    return o
+
+
+# 出力ファイル名とモジュール名から .ll のパスを作る（a.out + main → a.out.main.ll）
+def ll_path_for(output: str, mod_name: str) -> str:
+    return output + "." + mod_name + ".ll"
+
+
+# ⚠️ C 版はビルド時に埋め込む値（-DPLC_TARGET_TRIPLE / -DPLC_RUNTIME_O）を、
+#   stage1 は環境変数から受け取ります。C 版も同じ環境変数を先に見るので、
+#   両者は同じ規則で動きます（PLC_LIB_DIR と同じ手）。
+def target_triple() -> str:
+    return sys.getenv("PLC_TARGET_TRIPLE")
+
+def clang_cmd() -> str:
+    # ★ C 版（src/main.c）と同じく、環境変数を先に見ます。
+    #   MSYS2 のように clang が別名で入っている環境のための逃げ道です。
+    env: str = sys.getenv("PLC_CLANG")
+    if len(env) > 0:
+        return env
+    return "clang"
+
+
+def runtime_o() -> str:
+    env: str = sys.getenv("PLC_RUNTIME_O")
+    if len(env) > 0:
+        return env
+    return "build/runtime.o"
+
+
+
+# ── モジュールごとの clang を並列に走らせる ──────────────────
+#
+# 🤔 なぜここが効くのか
+#   このコンパイラの仕事は、実測で **前段（字句〜意味解析〜IR 生成）が 5%、
+#   clang が 95%** です。つまり**コンパイラ自身をスレッド化しても意味がなく**、
+#   「clang の呼び出しを並べる」だけで頭打ちまで行きます。
+#
+#   ⚠️ 0.13.0 までは **1 つの clang に .ll を全部渡していました**。clang は
+#     入力を順番に処理するので、コアが 12 あっても 1 つしか回りません。
+#
+# ⚠️ **spawn（スレッド）から sys.run を呼ぶ形では速くなりません。** macOS の
+#    system() はグローバルなロックを取るので、何本のスレッドから呼んでも
+#    1 本ずつしか走りません。だから sys.start_shell でプロセスを直接起こします。
+#
+# ⚠️ Windows では start_shell が -1 を返すので、その場で sys.run に落ちます
+#    （効かないだけで、壊れません）。C 版 src/main.c の run_jobs と対。
+def run_jobs(cmds: list[str], want: int) -> int:
+    n: int = want
+    if n <= 0:
+        n = sys.cpu_count()
+    if n < 1:
+        n = 1
+    if n > len(cmds):
+        n = len(cmds)
+
+    worst: int = 0
+    pids: list[int] = []      # 走っている子の番号
+    started: int = 0
+    while started < len(cmds) or len(pids) > 0:
+        # ① 空きがあるだけ起こす
+        while started < len(cmds) and len(pids) < n:
+            pid: int = sys.start_shell(cmds[started])
+            if pid < 0:
+                # 起こせなかったら、その場で自分が走る（落とさない）
+                r0: int = sys.run(cmds[started])
+                if r0 != 0:
+                    worst = r0
+            else:
+                pids.append(pid)
+            started = started + 1
+
+        # ② いま走っているものを待つ
+        #   ★ 順に待ちます。どれが先に終わってもよいので、待つ順は結果に
+        #     影響しません（全部終わるまで先へ進まないため）。
+        for p in pids:
+            r1: int = sys.wait_for(p)
+            if r1 != 0:
+                worst = r1
+        pids.clear()
+    return worst
+
+
+def main() -> int:
+    opt: Options = parse_args(sys.argv())
+
+    # ── ①② 字句解析・構文解析だけを見たいとき（入口ファイルのみ）──
+    #
+    # ⚠️ --dump-tokens / --dump-ast は import をたどりません。
+    #    「1 ファイルの中身を確かめる」道具だからです。
+    if opt.stage == STAGE_DUMP_TOKENS or opt.stage == STAGE_DUMP_AST:
+        src: str = lexer.read_source(opt.input_)
+        toks: list[rc[token.Token]] = lexer.tokenize(opt.input_, src)
+        if opt.stage == STAGE_DUMP_TOKENS:
+            dump_tokens(toks)
+            return 0
+        ast.dump_ast(parser.parse(toks))
+        return 0
+
+    # ── ⓪ 読み込み：import をたどって依存順に並べる──
+    # ★ -I で足した場所も探させます（load_modules より前に）
+    module.set_search_paths(opt.inc)
+    mods: rc[module.Module] | None = module.load_modules(opt.input_)
+    entry: rc[module.Module] | None = module.entry_of(mods, opt.input_)
+    if entry is None:
+        panic("main: 入口モジュールがありません")
+        return 1
+
+    # ── ③ 意味解析・型検査（全モジュールまとめて）──
+    sema.sema_program(mods, entry)
+
+    # --check : ここで終わり
+    if opt.stage == STAGE_CHECK:
+        return 0
+
+    # 入口モジュールの main の IR 名（@main のラッパが呼ぶ相手）
+    main_ir: str = entry.name + ".main"
+
+    multi: bool = False
+    if mods is not None:
+        head: rc[module.Module] = mods
+        if head.next is not None:
+            multi = True
+
+    # ── ④ コード生成（モジュールごとに 1 本の .ll）──
+    triple: str = target_triple()
+    m: rc[module.Module] | None = mods
+    while m is not None:
+        mm: rc[module.Module] = m
+        name: str = ""
+        if mm.name == entry.name:
+            name = copy(main_ir)
+        ir: str = codegen.codegen(mm, name, triple, opt.no_ovf)
+
+        if opt.stage == STAGE_EMIT_IR:
+            # -S : IR を出して終了。複数モジュールなら区切りを入れて並べる
+            if multi:
+                print("; ── module: " + mm.name + " ──")
+            io.print_raw(ir)
+        else:
+            mm.ll_path = ll_path_for(opt.output, mm.name)
+            io.write_file(mm.ll_path, ir)
+        m = mm.next
+
+    if opt.stage == STAGE_EMIT_IR:
+        return 0
+
+    # ── ⑤ clang に丸投げして実行ファイルを作る ──
+    #
+    # ★ .ll を全部並べて渡します。モジュール修飾のおかげで、
+    #   別ファイルの同名関数があっても duplicate symbol になりません。
+    #
+    # ★ Windows では拡張子が無いと実行できないので、`.` を含まない出力名には
+    #   .exe を足します（gcc / clang と同じふるまい。C 版 src/main.c と対）。
+    out_path: str = opt.output
+    if strings.contains(triple, "windows") and not strings.contains(out_path, "."):
+        out_path = out_path + ".exe"
+
+    # ⚠️ 引用は "…" にします。Windows の system() は cmd.exe を通すので、
+    #    '…' は引用符として扱われず、そのままファイル名の一部になります
+    #    （POSIX の sh は "…" も理解するので、これで両方に効きます）。
+    #
+    # ★ **モジュールごとに .o を作ってからリンク**します。
+    #   ⚠️ 出来上がる実行ファイルは変わりません。clang は元々、複数の .ll を
+    #     渡されても 1 本ずつ独立にコンパイルしていました（LTO ではありません）。
+    cmds: list[str] = []
+    objs: list[str] = []
+    m2: rc[module.Module] | None = mods
+    while m2 is not None:
+        mm2: rc[module.Module] = m2
+        obj: str = opt.output + "." + mm2.name + ".o"
+        # ⚠️ append は所有を持っていくので、**先にコマンドを組み立てます**
+        #   （逆にすると E-MOVE-1「移動済みの値 'obj' を使っています」）。
+        cmds.append(clang_cmd() + " " + opt.opt_level + " -c \"" +
+                    mm2.ll_path + "\" -o \"" + obj + "\"")
+        objs.append(obj)
+        m2 = mm2.next
+
+    rc: int = run_jobs(cmds, opt.jobs)
+
+    if rc == 0:
+        # ── リンク ──
+        parts: list[str] = []
+        parts.append(clang_cmd() + " " + opt.opt_level)
+        for ob in objs:
+            parts.append(" \"" + ob + "\"")
+        parts.append(" \"" + runtime_o() + "\"")
+        # ★ スレッド（A-18）。ランタイムが pthread を使うので、
+        #   POSIX ではリンク時に -pthread が要る。
+        # ⚠️ Windows のスレッドは kernel32 にあるので何も足さない。
+        if not strings.contains(triple, "windows"):
+            parts.append(" -pthread")
+        parts.append(" -o \"" + out_path + "\"")
+        rc = sys.run(strings.join(parts, ""))
+
+    # ⚠️ .o は成否によらず片付けます（.ll は失敗時だけ残します。下記）。
+    for ob2 in objs:
+        io.remove(ob2)
+    if rc != 0:
+        # ここに来たら、生成した IR に問題があるということ。
+        # .ll を残して調査できるようにする。
+        io.eprint("error: clang の実行に失敗しました" +
+                  "（生成した IR に問題があります）\n")
+        io.eprint("  生成された IR を残しました:\n")
+        m3: rc[module.Module] | None = mods
+        while m3 is not None:
+            mm3: rc[module.Module] = m3
+            io.eprint("    " + mm3.ll_path + "\n")
+            m3 = mm3.next
+        return 1
+
+    if not opt.keep_ll:
+        m4: rc[module.Module] | None = mods
+        while m4 is not None:
+            mm4: rc[module.Module] = m4
+            io.remove(mm4.ll_path)
+            m4 = mm4.next
+    return 0
+
+
+# トークン列の表示（C 版 dump_tokens と同じ書式）
+def dump_tokens(toks: list[rc[token.Token]]) -> None:
+    i: int = 0
+    while i < len(toks):
+        t: rc[token.Token] = toks[i]
+        parts: list[str] = []
+        parts.append(strings.lpad(str(i), 3))
+        parts.append("  ")
+        parts.append(strings.rpad(token.kind_name(t.kind), 8))
+        parts.append("  ")
+        parts.append(str(t.line) + ":" + strings.rpad(str(t.col), 3))
+        parts.append("  ")
+
+        if t.kind == token.TK_INT:
+            parts.append(str(t.ival))
+        elif t.kind == token.TK_EOF or t.kind == token.TK_NEWLINE:
+            parts.append("")
+        elif t.kind == token.TK_INDENT or t.kind == token.TK_DEDENT:
+            parts.append("")
+        else:
+            parts.append(copy(t.raw))
+
+        print(strings.join(parts, ""))
+        i = i + 1

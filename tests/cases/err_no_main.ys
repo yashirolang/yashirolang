@@ -1,0 +1,4 @@
+# ERROR: main 関数がありません
+# ERROR: def main() -> int:
+def helper() -> int:
+    return 1

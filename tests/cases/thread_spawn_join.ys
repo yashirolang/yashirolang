@@ -1,0 +1,40 @@
+# OUTPUT: 499500
+# OUTPUT: 1999000
+# OUTPUT: 10.0
+# OUTPUT: スレッドから
+# EXIT: 0
+# spawn / join（A-18）
+#
+# ★ 新しい構文はありません。spawn は**呼び出しの形のまま**です。
+#   ⚠️ クロージャが無いので「関数 + 引数 1 つ」の形に限ります。
+#
+# ★ 戻り型ごとに thunk（中継関数）が 1 つ出ます。int / float / None を
+#   ここで通しているのは、**呼び出し規約が型で変わる**からです
+#   （float は別のレジスタ、None には戻り値レジスタが無い）。
+
+def work(n: int) -> int:
+    s: int = 0
+    i: int = 0
+    while i < n:
+        s = s + i
+        i = i + 1
+    return s
+
+def dbl(x: float) -> float:
+    return x * 2.5
+
+def shout(msg: own str) -> None:
+    print(msg)
+
+def main() -> int:
+    t: Thread[int] = spawn(work, 1000)
+    u: Thread[int] = spawn(work, 2000)
+    print(t.join())
+    print(u.join())
+
+    f: Thread[float] = spawn(dbl, 4.0)
+    print(str(f.join()))
+
+    v: Thread[None] = spawn(shout, "スレッドから")
+    v.join()
+    return 0

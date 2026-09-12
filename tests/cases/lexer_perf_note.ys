@@ -1,0 +1,37 @@
+# OUTPUT: ok
+# EXIT: 0
+# トークンが「ソース全体」を持つときは **借用**であること
+#
+#   ⚠️ Token.init が copy(src) していたころ、トークン数 × ソース長 で
+#     O(n²) になっていました。セルフホスト版が自分自身を IR にするのに
+#     3.79 秒（C 版 0.12 秒）。借用に直して 0.32 秒になりました。
+#
+#   ★ ここでは「大きな文字列を持つオブジェクトを大量に作っても、
+#     実体が増えない」ことを確かめます。複製していれば時間が跳ねます。
+class Tok:
+    src: str
+    pos: int
+    # ⚠️ own で受け取る（copy しない）。呼び出し側は同じ文字列を渡す
+    def init(self, src: own str, pos: int) -> None:
+        self.src = src
+        self.pos = pos
+
+def main() -> int:
+    parts: list[str] = []
+    i: int = 0
+    while i < 4000:
+        parts.append("xxxxxxxxxx")
+        i = i + 1
+    big: str = ""
+    for p in parts:
+        big = big + p
+
+    toks: list[Tok] = []
+    i = 0
+    while i < 4000:
+        toks.append(Tok(big, i))
+        i = i + 1
+
+    if len(toks) == 4000 and len(toks[3999].src) == 40000:
+        print("ok")
+    return 0

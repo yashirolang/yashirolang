@@ -1,0 +1,7 @@
+# OUTPUT: 5
+# extern def は C の関数をそのまま呼ぶ（名前修飾しない）
+extern def pl_str_len(s: str) -> int
+
+def main() -> int:
+    print(pl_str_len("hello"))
+    return 0

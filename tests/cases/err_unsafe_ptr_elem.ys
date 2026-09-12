@@ -1,0 +1,8 @@
+# STAGE0-ONLY: unsafe / ptr[T] は C 版だけ
+# STAGE1-SKIP: stage1 はまだ unsafe / ptr[T] を解析できない
+# ERROR: いま ptr に書けるのは int だけです（例: ptr[int]）
+# 番地の先に「本言語の型」は載っていない
+def main() -> int:
+    unsafe:
+        p: ptr[str] = ptr_at(0)
+    return 0

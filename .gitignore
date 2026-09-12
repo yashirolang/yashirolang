@@ -1,0 +1,15 @@
+build/
+tests/tmp/
+a.out
+# tests/cases/lib_io が作る一時ファイル
+#   ⚠️ .gitignore の「#」は行頭だけがコメントです。
+#     パターンの後ろに書くとファイル名の一部になります。
+lib_io_test.txt
+*.ll
+*.o
+*.d
+*.dSYM/
+
+# ベンチマーク：⚠️ **ソースは追跡します**（docs/roadmap.md §3-B3）。
+#   公開する文書に数字を載せる以上、誰でも再現できる必要があるためです。
+#   作った実行ファイルだけ bench/.gitignore で除きます。

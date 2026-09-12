@@ -1,0 +1,12 @@
+# STAGE0-ONLY: 所有権検査は C 版だけ
+# FLAGS: --deny-move
+# OUTPUT: ab
+# OUTPUT: cd
+# OUTPUT: 2
+# for の対象も要素も借用（仕様 v2 §3.1）。ループの後も使える
+def main() -> int:
+    names: list[str] = ["ab", "cd"]
+    for s in names:
+        print(s)
+    print(len(names))
+    return 0

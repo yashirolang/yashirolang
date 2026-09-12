@@ -1,0 +1,28 @@
+# OUTPUT: True
+# OUTPUT: False
+# OUTPUT: True
+# OUTPUT: True
+# OUTPUT: False
+# OUTPUT: True
+# OUTPUT: False
+# OUTPUT: True
+# OUTPUT: False
+# OUTPUT: 組み合わせ ok
+# EXIT: 0
+# in / not in（list[int] / list[str] / list[float] / str）
+def main() -> int:
+    xs: list[int] = [1, 2, 3]
+    print(2 in xs)
+    print(9 in xs)
+    print(9 not in xs)
+    ss: list[str] = ["a", "bb"]
+    print("bb" in ss)
+    print("cc" in ss)
+    fs: list[float] = [1.5, 2.5]
+    print(2.5 in fs)
+    print(0.0 in fs)
+    print("ell" in "hello")
+    print("zz" in "hello")
+    if 1 in xs and "x" not in "abc":
+        print("組み合わせ ok")
+    return 0

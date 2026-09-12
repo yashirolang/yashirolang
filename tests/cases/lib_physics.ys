@@ -1,0 +1,36 @@
+# OUTPUT: done
+# EXIT: 0
+# 物理定数（CODATA 2018）と既知の物理量
+import physics
+import math
+
+def rel(name: str, got: float, want: float, tol: float) -> None:
+    if math.fabs(got - want) / math.fabs(want) > tol:
+        print("NG " + name + " got=" + str(got) + " want=" + str(want))
+
+def main() -> int:
+    # 既知の値と突き合わせる
+    rel("R", physics.R(), 8.31446261815324, 1.0e-12)
+    rel("hbar", physics.hbar(), 1.054571817e-34, 1.0e-9)
+    rel("eps0", physics.epsilon_0(), 8.8541878128e-12, 1.0e-9)
+    rel("coulomb", physics.coulomb(), 8.9875517923e9, 1.0e-9)
+    rel("ly", physics.light_year(), 9.4607304725808e15, 1.0e-12)
+    rel("pc", physics.parsec(), 3.0856775814913673e16, 1.0e-12)
+
+    # 物理的に既知の答え
+    rel("地球の脱出速度", physics.escape_velocity(5.972e24, 6.371e6), 11186.0, 1.0e-3)
+    rel("ISS 軌道速度", physics.orbital_velocity(5.972e24, 6.771e6), 7672.0, 1.0e-3)
+    rel("太陽のシュワルツ半径", physics.schwarzschild_radius(1.989e30), 2953.0, 1.0e-3)
+    rel("電子の静止エネルギー(eV)",
+        physics.joule_to_ev(physics.mass_to_energy(physics.electron_mass())),
+        510998.95, 1.0e-6)
+    rel("γ(0.866c)", physics.lorentz_factor(0.866 * physics.c()), 2.0, 1.0e-3)
+    rel("太陽表面の放射(5772K)", physics.blackbody_flux(5772.0), 6.294e7, 1.0e-3)
+    rel("緑光子(550nm)", physics.joule_to_ev(physics.photon_energy(550.0e-9)), 2.254, 1.0e-3)
+
+    # 単位換算の往復
+    rel("温度往復", physics.kelvin_to_celsius(physics.celsius_to_kelvin(25.0)), 25.0, 1.0e-12)
+    rel("華氏", physics.fahrenheit_to_celsius(212.0), 100.0, 1.0e-12)
+    rel("絶対零度", physics.celsius_to_fahrenheit(-273.15), -459.67, 1.0e-12)
+    print("done")
+    return 0

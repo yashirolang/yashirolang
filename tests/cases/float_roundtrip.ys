@@ -1,0 +1,43 @@
+# OUTPUT: 0.30000000000000004
+# OUTPUT: 0.3333333333333333
+# OUTPUT: 1.0 0.5 -2.5 0.0
+# OUTPUT: 1.0e-9 10000000000.0 1.0e300
+# OUTPUT: 0.1 0.2 0.7
+# OUTPUT: 0.00001 0.0001
+# OUTPUT: ok
+# EXIT: 0
+# str(float) は「元に戻る最短の表記」
+#
+#   ★ 前は 6 桁に丸めていました。`str(0.1 + 0.2)` が `0.3` に見えるのは、
+#     数値計算の言語として害でした（自分の誤差が見えない。レビュー C5）。
+#
+#   ⚠️ **17 桁出すのではありません。** double → 文字列 → double が元に戻る、
+#     いちばん短い表記を選びます（1.0 は "1.0"、0.1 は "0.1"）。
+#
+#   ⚠️ **10 のべき乗で割る素朴なやり方では駄目でした**（試作して 200 件中
+#     116 件しか往復しませんでした）。多倍長整数で桁を作っています
+#     （runtime/core.c の pl_shortest_digits。Dragon4）。
+import math
+
+def main() -> int:
+    print(str(0.1 + 0.2))          # ★ 誤差が見える
+    print(str(1.0 / 3.0))
+
+    print(str(1.0) + " " + str(0.5) + " " + str(-2.5) + " " + str(0.0))
+    print(str(1.0e-9) + " " + str(1.0e10) + " " + str(1.0e300))
+
+    # 短い表記が選ばれること（0.1 は "0.1"。17 桁にはならない）
+    print(str(0.1) + " " + str(0.2) + " " + str(0.7))
+
+    # 指数表記との境目（**1e-6 未満**が指数表記。Python の 1e-4 とは違います）
+    print(str(0.00001) + " " + str(0.0001))
+
+    # 丸めたいときは round_to
+    if str(math.round_to(0.1 + 0.2, 6)) != "0.3":
+        print("NG round_to")
+        return 1
+    if str(math.round_to(2.0 ** 0.5, 6)) != "1.414214":
+        print("NG round_to sqrt")
+        return 1
+    print("ok")
+    return 0

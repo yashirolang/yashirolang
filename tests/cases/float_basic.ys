@@ -1,0 +1,16 @@
+# OUTPUT: 3.0
+# OUTPUT: 0.375
+# OUTPUT: 1.75
+# OUTPUT: -2.5
+# OUTPUT: 0.0
+# EXIT: 0
+# float の四則演算と表示
+def main() -> int:
+    a: float = 1.5
+    b: float = a * 2.0
+    print(b)
+    print(a / 4.0)
+    print(a + 0.25)
+    print(-2.5)
+    print(a - 1.5)
+    return 0

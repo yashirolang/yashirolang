@@ -1,0 +1,4 @@
+import common
+
+def get() -> int:
+    return common.base() + 2

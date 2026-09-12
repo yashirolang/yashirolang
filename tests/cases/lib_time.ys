@@ -1,0 +1,55 @@
+# OUTPUT: ok
+# EXIT: 0
+# time モジュール
+#   ⚠️ 時刻そのものは出力できません（毎回変わるため）。
+#     **成り立っているはずの関係**だけを確かめます。
+import time
+
+def main() -> int:
+    ok: bool = True
+
+    # ① 単調時計は戻らない（少し仕事をしてから測り直す）
+    t0: int = time.monotonic_ns()
+    s: int = 0
+    for i in range(200000):
+        s = s + i
+    t1: int = time.monotonic_ns()
+    if t1 < t0:
+        ok = False
+        print("NG 単調時計が戻りました")
+    if s == 0:
+        ok = False
+
+    # ② 経過時間は 0 以上で、この程度の仕事なら 10 秒はかからない
+    el: int = time.since_ns(t0)
+    if el < 0 or el > 10000000000:
+        ok = False
+        print("NG 経過時間がおかしいです: " + str(el))
+
+    # ③ ミリ秒・秒への換算が桁で合っている
+    ms: float = time.ns_to_ms(1500000)
+    if ms < 1.4 or ms > 1.6:
+        ok = False
+        print("NG ns_to_ms: " + str(ms))
+    sec: float = time.ns_to_sec(2500000000)
+    if sec < 2.4 or sec > 2.6:
+        ok = False
+        print("NG ns_to_sec: " + str(sec))
+
+    # ④ 実時刻は 2020 年より後、2100 年より前
+    #   （1577836800 = 2020-01-01、4102444800 = 2100-01-01）
+    w: int = time.now_ns()
+    if w < 1577836800000000000 or w > 4102444800000000000:
+        ok = False
+        print("NG 実時刻がおかしいです: " + str(w))
+
+    # ⑤ 秒版と ns 版が同じ時計を見ている（1 秒以内）
+    d: float = time.now() - float(time.now_ns()) / 1000000000.0
+    if d > 1.0 or d < -1.0:
+        ok = False
+        print("NG now() と now_ns() がずれています: " + str(d))
+
+    if ok:
+        print("ok")
+        return 0
+    return 1

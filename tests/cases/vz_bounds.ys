@@ -1,0 +1,70 @@
+# OUTPUT: 140
+# OUTPUT: 150
+# OUTPUT: 0
+# OUTPUT: 21
+# OUTPUT: 6
+# OUTPUT: 15
+# OUTPUT: 3
+# EXIT: 0
+# 添字の範囲をループの外で 1 回だけ確かめる（loop versioning）
+#
+# ★ 数える形のループを 2 つに分け、入口で「全反復ぶんの添字が範囲内か」を
+#   1 回だけ確かめます。速い側では境界検査も**負の添字の正規化も**出しません。
+#   ⚠️ 見るのは**両端だけ**です。添字が誘導変数についてアフィンなら単調なので、
+#     途中の値は必ず両端のあいだに入ります。
+#
+# ⚠️ **ここで確かめているのは「意味が変わっていないこと」です。**
+#   負の添字も、空のリストも、`len` を上限にする形も、今までどおり動きます。
+
+def sum_neg(xs: list[int], n: int) -> int:
+    # 負の添字（後ろから）。両端の検査は -1 と -(n-1) を見ます
+    s: int = 0
+    i: int = 1
+    while i < n:
+        s = s + xs[0 - i]
+        i = i + 1
+    return s
+
+def total(xs: list[int]) -> int:
+    s: int = 0
+    i: int = 0
+    while i < len(xs):        # 上限が len(...) の形
+        s = s + xs[i]
+        i = i + 1
+    return s
+
+def stride(xs: list[int], n: int, k: int) -> int:
+    s: int = 0
+    j: int = 0
+    while j < n:
+        s = s + xs[k * n + j]   # アフィン（k * n は不変）
+        j = j + 1
+    return s
+
+# ⚠️ 添字に出てくる変数のうち、誘導変数でないものが**ループ内で変わる**なら
+#   版分けしてはいけません（両端で確かめた値と実際の値が違ってしまいます）。
+#   ここは k が変わるので、今までどおりの検査つきで回ります。
+def moving(xs: list[int], n: int) -> int:
+    s: int = 0
+    k: int = 0
+    j: int = 0
+    while j < n:
+        s = s + xs[k]
+        k = k + 1
+        j = j + 1
+    return s
+
+def main() -> int:
+    xs: list[int] = [10, 20, 30, 40, 50]
+    print(sum_neg(xs, 5))         # 50+40+30+20 = 140
+    print(total(xs))              # 150
+
+    empty: list[int] = []
+    print(total(empty))           # 0（1 回も回らない）
+
+    ys: list[int] = [1, 2, 3, 4, 5, 6]
+    print(total(ys))              # 21
+    print(stride(ys, 3, 0))       # 1+2+3 = 6
+    print(stride(ys, 3, 1))       # 4+5+6 = 15
+    print(moving(ys, 2))          # 1+2 = 3（範囲内なので通る）
+    return 0

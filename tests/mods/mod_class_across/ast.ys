@@ -1,0 +1,9 @@
+class Node:
+    v: int
+    next: Node | None
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+def make(v: int) -> Node:
+    return Node(v)

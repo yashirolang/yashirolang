@@ -1,0 +1,4 @@
+n: int = 0
+
+def get() -> int:
+    return n

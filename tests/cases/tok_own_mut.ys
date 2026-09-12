@@ -1,0 +1,3 @@
+# TOKENS: KEYWORD IDENT PUNCT KEYWORD IDENT NEWLINE EOF
+# own / mut は予約語（KEYWORD）として字句解析される
+own xs: mut int

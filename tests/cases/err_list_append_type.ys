@@ -1,0 +1,6 @@
+# ERROR: 'int' のリストに 'str' を追加できません
+# ERROR: = ヒント: 本言語には暗黙の型変換がありません
+def main() -> int:
+    xs: list[int] = []
+    xs.append("a")
+    return 0

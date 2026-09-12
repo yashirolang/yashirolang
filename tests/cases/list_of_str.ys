@@ -1,0 +1,7 @@
+# OUTPUT: b
+# OUTPUT: 2
+def main() -> int:
+    ys: list[str] = ["a", "b"]
+    print(ys[1])
+    print(len(ys))
+    return 0

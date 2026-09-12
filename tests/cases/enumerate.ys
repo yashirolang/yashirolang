@@ -1,0 +1,38 @@
+# OUTPUT: 0: a
+# OUTPUT: 1: b
+# OUTPUT: 2: c
+# OUTPUT: 0 -> 10
+# OUTPUT: 1 -> 20
+# OUTPUT: 残り a
+# OUTPUT: a
+# OUTPUT: b
+# OUTPUT: c
+# OUTPUT: 0
+# OUTPUT: 1
+# OUTPUT: 2
+# EXIT: 0
+# enumerate（添字と要素を同時に受け取る）
+#   ⚠️ タプルはありません。**この形だけ**を特別扱いしています
+def main() -> int:
+    xs: list[str] = ["a", "b", "c"]
+    for i, x in enumerate(xs):
+        print(f"{i}: {x}")
+
+    ns: list[int] = [10, 20]
+    for k, v in enumerate(ns):
+        print(f"{k} -> {v}")
+
+    # 途中で break / continue も効く
+    for j, y in enumerate(xs):
+        if j == 1:
+            continue
+        if j == 2:
+            break
+        print(f"残り {y}")
+
+    # 従来の for も壊れていない
+    for z in xs:
+        print(z)
+    for m in range(0, 3):
+        print(m)
+    return 0

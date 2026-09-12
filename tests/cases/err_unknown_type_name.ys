@@ -1,0 +1,4 @@
+# ERROR: 未知の型名 'Fooo' です
+def main() -> int:
+    x: Fooo = 1
+    return 0

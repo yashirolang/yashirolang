@@ -1,0 +1,98 @@
+# kernel — この言語で書いた最小カーネル
+#
+# ★ print がそのまま使えます。core.c を libc から切り離し、
+#   出力先を pl_hook_write（kernel/hooks.c）に差し替えてあるからです。
+pragma target "riscv64-unknown-elf"
+pragma no_runtime
+
+# ── 装置の番地（QEMU virt マシン）──────────────────────────
+#
+# CLINT … タイマ。mtime が現在時刻、mtimecmp に「次に割り込む時刻」を書く
+UART_BASE: int = 0x10000000
+MTIME: int = 0x200BFF8
+MTIMECMP: int = 0x2004000
+
+# タイマの周波数は 10MHz なので、100 万で 0.1 秒
+TICK_INTERVAL: int = 1000000
+
+ticks: int = 0
+
+def banner() -> None:
+    print("=================================")
+    print(" kernel on RISC-V (virt)")
+    print("=================================")
+
+# 次の割り込み時刻を設定する（これを毎回やらないと 1 回しか来ない）
+def timer_next(delta: int) -> None:
+    unsafe:
+        now: int = peek64(ptr_at(MTIME), 0)
+        poke64(ptr_at(MTIMECMP), 0, now + delta)
+
+# ── 割り込みハンドラ（boot.s の trap_entry から呼ばれる）──
+#
+# ⚠️ ここは「関数の途中に割り込んで」実行されます。
+#   レジスタの退避は boot.s がやっています（高級言語では書けないため）。
+def trap() -> None:
+    cause: int = 0
+    unsafe:
+        cause = asm_out("csrr %0, mcause")
+
+    # 最上位ビットが立っていれば割り込み（負の数になる）。下位が 7 ならタイマ。
+    if cause < 0 and (cause & 15) == 7:
+        ticks = ticks + 1
+        print("tick " + str(ticks))
+        timer_next(TICK_INTERVAL)
+        return
+
+    print("未知の割り込み: " + str(cause))
+
+# UART に 1 文字来ていれば読む（無ければ -1）
+def uart_getc() -> int:
+    unsafe:
+        lsr: int = peek8(ptr_at(UART_BASE + 5), 0)
+        if (lsr & 1) == 1:
+            return peek8(ptr_at(UART_BASE), 0)
+    return -1
+
+def main() -> int:
+    banner()
+
+    total: int = 0
+    for i in range(1, 11):
+        total = total + i
+    print("1 から 10 までの合計: " + str(total))
+
+    names: list[str] = ["own", "mut", "raises", "rc"]
+    for n in names:
+        print("v2 の言葉: " + n)
+
+    # ── タイマ割り込みを 3 回受ける ──
+    print("タイマ割り込みを待ちます")
+    timer_next(TICK_INTERVAL)
+    unsafe:
+        asm_in("csrs mie, %0", 128)   # MTIE（bit 7）を立てる
+        asm("csrsi mstatus, 8")        # MIE（bit 3）を立てる＝割り込みを許可
+
+    while ticks < 3:
+        unsafe:
+            asm("wfi")                 # 何もせずに待つ（電力を使わない）
+
+    unsafe:
+        asm("csrci mstatus, 8")        # 割り込みを止める
+
+    print("3 回割り込みが来ました")
+
+    # ── キーボード（UART の受信）──
+    #
+    # ★ 割り込みを使わずに「来ていれば読む」方式（ポーリング）です。
+    #   入力が無ければ何も起きないので、自動テストでも決まった結果になります。
+    print("キー入力があればエコーします")
+    i: int = 0
+    while i < 200000:
+        c: int = uart_getc()
+        if c >= 0:
+            print("入力: " + chr(c))
+        i = i + 1
+
+    print("halt")
+    return 0

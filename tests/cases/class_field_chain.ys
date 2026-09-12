@@ -1,0 +1,16 @@
+# OUTPUT: 5
+# t.next.v のような連鎖。next は Node | None なので、
+# 一度ローカル変数に受けて絞り込む（フィールドは絞り込まない。15.5 節）
+class Node:
+    v: int
+    next: Node | None
+
+def main() -> int:
+    a: Node = Node()
+    b: Node = Node()
+    b.v = 5
+    a.next = b
+    nxt: Node | None = a.next
+    if nxt is not None:
+        print(nxt.v)
+    return 0

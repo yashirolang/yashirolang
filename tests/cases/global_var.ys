@@ -1,0 +1,10 @@
+# EXIT: 3
+counter: int = 1
+
+def bump() -> None:
+    counter = counter + 1
+
+def main() -> int:
+    bump()
+    bump()
+    return counter

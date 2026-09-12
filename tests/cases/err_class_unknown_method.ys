@@ -1,0 +1,8 @@
+# ERROR: クラス 'P' にメソッド 'run' はありません
+class P:
+    x: int
+
+def main() -> int:
+    p: P = P()
+    p.run()
+    return 0

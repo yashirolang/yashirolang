@@ -1,0 +1,5 @@
+# ERROR: 'int | None' は書けません
+# ERROR: nullable にできるのは str / list[T] / class です
+def main() -> int:
+    n: int | None = None
+    return 0

@@ -1,0 +1,4 @@
+# ERROR: モジュール 'lib' を import していません
+# ERROR: ファイルの先頭に 'import lib' を書いてください
+def main() -> int:
+    return lib.f(1)

@@ -1,0 +1,21 @@
+# OUTPUT: 150
+# EXIT: 1
+# 版分けしても、範囲外は**同じ位置で同じように**止まります
+#
+# ⚠️ ここが版分けでいちばん大事な性質です。入口の検査が落ちたら遅い側へ行き、
+#   ちょうど範囲外になる反復で、今までと同じメッセージで止まります。
+#   「速くするために診断が雑になる」ということはありません。
+
+def total(xs: list[int], n: int) -> int:
+    s: int = 0
+    i: int = 0
+    while i < n:
+        s = s + xs[i]
+        i = i + 1
+    return s
+
+def main() -> int:
+    xs: list[int] = [10, 20, 30, 40, 50]
+    print(total(xs, 5))     # 150（速い側）
+    print(total(xs, 8))     # ← 遅い側。i = 5 で止まる
+    return 0

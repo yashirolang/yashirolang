@@ -1,0 +1,7 @@
+# OUTPUT: [notebook]
+def wrap(s: str) -> str:
+    return "[" + s + "]"
+
+def main() -> int:
+    print(wrap("notebook"))
+    return 0

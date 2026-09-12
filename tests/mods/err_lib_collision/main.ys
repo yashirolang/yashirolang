@@ -1,0 +1,7 @@
+# ERROR: モジュール 'strings' が標準ライブラリと衝突しています
+# ERROR: どちらを指しているか決められません
+# ERROR: どちらかの名前を変えてください
+import strings
+
+def main() -> int:
+    return strings.hello()

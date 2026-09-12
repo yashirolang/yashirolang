@@ -1,0 +1,6 @@
+# ERROR: は組み込みの型名です
+class int:
+    x: int
+
+def main() -> int:
+    return 0

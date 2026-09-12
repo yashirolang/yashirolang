@@ -1,0 +1,5 @@
+# ERROR: モジュール 'lib' に 'nope' はありません
+import lib
+
+def main() -> int:
+    return lib.nope

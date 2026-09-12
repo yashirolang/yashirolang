@@ -1,0 +1,20 @@
+# OUTPUT: ok
+# EXIT: 0
+# int(str) の桁あふれ検査が境界で **誤検出しない**こと
+#   ⚠️ 負の側は 1 つ広い（-9223372036854775808 まで）ので上限を分けています。
+def main() -> int:
+    ok: bool = True
+    if int("9223372036854775807") != 9223372036854775807:
+        ok = False
+    if int("-9223372036854775808") != -9223372036854775807 - 1:
+        ok = False
+    if int("0") != 0:
+        ok = False
+    if int("-42") != -42:
+        ok = False
+    if int("+7") != 7:
+        ok = False
+    if ok:
+        print("ok")
+        return 0
+    return 1

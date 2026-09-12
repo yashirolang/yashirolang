@@ -1,0 +1,13 @@
+# STAGE0-ONLY: 所有権検査は C 版だけ
+# FLAGS: --deny-move
+# ERROR: error[E-MOVE-1]: 移動済みかもしれない値 'name' を使っています
+# ERROR: 分岐によっては、'name' はここで移動しています
+# 片方の枝だけで移動したら、合流点では「移動済みかもしれない」
+def take(s: own str) -> int:
+    return len(s)
+
+def main() -> int:
+    name: str = "abc"
+    if len(name) > 2:
+        print(take(name))
+    return len(name)

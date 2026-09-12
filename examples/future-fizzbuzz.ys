@@ -1,0 +1,20 @@
+# ⚠️ これは「いずれ動くようになる」目標プログラムです。
+#    現在ではまだコンパイルできません。
+#
+# docs/spec/language-spec.md 第11節より。
+# 本言語の完成形の姿を掴むために置いてあります。
+
+def fizzbuzz(n: int) -> str:
+    if n % 15 == 0:
+        return "FizzBuzz"
+    elif n % 3 == 0:
+        return "Fizz"
+    elif n % 5 == 0:
+        return "Buzz"
+    else:
+        return str(n)
+
+def main() -> int:
+    for i in range(1, 16):
+        print(fizzbuzz(i))
+    return 0

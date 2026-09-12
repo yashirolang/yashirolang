@@ -1,0 +1,25 @@
+# STAGE0-ONLY: 解放の挿入は C 版だけ
+# FLAGS: --drop --deny-move --deny-borrow
+# OUTPUT: taken
+# OUTPUT: drop moved
+# OUTPUT: after
+# EXIT: 0
+# 移動した値は「移動した先」が解放する（二重解放しない）
+#         ★ スロットに null を書くのが drop フラグの代わり（決定 D17）
+class Res:
+    name: str
+
+    def init(self, name: own str) -> None:
+        self.name = name
+
+    def drop(self) -> None:
+        print("drop " + self.name)
+
+def take(r: own Res) -> None:
+    print("taken")
+
+def main() -> int:
+    m: Res = Res("moved")
+    take(m)
+    print("after")
+    return 0

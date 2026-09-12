@@ -1,0 +1,6 @@
+# ERROR: フィールドには型注釈が必須です
+class P:
+    x:
+
+def main() -> int:
+    return 0

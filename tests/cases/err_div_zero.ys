@@ -1,0 +1,5 @@
+# ERROR: 0 で除算しています
+# ERROR: この 0 で割ろうとしています
+# ERROR: note: 演算子 '//' はここです
+def main() -> int:
+    return 1 // 0

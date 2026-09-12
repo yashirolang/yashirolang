@@ -1,0 +1,8 @@
+# OUTPUT: 3
+# OUTPUT: 2
+# OUTPUT: 1
+# 増分が負なら条件の向きが逆になる（脱糖時に符号で決める）
+def main() -> int:
+    for i in range(3, 0, -1):
+        print(i)
+    return 0

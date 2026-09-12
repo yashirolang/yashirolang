@@ -1,0 +1,21 @@
+# STAGE0-ONLY: 所有権検査は C 版だけ
+# FLAGS: --deny-move
+# OUTPUT: x
+# EXIT: 2
+# 別々のフィールドは重ならない（設計 ownership.md §3 の接頭辞規則）
+#         ★ フィールドからの取り出しを禁止したので、
+#           「フィールドへ別々に移動できる」ほうで確かめます。
+class Pair:
+    a: str
+    b: str
+
+    def init(self, a: own str, b: own str) -> None:
+        self.a = a
+        self.b = b
+
+def main() -> int:
+    x: str = "x"
+    y: str = "yy"
+    p: Pair = Pair(x, y)
+    print(p.a)
+    return len(p.b)

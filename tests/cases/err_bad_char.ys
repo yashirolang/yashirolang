@@ -1,0 +1,3 @@
+# ERROR: 解釈できない文字です
+def main() -> int:
+    return @

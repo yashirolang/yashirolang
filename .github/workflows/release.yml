@@ -1,0 +1,168 @@
+# Release — タグを打つと、3 つの OS 向けの配布物を作って Release に貼ります。
+#
+# ★ 配る形はどの OS でも同じです（<cc> はコンパイラのコマンド名）。
+#     bin/<cc>
+#     lib/plc/runtime.a
+#     lib/plc/lib/*.<ext>
+#
+# ⚠️ 名前（言語名・コマンド名・拡張子）を**このファイルに書かないこと**。
+#    すべて `make -s print-LANG_*` で make に訊きます。改名しても
+#    この workflow を直さずに済ませるためです（docs/design/naming.md）。
+#   コンパイラは実行ファイルからの相対でこの 2 つを探すので、
+#   **展開した場所がどこでも動きます**（src/main.c の runtime_o を参照）。
+#
+# ⚠️ 使う側には clang が必要です（このコンパイラは LLVM IR を出して
+#    clang にリンクを任せる作りなので）。README の「必要なもの」を参照。
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'つけるタグ（例: v0.1.0）'
+        required: true
+
+jobs:
+  build:
+    name: 配布物（${{ matrix.name }}）
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ★ 展開したときのフォルダ名は、配布物の名前と揃えます。
+          #   DIST_NAME は「<言語名>-<この name>」を各ジョブが組み立てます
+          #   （既定の `uname -s` 由来だと、MSYS2 で
+          #   ...-MINGW64_NT-10.0-26100-x86_64 のように
+          #   **Windows のビルド番号まで入って**しまうためです）。
+          - name: linux-x86_64
+            os: ubuntu-latest
+            shell: bash
+            extra_flags: ''
+          # ★ macOS は **ユニバーサル**（Intel と Apple Silicon の両対応）で作ります。
+          #   GitHub の macos-latest は Apple Silicon なので、普通に作ると
+          #   arm64 専用になり、Intel Mac では "bad CPU type" で動きません。
+          - name: macos-universal
+            os: macos-latest
+            shell: bash
+            extra_flags: 'UNIVERSAL=1'
+          - name: windows-x86_64
+            os: windows-latest
+            shell: 'msys2 {0}'
+            extra_flags: ''
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 道具を入れる（Linux）
+        if: runner.os == 'Linux'
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install -y clang llvm
+
+      - name: 道具を入れる（Windows / MSYS2）
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: make diffutils grep coreutils
+          pacboy: clang:p lld:p
+
+      # ★ 名前は make に訊いて、以降のステップに渡します。
+      - name: 名前を取り出す
+        id: lang
+        run: |
+          echo "name=$(make -s print-LANG_NAME)" >> "$GITHUB_OUTPUT"
+          echo "cc=$(make -s print-LANG_CC)"     >> "$GITHUB_OUTPUT"
+          echo "ext=$(make -s print-LANG_EXT)"   >> "$GITHUB_OUTPUT"
+          echo "dist=$(make -s print-LANG_NAME)-${{ matrix.name }}" >> "$GITHUB_OUTPUT"
+
+      - name: ビルドとテスト
+        run: |
+          make ${{ matrix.extra_flags }} DIST_NAME=${{ steps.lang.outputs.dist }}
+          make test ${{ matrix.extra_flags }} DIST_NAME=${{ steps.lang.outputs.dist }}
+
+      - name: 配布物を作る
+        run: make dist ${{ matrix.extra_flags }} DIST_NAME=${{ steps.lang.outputs.dist }}
+
+      - name: 2 つのアーキが入っているか確かめる（macOS）
+        if: runner.os == 'macOS'
+        run: |
+          cd build/dist
+          d="${{ steps.lang.outputs.dist }}"
+          cc="${{ steps.lang.outputs.cc }}"
+          file "$d/bin/$cc" "$d/lib/plc/runtime.a"
+          # ★ 片方しか入っていなかったら、ここで落とします
+          lipo -archs "$d/bin/$cc" | grep -q x86_64
+          lipo -archs "$d/bin/$cc" | grep -q arm64
+
+      - name: 動くことを確かめる（展開した場所から）
+        run: |
+          cd build/dist
+          d="${{ steps.lang.outputs.dist }}"
+          cc="${{ steps.lang.outputs.cc }}"
+          ext="${{ steps.lang.outputs.ext }}"
+          printf 'def main() -> int:\n    print("release ok")\n    return 0\n' > "t$ext"
+          "./$d/bin/$cc" "t$ext" -o t
+          ./t*
+
+      - name: まとめる
+        run: |
+          cd build/dist
+          d="${{ steps.lang.outputs.dist }}"
+          tar czf "$d.tar.gz" "$d"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.lang.outputs.dist }}
+          path: build/dist/${{ steps.lang.outputs.dist }}.tar.gz
+
+  release:
+    name: Release に貼る
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # ⚠️ checkout は download-artifact より**先**に置くこと。
+      #   actions/checkout は既定で作業ディレクトリを掃除する（clean: true）ので、
+      #   後に置くと落としてきた dist/ ごと消えてしまいます。
+      #
+      # ★ checkout するのは、Release の本文に出すコマンド名を
+      #   `make -s print-LANG_*` で**この場で訊く**ためです。
+      #   名前をこのファイルに書き写さないためです（docs/design/naming.md）。
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: 一覧
+        run: ls -R dist
+
+      # ★ 本文は .github/release-body.md.in（ひな型）から流し込みます。
+      #   docs/ と同じ仕組みなので、改名してもここは直しません。
+      #
+      # ⚠️ 昔はこの中で echo を並べて組み立てていましたが、シェルによっては
+      #   echo が "\n" を**本物の改行に変えて**しまい、利用者に見せる
+      #   printf の例が崩れました。ひな型をそのまま流し込むのが確実です。
+      - name: Release の本文を組み立てる
+        id: body
+        run: |
+          {
+            echo 'body<<RELEASE_BODY_EOF'
+            tools/render_docs.sh .github/release-body.md.in
+            echo 'RELEASE_BODY_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: dist/*.tar.gz
+          body: ${{ steps.body.outputs.body }}

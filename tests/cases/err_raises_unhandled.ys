@@ -1,0 +1,14 @@
+# ERROR: error[E-RAISE-1]: 失敗しうる呼び出し 'read' を処理していません
+# ERROR: try で捕まえるか、この関数に 'raises IOError' を足してください
+# 失敗は握りつぶせない（仕様 v2 §8.2）
+class IOError:
+    message: str
+
+    def init(self, message: own str) -> None:
+        self.message = message
+
+def read(path: str) -> int raises IOError:
+    raise IOError("だめ")
+
+def main() -> int:
+    return read("x")

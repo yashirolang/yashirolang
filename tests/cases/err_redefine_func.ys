@@ -1,0 +1,10 @@
+# ERROR: 関数 'f' は既に定義されています
+# ERROR: 最初の定義はここです
+def f() -> int:
+    return 1
+
+def f() -> int:
+    return 2
+
+def main() -> int:
+    return f()

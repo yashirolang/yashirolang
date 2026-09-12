@@ -1,0 +1,23 @@
+# OUTPUT: 42
+# OUTPUT: 15
+# OUTPUT: 20
+# OUTPUT: 30
+# EXIT: 0
+# 関数型 fn(A) -> B。関数を値として渡し、変数に入れ替える
+def double(x: int) -> int:
+    return x * 2
+
+def triple(x: int) -> int:
+    return x * 3
+
+def apply(f: fn(int) -> int, x: int) -> int:
+    return f(x)
+
+def main() -> int:
+    print(apply(double, 21))
+    print(apply(triple, 5))
+    g: fn(int) -> int = double
+    print(g(10))
+    g = triple
+    print(g(10))
+    return 0

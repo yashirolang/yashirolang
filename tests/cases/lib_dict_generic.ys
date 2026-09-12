@@ -1,0 +1,42 @@
+# OUTPUT: 20
+# OUTPUT: False
+# OUTPUT: 2
+# OUTPUT: 2
+# OUTPUT: -1
+# OUTPUT: one
+# OUTPUT: x
+# OUTPUT: y
+# EXIT: 0
+# ジェネリックになった dict
+#   ★ **これがジェネリクスの目的**です。当初は値が int に固定で、
+#     `str → クラス` の表が作れず「list の添字を値に入れる」回り道が
+#     必要でした（tests/cases/lib_dict_handle にその形が残っています）。
+import dict
+
+class Symbol:
+    name: str
+    value: int
+    def init(self, name: own str, value: int) -> None:
+        self.name = name
+        self.value = value
+
+def main() -> int:
+    syms: dict.Dict[str, Symbol] = dict.Dict()
+    syms.set("x", Symbol("x", 10))
+    syms.set("y", Symbol("y", 20))
+    print(syms.get("y").value)
+    print(syms.has("z"))
+    print(syms.len())
+
+    counts: dict.Dict[str, int] = dict.Dict()
+    counts.set("a", 1)
+    counts.set("a", 2)
+    print(counts.get_or("a", 0))
+    print(counts.get_or("b", -1))
+
+    names: dict.Dict[int, str] = dict.Dict()
+    names.set(1, "one")
+    print(names.get(1))
+    for k in syms.keys():
+        print(k)
+    return 0

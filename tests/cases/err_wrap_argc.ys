@@ -1,0 +1,4 @@
+# ERROR: wrap_mul は 2 個の引数を取ります
+# wrap_* は 2 引数
+def main() -> int:
+    return wrap_mul(1)

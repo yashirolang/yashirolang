@@ -1,0 +1,6 @@
+# EXIT: 1
+# or は and より弱い：True or (False and False)
+def main() -> int:
+    if True or False and False:
+        return 1
+    return 0

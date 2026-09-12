@@ -1,0 +1,7 @@
+# EXIT: 1
+# 左辺が真なら右辺は評価される（飛ばしすぎていないことの確認）
+def main() -> int:
+    z: int = 4
+    if True and (8 // z) == 2:
+        return 1
+    return 0

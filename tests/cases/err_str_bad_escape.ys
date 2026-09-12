@@ -1,0 +1,5 @@
+# ERROR: 未知のエスケープシーケンス '\p' です
+# ERROR: = ヒント: 使えるのは \n \t \r \0 \\ \" \' です
+def main() -> int:
+    s: str = "C:\path"
+    return 0

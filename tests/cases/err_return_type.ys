@@ -1,0 +1,8 @@
+# ERROR: return の型が戻り型と一致しません
+# ERROR: 型 'bool' の式
+# ERROR: 関数 'f' の戻り型は 'int' です
+def f() -> int:
+    return True
+
+def main() -> int:
+    return f()

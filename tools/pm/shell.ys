@@ -1,0 +1,58 @@
+# shell — 外部コマンドを呼ぶ道具（書き直し）
+#
+# ★ パッケージマネージャが外に出す副作用はここに全部集めてあります。監査するときは
+#   **このファイルだけ**を読めば「何を実行するか」が分かるようにしています。
+#
+# ⚠️ 引数は必ず q() で包んでください。包まずに連結すると、リポジトリの URL や
+#   タグ名がそのままシェルに渡ります（パッケージの取得は外から来た文字列を
+#   扱う処理なので、ここが最初の防御線です）。
+#
+# ★ **一時ファイルが消えました。**
+#   出力は `sys.capture`（パイプ）で直に受け取り、ディレクトリの作成・削除は
+#   `io.mkdir_all` / `io.remove_all` を使います。以前は
+#   `sys.run("mkdir -p …")` と一時ファイルの読み直しに頼っていました。
+import io
+import strings
+import sys
+import langinfo
+
+# シェルに渡す 1 語を安全に包む。
+#
+#   it's  →  'it'\''s'
+#
+# ★ ' で囲めば、中身は ' 以外まったく解釈されません。' だけを
+#   「閉じる・エスケープした '・開き直す」に置き換えます。
+def q(s: str) -> str:
+    return "'" + strings.replace(copy(s), "'", "'\\''") + "'"
+
+def mkdir_p(path: str) -> None:
+    if not io.mkdir_all(path):
+        io.eprint(langinfo.pm() + ": ディレクトリを作れませんでした: " + path + "\n")
+        exit(1)
+
+# ディレクトリを消す。
+#
+# ⚠️ 消すのは自分で作った場所だけです。".." を含むパスと "/" は断ります。
+#   ここは唯一の破壊的な操作なので、呼び出し側ではなく**この関数**で守ります。
+def run_rm(path: str) -> None:
+    if len(path) == 0 or path == "/" or path == "." or strings.contains(path, ".."):
+        panic(langinfo.pm() + ": 消してはいけない場所です: " + path)
+    io.remove_all(path)
+
+# コマンドを実行して、**標準出力**と終了コードを受け取る（読み取る用）。
+def capture(cmd: str) -> sys.Output:
+    return sys.capture(cmd)
+
+# 実行して、失敗したらそこで止める（効果だけが目的の用）。
+#
+# ⚠️ こちらは**標準エラーを混ぜます**。失敗したときに理由を出すためで、
+#   出力を解釈しない呼び出し（clone / fetch）だけに使ってください。
+def must(cmd: str, what: str) -> sys.Output:
+    r: sys.Output = sys.capture(cmd + " 2>&1")
+    if r.code != 0:
+        io.eprint(langinfo.pm() + ": " + what + " に失敗しました\n")
+        io.eprint("    コマンド: " + cmd + "\n")
+        if len(strings.strip(r.out)) > 0:
+            io.eprint("    " + strings.strip(r.out) + "\n")
+        exit(1)
+    return r

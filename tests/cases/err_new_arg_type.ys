@@ -1,0 +1,10 @@
+# ERROR: の生成の第 1 引数
+class P:
+    x: int
+
+    def init(self, x: int) -> None:
+        self.x = x
+
+def main() -> int:
+    p: P = P("a")
+    return 0

@@ -1,0 +1,6 @@
+# ERROR: 'main' は自分自身です
+# ERROR: モジュールは自分自身を import できません
+import main
+
+def main() -> int:
+    return 0

@@ -1,0 +1,5 @@
+# ERROR: 文字列が閉じられていません
+# ERROR: = ヒント: 文字列は同じ行の中で閉じてください
+def main() -> int:
+    s: str = "hello
+    return 0

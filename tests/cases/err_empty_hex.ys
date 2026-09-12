@@ -1,0 +1,4 @@
+# ERROR: 数値リテラルに数字がありません
+# ERROR: = ヒント: 基数 16 で使える数字は 0-9 a-f A-F です
+def main() -> int:
+    return 0x

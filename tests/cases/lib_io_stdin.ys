@@ -1,0 +1,18 @@
+# STDIN: hello
+# STDIN: world
+# OUTPUT: 1: hello
+# OUTPUT: 2: world
+# OUTPUT: 行数 2
+# EXIT: 0
+# io.read_line は 1 行ずつ読む（改行は含まない。EOF で None）
+import io
+
+def main() -> int:
+    n: int = 0
+    line: str | None = io.read_line()
+    while line is not None:
+        n = n + 1
+        print(str(n) + ": " + line)
+        line = io.read_line()
+    print("行数 " + str(n))
+    return 0

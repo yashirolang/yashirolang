@@ -1,0 +1,7 @@
+# ERROR: 空のリストの要素型が決まりません
+# ERROR: = ヒント: 型注釈を書いてください（例: xs: list[int] = []）
+def take(xs: list[int]) -> int:
+    return len(xs)
+
+def main() -> int:
+    return take([])

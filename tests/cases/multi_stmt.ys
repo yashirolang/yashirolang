@@ -1,0 +1,6 @@
+# EXIT: 12
+# 複数の文。プログラムの値は main の return で決まる
+def main() -> int:
+    x: int = 1 + 2
+    x = 3 * 4
+    return x

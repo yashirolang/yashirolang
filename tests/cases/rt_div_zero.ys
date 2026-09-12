@@ -1,0 +1,5 @@
+# EXIT: 1
+# 実行時 0 除算。SIGFPE ではなくメッセージを出して終了コード 1
+def main() -> int:
+    z: int = 0
+    return 1 // z

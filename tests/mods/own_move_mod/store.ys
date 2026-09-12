@@ -1,0 +1,5 @@
+def keep(s: own str) -> int:
+    return len(s)
+
+def peek(s: str) -> int:
+    return len(s)

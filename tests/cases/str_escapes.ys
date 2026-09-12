@@ -1,0 +1,7 @@
+# OUTPUT: a	b
+# OUTPUT: c
+# OUTPUT: "q" \ 'x'
+def main() -> int:
+    print("a\tb\nc")
+    print("\"q\" \\ \'x\'")
+    return 0

@@ -1,0 +1,17 @@
+# OUTPUT: 42
+# 相互参照するクラス（パス 1a で名前だけ先に登録している効果）
+class Tree:
+    root: Leaf | None
+
+class Leaf:
+    v: int
+
+def main() -> int:
+    t: Tree = Tree()
+    l: Leaf = Leaf()
+    l.v = 42
+    t.root = l
+    r: Leaf | None = t.root
+    if r is not None:
+        print(r.v)
+    return 0

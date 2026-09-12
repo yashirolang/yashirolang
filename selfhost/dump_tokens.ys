@@ -1,0 +1,52 @@
+# dump_tokens — stage1 の字句解析器を動かす入口
+#
+#   ./build/stage1-lexer foo<拡張子>
+#
+# ★ C 版の `--dump-tokens` と**バイト単位で同じ出力**を目指します。
+#   C 版:  printf("%3d  %-8s  %d:%-3d  ", i, kind_name, line, col)
+import io
+import strings
+import sys
+import token
+import lexer
+import langinfo
+
+def format_token(i: int, t: rc[token.Token]) -> str:
+    parts: list[str] = []
+    parts.append(strings.lpad(str(i), 3))
+    parts.append("  ")
+    parts.append(strings.rpad(token.kind_name(t.kind), 8))
+    parts.append("  ")
+    parts.append(str(t.line) + ":" + strings.rpad(str(t.col), 3))
+    parts.append("  ")
+
+    # 仮想トークンと EOF は長さ 0 なので表示する実体がない
+    if t.kind == token.TK_INT:
+        parts.append(str(t.ival))
+    elif t.kind == token.TK_FLOAT:
+        # ★ 正規化した後の文字列を出します（ソースのままではありません）
+        parts.append(t.text)
+    elif t.kind == token.TK_EOF or t.kind == token.TK_NEWLINE:
+        parts.append("")
+    elif t.kind == token.TK_INDENT or t.kind == token.TK_DEDENT:
+        parts.append("")
+    else:
+        parts.append(t.raw)
+
+    return strings.join(parts, "")
+
+def main() -> int:
+    args: list[str] = sys.argv()
+    if len(args) < 2:
+        print("使い方: stage1-lexer <入力" + langinfo.ext() + ">")
+        return 1
+
+    path: str = args[1]
+    src: str = lexer.read_source(path)
+    toks: list[rc[token.Token]] = lexer.tokenize(path, src)
+
+    i: int = 0
+    while i < len(toks):
+        print(format_token(i, toks[i]))
+        i = i + 1
+    return 0

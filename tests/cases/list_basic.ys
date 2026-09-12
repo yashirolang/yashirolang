@@ -1,0 +1,9 @@
+# OUTPUT: 30
+# OUTPUT: 2
+def main() -> int:
+    xs: list[int] = []
+    xs.append(10)
+    xs.append(20)
+    print(xs[0] + xs[1])
+    print(len(xs))
+    return 0

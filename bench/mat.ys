@@ -1,0 +1,44 @@
+# 行列積 N³（二重リスト list[list[float]]）
+#
+# ★ 測るのは積だけです。行列の構築は t0 より前で済ませます
+#   （§3-B7 で「構築は 2 ms」と確かめましたが、そもそも混ぜません）。
+import time
+
+N: int = 512
+
+def make(seed: int) -> list[list[float]]:
+    m: list[list[float]] = []
+    s: int = seed
+    for i in range(N):
+        row: list[float] = []
+        for j in range(N):
+            s = (s * 1103515 + 12345) % 2147483648
+            row.append(float(s % 1000) / 1000.0)
+        m.append(row)
+    return m
+
+def main() -> int:
+    a: list[list[float]] = make(1)
+    b: list[list[float]] = make(7)
+
+    c: list[list[float]] = []
+    for i in range(N):
+        row: list[float] = []
+        for j in range(N):
+            row.append(0.0)
+        c.append(row)
+
+    t0: int = time.monotonic_ns()
+    for i in range(N):
+        for k in range(N):
+            aik: float = a[i][k]
+            for j in range(N):
+                c[i][j] = c[i][j] + aik * b[k][j]
+    ms: float = time.since_ms(t0)
+
+    t: float = 0.0
+    for i in range(N):
+        t = t + c[i][i]
+    print("RESULT " + str(t))
+    print("TIME_MS " + str(ms))
+    return 0

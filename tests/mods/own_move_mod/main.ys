@@ -1,0 +1,13 @@
+# STAGE0-ONLY: 所有権検査は C 版だけ
+# FLAGS: --deny-move
+# ERROR: error[E-MOVE-1]: 移動済みの値 'name' を使っています
+# ERROR: 'name' はここで移動しました
+# モジュール修飾の呼び出し（mod.f）でも own / 借用を見分ける。
+#         ★ mod.f(args) は self を取らないので、引数をずらしてはいけない
+import store
+
+def main() -> int:
+    name: str = "abc"
+    print(store.peek(name))
+    print(store.keep(name))
+    return len(name)

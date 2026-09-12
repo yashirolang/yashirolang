@@ -1,0 +1,6 @@
+# ERROR: 字下げされたブロックが必要です
+# ERROR: = ヒント: ':' の次の行は字下げしてください
+def main() -> int:
+    if True:
+    print(1)
+    return 0

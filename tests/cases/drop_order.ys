@@ -1,0 +1,21 @@
+# STAGE0-ONLY: 解放の挿入は C 版だけ
+# FLAGS: --drop
+# OUTPUT: main
+# OUTPUT: drop b
+# OUTPUT: drop a
+# EXIT: 0
+# スコープの終端で、宣言と逆順に解放する（仕様 v2 §6.1）
+class Res:
+    name: str
+
+    def init(self, name: own str) -> None:
+        self.name = name
+
+    def drop(self) -> None:
+        print("drop " + self.name)
+
+def main() -> int:
+    a: Res = Res("a")
+    b: Res = Res("b")
+    print("main")
+    return 0

@@ -1,0 +1,24 @@
+# OUTPUT: 20000
+# OUTPUT: ok
+# EXIT: 0
+# split / substr が O(n²) でないこと
+#   ⚠️ substr が 1 文字ずつ連結していたころは、20000 語の分割に
+#     **7.2 秒**かかっていました（スライスに直して 0.00 秒）。
+#   ★ このテストは「遅くなったら気づく」ための番人です。
+#     O(n²) に戻ると、ここで目に見えて時間がかかります。
+import strings
+import linalg
+
+def main() -> int:
+    parts: list[str] = []
+    i: int = 0
+    while i < 20000:
+        parts.append("w" + str(i))
+        i = i + 1
+    text: str = strings.join(parts, " ")
+
+    got: list[str] = strings.split(text, " ")
+    print(len(got))
+    if got[0] == "w0" and got[19999] == "w19999" and strings.substr(text, 0, 2) == "w0":
+        print("ok")
+    return 0

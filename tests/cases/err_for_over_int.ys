@@ -1,0 +1,6 @@
+# ERROR: len は 'int' 型を受け取れません
+# 数値は回せない（len が使えないため）
+def main() -> int:
+    for x in 42:
+        print(x)
+    return 0

@@ -1,0 +1,603 @@
+# math — 数学関数（Python の math 相当）
+#
+# ★ **すべて本言語で書いています。** libm は呼びません。
+#
+#   🤔 なぜ自前で書くのか
+#     ランタイム（runtime/core.c）は libc に依存しない、という約束があります
+#     （docs/design/os-support.md）。libm を呼ぶと、ベアメタルで動かなくなります。
+#     float が入ったので、数値計算そのものを本言語で書けます。
+#
+# ⚠️ **精度について。** 目標は「倍精度の有効桁のうち下位 1〜2 桁を除いて合う」
+#   ことです。libm のような最終ビットまでの正確さ（correctly-rounded）は
+#   目指していません。tests/cases/lib_math_* が libm の値と突き合わせています。
+#
+# ⚠️ 引数が定義域の外なら **NaN を返します**（panic はしません）。
+#   sqrt(-1) は NaN、log(0) は -inf、log(-1) は NaN です。
+
+# ── 定数 ────────────────────────────────────────────────────
+#
+# ⚠️ グローバル変数の初期化式はリテラルだけなので、関数で持ちます
+#   （言語仕様 6.2）。
+
+def pi() -> float:
+    return 3.141592653589793
+
+def tau() -> float:
+    return 6.283185307179586
+
+def e() -> float:
+    return 2.718281828459045
+
+# 自然対数の 2（内部でも使う）
+def ln2() -> float:
+    return 0.6931471805599453
+
+def ln10() -> float:
+    return 2.302585092994046
+
+# ★ 無限大は「倍精度で表せる最大値をさらに大きくする」ことで作ります。
+#   1.0e400 とは書けません（LLVM のリテラルとして表せないため）。
+def inf() -> float:
+    return 1.0e308 * 10.0
+
+def nan() -> float:
+    return inf() - inf()
+
+
+# ── 判定 ────────────────────────────────────────────────────
+
+# ★ NaN は「自分自身と等しくない」唯一の値です（IEEE 754）。
+def isnan(x: float) -> bool:
+    return x != x
+
+def isinf(x: float) -> bool:
+    return x == inf() or x == -inf()
+
+def isfinite(x: float) -> bool:
+    return not isnan(x) and not isinf(x)
+
+
+# ── 符号と絶対値 ────────────────────────────────────────────
+
+def fabs(x: float) -> float:
+    if x < 0.0:
+        return -x
+    return x
+
+# y の符号を x の大きさに付ける
+def copysign(x: float, y: float) -> float:
+    if y < 0.0:
+        return -fabs(x)
+    return fabs(x)
+
+# 符号を -1.0 / 0.0 / 1.0 で返す（Python の math には無いが頻出）
+def sign(x: float) -> float:
+    if x > 0.0:
+        return 1.0
+    if x < 0.0:
+        return -1.0
+    return x       # 0.0 と NaN はそのまま
+
+
+# ── 丸め ────────────────────────────────────────────────────
+#
+# ⚠️ int() は 64 ビット整数への変換なので、それより大きい値には使えません
+#   （変換結果が未定義になります）。大きい値は既に整数なので、そのまま返します。
+
+def trunc(x: float) -> float:
+    if isnan(x) or isinf(x):
+        return x
+    if fabs(x) >= 9.0e18:
+        return x
+    return float(int(x))
+
+def floor(x: float) -> float:
+    t: float = trunc(x)
+    if x < 0.0 and t != x:
+        return t - 1.0
+    return t
+
+def ceil(x: float) -> float:
+    t: float = trunc(x)
+    if x > 0.0 and t != x:
+        return t + 1.0
+    return t
+
+# 四捨五入（0 から遠いほうへ。Python の round は偶数丸めだが、こちらは
+# 「.5 は 0 から遠いほうへ」という C の round と同じ規則にします）
+def round(x: float) -> float:
+    if isnan(x) or isinf(x):
+        return x
+    if x >= 0.0:
+        return floor(x + 0.5)
+    return ceil(x - 0.5)
+
+# 小数点以下 n 桁に丸める
+#
+# ★ **`str(float)` が最短の往復表記になった**ので、丸めたいときは
+#   自分で丸めます。表示のためだけに桁を落とすのがふつうの使い方です。
+#
+#     print(str(math.round_to(2.0 ** 0.5, 6)))   # → 1.414214
+#
+# ⚠️ 2 進で表せない値は「いちばん近い double」に丸まります。
+#   `round_to(0.1 + 0.2, 6)` は `0.3` と表示されますが、値そのものは
+#   0.3 に最も近い double です（0.1 + 0.2 とは別の値）。
+# ⚠️ n が大きすぎる（10^n があふれる）ときは、そのまま返します。
+def round_to(x: float, n: int) -> float:
+    if isnan(x) or isinf(x):
+        return x
+    if n < 0 or n > 17:
+        return x
+    p: float = 1.0
+    i: int = 0
+    while i < n:
+        p = p * 10.0
+        i = i + 1
+    return round(x * p) / p
+
+# x を y で割った余り（符号は x に従う）
+def fmod(x: float, y: float) -> float:
+    if y == 0.0 or isnan(x) or isnan(y) or isinf(x):
+        return nan()
+    if isinf(y):
+        return x
+    return x - y * trunc(x / y)
+
+
+# ── 冪根 ────────────────────────────────────────────────────
+
+# 平方根（ニュートン法）
+#
+# ★ x の平方根は f(t) = t² - x の零点なので、
+#     t ← (t + x/t) / 2
+#   を繰り返します。**1 回で有効桁がおよそ倍**になるので、
+#   よい初期値から始めれば数回で倍精度に届きます。
+def sqrt(x: float) -> float:
+    if isnan(x) or x < 0.0:
+        return nan()
+    if x == 0.0 or isinf(x):
+        return x
+
+    # 初期値：2 の冪で x を [1, 4) に寄せてから 1.0 で始める。
+    # ⚠️ ビット演算で指数部を取り出せない（float のビット表現に触れない）ので、
+    #    2 の冪の掛け算・割り算で寄せます。
+    m: float = x
+    k: int = 0
+    while m >= 4.0:
+        m = m / 4.0
+        k = k + 1
+    while m < 1.0:
+        m = m * 4.0
+        k = k - 1
+
+    t: float = (m + 1.0) / 2.0        # m は [1,4) なので、これで十分近い
+    i: int = 0
+    while i < 8:
+        t = (t + m / t) / 2.0
+        i = i + 1
+
+    # ⚠️ x = m·4^k と分けたので、√x = √m · **2^k** です（4^k ではありません）
+    return t * ldexp(1.0, k)
+
+# 立方根（符号を保つ）
+def cbrt(x: float) -> float:
+    if x == 0.0 or isnan(x) or isinf(x):
+        return x
+    s: float = 1.0
+    a: float = x
+    if a < 0.0:
+        s = -1.0
+        a = -a
+    return s * exp(log(a) / 3.0)
+
+# x · 2^n（指数部の操作。掛け算の繰り返しで作る）
+def ldexp(x: float, n: int) -> float:
+    r: float = x
+    i: int = 0
+    if n >= 0:
+        while i < n:
+            r = r * 2.0
+            i = i + 1
+        return r
+    while i < -n:
+        r = r / 2.0
+        i = i + 1
+    return r
+
+
+# ── 指数と対数 ──────────────────────────────────────────────
+
+# e^x
+#
+# ★ **引数の縮小**が肝です。テイラー展開は 0 の近くでしか速く収束しないので、
+#     x = k·ln2 + r   （|r| ≤ ln2/2 ≈ 0.347）
+#   と分けて、e^x = 2^k · e^r として e^r だけを級数で求めます。
+def exp(x: float) -> float:
+    if isnan(x):
+        return x
+    if x > 710.0:
+        return inf()      # これ以上は倍精度で表せない
+    if x < -746.0:
+        return 0.0
+
+    k: int = int(round(x / ln2()))
+    r: float = x - float(k) * ln2()
+
+    # e^r = Σ rⁿ/n!（|r| ≤ 0.347 なので 14 項で倍精度に届く）
+    term: float = 1.0
+    s: float = 1.0
+    n: int = 1
+    while n <= 14:
+        term = term * r / float(n)
+        s = s + term
+        n = n + 1
+
+    return ldexp(s, k)
+
+# 自然対数
+#
+# ★ こちらも引数の縮小から。x = m · 2^k（m は [1,2)）と分けて、
+#     log(x) = k·ln2 + log(m)
+#   とします。log(m) には **atanh の級数**を使います。
+#     log(m) = 2·atanh(z),  z = (m-1)/(m+1)
+#   z は高々 1/3 なので、奇数項だけの級数が速く収束します。
+def log(x: float) -> float:
+    if isnan(x) or x < 0.0:
+        return nan()
+    if x == 0.0:
+        return -inf()
+    if isinf(x):
+        return x
+
+    m: float = x
+    k: int = 0
+    while m >= 2.0:
+        m = m / 2.0
+        k = k + 1
+    while m < 1.0:
+        m = m * 2.0
+        k = k - 1
+
+    z: float = (m - 1.0) / (m + 1.0)
+    z2: float = z * z
+    term: float = z
+    s: float = z
+    n: int = 3
+    while n <= 33:
+        term = term * z2
+        s = s + term / float(n)
+        n = n + 2
+
+    return 2.0 * s + float(k) * ln2()
+
+def log2(x: float) -> float:
+    return log(x) / ln2()
+
+def log10(x: float) -> float:
+    return log(x) / ln10()
+
+# log(1 + x)。x が 0 に近いとき log(1.0 + x) より精度がよい
+def log1p(x: float) -> float:
+    if x == 0.0:
+        return x
+    u: float = 1.0 + x
+    if u == 1.0:
+        return x          # x が小さすぎて 1.0 に埋もれた
+    return log(u) * x / (u - 1.0)
+
+# x^y
+#
+# ⚠️ 整数の指数は **繰り返し二乗法**で計算します。x < 0 のときは
+#   exp(y·log(x)) が使えない（log(負) が NaN）ためで、精度の面でも有利です。
+def pow(x: float, y: float) -> float:
+    if y == 0.0:
+        return 1.0
+    if isnan(x) or isnan(y):
+        return nan()
+    if x == 1.0:
+        return 1.0
+
+    # 指数が整数なら繰り返し二乗法
+    if y == trunc(y) and fabs(y) <= 1024.0:
+        n: int = int(fabs(y))
+        base: float = x
+        r: float = 1.0
+        while n > 0:
+            if n % 2 == 1:
+                r = r * base
+            base = base * base
+            n = n // 2
+        if y < 0.0:
+            return 1.0 / r
+        return r
+
+    if x < 0.0:
+        return nan()      # 負の数の非整数乗は実数にならない
+    if x == 0.0:
+        if y > 0.0:
+            return 0.0
+        return inf()
+    return exp(y * log(x))
+
+# √(x² + y²)。途中で溢れないように大きいほうで括る
+def hypot(x: float, y: float) -> float:
+    a: float = fabs(x)
+    b: float = fabs(y)
+    if a < b:
+        t: float = a
+        a = b
+        b = t
+    if a == 0.0:
+        return 0.0
+    r: float = b / a
+    return a * sqrt(1.0 + r * r)
+
+
+# ── 三角関数 ────────────────────────────────────────────────
+
+# sin
+#
+# ★ ① 2π で折り返す → ② 象限に分ける → ③ [-π/4, π/4] でテイラー展開
+#   という 3 段構えです。級数は 0 の近くでしか使えないので、
+#   そこまで引数を持ってくるのが仕事の大半になります。
+def sin(x: float) -> float:
+    if isnan(x) or isinf(x):
+        return nan()
+
+    # ① 2π で折り返す
+    a: float = fmod(x, tau())
+    if a < 0.0:
+        a = a + tau()
+
+    # ② 象限（π/2 ごと）に分ける
+    #    sin は π/2 ずつずらすと cos → -sin → -cos と巡ります
+    q: int = int(a / (pi() / 2.0))
+    r: float = a - float(q) * (pi() / 2.0)
+
+    if q == 0:
+        return sin_small(r)
+    if q == 1:
+        return cos_small(r)
+    if q == 2:
+        return -sin_small(r)
+    return -cos_small(r)
+
+def cos(x: float) -> float:
+    return sin(x + pi() / 2.0)
+
+def tan(x: float) -> float:
+    c: float = cos(x)
+    if c == 0.0:
+        return nan()
+    return sin(x) / c
+
+# [-π/4, π/4] 相当での sin（Σ (-1)ⁿ x^(2n+1) / (2n+1)!）
+def sin_small(x: float) -> float:
+    term: float = x
+    s: float = x
+    n: int = 1
+    while n <= 12:
+        d: float = float(2 * n) * float(2 * n + 1)
+        term = -term * x * x / d
+        s = s + term
+        n = n + 1
+    return s
+
+# 同じく cos（Σ (-1)ⁿ x^(2n) / (2n)!）
+def cos_small(x: float) -> float:
+    term: float = 1.0
+    s: float = 1.0
+    n: int = 1
+    while n <= 12:
+        d: float = float(2 * n - 1) * float(2 * n)
+        term = -term * x * x / d
+        s = s + term
+        n = n + 1
+    return s
+
+
+# ── 逆三角関数 ──────────────────────────────────────────────
+
+# arctan
+#
+# ★ 級数は |x| が 1 に近いと収束が遅いので、2 段で縮めます。
+#     |x| > 1 なら atan(x) = π/2 - atan(1/x)
+#     さらに atan(x) = 2·atan( x / (1 + √(1+x²)) ) を 2 回使って |x| を縮める
+def atan(x: float) -> float:
+    if isnan(x):
+        return x
+    if isinf(x):
+        if x > 0.0:
+            return pi() / 2.0
+        return -pi() / 2.0
+
+    s: float = 1.0
+    a: float = x
+    if a < 0.0:
+        s = -1.0
+        a = -a
+
+    flip: bool = False
+    if a > 1.0:
+        a = 1.0 / a
+        flip = True
+
+    # 半角を 2 回。|a| ≤ 1 が |a| ≤ 0.132 くらいまで縮む
+    k: int = 0
+    while k < 2:
+        a = a / (1.0 + sqrt(1.0 + a * a))
+        k = k + 1
+
+    # Σ (-1)ⁿ a^(2n+1) / (2n+1)
+    a2: float = a * a
+    term: float = a
+    r: float = a
+    n: int = 3
+    while n <= 25:
+        term = -term * a2
+        r = r + term / float(n)
+        n = n + 2
+    r = r * 4.0                 # 半角 2 回ぶんを戻す
+
+    if flip:
+        r = pi() / 2.0 - r
+    return s * r
+
+# 2 引数版。象限を正しく返す（x が 0 でも使える）
+def atan2(y: float, x: float) -> float:
+    if x > 0.0:
+        return atan(y / x)
+    if x < 0.0:
+        if y >= 0.0:
+            return atan(y / x) + pi()
+        return atan(y / x) - pi()
+    # x == 0
+    if y > 0.0:
+        return pi() / 2.0
+    if y < 0.0:
+        return -pi() / 2.0
+    return 0.0
+
+def asin(x: float) -> float:
+    if isnan(x) or x < -1.0 or x > 1.0:
+        return nan()
+    if x == 1.0:
+        return pi() / 2.0
+    if x == -1.0:
+        return -pi() / 2.0
+    return atan(x / sqrt(1.0 - x * x))
+
+def acos(x: float) -> float:
+    if isnan(x) or x < -1.0 or x > 1.0:
+        return nan()
+    return pi() / 2.0 - asin(x)
+
+
+# ── 双曲線関数 ──────────────────────────────────────────────
+
+def sinh(x: float) -> float:
+    if x == 0.0 or isnan(x) or isinf(x):
+        return x
+    return (exp(x) - exp(-x)) / 2.0
+
+def cosh(x: float) -> float:
+    if isnan(x):
+        return x
+    return (exp(x) + exp(-x)) / 2.0
+
+def tanh(x: float) -> float:
+    if x == 0.0 or isnan(x):
+        return x
+    # ⚠️ 大きい |x| で exp(x) が溢れるので、先に打ち切ります
+    if x > 20.0:
+        return 1.0
+    if x < -20.0:
+        return -1.0
+    a: float = exp(2.0 * x)
+    return (a - 1.0) / (a + 1.0)
+
+def asinh(x: float) -> float:
+    if x == 0.0 or isnan(x) or isinf(x):
+        return x
+    return log(x + sqrt(x * x + 1.0))
+
+def acosh(x: float) -> float:
+    if isnan(x) or x < 1.0:
+        return nan()
+    return log(x + sqrt(x * x - 1.0))
+
+def atanh(x: float) -> float:
+    if isnan(x) or x < -1.0 or x > 1.0:
+        return nan()
+    if x == 1.0:
+        return inf()
+    if x == -1.0:
+        return -inf()
+    return log((1.0 + x) / (1.0 - x)) / 2.0
+
+
+# ── 角度 ────────────────────────────────────────────────────
+
+def degrees(rad: float) -> float:
+    return rad * 180.0 / pi()
+
+def radians(deg: float) -> float:
+    return deg * pi() / 180.0
+
+
+# ── 整数の関数 ──────────────────────────────────────────────
+
+def iabs(n: int) -> int:
+    if n < 0:
+        return -n
+    return n
+
+# 最大公約数（ユークリッドの互除法）
+def gcd(a: int, b: int) -> int:
+    x: int = iabs(a)
+    y: int = iabs(b)
+    while y != 0:
+        t: int = y
+        y = x % y
+        x = t
+    return x
+
+# 最小公倍数
+def lcm(a: int, b: int) -> int:
+    if a == 0 or b == 0:
+        return 0
+    g: int = gcd(a, b)
+    return iabs(a // g * b)
+
+# 階乗。⚠️ 21! は 64 ビットに入らないので、20 までしか受け付けません
+def factorial(n: int) -> int:
+    if n < 0:
+        panic("math.factorial: 負の数の階乗はありません")
+    if n > 20:
+        panic("math.factorial: 21 以上は int (64bit) に収まりません")
+    r: int = 1
+    i: int = 2
+    while i <= n:
+        r = r * i
+        i = i + 1
+    return r
+
+def imin(a: int, b: int) -> int:
+    if a < b:
+        return a
+    return b
+
+def imax(a: int, b: int) -> int:
+    if a > b:
+        return a
+    return b
+
+def fmin(a: float, b: float) -> float:
+    if isnan(a):
+        return b
+    if isnan(b):
+        return a
+    if a < b:
+        return a
+    return b
+
+def fmax(a: float, b: float) -> float:
+    if isnan(a):
+        return b
+    if isnan(b):
+        return a
+    if a > b:
+        return a
+    return b
+
+# 2 つの値がほぼ等しいか（Python の math.isclose 相当）
+#
+# ★ 浮動小数点数を == で比べてはいけない、という原則の受け皿です。
+#   相対誤差と絶対誤差の**どちらかが**収まっていれば True。
+def isclose(a: float, b: float, rel: float, abs_tol: float) -> bool:
+    if isnan(a) or isnan(b):
+        return False
+    if a == b:
+        return True
+    d: float = fabs(a - b)
+    return d <= fabs(rel) * fmax(fabs(a), fabs(b)) or d <= fabs(abs_tol)

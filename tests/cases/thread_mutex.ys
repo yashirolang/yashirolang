@@ -1,0 +1,25 @@
+# OUTPUT: 1
+# OUTPUT: 2
+# OUTPUT: 3
+# EXIT: 0
+# mutex[T]（A-18）
+#
+# ★ 中身に触るには**必ずロックを通します**。生の lock / unlock は
+#   出していないので、解き忘れが起きえません（設計文書 §4）。
+
+class Counter:
+    n: int
+
+    def init(mut self, n: int) -> None:
+        self.n = n
+
+def bump(c: mut Counter) -> int:
+    c.n = c.n + 1
+    return c.n
+
+def main() -> int:
+    m: mutex[Counter] = mutex(Counter(0))
+    print(m.lock(bump))
+    print(m.lock(bump))
+    print(m.lock(bump))
+    return 0

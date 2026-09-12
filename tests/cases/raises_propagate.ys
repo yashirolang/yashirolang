@@ -1,0 +1,30 @@
+# OUTPUT: 8
+# OUTPUT: io: 空のパス
+# EXIT: 0
+# raises 関数の中から raises 関数を呼ぶと、失敗は自動で伝播する
+#         （Rust の '?' に相当。書くものは無い）
+class IOError:
+    message: str
+
+    def init(self, message: own str) -> None:
+        self.message = message
+
+def read(path: str) -> str raises IOError:
+    if len(path) == 0:
+        raise IOError("空のパス")
+    return "data:" + path
+
+def load(path: str) -> int raises IOError:
+    text: str = read(path)
+    return len(text)
+
+def main() -> int:
+    try:
+        print(str(load("abc")))
+    except IOError as e:
+        print("io: " + e.message)
+    try:
+        print(str(load("")))
+    except IOError as e2:
+        print("io: " + e2.message)
+    return 0

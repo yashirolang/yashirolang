@@ -1,0 +1,50 @@
+# OUTPUT: 42
+# OUTPUT: 7
+# OUTPUT: hello
+# OUTPUT: 3
+# OUTPUT: age = 30
+# OUTPUT: 9
+# EXIT: 0
+# ジェネリクス（単相化）
+#   ★ Box[int] と Box[str] は **別々のクラス**になります（型消去ではない）。
+#     生成する IR を見ると %Box$int.type = { i64 } と
+#     %Box$str.type = { ptr } が別々に出ています。
+class Box[T]:
+    v: T
+
+    def init(self, v: own T) -> None:
+        self.v = v
+
+    def get(self) -> T:
+        return self.v
+
+    def set(mut self, v: own T) -> None:
+        self.v = v
+
+class Pair[A, B]:
+    first: A
+    second: B
+
+    def init(self, a: own A, b: own B) -> None:
+        self.first = a
+        self.second = b
+
+def main() -> int:
+    bi: Box[int] = Box(42)
+    print(bi.get())
+    bi.set(7)
+    print(bi.get())
+
+    bs: Box[str] = Box("hello")
+    print(bs.get())
+
+    bl: Box[list[int]] = Box([1, 2, 3])
+    print(len(bl.get()))
+
+    p: Pair[str, int] = Pair("age", 30)
+    print(f"{p.first} = {p.second}")
+
+    # 入れ子
+    bb: Box[Box[int]] = Box(Box(9))
+    print(bb.get().get())
+    return 0

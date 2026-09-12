@@ -1,0 +1,15 @@
+# OUTPUT: True
+# OUTPUT: ab
+# OUTPUT: 2
+# str と list[T] も nullable にできる（参照型だから）
+def main() -> int:
+    s: str | None = None
+    print(s is None)
+    s = "ab"
+    if s is not None:
+        print(s)
+
+    xs: list[int] | None = [1, 2]
+    if xs is not None:
+        print(len(xs))
+    return 0

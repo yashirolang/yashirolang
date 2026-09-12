@@ -1,0 +1,32 @@
+# ERROR: E-SEND-2
+# ERROR: は中に rc[Node2] を持つので
+# STAGE0-ONLY: 所有権検査は C 版にしかありません
+# STAGE1-SKIP: 所有権検査（E-SEND-*）は C 版にしかないので、IR を比べられません
+# own で渡す値の**中**に rc があっても止めます（A-18）
+#
+# ⚠️ **これが無いと検査に穴が開きます。** `own Job` を渡すのは安全に見えますが、
+#    Job のフィールドに rc[Node2] があれば、**その数え札は 2 つのスレッドから
+#    増減されます**（渡した側が同じ節点への rc を別に持っていることがある）。
+#    渡すものの型だけを見て「クラスだから安全」とは言えません。
+#
+# ★ 再帰的なクラス（Node が Node を持つ）でも止まらないよう、
+#   たどったクラスは覚えながら探します。
+
+class Node2:
+    n: int
+    def init(mut self, n: int) -> None:
+        self.n = n
+
+class Job:
+    child: rc[Node2]        # ⚠️ ここに rc が隠れている
+    def init(mut self, c: rc[Node2]) -> None:
+        self.child = c
+
+def work(j: own Job) -> int:
+    return j.child.n
+
+def main() -> int:
+    r: rc[Node2] = rc(Node2(1))
+    j: Job = Job(r)
+    t: Thread[int] = spawn(work, j)
+    return t.join() + r.n     # ⚠️ 渡した先と main が同じ節点を数えている

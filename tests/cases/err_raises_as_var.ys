@@ -1,0 +1,6 @@
+# STAGE0-ONLY: raises / try / except は C 版だけ
+# ERROR: 'raises' は予約語です
+# raises / unsafe / pragma も予約済み（使うのはのちに）
+def main() -> int:
+    raises: int = 1
+    return raises

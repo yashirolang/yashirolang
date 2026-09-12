@@ -1,0 +1,6 @@
+# ERROR: ループ変数を 2 つ書けるのは enumerate だけです
+# タプルは無いので、2 変数は enumerate のときだけ
+def main() -> int:
+    for i, x in [1, 2]:
+        print(i)
+    return 0

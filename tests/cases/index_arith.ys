@@ -1,0 +1,27 @@
+# OUTPUT: 30
+# OUTPUT: 30
+# OUTPUT: 99
+# OUTPUT: 10
+# OUTPUT: 4
+# OUTPUT: 4
+# EXIT: 0
+# 添字の中の算術は、あふれ検査を相乗りさせても答えが変わらない
+#   ⚠️ 負の添字・入れ子の添字・単項マイナスまで通ること
+def main() -> int:
+    xs: list[int] = [10, 20, 30]
+    i: int = 1
+    print(str(xs[i + 1]))
+    print(str(xs[-1]))
+    xs[i * 2] = 99
+    print(str(xs[2]))
+    print(str(xs[len(xs) - 3]))
+
+    # 入れ子（内側の添字も自分の旗を持つ）
+    idx: list[int] = [2, 1, 0]
+    ys: list[int] = [4, 5, 6]
+    print(str(ys[idx[i * 2]]))
+
+    # 単項マイナス（-1 は末尾から）
+    n: int = 1
+    print(str(ys[-n] - 2))
+    return 0

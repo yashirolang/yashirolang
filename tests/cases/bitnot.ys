@@ -1,0 +1,4 @@
+# EXIT: 5
+# ~x = -x-1 なので ~-6 = 5
+def main() -> int:
+    return ~-6

@@ -1,0 +1,6 @@
+def f() -> int:
+    return 2
+
+class Box:
+    v: int
+    w: int

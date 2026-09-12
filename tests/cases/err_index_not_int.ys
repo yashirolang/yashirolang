@@ -1,0 +1,4 @@
+# ERROR: 添字は int でなければなりません
+def main() -> int:
+    xs: list[int] = [1]
+    return xs["0"]

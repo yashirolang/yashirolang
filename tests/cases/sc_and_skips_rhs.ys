@@ -1,0 +1,7 @@
+# EXIT: 0
+# 短絡評価が効いていなければ 1 // 0 で SIGFPE になる
+def main() -> int:
+    z: int = 0
+    if False and (1 // z) > 0:
+        return 1
+    return 0

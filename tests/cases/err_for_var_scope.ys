@@ -1,0 +1,7 @@
+# ERROR: 未定義の名前 'x' です
+# ループ変数は for のスコープに閉じている（言語仕様 5.5）
+def main() -> int:
+    for x in [1, 2]:
+        print(x)
+    print(x)
+    return 0

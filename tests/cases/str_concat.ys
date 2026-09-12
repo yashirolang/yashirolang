@@ -1,0 +1,5 @@
+# OUTPUT: hello, notebook
+def main() -> int:
+    name: str = "notebook"
+    print("hello, " + name)
+    return 0

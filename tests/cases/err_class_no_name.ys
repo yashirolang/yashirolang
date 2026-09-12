@@ -1,0 +1,6 @@
+# ERROR: クラス名が必要です
+class:
+    x: int
+
+def main() -> int:
+    return 0

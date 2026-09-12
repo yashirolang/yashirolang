@@ -1,0 +1,10 @@
+# ERROR: 型 'Box | None' の値にはメソッドがありません
+class Box:
+    v: int
+
+    def get(self) -> int:
+        return self.v
+
+def main() -> int:
+    b: Box | None = None
+    return b.get()

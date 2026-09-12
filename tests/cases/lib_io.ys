@@ -1,0 +1,17 @@
+# OUTPUT: True
+# OUTPUT: True
+# OUTPUT: False
+# OUTPUT: 3
+# ファイル入出力（C ランタイムを io が薄く包んでいる）
+import io
+import strings
+
+def main() -> int:
+    # ⚠️ 絶対パス（/tmp）は Windows には無いので、作業ディレクトリに作ります
+    path: str = "lib_io_test.txt"
+    io.write_file(path, "a,b,c")
+    print(io.read_file(path) == "a,b,c")
+    print(io.exists(path))
+    print(io.exists("no_such_file_12345.txt"))
+    print(len(strings.split(io.read_file(path), ",")))
+    return 0

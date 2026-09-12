@@ -1,0 +1,6 @@
+# OUTPUT: 99
+def main() -> int:
+    xs: list[int] = [1, 2]
+    xs[0] = 99
+    print(xs[0])
+    return 0

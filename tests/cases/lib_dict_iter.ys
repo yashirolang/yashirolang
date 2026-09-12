@@ -1,0 +1,20 @@
+# OUTPUT: a -> 1
+# OUTPUT: b -> 2
+# OUTPUT: 2
+# EXIT: 0
+# 辞書を順に見る（key_at / val_at）
+#   ⚠️ items() のように「組のリスト」を返すことはできません。
+#     中身は表が持っているので、組にして返すと借りたものを保存する
+#     ことになります（E-BORROW-1 / E-BORROW-3）。
+import dict
+
+def main() -> int:
+    d: dict.Dict[str, int] = dict.Dict()
+    d.set("a", 1)
+    d.set("b", 2)
+    i: int = 0
+    while i < d.len():
+        print(f"{d.key_at(i)} -> {d.val_at(i)}")
+        i = i + 1
+    print(d.len())
+    return 0

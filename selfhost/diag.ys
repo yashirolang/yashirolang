@@ -1,0 +1,325 @@
+# diag — 診断メッセージの整形と出力
+#
+# ★ src/diag.c の移植です。**出力をバイト単位で C 版に合わせます。**
+#   罫線の幅・キャレットの位置・note の書式まで一致させることで、
+#   「stage1 と C 版の区別が付かない」状態を目指します。
+#
+# 出力例:
+#
+#   error: 閉じ括弧 ')' がありません
+#     --> t:3:1
+#      |
+#    3 |
+#      | ^ ここに ')' が必要です
+#      |
+#   note: 対応する '(' はここです
+#     --> t:2:1
+#      |
+#    2 | (1 + 2
+#      | ^
+#      |
+#      = ヒント: 括弧の対応を確認してください
+import io
+import strings
+import token
+
+
+# ソース上の 1 箇所と、そこに付ける短い説明
+class Label:
+    tok: rc[token.Token] | None
+    text: str
+
+    def init(self, tok: rc[token.Token] | None, text: str) -> None:
+        self.tok = tok
+        self.text = copy(text)
+
+
+# 1 件の診断（C 版の Diag と同じ形）
+class Diag:
+    severity: str
+    # 診断コード（"E-RAISE-5"）。空なら出力しない（ C 版に足したもの）
+    code: str
+    message: str
+    primary: Label | None
+    related: Label | None
+    hint: str
+
+    def init(self, message: own str) -> None:
+        self.severity = "error"
+        self.code = ""
+        self.message = message
+        self.hint = ""
+
+
+# ── UTF-8 と表示幅 ──────────────────────────────────────────
+#
+# ★ なぜこれが必要か（C 版と同じ理由）
+#   Token.col は「行頭からのバイト数」です。そのまま人間向けに使うと
+#   日本語を含む行で破綻します。報告する桁は**文字数**、キャレットの
+#   字下げは**表示幅**（全角は 2）と、2 種類の数え方を使い分けます。
+
+def is_wide_cp(cp: int) -> bool:
+    if cp >= 4352 and cp <= 4447:
+        return True
+    if cp >= 11904 and cp <= 12350:
+        return True
+    if cp >= 12353 and cp <= 13311:
+        return True
+    if cp >= 13312 and cp <= 19903:
+        return True
+    if cp >= 19968 and cp <= 40959:
+        return True
+    if cp >= 40960 and cp <= 42191:
+        return True
+    if cp >= 44032 and cp <= 55203:
+        return True
+    if cp >= 63744 and cp <= 64255:
+        return True
+    if cp >= 65040 and cp <= 65049:
+        return True
+    if cp >= 65072 and cp <= 65135:
+        return True
+    if cp >= 65280 and cp <= 65376:
+        return True
+    if cp >= 65504 and cp <= 65510:
+        return True
+    return False
+
+# s の i バイト目から 1 文字ぶんのバイト長を返す
+#
+# ⚠️ 不正なバイト列でも必ず 1 以上を返す（さもないと無限ループになる）
+def utf8_len(s: str, i: int) -> int:
+    c: int = strings.byte_at(s, i)
+    if c < 128:
+        return 1
+    if c >= 194 and c <= 223 and cont_at(s, i + 1):
+        return 2
+    if c >= 224 and c <= 239 and cont_at(s, i + 1) and cont_at(s, i + 2):
+        return 3
+    if c >= 240 and c <= 244 and cont_at(s, i + 1):
+        return 4
+    return 1
+
+# s の i バイト目から 1 文字ぶんの表示幅（全角なら 2）
+def utf8_width(s: str, i: int) -> int:
+    c: int = strings.byte_at(s, i)
+    if c < 128:
+        return 1
+    if c >= 194 and c <= 223 and cont_at(s, i + 1):
+        return 1
+    if c >= 224 and c <= 239 and cont_at(s, i + 1) and cont_at(s, i + 2):
+        cp: int = (c - 224) * 4096
+        cp = cp + (strings.byte_at(s, i + 1) - 128) * 64
+        cp = cp + (strings.byte_at(s, i + 2) - 128)
+        if is_wide_cp(cp):
+            return 2
+        return 1
+    if c >= 240 and c <= 244 and cont_at(s, i + 1):
+        return 2
+    return 1
+
+# i バイト目が継続バイト（0b10xxxxxx）か
+def cont_at(s: str, i: int) -> bool:
+    if i >= len(s):
+        return False
+    b: int = strings.byte_at(s, i)
+    return b >= 128 and b < 192
+
+
+# ── ソース抜粋の描画 ────────────────────────────────────────
+
+# その行の長さ（改行まで）をバイト数で数える
+def line_length(src: str, line_start: int) -> int:
+    n: int = 0
+    i: int = line_start
+    while i < len(src):
+        b: int = strings.byte_at(src, i)
+        if b == 10:
+            return n
+        n = n + 1
+        i = i + 1
+    return n
+
+# 行頭から byte_off バイト目までに何文字あるか（1 起算の桁番号）
+def char_column(src: str, line_start: int, byte_off: int) -> int:
+    col: int = 1
+    i: int = 0
+    while i < byte_off:
+        i = i + utf8_len(src, line_start + i)
+        col = col + 1
+    return col
+
+def num_width(n: int) -> int:
+    w: int = 1
+    v: int = n
+    while v >= 10:
+        v = v // 10
+        w = w + 1
+    return w
+
+def spaces(n: int) -> str:
+    return strings.repeat(" ", n)
+
+# 1 箇所ぶんのブロックを描画する（gw は行番号欄の幅）
+def render_block(lb: Label, gw: int) -> str:
+    t: rc[token.Token] | None = lb.tok
+    if t is None:
+        return ""
+
+    src: str = t.src.text
+    ls: int = t.line_start
+    parts: list[str] = []
+
+    n: int = line_length(src, ls)
+
+    # byte 単位の col を、行内に収まる範囲に丸めておく
+    off: int = t.col - 1
+    if off > n:
+        off = n
+    if off < 0:
+        off = 0
+
+    # ★ 報告する桁番号は「文字数」で出す（バイト数ではなく）
+    parts.append(spaces(gw + 1) + "--> " + t.src.file + ":" + str(t.line) + ":" +
+                 str(char_column(src, ls, off)) + "\n")
+    parts.append(spaces(gw + 1) + " |\n")
+
+    # ソース行そのもの
+    parts.append(strings.lpad(str(t.line), gw + 1) + " | " +
+                 strings.substr(src, ls, n) + "\n")
+
+    # 下線の行
+    parts.append(spaces(gw + 1) + " | ")
+
+    # ★ キャレットの手前は「表示幅」ぶんの空白を送る（全角は 2 個）
+    # ⚠️ タブはタブで送ると、端末上の桁が元の行とそろう
+    i: int = 0
+    while i < off:
+        if strings.byte_at(src, ls + i) == 9:
+            parts.append("\t")
+            i = i + 1
+        else:
+            w: int = utf8_width(src, ls + i)
+            parts.append(spaces(w))
+            i = i + utf8_len(src, ls + i)
+
+    # 下線も表示幅で数える。行末を越えないよう切り詰め、最低 1 文字は引く
+    end: int = off + t.len
+    if end > n:
+        end = n
+    under: int = 0
+    j: int = off
+    while j < end:
+        under = under + utf8_width(src, ls + j)
+        j = j + utf8_len(src, ls + j)
+    if under < 1:
+        under = 1
+    parts.append(strings.repeat("^", under))
+
+    if len(lb.text) > 0:
+        parts.append(" " + lb.text)
+    parts.append("\n")
+    return strings.join(parts, "")
+
+
+def gutter_width(d: Diag) -> int:
+    w: int = 1
+    p: Label | None = d.primary
+    if p is not None:
+        pt: rc[token.Token] | None = p.tok
+        if pt is not None:
+            w = num_width(pt.line)
+    r: Label | None = d.related
+    if r is not None:
+        rt: rc[token.Token] | None = r.tok
+        if rt is not None:
+            w2: int = num_width(rt.line)
+            if w2 > w:
+                w = w2
+    return w
+
+
+def emit(d: Diag) -> None:
+    gw: int = gutter_width(d)
+    parts: list[str] = []
+
+    # ① 主メッセージ（診断コードがあれば error[E-MOVE-1]: の形で出す）
+    if len(d.code) > 0:
+        parts.append(d.severity + "[" + d.code + "]: " + d.message + "\n")
+    else:
+        parts.append(d.severity + ": " + d.message + "\n")
+
+    # ② 主要な位置
+    p: Label | None = d.primary
+    if p is not None:
+        parts.append(render_block(p, gw))
+
+    # ③ 関連する位置（別ブロックとして note: で出す）
+    r: Label | None = d.related
+    if r is not None:
+        parts.append(spaces(gw + 1) + " |\n")
+        note: str = r.text
+        if len(note) == 0:
+            note = "関連する位置"
+        parts.append("note: " + note + "\n")
+        parts.append(render_block(Label(r.tok, ""), gw))
+
+    # ④ ヒント
+    if len(d.hint) > 0:
+        parts.append(spaces(gw + 1) + " |\n")
+        parts.append(spaces(gw + 1) + " = ヒント: " + d.hint + "\n")
+
+    io.eprint(strings.join(parts, ""))
+
+
+def fail(d: Diag) -> None:
+    emit(d)
+    exit(1)
+
+
+# ── 簡易版（C 版の error_at / error_at_hint）────────────────
+
+def error_at(tok: rc[token.Token], msg: str) -> None:
+    # ⚠️ msg は借りものなので、複製してから預けます
+    #   （own str にすると呼び出し側 200 か所に copy が要ります）
+    d: Diag = Diag(copy(msg))
+    d.primary = Label(tok, "")
+    fail(d)
+
+def error_at_hint(tok: rc[token.Token], hint: str, msg: str) -> None:
+    d: Diag = Diag(copy(msg))
+    d.primary = Label(tok, "")
+    d.hint = copy(hint)
+    fail(d)
+
+# 診断コード付きのエラー。
+def error_code_full(tok: rc[token.Token], code: own str, msg: own str, label: own str,
+                    rel: rc[token.Token] | None, rel_label: own str,
+                    hint: own str) -> None:
+    d: Diag = Diag(msg)
+    d.code = code
+    d.primary = Label(tok, label)
+    if rel is not None:
+        d.related = Label(rel, rel_label)
+    d.hint = hint
+    fail(d)
+
+# 警告（終了しない）。E-RAISE-5 で使う。
+def warn_full(tok: rc[token.Token], code: own str, msg: own str, label: own str,
+              hint: own str) -> None:
+    d: Diag = Diag(msg)
+    d.severity = "warning"
+    d.code = code
+    d.primary = Label(tok, label)
+    d.hint = hint
+    emit(d)
+
+# 位置つきラベル・note・ヒントを全部使う形
+def error_full(tok: rc[token.Token], msg: str, label: str,
+               rel: rc[token.Token] | None, rel_label: str, hint: str) -> None:
+    d: Diag = Diag(copy(msg))
+    d.primary = Label(tok, label)
+    if rel is not None:
+        d.related = Label(rel, rel_label)
+    d.hint = copy(hint)
+    fail(d)

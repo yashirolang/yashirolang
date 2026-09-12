@@ -1,0 +1,274 @@
+# numeric — 数値解析（積分・求根・微分・常微分方程式・最適化）
+#
+# ★ **どれも「関数を受け取る」ことが本質**です。関数型が入って
+#   初めて書けるようになりました。それまでは `integrate(f, a, b)` の `f` を
+#   渡す手段がなく、この種のものは一切書けませんでした。
+#
+# ⚠️ 渡す関数は `raises` しないものに限ります（関数型はエラーの受け渡しを
+#   表さないため）。失敗しうる計算は、呼ぶ側で包んでください。
+
+import math
+
+# ══════════════════════════════════════════════════════════
+#  数値積分
+# ══════════════════════════════════════════════════════════
+
+# 台形則。n は区間の分割数
+#
+# ★ 各区間を台形で近似します。誤差は h² に比例します。
+def trapezoid(f: fn(float) -> float, a: float, b: float, n: int) -> float:
+    if n < 1:
+        panic("numeric.trapezoid: 分割数は 1 以上です")
+    h: float = (b - a) / float(n)
+    s: float = (f(a) + f(b)) / 2.0
+    i: int = 1
+    while i < n:
+        s = s + f(a + float(i) * h)
+        i = i + 1
+    return s * h
+
+# シンプソン則。⚠️ n は **偶数**でなければなりません
+#
+# ★ 各 2 区間を放物線で近似します。誤差は h⁴ に比例するので、
+#   台形則と同じ分割数でも桁違いに正確です。
+def simpson(f: fn(float) -> float, a: float, b: float, n: int) -> float:
+    if n < 2 or n % 2 != 0:
+        panic("numeric.simpson: 分割数は 2 以上の偶数です")
+    h: float = (b - a) / float(n)
+    s: float = f(a) + f(b)
+    i: int = 1
+    while i < n:
+        w: float = 2.0
+        if i % 2 == 1:
+            w = 4.0
+        s = s + w * f(a + float(i) * h)
+        i = i + 1
+    return s * h / 3.0
+
+# 分割数を自動で増やす積分（相対誤差 tol を目安に）
+#
+# ★ 分割を倍にして結果がほとんど変わらなくなったら止めます。
+# ⚠️ **収束は保証しません。** 上限に達したらそこまでの値を返します
+#   （振動する関数や特異点があると収束しません）。
+def integrate(f: fn(float) -> float, a: float, b: float, tol: float) -> float:
+    n: int = 8
+    prev: float = simpson(f, a, b, n)
+    i: int = 0
+    while i < 20:
+        n = n * 2
+        cur: float = simpson(f, a, b, n)
+        if math.fabs(cur - prev) <= tol * math.fmax(math.fabs(cur), 1.0):
+            return cur
+        prev = cur
+        i = i + 1
+    return prev
+
+
+# ══════════════════════════════════════════════════════════
+#  求根
+# ══════════════════════════════════════════════════════════
+
+# 二分法。⚠️ f(a) と f(b) の符号が違うことが必要です
+#
+# ★ 遅い代わりに **必ず収束します**。区間が毎回半分になるので、
+#   倍精度なら 60 回ほどで限界まで詰まります。
+def bisect(f: fn(float) -> float, a: float, b: float) -> float:
+    fa: float = f(a)
+    fb: float = f(b)
+    if fa == 0.0:
+        return a
+    if fb == 0.0:
+        return b
+    if (fa < 0.0) == (fb < 0.0):
+        panic("numeric.bisect: 区間の両端で符号が同じです（根を挟んでいません）")
+
+    lo: float = a
+    hi: float = b
+    flo: float = fa
+    i: int = 0
+    while i < 200:
+        mid: float = (lo + hi) / 2.0
+        fm: float = f(mid)
+        if fm == 0.0:
+            return mid
+        if (flo < 0.0) != (fm < 0.0):
+            hi = mid
+        else:
+            lo = mid
+            flo = fm
+        i = i + 1
+    return (lo + hi) / 2.0
+
+# ニュートン法。導関数も渡します
+#
+# ★ 速い（1 回で有効桁が倍になる）代わりに **収束しないことがあります**。
+#   導関数が 0 に近いところに来ると飛んでいきます。
+# ⚠️ 収束しなければ panic します。黙って間違った値を返すよりましだからです。
+def newton(f: fn(float) -> float, df: fn(float) -> float, x0: float,
+           tol: float) -> float:
+    x: float = x0
+    i: int = 0
+    while i < 100:
+        fx: float = f(x)
+        d: float = df(x)
+        if d == 0.0:
+            panic("numeric.newton: 導関数が 0 になりました")
+        nx: float = x - fx / d
+        if math.fabs(nx - x) <= tol * math.fmax(math.fabs(nx), 1.0):
+            return nx
+        x = nx
+        i = i + 1
+    panic("numeric.newton: 収束しませんでした")
+    return x
+
+# 導関数を渡さない版（差分で代用する割線法）
+def secant(f: fn(float) -> float, a: float, b: float, tol: float) -> float:
+    x0: float = a
+    x1: float = b
+    f0: float = f(x0)
+    f1: float = f(x1)
+    i: int = 0
+    while i < 200:
+        if f1 == f0:
+            panic("numeric.secant: 傾きが 0 になりました")
+        x2: float = x1 - f1 * (x1 - x0) / (f1 - f0)
+        if math.fabs(x2 - x1) <= tol * math.fmax(math.fabs(x2), 1.0):
+            return x2
+        x0 = x1
+        f0 = f1
+        x1 = x2
+        f1 = f(x2)
+        i = i + 1
+    panic("numeric.secant: 収束しませんでした")
+    return x1
+
+
+# ══════════════════════════════════════════════════════════
+#  数値微分
+# ══════════════════════════════════════════════════════════
+
+# 中心差分による 1 階微分
+#
+# ⚠️ **刻み幅は小さければよいものではありません。** 小さくすると打ち切り
+#   誤差は減りますが、f(x+h) - f(x-h) の引き算で桁落ちが起きます。
+#   中心差分では h ≈ ∛ε ≈ 6e-6 あたりが最良で、それを既定にしています。
+def derivative(f: fn(float) -> float, x: float) -> float:
+    h: float = 6.0e-6 * math.fmax(math.fabs(x), 1.0)
+    return (f(x + h) - f(x - h)) / (2.0 * h)
+
+# 2 階微分
+def derivative2(f: fn(float) -> float, x: float) -> float:
+    h: float = 1.0e-4 * math.fmax(math.fabs(x), 1.0)
+    return (f(x + h) - 2.0 * f(x) + f(x - h)) / (h * h)
+
+
+# ══════════════════════════════════════════════════════════
+#  常微分方程式
+# ══════════════════════════════════════════════════════════
+
+# dy/dt = f(t, y) を古典的 4 次ルンゲ＝クッタ法で解く
+#
+# ★ t0 から t1 まで n 段で進め、**各段の y を並べて返します**（長さ n+1）。
+# ⚠️ オイラー法は入れていません。誤差が段数に比例して溜まり、
+#   実用にならないためです。
+def solve_ode(f: fn(float, float) -> float, t0: float, y0: float, t1: float,
+              n: int) -> list[float]:
+    if n < 1:
+        panic("numeric.solve_ode: 段数は 1 以上です")
+    h: float = (t1 - t0) / float(n)
+    ys: list[float] = []
+    ys.append(y0)
+
+    t: float = t0
+    y: float = y0
+    i: int = 0
+    while i < n:
+        k1: float = f(t, y)
+        k2: float = f(t + h / 2.0, y + h * k1 / 2.0)
+        k3: float = f(t + h / 2.0, y + h * k2 / 2.0)
+        k4: float = f(t + h, y + h * k3)
+        y = y + h * (k1 + 2.0 * k2 + 2.0 * k3 + k4) / 6.0
+        t = t + h
+        ys.append(y)
+        i = i + 1
+    return ys
+
+
+# ══════════════════════════════════════════════════════════
+#  最適化
+# ══════════════════════════════════════════════════════════
+
+# 黄金分割探索で **区間 [a, b] にある極小**を求める
+#
+# ★ 微分が要らないのが利点です。区間を黄金比で詰めていきます。
+# ⚠️ 区間内に極小が **1 つだけ**あることを前提にします
+#   （複数あるとどれに落ちるか決まりません）。
+def minimize(f: fn(float) -> float, a: float, b: float, tol: float) -> float:
+    # 黄金比の逆数 (√5 - 1) / 2
+    r: float = 0.6180339887498949
+    lo: float = a
+    hi: float = b
+    x1: float = hi - r * (hi - lo)
+    x2: float = lo + r * (hi - lo)
+    f1: float = f(x1)
+    f2: float = f(x2)
+
+    i: int = 0
+    while i < 200:
+        if math.fabs(hi - lo) <= tol * math.fmax(math.fabs(lo), 1.0):
+            return (lo + hi) / 2.0
+        if f1 < f2:
+            hi = x2
+            x2 = x1
+            f2 = f1
+            x1 = hi - r * (hi - lo)
+            f1 = f(x1)
+        else:
+            lo = x1
+            x1 = x2
+            f1 = f2
+            x2 = lo + r * (hi - lo)
+            f2 = f(x2)
+        i = i + 1
+    return (lo + hi) / 2.0
+
+
+# ══════════════════════════════════════════════════════════
+#  列に対する操作（関数を渡す）
+# ══════════════════════════════════════════════════════════
+
+# 各要素に f を適用した新しいリスト
+def map(a: list[float], f: fn(float) -> float) -> list[float]:
+    out: list[float] = []
+    for x in a:
+        out.append(f(x))
+    return out
+
+# 条件を満たす要素だけを集めた新しいリスト
+def filter(a: list[float], keep: fn(float) -> bool) -> list[float]:
+    out: list[float] = []
+    for x in a:
+        if keep(x):
+            out.append(x)
+    return out
+
+# 左から畳み込む
+def reduce(a: list[float], f: fn(float, float) -> float,
+           init: float) -> float:
+    acc: float = init
+    for x in a:
+        acc = f(acc, x)
+    return acc
+
+# すべて / どれかが条件を満たすか
+def all(a: list[float], pred: fn(float) -> bool) -> bool:
+    for x in a:
+        if not pred(x):
+            return False
+    return True
+
+def any(a: list[float], pred: fn(float) -> bool) -> bool:
+    for x in a:
+        if pred(x):
+            return True
+    return False

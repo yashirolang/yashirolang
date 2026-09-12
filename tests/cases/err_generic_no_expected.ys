@@ -1,0 +1,13 @@
+# ERROR: 'Box' のどの実体を作るのか決められません
+# 型引数の推論は **左辺の型から**だけ（設計 §1）
+class Box[T]:
+    v: T
+    def init(self, v: own T) -> None:
+        self.v = v
+
+def f(b: Box[int]) -> int:
+    return b.v
+
+def main() -> int:
+    print(f(Box(1)))
+    return 0

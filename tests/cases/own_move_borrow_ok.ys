@@ -1,0 +1,17 @@
+# STAGE0-ONLY: 所有権検査は C 版だけ
+# FLAGS: --deny-move
+# EXIT: 9
+# 既定の引数は借用。渡しても所有権は呼び出し側に残る（仕様 v2 §4.1）
+def total(xs: list[int]) -> int:
+    s: int = 0
+    for x in xs:
+        s = s + x
+    return s
+
+def fill(xs: mut list[int], n: int) -> None:
+    xs.append(n)
+
+def main() -> int:
+    xs: list[int] = [1, 2]
+    fill(xs, 3)
+    return total(xs) + len(xs)

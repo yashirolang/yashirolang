@@ -1,0 +1,112 @@
+# OUTPUT: svg header: True
+# OUTPUT: well formed: True
+# OUTPUT: sine polyline points: 64
+# OUTPUT: escaped: True
+# OUTPUT: bar rects: 3
+# OUTPUT: zero baseline shared: True
+# OUTPUT: hist total: 100.0
+# EXIT: 0
+# 作図（lib/plot）
+#   ★ 出力は SVG の**文字列**なので、目で見なくても機械で確かめられます。
+#     ここでは「入れた点の数だけ座標が出たか」「0 の線を棒が共有しているか」
+#     のように、**図の意味が壊れていないこと**を見ています。
+import math
+import plot
+import strings
+
+# at 文字目以降で最初に見つかる sub の位置（無ければ -1）
+def find_from(s: str, sub: str, at: int) -> int:
+    i: int = at
+    while i + len(sub) <= len(s):
+        if strings.matches_at(s, sub, i):
+            return i
+        i = i + 1
+    return -1
+
+# at 文字目から '"' の手前までを数として読む
+def num_at(s: str, at: int) -> float:
+    k: int = at
+    while k < len(s) and strings.byte_at(s, k) != 34:
+        k = k + 1
+    return float(strings.substr(s, at, k - at))
+
+# n 個目の <rect x="…"> の、key で指した属性の値
+def rect_attr(s: str, n: int, key: str) -> float:
+    at: int = 0
+    i: int = 0
+    while i <= n:
+        at = find_from(s, "<rect x=\"", at)
+        if at < 0:
+            panic("rect が足りません")
+        if i < n:
+            at = at + 9
+        i = i + 1
+    return num_at(s, find_from(s, key, at) + len(key))
+
+
+# s の中に sub が何回出てくるか
+def count_of(s: str, sub: str) -> int:
+    n: int = 0
+    i: int = 0
+    while i + len(sub) <= len(s):
+        if strings.matches_at(s, sub, i):
+            n = n + 1
+            i = i + len(sub)
+        else:
+            i = i + 1
+    return n
+
+def main() -> int:
+    # ① 折れ線
+    xs: list[float] = []
+    ys: list[float] = []
+    for i in range(64):
+        t: float = float(i) / 8.0
+        xs.append(t)
+        ys.append(math.sin(t))
+
+    p: plot.Plot = plot.Plot(640, 400)
+    p.title("sin & <t>")          # ★ & と < が escape されるか
+    p.xlabel("t")
+    p.line("sin", xs, ys)
+    svg: str = p.to_svg()
+
+    print("svg header: " + str(strings.startswith(svg, "<svg xmlns=")))
+    print("well formed: " + str(strings.endswith(svg, "</svg>\n")))
+
+    # polyline の points は「x,y」が点の数だけ空白区切りで並ぶ
+    open_at: int = strings.find(svg, "points=\"")
+    rest: str = strings.substr(svg, open_at + 8, len(svg) - open_at - 8)
+    end_at: int = strings.find(rest, "\"")
+    pts: str = strings.substr(rest, 0, end_at)
+    print("sine polyline points: " + str(len(strings.split(pts, " "))))
+
+    print("escaped: " + str(strings.contains(svg, "sin &amp; &lt;t&gt;")))
+
+    # ② 棒グラフ（負の値を含む）。棒は 3 本で、0 の線を共有する
+    q: plot.Plot = plot.Plot(480, 320)
+    q.bar("pl", ["A", "B", "C"], [5.0, -3.0, 2.0])
+    bsvg: str = q.to_svg()
+    # 枠の rect と凡例の rect と背景の rect を除いた数が棒の数
+    print("bar rects: " + str(count_of(bsvg, "fill=\"#1f5fd0\"") - 1))
+
+    # 上向きの棒の下端と、下向きの棒の上端が同じ y（＝ 0 の線）
+    #   ⚠️ 数値は書き込みません。**出た SVG から読み取って**突き合わせます。
+    #   0 本目の <rect x="…"> は枠、1 本目から棒です
+    up_bottom: float = rect_attr(bsvg, 1, "y=\"") + rect_attr(bsvg, 1, "height=\"")
+    down_top: float = rect_attr(bsvg, 2, "y=\"")
+    print("zero baseline shared: " +
+          str(math.fabs(up_bottom - down_top) < 0.05))
+
+    # ③ ヒストグラム：度数の合計は点の数と一致する
+    a: list[float] = []
+    for i in range(100):
+        a.append(float(i % 7))
+    h: plot.Plot = plot.Plot(400, 300)
+    h.hist("c", a, 7)
+    total: float = 0.0
+    for s in h.items:
+        for y in s.ys:
+            total = total + y
+    print("hist total: " + str(total))
+    return 0

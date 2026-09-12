@@ -1,0 +1,25 @@
+# dump_ast — stage1 の構文解析器を動かす入口
+#
+#   ./build/stage1-ast foo<拡張子>
+#
+# ★ C 版の `--dump-ast` と**バイト単位で同じ出力**を目指します。
+import io
+import sys
+import token
+import lexer
+import ast
+import parser
+import langinfo
+
+def main() -> int:
+    args: list[str] = sys.argv()
+    if len(args) < 2:
+        print("使い方: stage1-ast <入力" + langinfo.ext() + ">")
+        return 1
+
+    path: str = args[1]
+    src: str = lexer.read_source(path)
+    toks: list[rc[token.Token]] = lexer.tokenize(path, src)
+    root: rc[ast.Node] = parser.parse(toks)
+    ast.dump_ast(root)
+    return 0

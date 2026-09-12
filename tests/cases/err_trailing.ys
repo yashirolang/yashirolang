@@ -1,0 +1,4 @@
+# ERROR: 文の後に余分なトークンがあります
+# ERROR: ここから先が解釈できません
+def main() -> int:
+    return 1 2

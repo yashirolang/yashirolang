@@ -1,0 +1,13 @@
+# OUTPUT: 0
+# OUTPUT: 1
+# OUTPUT: 4
+# OUTPUT: 9
+def square(x: int) -> int:
+    return x * x
+
+def main() -> int:
+    i: int = 0
+    while i < 4:
+        print(square(i))
+        i += 1
+    return 0

@@ -1,0 +1,8 @@
+# OUTPUT: -9223372036854775808
+# EXIT: 0
+# FLAGS: --no-overflow-check
+# --no-overflow-check を付けると検査を出さない（2 の補数で折り返す）
+def main() -> int:
+    a: int = 9223372036854775807
+    print(str(a + 1))
+    return 0

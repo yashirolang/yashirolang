@@ -1,0 +1,7 @@
+# ERROR: 関数 'add' は 2 個の引数を取りますが、3 個渡されました
+# ERROR: この関数はここで定義されています
+def add(a: int, b: int) -> int:
+    return a + b
+
+def main() -> int:
+    return add(1, 2, 3)

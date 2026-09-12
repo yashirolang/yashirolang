@@ -1,0 +1,10 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# FLAGS: --deny-borrow
+# ERROR: error[E-BORROW-4]: 借用した値 'xs[…]' は返せません
+# 借りたリストの「要素」も借りもの（添字は区別しないので xs[…] と表示する）
+def first(xs: list[str]) -> str:
+    return xs[0]
+
+def main() -> int:
+    names: list[str] = ["ab", "c"]
+    return len(first(names))

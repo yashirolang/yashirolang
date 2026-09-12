@@ -1,0 +1,15 @@
+# OUTPUT: 6
+# 内側の break は内側のループだけを抜ける
+def main() -> int:
+    i: int = 0
+    t: int = 0
+    while i < 3:
+        j: int = 0
+        while j < 10:
+            if j == 2:
+                break
+            t += 1
+            j += 1
+        i += 1
+    print(t)
+    return 0

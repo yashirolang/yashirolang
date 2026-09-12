@@ -1,0 +1,21 @@
+# OUTPUT: [1, 2, 3]
+# OUTPUT: []
+# OUTPUT: ["a", "b"]
+# OUTPUT: [True, False]
+# OUTPUT: [1.5, -0.25]
+# OUTPUT: str: [10, 20]
+# EXIT: 0
+# list をそのまま print / str できる
+#
+# ⚠️ 要素の型ごとにランタイム関数を呼び分けるので、
+#   int / float / str / bool のときだけ。
+
+def main() -> int:
+    print([1, 2, 3])
+    empty: list[int] = []
+    print(empty)
+    print(["a", "b"])
+    print([True, False])
+    print([1.5, -0.25])
+    print("str: " + str([10, 20]))
+    return 0

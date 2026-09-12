@@ -1,0 +1,28 @@
+# OUTPUT: [-5.0, 1.0, 2.0, 3.0]
+# OUTPUT: [3.0, 2.0, 1.0, -5.0]
+# OUTPUT: [1.0, 2.0, 3.0, -5.0]
+# OUTPUT: [3.0, 1.0, -5.0, 2.0]
+# EXIT: 0
+# 比較関数を渡すソート（元のリストは壊さない）
+import stats
+import linalg
+
+def desc(a: float, b: float) -> bool:
+    return a > b
+
+def by_abs(a: float, b: float) -> bool:
+    x: float = a
+    if x < 0.0:
+        x = -x
+    y: float = b
+    if y < 0.0:
+        y = -y
+    return x < y
+
+def main() -> int:
+    xs: list[float] = [3.0, 1.0, -5.0, 2.0]
+    linalg.vprint(stats.sorted(xs))
+    linalg.vprint(stats.sorted_by(xs, desc))
+    linalg.vprint(stats.sorted_by(xs, by_abs))
+    linalg.vprint(xs)
+    return 0

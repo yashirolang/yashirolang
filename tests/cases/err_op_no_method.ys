@@ -1,0 +1,14 @@
+# ERROR: 型 'P' に演算子 '+' は適用できません
+# ERROR: __add__(self, other)
+# 多重定義が無いときは、書き方を示して落とす
+class P:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+def main() -> int:
+    a: P = P(1)
+    b: P = P(2)
+    print(str((a + b).v))
+    return 0

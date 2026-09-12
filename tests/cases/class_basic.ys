@@ -1,0 +1,17 @@
+# OUTPUT: 1:hello
+# ゴール。フィールド・init・メソッドの最小形
+class Token:
+    kind: int
+    text: str
+
+    def init(self, kind: int, text: str) -> None:
+        self.kind = kind
+        self.text = text
+
+    def show(self) -> None:
+        print(str(self.kind) + ":" + self.text)
+
+def main() -> int:
+    t: Token = Token(1, "hello")
+    t.show()
+    return 0

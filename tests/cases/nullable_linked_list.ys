@@ -1,0 +1,23 @@
+# OUTPUT: 1
+# OUTPUT: 2
+# OUTPUT: 3
+# ゴール：連結リストの走査。while で絞り込み、代入で解除される
+class Node:
+    v: int
+    next: Node | None
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+def main() -> int:
+    a: Node = Node(1)
+    b: Node = Node(2)
+    c: Node = Node(3)
+    a.next = b
+    b.next = c
+
+    cur: Node | None = a
+    while cur is not None:
+        print(cur.v)
+        cur = cur.next
+    return 0

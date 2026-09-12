@@ -1,0 +1,14 @@
+# OUTPUT: 1000.0
+# OUTPUT: 0.001
+# OUTPUT: 1000.5
+# OUTPUT: 100.0
+# OUTPUT: 3.14159
+# EXIT: 0
+# リテラルの書き方（正規化して IR に出す。lexer.c の read_number）
+def main() -> int:
+    print(1e3)
+    print(1.0e-3)
+    print(1_000.5)
+    print(1E+2)
+    print(3.14159)
+    return 0

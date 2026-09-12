@@ -1,0 +1,51 @@
+# OUTPUT: ok
+# EXIT: 0
+# dict の削除は O(1)（墓石方式）
+#   ⚠️ 詰める方式（O(n)）だと 18000 回の削除に 115 秒かかりました。
+#     印を消すだけにして 0.19 秒になっています。
+import dict
+import linalg
+
+def main() -> int:
+    d: dict.Dict[str, int] = dict.Dict()
+    ok: bool = True
+    n: int = 500
+    i: int = 0
+    while i < n:
+        d.set("k" + str(i), i)
+        i = i + 1
+    # 偶数を消す
+    i = 0
+    while i < n:
+        if i % 2 == 0:
+            if not d.remove("k" + str(i)):
+                ok = False
+        i = i + 1
+    if d.len() != n // 2:
+        ok = False
+        print(f"NG 件数 {d.len()}")
+    # 残りが正しく引けるか
+    i = 0
+    while i < n:
+        if i % 2 == 1:
+            if not d.has("k" + str(i)) or d.get("k" + str(i)) != i:
+                ok = False
+        else:
+            if d.has("k" + str(i)):
+                ok = False
+        i = i + 1
+    # 無い鍵の削除は False
+    if d.remove("nope"):
+        ok = False
+    # 消した後に入れ直せる
+    d.set("k0", 999)
+    if d.get("k0") != 999 or d.len() != n // 2 + 1:
+        ok = False
+    # 順序（消した後も入れた順）
+    ks: list[str] = d.keys()
+    if ks[0] != "k1" or ks[len(ks)-1] != "k0":
+        ok = False
+        print(f"NG 順序 {ks[0]} {ks[len(ks)-1]}")
+    if ok:
+        print("ok")
+    return 0

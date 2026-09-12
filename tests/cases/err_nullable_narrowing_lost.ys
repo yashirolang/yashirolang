@@ -1,0 +1,13 @@
+# ERROR: 型 'Node | None' の値にはフィールドがありません
+# 代入すると絞り込みは解除される（cur.next は None かもしれない）
+class Node:
+    v: int
+    next: Node | None
+
+def main() -> int:
+    a: Node = Node()
+    cur: Node | None = a
+    if cur is not None:
+        cur = cur.next
+        print(cur.v)
+    return 0

@@ -1,0 +1,12 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# FLAGS: --deny-borrow
+# ERROR: error[E-BORROW-4]: 借用した値 'a' は返せません
+# ERROR: 返すと、呼び出しが終わった後も生き続けてしまいます
+# 借用は返せない（仕様 v2 §4.4。ライフタイム注釈を持たないための規則）
+def pick(a: str, b: str, flag: bool) -> str:
+    if flag:
+        return a
+    return b
+
+def main() -> int:
+    return len(pick("xy", "z", True))

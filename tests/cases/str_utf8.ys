@@ -1,0 +1,8 @@
+# OUTPUT: こんにちは
+# OUTPUT: 15
+# UTF-8 は各バイトが \XX にエスケープされて IR に入る。len はバイト数
+def main() -> int:
+    s: str = "こんにちは"
+    print(s)
+    print(len(s))
+    return 0

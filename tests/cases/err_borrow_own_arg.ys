@@ -1,0 +1,13 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# FLAGS: --deny-borrow
+# ERROR: error[E-BORROW-1]: 借用した値 's' は移動できません
+# ERROR: 引数を 's: own str' にすると、所有権を受け取れます
+# 借りものを own 引数へ渡すこともできない（所有権を持っていないため）
+def take(s: own str) -> int:
+    return len(s)
+
+def show(s: str) -> int:
+    return take(s)
+
+def main() -> int:
+    return show("abc")

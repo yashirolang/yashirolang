@@ -1,0 +1,5 @@
+# ERROR: 'Box' はクラスです。生成するには 'lib.Box(...)' と書いてください
+import lib
+
+def main() -> int:
+    return lib.Box

@@ -1,0 +1,31 @@
+# OUTPUT: True
+# OUTPUT: False
+# OUTPUT: True
+# OUTPUT: True False
+# OUTPUT: ok
+# OUTPUT: 2
+# EXIT: 0
+# 'in' の多重定義（__contains__）
+#   ⚠️ 'in' だけは **右辺（入れ物）の型**で決まります。
+#     Python の __contains__ と同じ考え方です。
+import dict
+
+def show(b: bool) -> str:
+    return str(b)
+
+def main() -> int:
+    d: dict.Dict[str, int] = dict.Dict()
+    d.set("a", 1)
+    d.set("b", 2)
+    print(str("a" in d))
+    print(str("z" in d))
+    print(str("z" not in d))
+    # 実引数の並びが壊れないこと（ノードを作り替えるので、ここが要注意）
+    print(show("a" in d) + " " + show("z" in d))
+    if "b" in d and "c" not in d:
+        print("ok")
+    # list と str の 'in' は今までどおり
+    xs: list[int] = [1, 2, 3]
+    if 2 in xs and "bc" in "abcd":
+        print(str(d.get("b")))
+    return 0

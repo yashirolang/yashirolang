@@ -1,0 +1,44 @@
+# OUTPUT: 7
+# OUTPUT: 35
+# OUTPUT: 抜けました
+# EXIT: 0
+# scope: ブロック（A-18 の scoped spawn）
+#
+# 🤔 なぜこれで借りを渡せるのか
+#   scope: の出口で、そこで始めたスレッドを**必ず全部 join** します。
+#   すると「借りは呼び出しより長生きしない」という借用検査の不変条件が
+#   **成り立ったまま**になります。規則を緩めたのではなく、規則の前提を
+#   実際に満たすようにした、という形です。
+#
+# ★ spawn は**引数を何個でも**取れます。
+#   クロージャが無いのでクラスにまとめるしかなく、しかも
+#   **クラスは借りを保存できない**（E-BORROW-3）ので、
+#   scope: だけでは借りを共有する形が書けませんでした。
+
+class Job:
+    n: int
+
+    def init(mut self, n: int) -> None:
+        self.n = n
+
+def peek(j: Job) -> int:                       # 借りで受け取る
+    return j.n
+
+def add3(a: list[int], b: list[int], k: int) -> int:   # 引数 3 つ
+    return a[k] + b[k] + k
+
+def main() -> int:
+    j: Job = Job(7)
+    xs: list[int] = [1, 2, 3]
+    ys: list[int] = [10, 20, 30]
+    r: int = 0
+    s: int = 0
+    scope:
+        t: Thread[int] = spawn(peek, j)        # 借りを渡す
+        u: Thread[int] = spawn(add3, xs, ys, 2)  # 借り 2 つ + 値
+        r = t.join()
+        s = u.join()
+    print(r)                                    # 7
+    print(s)                                    # xs[2] + ys[2] + 2 = 3 + 30 + 2 = 35
+    print("抜けました")
+    return 0

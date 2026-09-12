@@ -1,0 +1,16 @@
+# OUTPUT: 1
+# OUTPUT: 2
+# OUTPUT: 3
+# 同名の関数とクラスを持つ 2 つのモジュール（名前修飾が効いているか）
+import a
+import b
+
+def main() -> int:
+    print(a.f())
+    print(b.f())
+    x: a.Box = a.Box()
+    y: b.Box = b.Box()
+    x.v = 1
+    y.v = 2
+    print(x.v + y.v)
+    return 0

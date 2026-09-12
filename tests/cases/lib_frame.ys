@@ -1,0 +1,83 @@
+# OUTPUT: 行 6 / 列 3
+# OUTPUT: cols: shop,item,price
+# OUTPUT: price mean: 240.0
+# OUTPUT: 高い行: 4
+# OUTPUT: 並べ替え（安定）: 100.0,120.0,180.0,300.0,320.0,420.0
+# OUTPUT: 店ごとの合計: A=520.0 B=600.0 C=320.0
+# OUTPUT: 店ごとの件数: A=2 B=3 C=1
+# OUTPUT: 引用符つき CSV: True
+# OUTPUT: 往復: True
+# OUTPUT: 数値の鍵: 1=15.0 2=21.0 3=7.0
+# EXIT: 0
+# 表形式のデータ（lib/frame）
+#
+#   ★ pandas でやっていたことを、**型のある言語のやり方で**書きます。
+#     列は数値か文字列で、取り出すときに型を選びます。取り違えは panic です。
+import frame
+import strings
+
+def main() -> int:
+    csv: str = ("shop,item,price\n" +
+                "A,\"apple, red\",100\n" +
+                "B,pen,300\n" +
+                "A,\"say \"\"hi\"\"\",420\n" +
+                "C,book,320\n" +
+                "B,pen,180\n" +
+                "B,ink,120\n")
+    df: frame.Frame = frame.parse_csv(csv)
+
+    print(strings.strip(strings.split(frame.describe(df), "\n")[0]))
+    print("cols: " + strings.join(df.names(), ","))
+    print("price mean: " + str(frame.mean_of(df.num("price"))))
+
+    # ① 絞り込み
+    hi: frame.Frame = df.where(frame.gt(df.num("price"), 150.0))
+    print("高い行: " + str(hi.rows()))
+
+    # ② 並べ替え（安定であること：同じ pen が元の順で並ぶ）
+    srt: frame.Frame = df.sort_by("price")
+    ps: list[str] = []
+    for x in srt.num("price"):
+        ps.append(str(x))
+    print("並べ替え（安定）: " + strings.join(ps, ","))
+
+    # ③ 店ごとの集計
+    g: frame.Frame = frame.group_by(df, "shop", "price", "sum")
+    parts: list[str] = []
+    for i in range(g.rows()):
+        parts.append(g.text("shop")[i] + "=" + str(g.num("price")[i]))
+    print("店ごとの合計: " + strings.join(parts, " "))
+
+    c: frame.Frame = frame.group_by(df, "shop", "price", "count")
+    parts2: list[str] = []
+    for i in range(c.rows()):
+        parts2.append(c.text("shop")[i] + "=" + str(int(c.num("price")[i])))
+    print("店ごとの件数: " + strings.join(parts2, " "))
+
+    # ④ 引用符の中のカンマと "" が読めているか
+    items: list[str] = df.text("item")
+    print("引用符つき CSV: " +
+          str(items[0] == "apple, red" and items[2] == "say \"hi\""))
+
+    # ⑤ 書き出して読み直すと同じ表になる
+    again: frame.Frame = frame.parse_csv(frame.to_csv(df))
+    same: bool = again.rows() == df.rows() and again.width() == df.width()
+    for i in range(again.rows()):
+        if again.text("item")[i] != items[i]:
+            same = False
+        if again.num("price")[i] != df.num("price")[i]:
+            same = False
+    print("往復: " + str(same))
+
+    # ⑥ 鍵が数値の列でも集計できる（返る鍵の列も数値）
+    df2: frame.Frame = frame.Frame()
+    df2.add_num("day", [1.0, 2.0, 1.0, 3.0, 2.0])
+    df2.add_num("amt", [10.0, 20.0, 5.0, 7.0, 1.0])
+    gd: frame.Frame = frame.group_by(df2, "day", "amt", "sum")
+    parts3: list[str] = []
+    for i in range(gd.rows()):
+        parts3.append(str(int(gd.num("day")[i])) + "=" + str(gd.num("amt")[i]))
+    print("数値の鍵: " + strings.join(parts3, " "))
+
+    # ⚠️ 型の取り違えが panic することは rt_frame_wrong_type で見ています
+    return 0

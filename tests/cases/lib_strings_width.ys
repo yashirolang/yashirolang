@@ -1,0 +1,36 @@
+# OUTPUT: ok
+# EXIT: 0
+# 桁揃えは **表示幅**で数える（バイト数ではない）
+#   ⚠️ len(s) はバイト数。UTF-8 では「あ」が 3 バイトなので、
+#     len で桁を揃えると日本語で崩れます。
+import strings
+
+def check(name: str, got: int, want: int) -> bool:
+    if got != want:
+        print(f"NG {name}: {got} != {want}")
+        return False
+    return True
+
+def checks(name: str, got: str, want: str) -> bool:
+    if got != want:
+        print(f"NG {name}: [{got}] != [{want}]")
+        return False
+    return True
+
+def main() -> int:
+    ok: bool = True
+    ok = check("count abc", strings.char_count("abc"), 3) and ok
+    ok = check("count あいう", strings.char_count("あいう"), 3) and ok
+    ok = check("len あいう", len("あいう"), 9) and ok
+    ok = check("width abc", strings.width("abc"), 3) and ok
+    ok = check("width あいう", strings.width("あいう"), 6) and ok
+    ok = check("width aあb", strings.width("aあb"), 4) and ok
+    ok = check("width 空", strings.width(""), 0) and ok
+    ok = checks("lpad 超過", strings.lpad("abcdef", 3), "abcdef") and ok
+    ok = checks("rpad 超過", strings.rpad("あいう", 2), "あいう") and ok
+    ok = checks("lpad 全角", strings.lpad("あ", 5), "   あ") and ok
+    ok = checks("rpad 全角", strings.rpad("あ", 5), "あ   ") and ok
+    ok = checks("lpad 半角", strings.lpad("ab", 5), "   ab") and ok
+    if ok:
+        print("ok")
+    return 0

@@ -1,0 +1,7 @@
+# ERROR: 'list[list[int]]' はそのまま print できません
+# ERROR: = ヒント: そのまま出せるのは list[int] / list[float] / list[str] / list[bool] だけです。ほかは for でまわしてください
+# 入れ子の list はそのまま出せない
+def main() -> int:
+    xs: list[list[int]] = [[1, 2], [3]]
+    print(xs)
+    return 0

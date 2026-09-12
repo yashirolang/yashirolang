@@ -1,0 +1,11 @@
+# OUTPUT: 1
+# OUTPUT: 3
+# OUTPUT: 5
+def main() -> int:
+    i: int = 0
+    while i < 5:
+        i += 1
+        if i % 2 == 0:
+            continue
+        print(i)
+    return 0

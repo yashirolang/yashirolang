@@ -1,0 +1,13 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# FLAGS: --deny-borrow
+# ERROR: error[E-BORROW-5]: 'a' を可変借用と共有借用で同時に渡しています
+# ERROR: こちらは可変借用（書き換える側）です
+# ERROR: こちらは共有借用です
+# 1 つの呼び出しの中で、同じ場所を可変と共有で同時に渡せない（仕様 v2 §4.3）
+def swap_first(xs: mut list[int], ys: list[int]) -> None:
+    xs.append(len(ys))
+
+def main() -> int:
+    a: list[int] = [1]
+    swap_first(a, a)
+    return len(a)

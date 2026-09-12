@@ -1,0 +1,26 @@
+# OUTPUT: ok:5
+# OUTPUT: caught: 空のパス
+# EXIT: 0
+# raises / try / except の基本（アンワインドしない。戻り値検査に落ちる）
+class IOError:
+    message: str
+
+    def init(self, message: own str) -> None:
+        self.message = message
+
+def read(path: str) -> int raises IOError:
+    if len(path) == 0:
+        raise IOError("空のパス")
+    return len(path)
+
+def main() -> int:
+    try:
+        print("ok:" + str(read("abcde")))
+    except IOError as e:
+        print("caught: " + e.message)
+
+    try:
+        print("ok:" + str(read("")))
+    except IOError as e2:
+        print("caught: " + e2.message)
+    return 0

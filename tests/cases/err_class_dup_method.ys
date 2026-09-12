@@ -1,0 +1,10 @@
+# ERROR: は既に定義されています
+class P:
+    def f(self) -> int:
+        return 1
+
+    def f(self) -> int:
+        return 2
+
+def main() -> int:
+    return 0

@@ -1,0 +1,20 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# FLAGS: --deny-move --deny-borrow
+# OUTPUT: b
+# EXIT: 3
+# 呼び出しの中で閉じている別名は許す。
+#         ★ str の添字（s[i]）は 1 文字の新しい文字列なので、保存してよい
+def chars(s: str) -> list[str]:
+    out: list[str] = []
+    for c in s:
+        out.append(c)
+    return out
+
+def width(s: str) -> int:
+    t: str = s
+    return len(t)
+
+def main() -> int:
+    xs: list[str] = chars("abc")
+    print(xs[1])
+    return width("abc")

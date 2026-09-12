@@ -1,0 +1,9 @@
+# ERROR: 型が一致しません
+# ERROR: フィールド 'v' は 'int' 型として宣言されています
+class C:
+    v: int
+
+def main() -> int:
+    c: C = C()
+    c.v = "a"
+    return 0

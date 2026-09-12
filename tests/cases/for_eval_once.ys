@@ -1,0 +1,12 @@
+# OUTPUT: called
+# OUTPUT: 1
+# OUTPUT: 2
+# ★ 対象は 1 回だけ評価される（毎回呼ばれたら called が 2 回出る）
+def make() -> list[int]:
+    print("called")
+    return [1, 2]
+
+def main() -> int:
+    for x in make():
+        print(x)
+    return 0

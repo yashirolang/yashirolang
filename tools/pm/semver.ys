@@ -1,0 +1,94 @@
+# semver — 版（バージョン）の比較
+#
+# ★ 扱うのは "1.2.3" の 3 つ組だけです。プレリリース（1.0.0-rc1）や
+#   ビルドメタデータ（+abc）は**受け付けません**。曖昧さを持ち込むより、
+#   使えない形をはっきり断ったほうが小さく済みます（14.4 節と同じ考え方）。
+import strings
+
+class Ver:
+    major: int
+    minor: int
+    patch: int
+    ok: bool       # 解釈できたか
+
+    def init(self, major: int, minor: int, patch: int, ok: bool) -> None:
+        self.major = major
+        self.minor = minor
+        self.patch = patch
+        self.ok = ok
+
+def bad() -> Ver:
+    return Ver(0, 0, 0, False)
+
+def is_digits(s: str) -> bool:
+    if len(s) == 0:
+        return False
+    i: int = 0
+    while i < len(s):
+        b: int = strings.byte_at(s, i)
+        if b < 48 or b > 57:
+            return False
+        i = i + 1
+    # 先頭の 0 は "01" のような書き方を防ぐために弾く（0 そのものは可）
+    if len(s) > 1 and strings.byte_at(s, 0) == 48:
+        return False
+    return True
+
+# "1.2.3" も "v1.2.3" も受け取る
+def parse(text: str) -> Ver:
+    s: str = strings.strip(text)
+    if strings.startswith(s, "v"):
+        s = strings.substr(s, 1, len(s) - 1)
+    parts: list[str] = strings.split(s, ".")
+    if len(parts) != 3:
+        return bad()
+    for p in parts:
+        if not is_digits(p):
+            return bad()
+    return Ver(int(parts[0]), int(parts[1]), int(parts[2]), True)
+
+def show(v: Ver) -> str:
+    return str(v.major) + "." + str(v.minor) + "." + str(v.patch)
+
+def tag(v: Ver) -> str:
+    return "v" + show(v)
+
+# a < b なら -1、a == b なら 0、a > b なら 1
+def cmp(a: Ver, b: Ver) -> int:
+    if a.major != b.major:
+        if a.major < b.major:
+            return -1
+        return 1
+    if a.minor != b.minor:
+        if a.minor < b.minor:
+            return -1
+        return 1
+    if a.patch != b.patch:
+        if a.patch < b.patch:
+            return -1
+        return 1
+    return 0
+
+def lt(a: Ver, b: Ver) -> bool:
+    return cmp(a, b) < 0
+
+# 同じ major なら「両立する」とみなす（0.x は 0.x どうしのみ）。
+#
+# ★ MVS は版を上げるだけで解決するので、この判定は**警告のため**にしか
+#   使いません。エラーにはしません。
+def compatible(a: Ver, b: Ver) -> bool:
+    if a.major != b.major:
+        return False
+    if a.major == 0:
+        return a.minor == b.minor
+    return True
+
+# 一覧から最大のものを選ぶ（空なら ok=False）
+def max_of(vs: list[Ver]) -> Ver:
+    best: Ver = bad()
+    for v in vs:
+        if not v.ok:
+            continue
+        if not best.ok or lt(best, v):
+            best = Ver(v.major, v.minor, v.patch, True)
+    return best

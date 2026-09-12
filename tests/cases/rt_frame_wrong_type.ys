@@ -1,0 +1,13 @@
+# EXIT: 1
+# 列の型を取り違えたら panic します
+#
+#   ⚠️ **ここが pandas と違うところです。** pandas は列に何でも入るので、
+#     数値の列を文字列として扱っても「動いてしまう」ことがあります。
+#     この言語には暗黙変換が無いので、その場で止めます。
+import frame
+
+def main() -> int:
+    df: frame.Frame = frame.parse_csv("name,price\napple,100\npen,300\n")
+    print(str(len(df.num("price"))))    # ここは通る
+    print(str(len(df.text("price"))))   # 数値の列なので panic
+    return 0

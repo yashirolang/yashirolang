@@ -1,0 +1,8 @@
+# ERROR: error: 'int' は raise できません
+# ERROR: raise にはエラーオブジェクトを渡します
+# エラーはふつうのクラス（仕様 v2 §8.3）
+def f() -> int:
+    raise 42
+
+def main() -> int:
+    return 0

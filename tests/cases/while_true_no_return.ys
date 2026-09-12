@@ -1,0 +1,11 @@
+# EXIT: 4
+# ★ while True: に break が無ければ、そのループからは抜けない。
+#   だから後ろに return が無くても「全経路 return」を満たす。
+def first_over(n: int) -> int:
+    while True:
+        if n > 3:
+            return n
+        n = n + 1
+
+def main() -> int:
+    return first_over(0)

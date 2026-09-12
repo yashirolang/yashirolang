@@ -1,0 +1,6 @@
+# OUTPUT: 8
+# OUTPUT: 0
+def main() -> int:
+    print(len("notebook"))
+    print(len(""))
+    return 0

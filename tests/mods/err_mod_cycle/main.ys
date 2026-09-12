@@ -1,0 +1,6 @@
+# ERROR: 循環 import です: main → other → main
+# ERROR: モジュールの依存関係は一方通行（DAG）にしてください
+import other
+
+def main() -> int:
+    return other.f()

@@ -1,0 +1,9 @@
+# ERROR: init は戻り値を持てません
+class P:
+    x: int
+
+    def init(self) -> int:
+        return 0
+
+def main() -> int:
+    return 0

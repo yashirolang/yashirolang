@@ -1,0 +1,199 @@
+# dict — ハッシュ表
+#
+# ★ **ハッシュ表になりました。** それまでは線形探索（O(n)）で、
+#   4000 件の出し入れに 0.19 秒かかっていました。いまは測れないほどです。
+#
+# ★ 中身の持ち方（ここが設計の要）
+#
+#     keys_ / vals_   … 入れた順に**一度置いたら動かさない**
+#     buckets         … ハッシュ値 → 「keys_ の添字」の並び
+#
+#   🤔 なぜ鍵そのものをバケツに入れないのか
+#     表を広げるとき（rehash）、鍵と値をバケツ間で移すことになります。
+#     所有権の検査から見ると、それは「借りたものを別の入れ物に保存する」
+#     動きで、警告になります（E-BORROW-3）。**添字は int なのでコピー型**、
+#     動かしても所有権が動きません。これで問題ごと消えます。
+#
+#   ★ 副産物として、keys() が**入れた順**に返せるようになりました。
+#     （鍵をバケツに置くと、順序はハッシュの散り方で決まってしまいます。）
+#
+# ⚠️ 鍵に使えるのは `hash` が定義された型（int / float / str / bool）だけです。
+#   クラスを鍵にすると、実体化したときに「hash が使えません」と言われます
+#   （型制約が無いので、テンプレートの時点では分かりません）。
+#
+# ⚠️ ハッシュは FNV-1a です。**暗号用ではありません。** 敵が鍵を選べる場面では
+#   衝突を狙われて線形探索に落とされます。
+#
+
+class Dict[K, V]:
+    keys_: list[K]
+    vals_: list[V]
+    buckets: list[list[int]]
+    # ★ 生きているか（remove）。
+    #   ⚠️ **消しても keys_ からは取り除きません。** 取り除くと後ろの添字が
+    #     全部ずれ、バケツに入れた添字が指す先が変わります。代わりに印を
+    #     消して、走査のときに飛ばします（tombstone）。
+    #     こうすると削除が **O(1)** になります（詰めると O(n)）。
+    live: list[bool]
+    count: int
+    dead: int
+
+    def init(self) -> None:
+        self.keys_ = []
+        self.vals_ = []
+        self.live = []
+        self.buckets = []
+        self.count = 0
+        self.dead = 0
+        self.reset_buckets(8)
+
+    # バケツを n 個の空リストに張り直す
+    def reset_buckets(mut self, n: int) -> None:
+        self.buckets = []
+        i: int = 0
+        while i < n:
+            b: list[int] = []
+            self.buckets.append(b)
+            i = i + 1
+
+    def bucket_of(self, k: K) -> int:
+        return hash(k) % len(self.buckets)
+
+    # keys_ の中での位置。無ければ -1
+    # ⚠️ 消したものは飛ばします（live が False）
+    def index_of(self, k: K) -> int:
+        idxs: list[int] = self.buckets[self.bucket_of(k)]
+        for i in idxs:
+            if self.live[i] and self.keys_[i] == k:
+                return i
+        return -1
+
+    def has(self, k: K) -> bool:
+        return self.index_of(k) >= 0
+
+    # ★ `k in d` と書けます（`in` は**右辺の入れ物**が決めます）。
+    def __contains__(self, k: K) -> bool:
+        return self.index_of(k) >= 0
+
+    # 無ければ実行時エラー
+    # ⚠️ 鍵をメッセージに出しません。K が str とは限らないためです。
+    def get(self, k: K) -> V:
+        i: int = self.index_of(k)
+        if i < 0:
+            panic("dict: key not found")
+        return self.vals_[i]
+
+    # ⚠️ default は **所有権を受け取ります**（返す可能性があるため）
+    def get_or(self, k: K, default: own V) -> V:
+        i: int = self.index_of(k)
+        if i < 0:
+            return default
+        return self.vals_[i]
+
+    # 既にあれば上書きする
+    def set(mut self, k: own K, v: own V) -> None:
+        i: int = self.index_of(k)
+        if i >= 0:
+            self.vals_[i] = v
+            return
+
+        # ★ 先にバケツへ添字を入れてから、鍵を移します。
+        #   （k を移した後では、k を使って bucket_of を呼べません。）
+        b: int = self.bucket_of(k)
+        self.buckets[b].append(len(self.keys_))
+        self.keys_.append(k)
+        self.vals_.append(v)
+        self.live.append(True)
+        self.count = self.count + 1
+
+        # 詰まってきたら倍にして添字を振り直す
+        if len(self.keys_) > len(self.buckets):
+            self.rehash()
+
+    # 消す。あったら True。**O(1)**
+    #
+    # ★ 印を消すだけです。詰めると後ろの添字が全部ずれて、バケツに入れた
+    #   添字が指す先が変わってしまいます。
+    # ⚠️ 消しては入れるを繰り返すと keys_ が伸び続けるので、
+    #   死んだ数が半分を超えたら詰め直します。
+    def remove(mut self, k: K) -> bool:
+        i: int = self.index_of(k)
+        if i < 0:
+            return False
+        self.live[i] = False
+        self.count = self.count - 1
+        self.dead = self.dead + 1
+        if self.dead > self.count and self.dead > 16:
+            self.compact()
+        return True
+
+    # 死んだものを本当に取り除く（**O(n)。たまにしか呼ばれません**）
+    #
+    # ★ 詰めるのに list の remove を使うのが要点です。要素を動かすのは
+    #   ランタイムの中だけなので、所有権が動きません。
+    #   本言語側で「別のリストに移す」と書くと E-BORROW-3 になります。
+    def compact(mut self) -> None:
+        i: int = len(self.live) - 1
+        while i >= 0:
+            if not self.live[i]:
+                self.keys_.remove(i)
+                self.vals_.remove(i)
+                self.live.remove(i)
+            i = i - 1
+        self.dead = 0
+        self.rehash()
+
+    # バケツを倍にして、**添字だけ**を入れ直す
+    #
+    # ★ 鍵と値は一切動きません。動かすのは int の添字だけです。
+    # ⚠️ compact からも呼ばれます（そのときはバケツ数を変えません）。
+    def rehash(mut self) -> None:
+        n: int = len(self.buckets)
+        if len(self.keys_) > n:
+            n = n * 2
+        self.reset_buckets(n)
+        i: int = 0
+        while i < len(self.keys_):
+            if self.live[i]:
+                self.buckets[self.bucket_of(self.keys_[i])].append(i)
+            i = i + 1
+
+    def len(self) -> int:
+        return self.count
+
+    # ★ **入れた順**に返します（ハッシュの散り方に依存しません）
+    #
+    # ⚠️ 消したものがあると、**詰め直してから**返します。
+    #   ★ 新しいリストに 1 つずつ移すと E-BORROW-3 になります
+    #     （借りた要素を別の入れ物に保存することになるため）。
+    #     内部で詰めてから、そのまま返すのが所有権と噛み合う形です。
+    def keys(mut self) -> list[K]:
+        if self.dead > 0:
+            self.compact()
+        return self.keys_
+
+    def values(mut self) -> list[V]:
+        if self.dead > 0:
+            self.compact()
+        return self.vals_
+
+    # 鍵と値の組を、添字で順に取り出す
+    #
+    # ⚠️ **items() のようにリストを返すことはできません。**
+    #   中身は表が持っているので、組にして返すと「借りたものを保存する」
+    #   ことになります（E-BORROW-1 / E-BORROW-3）。
+    #   ★ 代わりに「i 番目の鍵」「i 番目の値」を返します。
+    #
+    #       i: int = 0
+    #       while i < d.len():
+    #           print(f"{d.key_at(i)} -> {d.val_at(i)}")
+    #           i = i + 1
+    def key_at(mut self, i: int) -> K:
+        if self.dead > 0:
+            self.compact()
+        return self.keys_[i]
+
+    def val_at(mut self, i: int) -> V:
+        if self.dead > 0:
+            self.compact()
+        return self.vals_[i]

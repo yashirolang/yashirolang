@@ -1,0 +1,16 @@
+# OUTPUT: 8
+# クラスを関数の引数と戻り値にする（ptr を渡すだけ）
+class Box:
+    v: int
+
+def make(v: int) -> Box:
+    b: Box = Box()
+    b.v = v
+    return b
+
+def get(b: Box) -> int:
+    return b.v
+
+def main() -> int:
+    print(get(make(8)))
+    return 0

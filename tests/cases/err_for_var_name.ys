@@ -1,0 +1,5 @@
+# ERROR: ループ変数の名前が必要です
+def main() -> int:
+    for 1 in [1]:
+        print(1)
+    return 0

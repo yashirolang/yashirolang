@@ -1,0 +1,261 @@
+# strings — 文字列ヘルパ
+#
+# ★ このファイルに C は 1 行もありません。
+#   str と + / list[T] / for / range で入れた
+#   機能の組み合わせだけで書けています。
+#
+# ⚠️ **文字列をループで連結してはいけません。** `out = out + s[i]` は
+#    毎回全体を作り直すので O(n²) になります。
+#    ★ substr がこれをやっていて、split が O(n²) になり、
+#      20000 語の分割に 7.2 秒かかっていました。スライス（ランタイムの
+#      memcpy 1 回）に直して 0.00 秒になりました。
+#    組み立てるときは **list[str] に溜めて最後に join** してください。
+
+# i 番目のバイトを int で返す（確保しない）
+#
+# ★ 言語には足していません。extern でランタイムを呼ぶだけです。
+#   s[i] は 1 文字の str を「毎回ヒープに確保して」返すので、
+#   字句解析器のように 1 文字ずつ回るコードではこちらを使います。
+extern def pl_byte_at(s: str, i: int) -> int
+extern def pl_str_join(xs: list[str], sep: str) -> str
+
+def byte_at(s: str, i: int) -> int:
+    return pl_byte_at(s, i)
+
+
+# s の start から count 文字を取り出す（範囲外は切り詰める）
+# ⚠️ **1 文字ずつ連結してはいけません。**
+#   以前はそう書いていて、substr 自体が O(n²) でした（連結のたびに
+#   全体を作り直すため）。split が substr を呼ぶので、split も O(n²) になり、
+#   20000 語の分割に 7 秒かかっていました。
+# ★ スライスはランタイムが 1 回の memcpy で済ませます。
+def substr(s: str, start: int, count: int) -> str:
+    return s[start:start + count]
+
+# 位置 at から sub が始まっているか
+#
+# ★ 比較は byte_at（int）で行います。s[i] は 1 文字の str を
+#   毎回ヒープに確保するので、内側のループで使うと効いてきます（15.7 節）。
+def matches_at(s: str, sub: str, at: int) -> bool:
+    n: int = len(s)
+    m: int = len(sub)
+    if at < 0 or at + m > n:
+        return False
+    i: int = 0
+    while i < m:
+        if byte_at(s, at + i) != byte_at(sub, i):
+            return False
+        i = i + 1
+    return True
+
+# sub が最初に現れる位置。無ければ -1
+#
+# ★ 「見つからない」を -1 で表すのは T | None が無いからです（直せる形）。
+def find(s: str, sub: str) -> int:
+    n: int = len(s)
+    m: int = len(sub)
+    if m == 0:
+        return 0
+    i: int = 0
+    while i + m <= n:
+        if matches_at(s, sub, i):
+            return i
+        i = i + 1
+    return -1
+
+def contains(s: str, sub: str) -> bool:
+    return find(s, sub) >= 0
+
+def startswith(s: str, prefix: str) -> bool:
+    return matches_at(s, prefix, 0)
+
+def endswith(s: str, suffix: str) -> bool:
+    return matches_at(s, suffix, len(s) - len(suffix))
+
+# sep で分割する。sep が空なら 1 文字ずつに分ける
+def split(s: str, sep: str) -> list[str]:
+    out: list[str] = []
+    n: int = len(s)
+    m: int = len(sep)
+
+    if m == 0:
+        for c in s:
+            out.append(c)
+        return out
+
+    start: int = 0
+    i: int = 0
+    while i + m <= n:
+        if matches_at(s, sep, i):
+            out.append(substr(s, start, i - start))
+            i = i + m
+            start = i
+        else:
+            i = i + 1
+    out.append(substr(s, start, n - start))
+    return out
+
+# ★ ランタイムに任せます。
+#   out = out + xs[i] を繰り返すと O(n^2) になり、セルフホストの
+#   IR 出力（何万行も組み立てる）で効いてきます。
+#   「list[str] に溜めて最後に join する」が本言語での文字列組み立ての形です。
+def join(xs: list[str], sep: str) -> str:
+    return pl_str_join(xs, sep)
+
+def is_space(c: str) -> bool:
+    return c == " " or c == "\t" or c == "\n" or c == "\r"
+
+def is_space_byte(b: int) -> bool:
+    return b == 32 or b == 9 or b == 10 or b == 13
+
+# 前後の空白を落とす
+def strip(s: str) -> str:
+    n: int = len(s)
+    start: int = 0
+    while start < n and is_space_byte(byte_at(s, start)):
+        start = start + 1
+    stop: int = n
+    while stop > start and is_space_byte(byte_at(s, stop - 1)):
+        stop = stop - 1
+    return substr(s, start, stop - start)
+
+# 桁揃え。printf の %3d / %-8s の代わり。
+#
+# ★ 言語に書式指定を足すのではなく、ライブラリの関数で済ませます
+#   （「言語に足すか、ライブラリで済ませるか」の境界線）。
+# ── 文字数 ────────────────────────────────────────────
+#
+# ⚠️ `len(s)` は **バイト数**です。UTF-8 では「あ」が 3 バイトなので、
+#   桁を揃えるのに len を使うと日本語で崩れます。
+#
+# ★ UTF-8 の続きバイトは上位 2 ビットが 10 です。それを飛ばして数えます。
+#   ⚠️ 「文字数」であって「見た目の幅」ではありません。全角は 2 桁ぶんの
+#     幅を取りますが、ここでは 1 と数えます（幅は下の width を使ってください）。
+def char_count(s: str) -> int:
+    n: int = 0
+    i: int = 0
+    while i < len(s):
+        b: int = byte_at(s, i)
+        # 0b10xxxxxx（128〜191）は続きのバイト
+        if b < 128 or b >= 192:
+            n = n + 1
+        i = i + 1
+    return n
+
+# 1 文字ずつに切り分ける
+#
+# ★ `for c in s` は **バイト単位**で回ります（"あいう" で 9 回）。
+#   文字単位で回りたいときはこれを使ってください:
+#
+#       for c in strings.chars("あいう"):    # 3 回
+#           print(c)
+#
+# ⚠️ 毎回新しいリストを作ります。長い文字列では byte_at で回るほうが速いです。
+def chars(s: str) -> list[str]:
+    out: list[str] = []
+    i: int = 0
+    while i < len(s):
+        n: int = char_len_at(s, i)
+        out.append(s[i:i + n])
+        i = i + n
+    return out
+
+# 位置 i から始まる文字が何バイトか
+#
+# ⚠️ 壊れたバイト列でも止まらないよう、1 を返して先へ進みます
+#   （不正なバイトで無限ループにしないため）。
+def char_len_at(s: str, i: int) -> int:
+    b: int = byte_at(s, i)
+    if b < 128:
+        return 1
+    if b >= 240:
+        return 4
+    if b >= 224:
+        return 3
+    if b >= 192:
+        return 2
+    return 1
+
+# 表示したときの桁数（全角を 2 と数える）
+#
+# ⚠️ **目安です。** 端末や字体によって幅は変わります。ここでは
+#   「よく全角で表示される範囲」を 2 桁として数えます:
+#     U+1100〜115F、U+2E80〜A4CF、U+AC00〜D7A3、U+F900〜FAFF、
+#     U+FE30〜FE6F、U+FF00〜FF60、U+FFE0〜FFE6
+def width(s: str) -> int:
+    w: int = 0
+    i: int = 0
+    while i < len(s):
+        b: int = byte_at(s, i)
+        if b < 128:
+            w = w + 1
+            i = i + 1
+            continue
+        n: int = char_len_at(s, i)
+        cp: int = code_point_at(s, i, n)
+        if is_wide(cp):
+            w = w + 2
+        else:
+            w = w + 1
+        i = i + n
+    return w
+
+# i から n バイトの UTF-8 をコードポイントに戻す
+# コードポイントを UTF-8 の文字にする（Python の chr に相当）。
+#
+# ⚠️ **組み込みの `chr()` はバイトを作ります**（0〜255）。日本語や絵文字を
+#   作るにはこちらを使ってください。後から足しました
+#   （json の \uXXXX を読むのに要りました）。
+def from_code_point(cp: int) -> str:
+    if cp < 0 or cp > 1114111:
+        panic("from_code_point: 範囲外のコードポイントです")
+    if cp < 128:
+        return chr(cp)
+    if cp < 2048:
+        return chr(192 + cp // 64) + chr(128 + cp % 64)
+    if cp < 65536:
+        return (chr(224 + cp // 4096) + chr(128 + (cp // 64) % 64) +
+                chr(128 + cp % 64))
+    return (chr(240 + cp // 262144) + chr(128 + (cp // 4096) % 64) +
+            chr(128 + (cp // 64) % 64) + chr(128 + cp % 64))
+
+def code_point_at(s: str, i: int, n: int) -> int:
+    b0: int = byte_at(s, i)
+    if n == 2:
+        return (b0 % 32) * 64 + byte_at(s, i + 1) % 64
+    if n == 3:
+        return ((b0 % 16) * 4096 + (byte_at(s, i + 1) % 64) * 64 +
+                byte_at(s, i + 2) % 64)
+    return ((b0 % 8) * 262144 + (byte_at(s, i + 1) % 64) * 4096 +
+            (byte_at(s, i + 2) % 64) * 64 + byte_at(s, i + 3) % 64)
+
+def is_wide(cp: int) -> bool:
+    return ((cp >= 0x1100 and cp <= 0x115F) or
+            (cp >= 0x2E80 and cp <= 0xA4CF) or
+            (cp >= 0xAC00 and cp <= 0xD7A3) or
+            (cp >= 0xF900 and cp <= 0xFAFF) or
+            (cp >= 0xFE30 and cp <= 0xFE6F) or
+            (cp >= 0xFF00 and cp <= 0xFF60) or
+            (cp >= 0xFFE0 and cp <= 0xFFE6))
+
+# ── 桁を揃える ──────────────────────────────────────────────
+#
+# ★ **表示幅**で数えます（全角は 2 桁）。バイト数で数えると日本語で崩れます。
+# ⚠️ 既に width を超えているときは、そのまま返します（切りません）。
+def lpad(s: str, w: int) -> str:
+    return repeat(" ", w - width(s)) + s
+
+def rpad(s: str, w: int) -> str:
+    return s + repeat(" ", w - width(s))
+
+def repeat(s: str, times: int) -> str:
+    out: str = ""
+    for i in range(times):
+        out = out + s
+    return out
+
+# old をすべて new に置き換える
+def replace(s: own str, old: str, new: str) -> str:
+    if len(old) == 0:
+        return s
+    return join(split(s, old), new)

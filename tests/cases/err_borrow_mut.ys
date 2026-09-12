@@ -1,0 +1,19 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# FLAGS: --deny-borrow
+# ERROR: error[E-BORROW-3]: 借用した値 'other' をフィールドに保存できません
+# ERROR: 引数 'other' は借用です（既定）
+# mut も借用。書き換えてよいだけで、所有権は持っていない（仕様 v2 §5.2）
+class Sink:
+    buf: list[str]
+
+    def init(self) -> None:
+        self.buf = []
+
+    def steal(mut self, other: mut list[str]) -> None:
+        self.buf = other
+
+def main() -> int:
+    s: Sink = Sink()
+    xs: list[str] = ["a"]
+    s.steal(xs)
+    return len(s.buf)

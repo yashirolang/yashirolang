@@ -1,0 +1,8 @@
+# ERROR: if の条件には bool が必要です
+# ERROR: これは 'int' 型です
+# ERROR: = ヒント: 本言語は int を真偽値として扱いません
+def main() -> int:
+    x: int = 1
+    if x:
+        print(1)
+    return 0

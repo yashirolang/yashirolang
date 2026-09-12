@@ -1,0 +1,7 @@
+# EXIT: 1
+# 代入側の添字でも同じこと（gen_index_store）
+def main() -> int:
+    xs: list[int] = [1, 2, 3, 4]
+    big: int = 4611686018427387904
+    xs[big * 2] = 7
+    return 0

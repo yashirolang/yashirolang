@@ -1,0 +1,29 @@
+# STAGE0-ONLY: --drop は C 版だけ（解放の移植は次章）
+# FLAGS: --drop --deny-move --deny-borrow --deny-mut
+# OUTPUT: a
+# OUTPUT: a
+# OUTPUT: end
+# OUTPUT: drop a
+# EXIT: 0
+# rc[T] は共有。代入しても元は使えるし、解放は最後の 1 つが手放したとき
+class Node:
+    name: str
+
+    def init(self, name: own str) -> None:
+        self.name = name
+
+    def drop(self) -> None:
+        print("drop " + self.name)
+
+def keep(dst: mut list[rc[Node]], n: rc[Node]) -> None:
+    dst.append(n)
+
+def main() -> int:
+    a: rc[Node] = rc(Node("a"))
+    b: rc[Node] = a
+    box: list[rc[Node]] = []
+    keep(box, a)
+    print(a.name)
+    print(b.name)
+    print("end")
+    return 0

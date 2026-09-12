@@ -1,0 +1,30 @@
+# OUTPUT: 1
+# OUTPUT: 2
+# OUTPUT: Fizz
+# OUTPUT: 4
+# OUTPUT: Buzz
+# OUTPUT: Fizz
+# OUTPUT: 7
+# OUTPUT: 8
+# OUTPUT: Fizz
+# OUTPUT: Buzz
+# OUTPUT: 11
+# OUTPUT: Fizz
+# OUTPUT: 13
+# OUTPUT: 14
+# OUTPUT: FizzBuzz
+# ★ 文字列が無かったころは負の数で代用していました。
+#   制御構造は 1 文字も変えずに、出力だけが本物になった。
+def main() -> int:
+    i: int = 1
+    while i <= 15:
+        if i % 15 == 0:
+            print("FizzBuzz")
+        elif i % 3 == 0:
+            print("Fizz")
+        elif i % 5 == 0:
+            print("Buzz")
+        else:
+            print(str(i))
+        i += 1
+    return 0

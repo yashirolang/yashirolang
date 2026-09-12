@@ -1,0 +1,6 @@
+# OUTPUT: True
+# OUTPUT: False
+def main() -> int:
+    print(True)
+    print(1 > 2)
+    return 0

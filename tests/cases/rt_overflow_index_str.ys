@@ -1,0 +1,8 @@
+# EXIT: 1
+# str の添字には相乗りさせる範囲検査が無いので、
+#   貯めた旗で 1 回だけ分岐する（gen_ovf_br）
+def main() -> int:
+    s: str = "abcd"
+    big: int = 4611686018427387904
+    print(s[big * 2])
+    return 0

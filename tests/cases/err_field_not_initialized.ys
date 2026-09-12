@@ -1,0 +1,11 @@
+# ERROR: フィールド 'next' は init で代入されていません
+# ERROR: このクラスには init がありません
+# ERROR: 型を 'Node | None' にする
+# 宿題：クラス型のフィールドが None から始まるのを型で塞ぐ
+class Node:
+    v: int
+    next: Node
+
+def main() -> int:
+    a: Node = Node()
+    return 0

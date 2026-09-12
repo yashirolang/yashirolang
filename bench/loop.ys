@@ -1,0 +1,14 @@
+# 整数ループ 2000 万回（int の算術と、桁あふれ検査の費用を見る）
+import time
+
+N: int = 20000000
+
+def main() -> int:
+    t0: int = time.monotonic_ns()
+    s: int = 0
+    for i in range(N):
+        s = (s + i * 3 + 7) % 1000000007
+    ms: float = time.since_ms(t0)
+    print("RESULT " + str(s))
+    print("TIME_MS " + str(ms))
+    return 0

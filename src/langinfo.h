@@ -28,7 +28,7 @@
 #endif
 
 #ifndef PLC_LANG_VERSION
-#define PLC_LANG_VERSION "0.15.2"      // 版番号（--version で出す）
+#define PLC_LANG_VERSION "0.16.0"      // 版番号（--version で出す）
 #endif
 
 // 拡張子の長さ（"." を含む）。sizeof は終端の '\0' を数えるので 1 引く。

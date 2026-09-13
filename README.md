@@ -92,7 +92,7 @@ sudo make install            # 既定は /usr/local
 make install PREFIX=$HOME/.local   # 自分の環境だけに入れるなら
 
 yashirolang hello.ys -o hello  # どこからでも呼べる
-yashirolang --version          # → yashirolang 0.15.2 (stage0)
+yashirolang --version          # → yashirolang 0.16.0 (stage0)
 ysm --version                 # パッケージマネージャも一緒に入ります
 ```
 

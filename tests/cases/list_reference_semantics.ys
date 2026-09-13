@@ -1,4 +1,3 @@
-# FLAGS: --drop
 # OUTPUT: 1
 # OUTPUT: 2
 # EXIT: 0

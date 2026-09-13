@@ -1,4 +1,3 @@
-# FLAGS: --drop
 # OUTPUT: True
 # OUTPUT: False
 # OUTPUT: True

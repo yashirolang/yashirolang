@@ -483,12 +483,156 @@ class Reporter:
         self.emit(d, self.opt.deny_store_borrow)
 
 
+
+
+# ── 変数宣言の表 ────────────────────────────────────────
+#
+# ★ 「この変数は借りものを束縛している」という印は、代入した場所ではなく
+#   **宣言のノード**に付けます。codegen は宣言を見て drop を出すからです。
+# ★ 対になる定義: src/ownck.c の struct DeclEnt
+class DeclEnt:
+    key: str                 # IR 名
+    decl: rc[ast.Node]       # 宣言のノード（ND_VARDECL / ND_PARAM）
+    depth: int               # 宣言されたスコープの深さ
+
+    def init(self, key: own str, decl: rc[ast.Node], depth: int) -> None:
+        self.key = key
+        self.decl = decl
+        self.depth = depth
+
+
+# ── 検査中の文脈 ────────────────────────────────────────
+#
+# ★ 対になる定義: src/ownck.c の struct Own
+class Own:
+    rep: Reporter            # 報告（上限つき）
+    quiet_depth: int         # >0 なら診断を出さない（while の不動点反復中）
+    roots: list[rc[BorrowRoot]]  # いま検査中の関数で「借りている」変数
+    decls: list[rc[DeclEnt]]     # いま検査中の関数の変数宣言
+    depth: int               # 今いるスコープの深さ（借用の寿命の検査に使う）
+    cur_fn: rc[ast.Node] | None  # いま検査中の関数（診断の「直し方」に名前が要る）
+    scope_depth: int         # scope: の中にいる深さ（0 なら外）
+    # 関数の定義を IR 名から引く表（この引数は own か、を知るのに要る）
+    func_keys: list[str]
+    func_nodes: list[rc[ast.Node]]
+
+    def init(self, rep: own Reporter) -> None:
+        self.rep = rep
+        self.quiet_depth = 0
+        self.roots = []
+        self.decls = []
+        self.depth = 0
+        self.cur_fn = None
+        self.scope_depth = 0
+        self.func_keys = []
+        self.func_nodes = []
+
+    # 宣言を IR 名から引く
+    def find_decl(self, ir_name: str) -> rc[DeclEnt] | None:
+        if len(ir_name) == 0:
+            return None
+        i: int = 0
+        while i < len(self.decls):
+            d: rc[DeclEnt] = self.decls[i]
+            if d.key == ir_name:
+                return d
+            i = i + 1
+        return None
+
+    # 関数を IR 名から引く
+    def lookup_func(self, ir_name: str) -> rc[ast.Node] | None:
+        if len(ir_name) == 0:
+            return None
+        i: int = 0
+        while i < len(self.func_keys):
+            if self.func_keys[i] == ir_name:
+                return self.func_nodes[i]
+            i = i + 1
+        return None
+
+    # 場所の根が借用引数なら、その根を返す。
+    #
+    # ★ self.name も t.text も、根をたどれば仮引数です。
+    #   「借りたものの一部」もまた借りものである、という規則がこれです。
+    def borrow_root_of(self, p: rc[Place]) -> rc[BorrowRoot] | None:
+        root: rc[Place] = p
+        # ⚠️ `root = root.base` とは書けません（rc[Place] | None が入るため）。
+        #   いったん受けてから絞り込みます。
+        nxt: rc[Place] | None = root.base
+        while nxt is not None:
+            root = nxt
+            nxt = root.base
+        # グローバルは常に生きている（設計 §5.3）
+        if root.kind != PL_LOCAL:
+            return None
+        i: int = 0
+        while i < len(self.roots):
+            b: rc[BorrowRoot] = self.roots[i]
+            if b.key == root.key:
+                return b
+            i = i + 1
+        return None
+
+# ── 式が「場所」なら Place を作る ───────────────────────────
+#
+# ⚠️ 呼び出しの戻り値やリテラルは場所ではありません（None を返します）。
+# ★ 対になる定義: src/ownck.c の place_of
+def place_of(n: rc[ast.Node] | None) -> rc[Place] | None:
+    if n is None:
+        return None
+    nn: rc[ast.Node] = n
+
+    if nn.kind == ast.ND_VAR:
+        # ★ 名前ではなく IR 名で識別します。兄弟スコープの同名変数
+        #   （%x と %x.1）を別の場所として扱うためです。
+        if len(nn.ir_name) == 0:
+            return None
+        k: int = PL_LOCAL
+        if strings.startswith(nn.ir_name, "@"):
+            k = PL_GLOBAL
+        return rc(Place(k, None, copy(nn.ir_name), copy(nn.name)))
+
+    if nn.kind == ast.ND_FIELD:
+        # ★ 'mod.g'（他モジュールのグローバル）は「常に生きている場所」。
+        #   名前が一意なので、そのまま 1 つの Global にします。
+        if len(nn.mod_name) > 0:
+            if len(nn.ir_name) == 0:
+                return None
+            return rc(Place(PL_GLOBAL, None, copy(nn.ir_name), copy(nn.name)))
+        fbase: rc[Place] | None = place_of(nn.lhs)
+        if fbase is None:
+            return None
+        fb: rc[Place] = fbase
+        return rc(Place(PL_FIELD, fb, copy(nn.name), fb.disp + "." + nn.name))
+
+    if nn.kind == ast.ND_INDEX:
+        # ⚠️ str の添字は「場所」ではありません。`s[i]` は 1 文字の
+        #   **新しい文字列**を作って返すからです（runtime の pl_str_index）。
+        #   list[T] の要素と違い、元の文字列を借りているわけではないので、
+        #   `for c in s:` で取り出した文字は保存しても構いません。
+        lh: rc[ast.Node] | None = nn.lhs
+        if lh is not None:
+            lt: rc[ast.Type] | None = node_type(lh)
+            if lt is not None and lt.kind == ast.TY_STR:
+                return None
+        ibase: rc[Place] | None = place_of(nn.lhs)
+        if ibase is None:
+            return None
+        ib: rc[Place] = ibase
+        return rc(Place(PL_INDEX, ib, "[]", ib.disp + "[…]"))
+
+    return None
+
 # ── 小道具 ──────────────────────────────────────────────
 def tok_of_node(n: rc[ast.Node] | None) -> rc[token.Token] | None:
     if n is None:
         return None
     nn: rc[ast.Node] = n
     return nn.tok
+
+# ノードの型（未設定なら None）
+def node_type(n: rc[ast.Node]) -> rc[ast.Type] | None:
+    return n.type
 
 # 同じ位置を指しているか（行と桁で見る。C 版はポインタ比較）
 def same_tok(a: rc[token.Token], b: rc[token.Token]) -> bool:

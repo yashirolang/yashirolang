@@ -1,0 +1,59 @@
+# 小さな Web サーバー
+#
+#   $ <cc> examples/webserver<ext> -o server && ./server 8080
+#   $ curl http://127.0.0.1:8080/
+#   $ curl http://127.0.0.1:8080/hello?name=world
+#
+# ★ **外部のライブラリは要りません。** ソケット（net）と HTTP（http）は
+#   標準で付いてきます。値の埋め込みは lib/json を使います。
+#
+# ⚠️ 1 本ずつ順に捌きます。同時に捌きたいときは serve_conn を spawn する
+#   輪を自分で書いてください（docs/reference/net.md §3.4）。
+import http
+import json
+import net
+import strings
+import sys
+
+# ⚠️ グローバルに書けるのはリテラルだけなので、組み立ては関数の中で。
+def page() -> str:
+    return ("<!doctype html><meta charset=\"utf-8\">" +
+            "<h1>うごいています</h1><ul>" +
+            "<li><a href=\"/hello?name=you\">/hello?name=you</a></li>" +
+            "<li><a href=\"/echo\">/echo</a></li></ul>")
+
+def handle(req: http.Request) -> http.Response:
+    if req.path == "/":
+        return http.html(200, page())
+
+    if req.path == "/hello":
+        who: str = req.param("name")
+        if len(who) == 0:
+            who = "名無し"
+        return http.text(200, "こんにちは、" + who + "さん")
+
+    # 受け取ったものをそのまま JSON で返す（POST の確認に）
+    if req.path == "/echo":
+        o: rc[json.Value] = json.object()
+        o.put("method", json.of_str(req.method))
+        o.put("path", json.of_str(req.path))
+        o.put("body", json.of_str(req.body))
+        return http.json(200, json.dumps(o))
+
+    return http.text(404, "ありません: " + req.path)
+
+def main() -> int:
+    port: int = 8080
+    args: list[str] = sys.argv()
+    if len(args) > 1:
+        port = int(args[1])
+
+    try:
+        l: net.Listener = net.listen("127.0.0.1", port)
+        print("http://127.0.0.1:" + str(l.port) + "/ で待っています")
+        print("（Ctrl-C で止めます）")
+        http.serve_on(l, handle)
+    except net.NetError as e:
+        print("起動できません: " + e.message)
+        return 1
+    return 0

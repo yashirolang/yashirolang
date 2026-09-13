@@ -18,6 +18,7 @@ def main() -> int:
 |---|---|
 | **[tutorial.md](tutorial.md)** | **入門** — Python との差分に絞った案内。まずこれ |
 | **[reference/numerics.md](reference/numerics.md)** | **数値計算の手引き** — numpy / scipy / matplotlib / pandas との対応表と実例 |
+| **[reference/net.md](reference/net.md)** | **ソケットと HTTP** — サーバーの書き方（`net` / `http`） |
 | [reference/cli.md](reference/cli.md) | `{{cc}}` のコマンドライン・リファレンス |
 | [reference/pkg.md](reference/pkg.md) | パッケージマネージャ `{{pm}}` のリファレンス |
 | [spec/stdlib.md](spec/stdlib.md) | 標準ライブラリ・リファレンス（文字列・入出力・**数学 / 線形代数 / 統計 / 乱数 / 物理 / 作図 / 表**） |

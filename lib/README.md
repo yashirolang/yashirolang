@@ -18,6 +18,8 @@ C ランタイム（`runtime/`）に置くのは、C の機能が必要なもの
 | `fft` | 高速フーリエ変換（`complex` の上に） |
 | `plot` | **作図**（SVG を書き出す。matplotlib 相当） |
 | `frame` | **表形式のデータ**（CSV・絞り込み・並べ替え・グループ集計。pandas 相当） |
+| `net` | **TCP ソケット**（`listen` / `accept` / `connect` / `send` / `recv`）。`extern` をここに閉じ込める |
+| `http` | **HTTP/1.1** の最小限（要求の解釈・応答の組み立て・受付の輪）。`net` の上に乗るだけで、C は 1 行も無い |
 
 `import strings` と書けば、コンパイラが `lib/` から自動で見つけます
 （探索場所は「入口ファイルのディレクトリ」と `lib/` の 2 つ。

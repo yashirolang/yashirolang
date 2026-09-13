@@ -1734,6 +1734,49 @@ static void mark_returns_borrow(Node *fn) {
     fn->binds_borrow = returns_borrow(fn, fn->body->body);
 }
 
+// 「借用を返す関数の戻り値を、そのまま返している」か。
+//
+// ★ なぜ要るか
+//   `def header(self) -> str: return self.headers.get_or(k, "")` のように、
+//   **借用を返す関数の戻り値をそのまま返す**関数があります。この関数の
+//   戻り値も借りものですが、rooted_in_param は「self.x」の形しか見ないので
+//   印が立ちません。すると呼び出し側が一時値として解放し、
+//   **dict の中の文字列が消えます**（ASan が heap-use-after-free と言う）。
+//
+// ⚠️ next は**ループで**たどります（has_spawn と同じ理由）。
+static bool returns_borrowed_call(Own *o, Node *n) {
+    for (; n; n = n->next) {
+        if (n->kind == ND_RETURN && n->lhs &&
+            (n->lhs->kind == ND_CALL || n->lhs->kind == ND_METHOD)) {
+            Node *f = callee_of(o, n->lhs);
+            if (f && f->binds_borrow) return true;
+        }
+        if (returns_borrowed_call(o, n->body)) return true;
+        if (returns_borrowed_call(o, n->els)) return true;
+        if (n->kind == ND_FUNC) break;
+    }
+    return false;
+}
+
+// 「戻り値が借りもの」の印を、呼び出しの連なりに沿って広げる。
+//
+// ★ **増えなくなるまで回します。** 呼び出しの向きは定義の順とも
+//   モジュールの依存順とも限らない（相互再帰もある）ためです。
+//   関数の数は高々数千なので、素直な反復で足ります。
+static void propagate_binds_borrow(Own *o) {
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (FuncEnt *e = o->funcs; e; e = e->next) {
+            if (e->fn->binds_borrow || !e->fn->body) continue;
+            if (returns_borrowed_call(o, e->fn->body->body)) {
+                e->fn->binds_borrow = true;
+                changed = true;
+            }
+        }
+    }
+}
+
 static void collect_funcs(Own *o, Node *ast) {
     for (Node *d = ast->body; d; d = d->next) {
         if (d->kind == ND_FUNC && d->ir_name) {
@@ -1781,6 +1824,8 @@ void ownck_program(Module *mods, const OwnckOptions *opt) {
     // ★ 表は先に全モジュールぶん作ります。呼び出しの向きは依存順とは
     //   限らない（同じモジュール内の相互再帰）ためです。
     for (Module *m = mods; m; m = m->next) collect_funcs(&o, m->ast);
+    // ★ 表が揃ってから、「戻り値が借りもの」の印を呼び出しに沿って広げます。
+    propagate_binds_borrow(&o);
 
     // ── spawn を使ったら、所有権の検査を**エラーに上げる** ──
     //

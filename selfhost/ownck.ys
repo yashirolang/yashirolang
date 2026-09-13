@@ -1579,6 +1579,56 @@ def mark_returns_borrow(fn: mut rc[ast.Node]) -> None:
     b: rc[ast.Node] = node_of_opt(fn.body)
     fn.binds_borrow = returns_borrow(fn, b.body)
 
+# 「借用を返す関数の戻り値を、そのまま返している」か。
+#
+# ★ なぜ要るか
+#   `def header(self) -> str: return self.headers.get_or(k, "")` のように、
+#   **借用を返す関数の戻り値をそのまま返す**関数があります。この関数の
+#   戻り値も借りものですが、rooted_in_param は「self.x」の形しか見ないので
+#   印が立ちません。すると呼び出し側が一時値として解放し、
+#   **dict の中の文字列が消えます**。
+#   対になる定義: src/ownck.c の returns_borrowed_call
+def returns_borrowed_call(o: Own, n: rc[ast.Node] | None) -> bool:
+    cur: rc[ast.Node] | None = n
+    while cur is not None:
+        nn: rc[ast.Node] = cur
+        if nn.kind == ast.ND_RETURN and nn.lhs is not None:
+            l: rc[ast.Node] = node_of_opt(nn.lhs)
+            if l.kind == ast.ND_CALL or l.kind == ast.ND_METHOD:
+                f: rc[ast.Node] | None = callee_of(o, l)
+                if f is not None:
+                    fn2: rc[ast.Node] = f
+                    if fn2.binds_borrow:
+                        return True
+        if returns_borrowed_call(o, nn.body):
+            return True
+        if returns_borrowed_call(o, nn.els):
+            return True
+        if nn.kind == ast.ND_FUNC:
+            return False
+        cur = nn.next
+    return False
+
+# 「戻り値が借りもの」の印を、呼び出しの連なりに沿って広げる。
+#
+# ★ **増えなくなるまで回します。** 呼び出しの向きは定義の順とも
+#   モジュールの依存順とも限らない（相互再帰もある）ためです。
+#   対になる定義: src/ownck.c の propagate_binds_borrow
+def propagate_binds_borrow(o: mut Own) -> None:
+    changed: bool = True
+    while changed:
+        changed = False
+        i: int = 0
+        while i < len(o.func_nodes):
+            fn: rc[ast.Node] = o.func_nodes[i]
+            i = i + 1
+            if fn.binds_borrow or fn.body is None:
+                continue
+            b: rc[ast.Node] = node_of_opt(fn.body)
+            if returns_borrowed_call(o, b.body):
+                fn.binds_borrow = True
+                changed = True
+
 # 関数の表を作る（★ 事前パス。呼び出し側が「戻り値は借りものか」を引ける）
 def collect_funcs(o: mut Own, root: rc[ast.Node]) -> None:
     d: rc[ast.Node] | None = root.body
@@ -1742,6 +1792,8 @@ def ownck_program(mods: rc[module.Module] | None, opt: own Options) -> Own:
         if mm.ast is not None:
             collect_funcs(o, node_of_opt(mm.ast))
         m = mm.next
+    # ★ 表が揃ってから、「戻り値が借りもの」の印を呼び出しに沿って広げる
+    propagate_binds_borrow(o)
     # ② 本検査
     m2: rc[module.Module] | None = mods
     while m2 is not None:

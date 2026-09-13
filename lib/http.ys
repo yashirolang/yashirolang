@@ -1,0 +1,420 @@
+# http — HTTP/1.1 の最小限（サーバーと、ごく簡単なクライアント）
+#
+# ★ **net の上に乗るだけの層です。** ソケットの扱いは net が持ち、
+#   ここは「バイト列 ⇄ Request / Response」の変換と、受付の輪だけです。
+#
+# ★ 対応する範囲（RFC 9112 のうち、実際に要るところ）
+#
+#   | 事柄 | 対応 |
+#   |---|---|
+#   | 要求行・応答行 | ✅ |
+#   | ヘッダ（大小を区別しない） | ✅ |
+#   | Content-Length の本体 | ✅ |
+#   | クエリ文字列 `?a=1&b=2` | ✅ |
+#   | パーセント符号化の復号 | ✅ |
+#   | keep-alive（1 本で何度も） | ✅ |
+#   | チャンク転送 | ⬜ 受け取ると 411 を返す |
+#   | TLS（https） | ⬜ |
+#
+# ⚠️ **1 本ずつ順に捌きます。** 同時接続は spawn で自分で分けてください
+#   （この層は輪を回すだけで、スレッドの方針を決めません）。
+import dict
+import net
+import strings
+
+# 受け取る要求の上限（頭でっかちな要求で潰されないため）
+MAX_HEAD: int = 65536
+MAX_BODY: int = 8388608      # 8 MiB
+
+CRLF: str = "\r\n"
+HEAD_END: str = "\r\n\r\n"
+
+
+# 組み立て・解釈の失敗
+class HttpError:
+    message: str
+    status: int
+
+    def init(self, message: own str, status: int) -> None:
+        self.message = message
+        self.status = status
+
+
+# ── 要求 ────────────────────────────────────────────────
+class Request:
+    method: str
+    # ★ path はクエリを含みません（"/a?b=1" なら "/a"）
+    path: str
+    query: str
+    version: str
+    headers: dict.Dict[str, str]
+    body: str
+
+    def init(self) -> None:
+        self.method = ""
+        self.path = ""
+        self.query = ""
+        self.version = "HTTP/1.1"
+        self.headers = dict.Dict()
+        self.body = ""
+
+    # ヘッダを引く（**大小を区別しません**）
+    def header(mut self, name: str) -> str:
+        return self.headers.get_or(lower(name), "")
+
+    # クエリの値を引く（無ければ ""）
+    def param(self, name: str) -> str:
+        return find_param(self.query, name)
+
+    # 1 本で続けてよいか（HTTP/1.1 は既定で継続）
+    def keep_alive(mut self) -> bool:
+        c: str = lower(self.header("connection"))
+        if c == "close":
+            return False
+        if self.version == "HTTP/1.0":
+            return c == "keep-alive"
+        return True
+
+
+# ── 応答 ────────────────────────────────────────────────
+class Response:
+    status: int
+    headers: dict.Dict[str, str]
+    body: str
+
+    def init(self, status: int, body: own str) -> None:
+        self.status = status
+        self.headers = dict.Dict()
+        self.body = body
+
+    def set(mut self, name: str, value: str) -> None:
+        self.headers.set(lower(name), copy(value))
+
+    # バイト列にする。
+    #
+    # ⚠️ **Content-Length は必ず自分で入れます。** 入れ忘れると、相手は
+    #   「接続が切れるまでが本体」と解釈します（keep-alive が壊れる）。
+    def encode(mut self, keep: bool) -> str:
+        parts: list[str] = []
+        parts.append("HTTP/1.1 " + str(self.status) + " " +
+                     reason(self.status) + CRLF)
+
+        if not self.headers.has("content-type"):
+            self.set("content-type", "text/plain; charset=utf-8")
+        self.set("content-length", str(len(self.body)))
+        if keep:
+            self.set("connection", "keep-alive")
+        else:
+            self.set("connection", "close")
+
+        ks: list[str] = self.headers.keys()
+        for k in ks:
+            parts.append(k + ": " + self.headers.get(k) + CRLF)
+        # ⚠️ **copy が要ります。** CRLF はグローバル、self.body は借りもので、
+        #   そのまま入れると所有者が 2 つになります（E-BORROW-3/7）。
+        parts.append(copy(CRLF))
+        parts.append(copy(self.body))
+        return strings.join(parts, "")
+
+
+# 文字列（text/plain）の応答
+def text(status: int, body: str) -> Response:
+    return Response(status, copy(body))
+
+# HTML の応答
+def html(status: int, body: str) -> Response:
+    r: Response = Response(status, copy(body))
+    r.set("content-type", "text/html; charset=utf-8")
+    return r
+
+# JSON の応答（本体は呼び出し側が作った文字列をそのまま置きます）
+def json(status: int, body: str) -> Response:
+    r: Response = Response(status, copy(body))
+    r.set("content-type", "application/json")
+    return r
+
+
+# ── 解釈 ────────────────────────────────────────────────
+
+# ASCII の小文字化（ヘッダ名は ASCII と決まっています）
+def lower(s: str) -> str:
+    out: list[str] = []
+    i: int = 0
+    while i < len(s):
+        b: int = strings.byte_at(s, i)
+        if b >= 65 and b <= 90:
+            out.append(chr(b + 32))
+        else:
+            out.append(strings.substr(s, i, 1))
+        i = i + 1
+    return strings.join(out, "")
+
+
+# 要求（頭 + 本体）を解釈する。
+#
+# ⚠️ **頭と本体の切れ目は呼び出し側が見つけます**（serve が読みながら探す）。
+#   ここには「頭の全部（空行を含まない）」と「本体」を渡します。
+def parse_request(head: str, body: str) -> Request raises HttpError:
+    r: Request = Request()
+    lines: list[str] = strings.split(head, CRLF)
+    if len(lines) == 0 or len(lines[0]) == 0:
+        raise HttpError("要求行がありません", 400)
+
+    # ① 要求行 "GET /a?b=1 HTTP/1.1"
+    first: list[str] = strings.split(lines[0], " ")
+    if len(first) != 3:
+        raise HttpError("要求行の形が違います", 400)
+    r.method = copy(first[0])
+    target: str = first[1]
+    r.version = copy(first[2])
+
+    q: int = strings.find(target, "?")
+    if q < 0:
+        r.path = decode(target)
+    else:
+        r.path = decode(strings.substr(target, 0, q))
+        r.query = strings.substr(target, q + 1, len(target) - q - 1)
+
+    # ② ヘッダ
+    i: int = 1
+    while i < len(lines):
+        line: str = lines[i]
+        i = i + 1
+        if len(line) == 0:
+            continue
+        c: int = strings.find(line, ":")
+        if c < 0:
+            raise HttpError("ヘッダの形が違います", 400)
+        name: str = lower(strings.strip(strings.substr(line, 0, c)))
+        value: str = strings.strip(strings.substr(line, c + 1,
+                                                  len(line) - c - 1))
+        r.headers.set(name, value)
+
+    r.body = copy(body)
+    return r
+
+
+# パーセント符号化を戻す（"%E3%81%82" や "+"）
+def decode(s: str) -> str:
+    out: list[str] = []
+    i: int = 0
+    while i < len(s):
+        b: int = strings.byte_at(s, i)
+        if b == 37 and i + 2 < len(s):            # '%'
+            hi: int = hex_val(strings.byte_at(s, i + 1))
+            lo: int = hex_val(strings.byte_at(s, i + 2))
+            if hi >= 0 and lo >= 0:
+                out.append(chr(hi * 16 + lo))
+                i = i + 3
+                continue
+        if b == 43:                                # '+' は空白
+            out.append(" ")
+        else:
+            out.append(strings.substr(s, i, 1))
+        i = i + 1
+    return strings.join(out, "")
+
+
+def hex_val(b: int) -> int:
+    if b >= 48 and b <= 57:
+        return b - 48            # 0-9
+    if b >= 97 and b <= 102:
+        return b - 87            # a-f
+    if b >= 65 and b <= 70:
+        return b - 55            # A-F
+    return -1
+
+
+# "a=1&b=2" から name の値を取り出す（無ければ ""）
+def find_param(query: str, name: str) -> str:
+    pairs: list[str] = strings.split(query, "&")
+    for p in pairs:
+        e: int = strings.find(p, "=")
+        if e < 0:
+            if decode(p) == name:
+                return ""
+            continue
+        if decode(strings.substr(p, 0, e)) == name:
+            return decode(strings.substr(p, e + 1, len(p) - e - 1))
+    return ""
+
+
+# 状態番号の短い説明
+def reason(status: int) -> str:
+    if status == 200:
+        return "OK"
+    if status == 201:
+        return "Created"
+    if status == 204:
+        return "No Content"
+    if status == 301:
+        return "Moved Permanently"
+    if status == 302:
+        return "Found"
+    if status == 304:
+        return "Not Modified"
+    if status == 400:
+        return "Bad Request"
+    if status == 401:
+        return "Unauthorized"
+    if status == 403:
+        return "Forbidden"
+    if status == 404:
+        return "Not Found"
+    if status == 405:
+        return "Method Not Allowed"
+    if status == 411:
+        return "Length Required"
+    if status == 413:
+        return "Payload Too Large"
+    if status == 500:
+        return "Internal Server Error"
+    if status == 501:
+        return "Not Implemented"
+    return "Unknown"
+
+
+# ── 受付の輪 ────────────────────────────────────────────
+
+# 1 本の接続を、閉じるまで捌く。
+#
+# ★ **keep-alive に対応します。** 1 本の接続で要求が何度も来るので、
+#   「頭の終わり（空行）まで読む → 本体を Content-Length ぶん読む」を
+#   繰り返します。
+#
+# ⚠️ **recv の切れ目は要求の切れ目ではありません。** 1 回の recv に
+#   要求が 2 本入っていることも、頭が途中で切れていることもあります。
+#   だから読んだぶんを貯めて、その中から切れ目を探します。
+#   （ここを「1 recv = 1 要求」と書くと、手元では通って実地で壊れます。）
+def serve_conn(c: mut net.Conn, handler: fn(Request) -> Response) -> None:
+    buf: str = ""
+    while True:
+        # ① 頭の終わり（空行）が来るまで読む
+        cut: int = strings.find(buf, HEAD_END)
+        while cut < 0:
+            if len(buf) > MAX_HEAD:
+                send_error(c, 413, "要求の頭が大きすぎます")
+                return
+            more: str = ""
+            try:
+                more = c.recv(net.CHUNK)
+            except net.NetError as e:
+                return              # 相手が切った。ふつうに起きること
+            if len(more) == 0:
+                return              # EOF。ここで終わり
+            buf = buf + more
+            cut = strings.find(buf, HEAD_END)
+
+        head: str = strings.substr(buf, 0, cut)
+        rest: str = strings.substr(buf, cut + 4, len(buf) - cut - 4)
+
+        req: Request = Request()
+        try:
+            req = parse_request(head, "")
+        except HttpError as he:
+            send_error(c, he.status, he.message)
+            return
+
+        # ② 本体を Content-Length ぶん読む
+        clen: int = 0
+        cl: str = req.header("content-length")
+        if len(cl) > 0:
+            clen = to_int(cl)
+            if clen < 0:
+                send_error(c, 400, "Content-Length が数ではありません")
+                return
+            if clen > MAX_BODY:
+                send_error(c, 413, "本体が大きすぎます")
+                return
+        elif len(req.header("transfer-encoding")) > 0:
+            # ⚠️ チャンク転送はまだ読めません。**黙って壊れるより、
+            #   はっきり断ります**（411 Length Required）。
+            send_error(c, 411, "Content-Length を付けてください" +
+                               "（チャンク転送には未対応です）")
+            return
+
+        while len(rest) < clen:
+            more2: str = ""
+            try:
+                more2 = c.recv(net.CHUNK)
+            except net.NetError as e2:
+                return
+            if len(more2) == 0:
+                return              # 本体が途中で切れた
+            rest = rest + more2
+
+        req.body = strings.substr(rest, 0, clen)
+        buf = strings.substr(rest, clen, len(rest) - clen)   # 次の要求ぶん
+
+        # ③ 捌いて返す
+        keep: bool = req.keep_alive()
+        res: Response = handler(req)
+        try:
+            c.send(res.encode(keep))
+        except net.NetError as e3:
+            return
+        if not keep:
+            return
+
+
+# 待ち受けて、1 本ずつ順に捌く（戻ってきません）。
+#
+# ★ **同時接続は分けていません。** 1 本ずつです。同時に捌きたいときは
+#   serve_conn を spawn で呼ぶ輪を自分で書いてください——この層が
+#   スレッドの方針を決めてしまわないようにしています。
+def serve(host: str, port: int, handler: fn(Request) -> Response) -> None raises net.NetError:
+    l: net.Listener = net.listen(host, port)
+    serve_on(l, handler)
+
+# すでに開いてある待ち受け口で捌く（ポートを呼び出し側が知りたいとき）。
+# **戻ってきません。**
+def serve_on(l: mut net.Listener, handler: fn(Request) -> Response) -> None:
+    serve_n(l, handler, -1)
+
+# 接続を n 本だけ捌いて戻る（n が負なら永久）。
+#
+# ★ **試験のためだけの機能ではありません。** 「1 本だけ受けて終わる」
+#   道具（開発用の一発サーバー、受け取りの確認）にそのまま使えます。
+#
+# ⚠️ **永久に回る輪は join できません。** 別スレッドで serve_on を回すと、
+#   accept で待ち続けるのでスレッドが終わりません。数を決めて回せば、
+#   終わりが来ます（この言語のテストがそうしています）。
+def serve_n(l: mut net.Listener, handler: fn(Request) -> Response,
+            n: int) -> None:
+    left: int = n
+    while left != 0:
+        try:
+            c: net.Conn = l.accept()
+            serve_conn(c, handler)
+            c.close()
+        except net.NetError as e:
+            return              # 待ち受け口が閉じられた
+        if left > 0:
+            left = left - 1
+
+
+# 決まり文句の失敗応答（送れなくても何もしません）
+def send_error(c: mut net.Conn, status: int, msg: str) -> None:
+    r: Response = text(status, msg)
+    try:
+        c.send(r.encode(False))
+    except net.NetError as e:
+        return
+
+
+# 10 進の文字列を数にする（数でなければ -1）
+#
+# ⚠️ 組み込みの int(s) は数でないと**実行時エラーで落ちます**。
+#   受け取ったヘッダは信用できないので、ここで自分で読みます。
+def to_int(s: str) -> int:
+    if len(s) == 0:
+        return -1
+    n: int = 0
+    i: int = 0
+    while i < len(s):
+        b: int = strings.byte_at(s, i)
+        if b < 48 or b > 57:
+            return -1
+        n = n * 10 + (b - 48)
+        i = i + 1
+    return n

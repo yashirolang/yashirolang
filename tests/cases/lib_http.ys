@@ -1,0 +1,112 @@
+# OUTPUT: HTTP/1.1 200 OK
+# OUTPUT: hello
+# OUTPUT: world
+# OUTPUT: あ b
+# OUTPUT: HTTP/1.1 404 Not Found
+# OUTPUT: keep-alive: 2 本 / 本体 ab
+# OUTPUT: 411: True
+# OUTPUT: 解釈: GET /a 1 x=1
+# EXIT: 0
+# http — HTTP/1.1 の最小限（A-22）
+#
+#   ★ 本物のソケットを通して確かめます（組み立てた文字列を解釈し直す
+#     だけだと、「recv の切れ目が要求の切れ目とは限らない」という
+#     いちばん間違えやすいところが確かめられません）。
+import http
+import net
+import strings
+
+def handle(req: http.Request) -> http.Response:
+    if req.path == "/":
+        return http.text(200, "hello")
+    if req.path == "/echo":
+        return http.text(200, req.body)
+    if req.path == "/q":
+        return http.text(200, req.param("name"))
+    return http.text(404, "nope")
+
+# ★ **6 本だけ捌いて戻ります。** serve_on は永久に回るので、
+#   別スレッドで回すと join できません（最初にそう書いて固まりました）。
+def server(fd: int) -> int:
+    l: net.Listener = net.Listener(fd, 0)
+    http.serve_n(l, handle, 6)
+    return 0
+
+# 1 回つないで、送って、相手が閉じるまで読む
+def once(port: int, msg: str) -> str raises net.NetError:
+    c: net.Conn = net.connect("127.0.0.1", port)
+    c.send(msg)
+    got: str = c.recv_all()
+    c.close()
+    return got
+
+# ⚠️ **copy が要ります。** 要素はリストのものなので、そのまま返すと
+#   関数の出口でリストごと解放され、返した先が宙に浮きます
+#   （最初に書き忘れて、コンパイラに E-BORROW-8 で教わりました）。
+def line0(s: str) -> str:
+    return copy(strings.split(s, "\r\n")[0])
+
+def body_of(s: str) -> str:
+    parts: list[str] = strings.split(s, "\r\n\r\n")
+    if len(parts) < 2:
+        return ""
+    return copy(parts[1])
+
+def main() -> int:
+    try:
+        l: net.Listener = net.listen("127.0.0.1", 0)
+        port: int = l.port
+        t: Thread[int] = spawn(server, l.fd)
+
+        r1: str = once(port, "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        print(line0(r1))
+        print(body_of(r1))
+
+        r2: str = once(port, "POST /echo HTTP/1.1\r\nContent-Length: 5\r\n" +
+                             "Connection: close\r\n\r\nworld")
+        print(body_of(r2))
+
+        # パーセント符号化と '+'（"あ b"）
+        r3: str = once(port, "GET /q?name=%E3%81%82+b HTTP/1.1\r\n" +
+                             "Connection: close\r\n\r\n")
+        print(body_of(r3))
+
+        r4: str = once(port, "GET /nope HTTP/1.1\r\nConnection: close\r\n\r\n")
+        print(line0(r4))
+
+        # ★ keep-alive：1 本の接続で 2 回。しかも **2 本まとめて**送ります。
+        #   1 回の recv に要求が 2 本入る形で、切れ目を正しく探せるか。
+        k: net.Conn = net.connect("127.0.0.1", port)
+        k.send("GET /echo HTTP/1.1\r\nContent-Length: 1\r\n\r\na" +
+               "GET /echo HTTP/1.1\r\nContent-Length: 1\r\nConnection: close\r\n\r\nb")
+        both: str = k.recv_all()
+        k.close()
+        # ⚠️ 応答は **本体のあとに空行が来ません**。だから
+        #   "\r\n\r\n" で切ると「1 本目の本体 + 2 本目の頭」が 1 つの
+        #   かたまりになります（ここを勘違いして書き直しました）。
+        n: int = len(strings.split(both, "HTTP/1.1 200 OK")) - 1
+        segs: list[str] = strings.split(both, "\r\n\r\n")
+        b1: str = strings.substr(segs[1], 0, 1)
+        b2: str = copy(segs[2])
+        print("keep-alive: " + str(n) + " 本 / 本体 " + b1 + b2)
+
+        # 411（チャンク転送には未対応と、はっきり断る）
+        r5: str = once(port, "POST /echo HTTP/1.1\r\n" +
+                             "Transfer-Encoding: chunked\r\n\r\n")
+        print("411: " + str(strings.contains(line0(r5), "411")))
+
+        t.join()
+        l.close()
+    except net.NetError as e:
+        print("NG: " + e.message)
+        return 1
+
+    # 解釈だけを直に確かめる
+    try:
+        req: http.Request = http.parse_request(
+            "GET /a?x=1 HTTP/1.1\r\nHost: h\r\nX-A: 1", "")
+        print("解釈: " + req.method + " " + req.path + " " +
+              req.header("x-a") + " x=" + req.param("x"))
+    except http.HttpError as he:
+        print("解釈 NG: " + he.message)
+    return 0

@@ -580,6 +580,10 @@ int main(int argc, char **argv) {
         //   ⚠️ Windows のスレッドは kernel32 にあるので、何も足しません。
 #ifndef _WIN32
         sb_printf(&cmd, " -pthread");
+#else
+        // ★ ソケット（A-22）。Windows の socket は ws2_32.dll にあります
+        //   （POSIX では libc に入っているので何も足しません）。
+        sb_printf(&cmd, " -lws2_32");
 #endif
         sb_printf(&cmd, " -o \"%s\"", out_path);
         rc = system(sb_str(&cmd));

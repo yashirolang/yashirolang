@@ -150,6 +150,7 @@ make info                  # 使っている clang・triple などの現在値
 | [docs/README.md](docs/README.md) | ドキュメントの入口（全体の地図） |
 | [docs/tutorial.md](docs/tutorial.md) | **入門** — 言語の使い方 |
 | **[docs/reference/numerics.md](docs/reference/numerics.md)** | **数値計算の手引き** — numpy / matplotlib / pandas との対応表 |
+| [docs/reference/net.md](docs/reference/net.md) | **ソケットと HTTP**（サーバーの書き方） |
 | [docs/reference/cli.md](docs/reference/cli.md) | `yashirolang` のオプション |
 | [docs/reference/pkg.md](docs/reference/pkg.md) | パッケージマネージャ `ysm` の使い方 |
 | [docs/spec/](docs/spec/) | **言語仕様** — 構文・型・安全性・標準ライブラリ |

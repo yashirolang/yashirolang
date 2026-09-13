@@ -26,6 +26,7 @@
 #endif
 
 #include <errno.h>
+#include <signal.h>   // SIGPIPE を無視する（ソケット。A-22）
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -889,3 +890,234 @@ char *pl_capture(const char *cmd) {
 }
 
 #endif
+
+// ══════════════════════════════════════════════════════════════════
+//  ソケット（A-22）
+// ══════════════════════════════════════════════════════════════════
+//
+// ★ **ここ（hosted.c）にしか置きません。** ベアメタルにネットワークは
+//   ありません。core.c の 4 フックを増やさない、という方針のとおりです。
+//
+// ★ 方針：**薄く、素直に。** 提供するのは BSD ソケットの 7 つだけです
+//   （listen / accept / connect / send / recv / close / port）。
+//   タイムアウトや多重化は、要るようになってから足します。
+//
+// ⚠️ **失敗は戻り値で返します。panic しません。**
+//   「相手が切った」「ポートが使われている」は**ふつうに起きること**で、
+//   プログラムが続けられなければ困ります。直前の失敗の理由は
+//   pl_sock_error() が文字列で返します（errno を持ち回らせないため）。
+//
+// ⚠️ **fd は int です。** Windows の SOCKET は符号なし 64 ビットですが、
+//   実際に返る値は小さく、INVALID_SOCKET だけが特別です。ここで
+//   -1 に正規化して、言語側からは「負なら失敗」だけを見れば済むようにします。
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+typedef int pl_socklen;
+#define PL_SOCK_ERRNO WSAGetLastError()
+#else
+#include <netdb.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+typedef socklen_t pl_socklen;
+#define PL_SOCK_ERRNO errno
+#define closesocket close
+#endif
+
+// 直前の失敗の理由（言語側は pl_sock_error() で取り出す）
+static char g_sock_err[256] = {0};
+
+static void pl_sock_fail(const char *what, int code) {
+#ifdef _WIN32
+    snprintf(g_sock_err, sizeof(g_sock_err), "%s: エラー番号 %d", what, code);
+#else
+    snprintf(g_sock_err, sizeof(g_sock_err), "%s: %s", what, strerror(code));
+#endif
+}
+
+static void pl_sock_ok(void) { g_sock_err[0] = '\0'; }
+
+char *pl_sock_error(void) { return pl_str_from_cstr(g_sock_err); }
+
+// ⚠️ **Windows は使う前に WSAStartup が要ります。**
+//   利用者に「最初に init を呼んでください」とは言いたくないので、
+//   ソケットを作る入口で 1 回だけ済ませます。POSIX では何もしません。
+static int pl_sock_start(void) {
+    static int done = 0;
+    if (done) return 1;
+#ifdef _WIN32
+    WSADATA w;
+    int rc = WSAStartup(MAKEWORD(2, 2), &w);
+    if (rc != 0) {
+        pl_sock_fail("WSAStartup", rc);
+        return 0;
+    }
+#else
+    // ⚠️ **書き込み側が閉じた相手へ送ると SIGPIPE で落ちます。**
+    //   サーバーでは「相手が先に切る」のがふつうなので、無視して
+    //   send の戻り値（EPIPE）として扱えるようにします。
+    signal(SIGPIPE, SIG_IGN);
+#endif
+    done = 1;
+    return 1;
+}
+
+// host:port を解決して addrinfo を返す（passive なら bind 用）。
+static struct addrinfo *pl_sock_resolve(const char *host, long long port,
+                                        int passive) {
+    char service[16];
+    snprintf(service, sizeof(service), "%lld", port);
+
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;        // ★ まず IPv4 だけ（v6 は要るときに）
+    hints.ai_socktype = SOCK_STREAM;
+    if (passive) hints.ai_flags = AI_PASSIVE;
+
+    struct addrinfo *res = NULL;
+    const char *node = (host && host[0]) ? host : NULL;
+    int rc = getaddrinfo(node, service, &hints, &res);
+    if (rc != 0) {
+        snprintf(g_sock_err, sizeof(g_sock_err), "名前を解決できません: %s",
+                 gai_strerror(rc));
+        return NULL;
+    }
+    return res;
+}
+
+// 待ち受ける。成功すれば fd、失敗すれば -1。
+//
+// ★ port に 0 を渡すと OS が空いているポートを選びます。選ばれた番号は
+//   pl_sock_port(fd) で取れます。**テストがこれを使います**
+//   （決め打ちのポートは、同時に走らせると衝突するため）。
+long long pl_sock_listen(const char *host, long long port, long long backlog) {
+    if (!pl_sock_start()) return -1;
+    struct addrinfo *res = pl_sock_resolve(host, port, 1);
+    if (!res) return -1;
+
+    int fd = (int)socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (fd < 0) {
+        pl_sock_fail("socket", PL_SOCK_ERRNO);
+        freeaddrinfo(res);
+        return -1;
+    }
+
+    // ⚠️ **SO_REUSEADDR を既定で立てます。** これが無いと、落としたばかりの
+    //   サーバーを立て直すときに「アドレスが使用中です」で数十秒待たされます
+    //   （TIME_WAIT）。サーバーを書く人がまず引っかかるところです。
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof(one));
+
+    if (bind(fd, res->ai_addr, (pl_socklen)res->ai_addrlen) != 0) {
+        pl_sock_fail("bind", PL_SOCK_ERRNO);
+        closesocket(fd);
+        freeaddrinfo(res);
+        return -1;
+    }
+    freeaddrinfo(res);
+
+    if (listen(fd, (int)(backlog > 0 ? backlog : 16)) != 0) {
+        pl_sock_fail("listen", PL_SOCK_ERRNO);
+        closesocket(fd);
+        return -1;
+    }
+    pl_sock_ok();
+    return fd;
+}
+
+// 実際に割り当てられたポート番号（listen(…, 0) のあとで使う）。
+long long pl_sock_port(long long fd) {
+    struct sockaddr_in a;
+    pl_socklen n = (pl_socklen)sizeof(a);
+    memset(&a, 0, sizeof(a));
+    if (getsockname((int)fd, (struct sockaddr *)&a, &n) != 0) {
+        pl_sock_fail("getsockname", PL_SOCK_ERRNO);
+        return -1;
+    }
+    pl_sock_ok();
+    return (long long)ntohs(a.sin_port);
+}
+
+// 1 本受け付ける（相手が来るまで待つ）。失敗すれば -1。
+long long pl_sock_accept(long long fd) {
+    int c = (int)accept((int)fd, NULL, NULL);
+    if (c < 0) {
+        pl_sock_fail("accept", PL_SOCK_ERRNO);
+        return -1;
+    }
+    pl_sock_ok();
+    return c;
+}
+
+// つなぎに行く。成功すれば fd、失敗すれば -1。
+long long pl_sock_connect(const char *host, long long port) {
+    if (!pl_sock_start()) return -1;
+    struct addrinfo *res = pl_sock_resolve(host, port, 0);
+    if (!res) return -1;
+
+    int fd = (int)socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (fd < 0) {
+        pl_sock_fail("socket", PL_SOCK_ERRNO);
+        freeaddrinfo(res);
+        return -1;
+    }
+    if (connect(fd, res->ai_addr, (pl_socklen)res->ai_addrlen) != 0) {
+        pl_sock_fail("connect", PL_SOCK_ERRNO);
+        closesocket(fd);
+        freeaddrinfo(res);
+        return -1;
+    }
+    freeaddrinfo(res);
+    pl_sock_ok();
+    return fd;
+}
+
+// 書けるだけ書く。**全部書けるまで繰り返します**（部分送信は上に見せない）。
+// 書いたバイト数を返す。失敗すれば -1。
+long long pl_sock_send(long long fd, const char *s) {
+    long long n = pl_str_len(s);
+    long long sent = 0;
+    while (sent < n) {
+        // ⚠️ MSG_NOSIGNAL が無い環境（macOS / Windows）があるので 0 を渡し、
+        //   代わりに SIGPIPE を無視します（下の pl_sock_init_once）。
+        long long k = (long long)send((int)fd, s + sent, (size_t)(n - sent), 0);
+        if (k <= 0) {
+            pl_sock_fail("send", PL_SOCK_ERRNO);
+            return -1;
+        }
+        sent += k;
+    }
+    pl_sock_ok();
+    return sent;
+}
+
+// 最大 max バイト読む。
+//
+// ⚠️ **戻り値の意味を 3 つに分けます。**
+//     文字列（長さ > 0） … 読めた
+//     ""                  … 相手が閉じた（EOF）
+//     None                … 失敗（理由は pl_sock_error）
+//   EOF とエラーを混ぜると、サーバーの while ループが書けません。
+char *pl_sock_recv(long long fd, long long max) {
+    if (max <= 0) max = 4096;
+    char *buf = (char *)pl_hook_alloc(max);
+    if (!buf) return NULL;
+
+    long long k = (long long)recv((int)fd, buf, (size_t)max, 0);
+    if (k < 0) {
+        pl_sock_fail("recv", PL_SOCK_ERRNO);
+        pl_hook_free(buf);
+        return NULL;
+    }
+    pl_sock_ok();
+    return pl_take_str(buf, (size_t)k);   // k == 0 なら "" ＝ EOF
+}
+
+// 閉じる（閉じ済み・負の fd に渡してもよい）。
+void pl_sock_close(long long fd) {
+    if (fd < 0) return;
+    closesocket((int)fd);
+}

@@ -1,0 +1,145 @@
+# net — TCP ソケット
+#
+# ★ extern（C との境界）をこのファイルに閉じ込めます。
+#   利用者は net.listen を使い、pl_sock_listen を知りません。
+#
+# ★ **薄い層です。** BSD ソケットの listen / accept / connect /
+#   send / recv / close をそのまま包んだだけで、独自の概念は足しません。
+#   HTTP は この上（lib/http<ext>）に乗ります。
+#
+# ⚠️ **失敗は raises で返します。panic しません。**
+#   「ポートが使われている」「相手が切った」は**ふつうに起きること**で、
+#   プログラムが続けられなければ困るからです。
+#
+# ⚠️ **閉じるのは利用者の仕事です**（`c.close()`）。
+#   クラスに「解放されるときに呼ばれる処理」はまだ無いので、
+#   fd を自動では閉じません。忘れると fd が尽きます。
+
+extern def pl_sock_listen(host: str, port: int, backlog: int) -> int
+extern def pl_sock_port(fd: int) -> int
+extern def pl_sock_accept(fd: int) -> int
+extern def pl_sock_connect(host: str, port: int) -> int
+extern def pl_sock_send(fd: int, s: str) -> int
+extern def pl_sock_recv(fd: int, max: int) -> str | None
+extern def pl_sock_close(fd: int) -> None
+extern def pl_sock_error() -> str
+
+# 1 回の recv で受け取る上限（増やしても速くはなりません）
+CHUNK: int = 65536
+
+
+# 通信の失敗。
+#
+# ★ この言語の例外はスタックを巻き戻しません（設計 §4-3）。
+#   `raises NetError` と書いた関数の戻り値を、呼び出し側が
+#   try / except で受け取る形です。
+class NetError:
+    message: str
+
+    def init(self, message: own str) -> None:
+        self.message = message
+
+
+# つながっている 1 本の接続
+class Conn:
+    fd: int
+
+    def init(self, fd: int) -> None:
+        self.fd = fd
+
+    # 最大 max バイト読む。
+    #
+    # ★ 相手が閉じたときは **""**（空文字列）を返します。
+    #   「もう来ない」と「失敗した」を分けるためです。
+    def recv(mut self, max: int) -> str raises NetError:
+        if self.fd < 0:
+            raise NetError("閉じた接続から読もうとしました")
+        got: str | None = pl_sock_recv(self.fd, max)
+        if got is None:
+            raise NetError(pl_sock_error())
+        return got
+
+    # 相手が閉じるまで全部読む
+    def recv_all(mut self) -> str raises NetError:
+        parts: list[str] = []
+        while True:
+            part: str = self.recv(CHUNK)
+            if len(part) == 0:
+                break
+            parts.append(part)
+        return join_parts(parts)
+
+    # 全部書く（書けるまで繰り返します）
+    def send(mut self, s: str) -> int raises NetError:
+        if self.fd < 0:
+            raise NetError("閉じた接続へ書こうとしました")
+        n: int = pl_sock_send(self.fd, s)
+        if n < 0:
+            raise NetError(pl_sock_error())
+        return n
+
+    # 閉じる（2 回呼んでもよい）
+    def close(mut self) -> None:
+        if self.fd >= 0:
+            pl_sock_close(self.fd)
+            self.fd = -1
+
+
+# 待ち受け口
+class Listener:
+    fd: int
+    port: int
+
+    def init(self, fd: int, port: int) -> None:
+        self.fd = fd
+        self.port = port
+
+    # 1 本受け付ける（相手が来るまで待ちます）
+    def accept(mut self) -> Conn raises NetError:
+        if self.fd < 0:
+            raise NetError("閉じた待ち受け口で accept しました")
+        c: int = pl_sock_accept(self.fd)
+        if c < 0:
+            raise NetError(pl_sock_error())
+        return Conn(c)
+
+    def close(mut self) -> None:
+        if self.fd >= 0:
+            pl_sock_close(self.fd)
+            self.fd = -1
+
+
+# 待ち受ける。
+#
+# ★ **port に 0 を渡すと OS が空いているポートを選びます。**
+#   選ばれた番号は `l.port` で読めます。テストや、同じ機械で何本も
+#   立てたいときに使います（決め打ちのポートは衝突するため）。
+def listen(host: str, port: int) -> Listener raises NetError:
+    return listen_backlog(host, port, 16)
+
+def listen_backlog(host: str, port: int, backlog: int) -> Listener raises NetError:
+    fd: int = pl_sock_listen(host, port, backlog)
+    if fd < 0:
+        raise NetError(pl_sock_error())
+    actual: int = pl_sock_port(fd)
+    if actual < 0:
+        pl_sock_close(fd)
+        raise NetError(pl_sock_error())
+    return Listener(fd, actual)
+
+
+# つなぎに行く
+def connect(host: str, port: int) -> Conn raises NetError:
+    fd: int = pl_sock_connect(host, port)
+    if fd < 0:
+        raise NetError(pl_sock_error())
+    return Conn(fd)
+
+
+# ⚠️ strings を import すると循環になりかねないので、ここで足します
+#   （net は下の層でいたいため）。
+def join_parts(parts: list[str]) -> str:
+    out: str = ""
+    for p in parts:
+        out = out + p
+    return out

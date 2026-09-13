@@ -1,0 +1,73 @@
+# OUTPUT: port>0: True
+# OUTPUT: echo:hello
+# OUTPUT: 閉じた接続: ふつうに失敗する
+# OUTPUT: 誰もいないポート: ふつうに失敗する
+# EXIT: 0
+# net — TCP ソケット（A-22）
+#
+#   ★ **ポートは 0 を渡して OS に選ばせます。** 決め打ちにすると、同じ
+#     機械で CI を 2 本走らせたときに衝突します。選ばれた番号は l.port です。
+#
+#   ★ 待ち受け口を main で作ってから、fd をスレッドへ渡します。
+#     「スレッドの中で listen して、main が connect する」形にすると、
+#     listen が済む前に connect してしまう競走になります。
+#
+#   ★ **失敗が panic ではなく raises で返ることも確かめます。**
+#     サーバーは「つながらなかった」で落ちては困るからです。
+import net
+
+def server(fd: int) -> int:
+    try:
+        l: net.Listener = net.Listener(fd, 0)
+        c: net.Conn = l.accept()
+        msg: str = c.recv(1024)
+        c.send("echo:" + msg)
+        c.close()
+    except net.NetError as e:
+        print("server NG: " + e.message)
+    return 0
+
+def main() -> int:
+    # ★ 誰も待っていないポート番号を先に押さえ、すぐ手放します。
+    #   あとでここへ繋ぐと必ず断られます（外の通信はしません）。
+    dead: int = 0
+    try:
+        d: net.Listener = net.listen("127.0.0.1", 0)
+        dead = d.port
+        d.close()
+    except net.NetError as e0:
+        print("NG: " + e0.message)
+        return 1
+
+    try:
+        l: net.Listener = net.listen("127.0.0.1", 0)
+        print("port>0: " + str(l.port > 0))
+
+        t: Thread[int] = spawn(server, l.fd)
+
+        c: net.Conn = net.connect("127.0.0.1", l.port)
+        c.send("hello")
+        # ★ 相手が閉じるまで読む（1 回の recv で全部来るとは限らない）
+        print(c.recv_all())
+        c.close()
+        t.join()
+        l.close()
+    except net.NetError as e1:
+        print("NG: " + e1.message)
+        return 1
+
+    # 閉じた接続から読む
+    closed: net.Conn = net.Conn(-1)
+    try:
+        print("読めた: " + closed.recv(1))
+    except net.NetError as e2:
+        print("閉じた接続: ふつうに失敗する")
+
+    # 誰も待っていないポートへ繋ぐ
+    try:
+        c2: net.Conn = net.connect("127.0.0.1", dead)
+        c2.close()
+        print("誰もいないポート: つながってしまった")
+    except net.NetError as e3:
+        print("誰もいないポート: ふつうに失敗する")
+    return 0

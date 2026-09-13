@@ -391,6 +391,10 @@ def main() -> int:
         # ⚠️ Windows のスレッドは kernel32 にあるので何も足さない。
         if not strings.contains(triple, "windows"):
             parts.append(" -pthread")
+        else:
+            # ★ ソケット（A-22）。Windows の socket は ws2_32.dll にある
+            #   （POSIX では libc に入っているので何も足さない）。
+            parts.append(" -lws2_32")
         parts.append(" -o \"" + out_path + "\"")
         rc = sys.run(strings.join(parts, ""))
 

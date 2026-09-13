@@ -1903,7 +1903,11 @@ class Emitter:
             push = "pl_list_push_ptr"
         self.declare_rt("void @" + push + "(ptr, " + sty + ")")
 
-        v: str = self.elem_to_slot(elem, self.gen_expr(node_of(n.args)))
+        # ★ rc[T] を場所から読んでリストに入れるときは参照数 +1
+        #   （対になる定義: src/codegen.c の append の maybe_retain）
+        v: str = self.elem_to_slot(elem,
+                                   self.maybe_retain(node_of(n.args),
+                                                     self.gen_expr(node_of(n.args))))
         self.emit("  call void @" + push + "(ptr " + obj2 + ", " + sty + " " +
                   v + ")\n")
         return ""
@@ -2472,7 +2476,8 @@ class Emitter:
     # ループが版分けできるなら誘導変数の IR 名を返す（できなければ ""）
     def vz_analyze(mut self, n: rc[ast.Node], sites: mut list[rc[ast.Node]]) -> str:
         # ⚠️ --drop のときは外す（本体を 2 回出すと解放の記録が二重になる）。
-        #   セルフホスト版に --drop はないが、C 版と条件を揃えておく。
+        if self.drop:
+            return ""
         if n.kind != ast.ND_WHILE:
             return ""
 
@@ -3113,7 +3118,9 @@ class Emitter:
                 self.emit("  ret void\n")      # 規約 R9
             else:
                 val: rc[ast.Node] = node_of(n.lhs)
-                v2: str = self.gen_expr(val)
+                # ⚠️ rc[T] を返すときは参照を 1 つ増やす（呼び出し側のぶん）。
+                #   （対になる定義: src/codegen.c の ND_RETURN の maybe_retain）
+                v2: str = self.maybe_retain(val, self.gen_expr(val))
                 # ⚠️ 返す値を**先に**作ってから解放する（解放してから読めない）
                 self.emit_drops_until(None)
                 self.emit("  ret " + self.llvm_type(type_of(val)) + " " + v2 +
@@ -3200,11 +3207,17 @@ class Emitter:
 
             if catcher >= 0:
                 self.store_err(self.err_slot(), n.err_tag, obj)
+                # ★ 捕まえる try まで、抜けるスコープを解放します。
+                if self.drop:
+                    self.emit_drops_until(self.try_scopes[catcher])
                 # ⚠️ emit_br は self を可変借用するので、先に読みます
                 catch_l: str = copy(self.try_labels[catcher])
                 self.emit_br(catch_l)
             else:
                 self.store_err("%err.out", n.err_tag, obj)
+                # ★ 呼び出し元へ返すので、抜けるスコープを全部解放します。
+                if self.drop:
+                    self.emit_drops_until(None)
                 self.emit_default_ret()
             return ""
 

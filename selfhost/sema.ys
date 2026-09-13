@@ -1325,7 +1325,7 @@ class Sema:
                                     "ここでは値として使えません", None, "",
                                     "関数型はエラーの受け渡しを表せません" +
                                     "（raises しない関数で包んでください）")
-                n.ir_name = fs.ir_name
+                n.ir_name = copy(fs.ir_name)
                 n.is_func_ref = True
                 return self.fn_type_of(fs)
 
@@ -1353,7 +1353,7 @@ class Sema:
                             "使う前に宣言してください（例: " + n.name +
                             ": int = 0）")
             return self.ty_int()
-        n.ir_name = v.ir_name
+        n.ir_name = copy(v.ir_name)
         return unwrap_type(v.type)
 
     def check_expr(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
@@ -1458,7 +1458,7 @@ class Sema:
 
         # ④ スコープに登録する（★ 初期化式を検査した「後」に）
         v: rc[types.VarEntry] = self.declare(n.name, want, n.tok)
-        n.ir_name = v.ir_name
+        n.ir_name = copy(v.ir_name)
         n.type = want
 
     def check_assign(mut self, n: mut rc[ast.Node]) -> None:
@@ -1566,7 +1566,7 @@ class Sema:
                             target.name + ": int = 0）")
             return
         target.type = v.type
-        target.ir_name = v.ir_name
+        target.ir_name = copy(v.ir_name)
 
         # ★ 代入できるかは「宣言された型」で判定する
         declared2: rc[ast.Type] = unwrap_type(v.declared)
@@ -1800,7 +1800,7 @@ class Sema:
                 if len(ex2.name) > 0:
                     v: rc[types.VarEntry] = self.declare(ex2.name,
                                                      unwrap_type(ex2.type), ex2.tok)
-                    ex2.ir_name = v.ir_name
+                    ex2.ir_name = copy(v.ir_name)
                 self.check_stmt_list(unwrap_node(ex2.body).body)
                 self.scope_pop()
                 ex2 = ex2.next
@@ -2255,7 +2255,7 @@ class Sema:
         if v is None:
             mf: rc[types.FuncSig] | None = self.lookup_func_in(ms, n.name)
             if mf is not None and len(mf.raises_cls) == 0:
-                n.ir_name = mf.ir_name
+                n.ir_name = copy(mf.ir_name)
                 n.is_func_ref = True
                 n.is_extern = True     # 他モジュールなので declare が要る
                 return self.fn_type_of(mf)
@@ -2277,7 +2277,7 @@ class Sema:
 
         # ★ codegen への記録
         n.mod_name = copy(mod_name)
-        n.ir_name = v.ir_name
+        n.ir_name = copy(v.ir_name)
         n.is_global = True
         n.is_extern = ms != self.cur_syms()
         return unwrap_type(v.type)
@@ -2383,7 +2383,7 @@ class Sema:
             i = i + 1
             a = arg.next
 
-        n.ir_name = f.ir_name
+        n.ir_name = copy(f.ir_name)
         n.is_extern = self.is_extern_owner(f.owner)
         self.check_can_fail(n, f, mname)
         return unwrap_type(f.ret)
@@ -2639,7 +2639,7 @@ class Sema:
                             "この関数は定義されていません", None, "", hint)
             return self.ty_int()
 
-        n.ir_name = f.ir_name
+        n.ir_name = copy(f.ir_name)
         n.is_extern = self.is_extern_owner(f.owner)
         return self.check_call_sig(n, f, "関数")
 
@@ -2756,7 +2756,7 @@ class Sema:
                                     "' が必要です")
                 ai = ai + 1
                 arg = an2.next
-            n.ir_name = fv.ir_name
+            n.ir_name = copy(fv.ir_name)
             n.is_indirect = True
             n.type = ast.elem_of(ftv)
             return ast.elem_of(ftv)
@@ -2919,7 +2919,7 @@ class Sema:
             return self.ty_int()
 
         # ★ 呼ぶ相手の IR 名（モジュール修飾済み）を codegen に渡す
-        n.ir_name = f.ir_name
+        n.ir_name = copy(f.ir_name)
         n.is_extern = self.is_extern_owner(f.owner)
 
         # ③④ 引数の個数と型
@@ -2991,7 +2991,7 @@ class Sema:
         while vi is not None:
             vn: rc[ast.Node] = vi
             e: rc[types.VarEntry] = self.declare(vn.name, rt.params[k], vn.tok)
-            vn.ir_name = e.ir_name
+            vn.ir_name = copy(e.ir_name)
             vn.type = rt.params[k]
             k = k + 1
             vi = vn.next
@@ -3239,7 +3239,7 @@ class Sema:
         f.next = ms.funcs
         ms.funcs = f
 
-        fn.ir_name = f.ir_name
+        fn.ir_name = copy(f.ir_name)
         fn.type = ret
 
     # ── 未初期化フィールドの検査 ──────────────────────
@@ -3711,7 +3711,7 @@ class Sema:
         ms: rc[types.ModuleSyms] = self.cur_syms()
         f.next = ms.funcs
         ms.funcs = f
-        n.ir_name = f.ir_name
+        n.ir_name = copy(f.ir_name)
         n.type = ret
 
     # グローバル変数の登録（言語仕様 6.2）
@@ -3760,7 +3760,7 @@ class Sema:
         v.next = sc.vars
         sc.vars = v
 
-        n.ir_name = v.ir_name
+        n.ir_name = copy(v.ir_name)
         n.is_global = True
         n.type = declared
 
@@ -3777,7 +3777,7 @@ class Sema:
         while pm is not None:
             p: rc[ast.Node] = pm
             v: rc[types.VarEntry] = self.declare(p.name, unwrap_type(p.type), p.tok)
-            p.ir_name = v.ir_name
+            p.ir_name = copy(v.ir_name)
             pm = p.next
 
         body: rc[ast.Node] = unwrap_node(n.body)

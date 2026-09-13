@@ -497,6 +497,12 @@ static void report_borrow(Own *o, BorrowRoot *br, Place *p, Node *at, MoveCtx ct
 //   `a.next = xs[1]` のように、**自分が所有している入れ物から読んだ値**には
 //   BorrowRoot がありません。それでも所有スロットへ入れれば所有者が 2 つになり、
 //   --drop すると二重解放になります（実測：tests/mods/mod_class_across が segfault）。
+//
+// ⚠️ **own 引数へ渡す形（MV_OWN_ARG）もここで見ます。** 以前は MV_FIELD と
+//   MV_APPEND だけを見ていたので、`Box(xs[0])` のように借りものを own 引数へ
+//   渡す形が**診断なしで二重解放**になっていました。受け取った側は own なので
+//   解放し、貸し手も解放します（実測：--drop 版のコンパイラが自分自身を
+//   通せませんでした。docs/roadmap.md A-21c）。
 static void report_store_borrow(Own *o, Place *p, Node *at, MoveCtx ctx) {
     if (o->quiet) return;
 
@@ -512,9 +518,13 @@ static void report_store_borrow(Own *o, Place *p, Node *at, MoveCtx ctx) {
     d.code = "E-BORROW-7";
     d.message = ctx == MV_APPEND
         ? diag_fmt("借用した値 '%s' をリストに保存しています", p->disp)
+        : ctx == MV_OWN_ARG
+        ? diag_fmt("借用した値 '%s' を own 引数へ渡しています", p->disp)
         : diag_fmt("借用した値 '%s' をフィールドに保存しています", p->disp);
     d.primary.tok = at->tok;
-    d.primary.label = "保存すると、所有者が 2 つになります";
+    d.primary.label = ctx == MV_OWN_ARG
+        ? "渡すと、所有者が 2 つになります"
+        : "保存すると、所有者が 2 つになります";
     if (lender) {
         d.related.tok = lender->tok;
         d.related.label = diag_fmt("'%s' が所有しています（読んだだけでは借りものです）",
@@ -1176,7 +1186,8 @@ static bool move_expr(Own *o, Flow *f, Node *n, MoveCtx ctx) {
     //    for のループ変数もここを通ります（仕様 v2 §3.1「for の要素は借用」）。
     //    所有権ごと取り出す xs.pop() は次章で入れます。
     if (p->kind == PL_INDEX) {
-        if (ctx == MV_FIELD || ctx == MV_APPEND) report_store_borrow(o, p, n, ctx);
+        if (ctx == MV_FIELD || ctx == MV_APPEND || ctx == MV_OWN_ARG)
+            report_store_borrow(o, p, n, ctx);
         use_expr(o, f, n);
         return false;
     }
@@ -1184,7 +1195,8 @@ static bool move_expr(Own *o, Flow *f, Node *n, MoveCtx ctx) {
     // ⚠️ グローバルはプログラムが終わるまで生きているので、
     //    読み出しは「借りているだけ」として扱います（解放もしません）。
     if (p->kind == PL_GLOBAL) {
-        if (ctx == MV_FIELD || ctx == MV_APPEND) report_store_borrow(o, p, n, ctx);
+        if (ctx == MV_FIELD || ctx == MV_APPEND || ctx == MV_OWN_ARG)
+            report_store_borrow(o, p, n, ctx);
         use_expr(o, f, n);
         return false;
     }
@@ -1198,7 +1210,8 @@ static bool move_expr(Own *o, Flow *f, Node *n, MoveCtx ctx) {
     // ★ 借用として扱えば、解放も安全です（借りものは解放しないため）。
     //   代わりに「貸し手より長生きしないか」を検査します（E-BORROW-6）。
     if (p->kind == PL_FIELD) {
-        if (ctx == MV_FIELD || ctx == MV_APPEND) report_store_borrow(o, p, n, ctx);
+        if (ctx == MV_FIELD || ctx == MV_APPEND || ctx == MV_OWN_ARG)
+            report_store_borrow(o, p, n, ctx);
         use_expr(o, f, n);
         return false;
     }

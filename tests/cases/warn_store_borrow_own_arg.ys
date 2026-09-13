@@ -1,0 +1,23 @@
+# STAGE0-ONLY: 所有権検査は C 版だけ
+# WARN: warning[E-BORROW-7]: 借用した値 'xs[…]' を own 引数へ渡しています
+# OUTPUT: hello!
+# EXIT: 0
+# 所有しているリストから読んだ要素を、own 引数へ渡すと所有者が 2 つになります。
+# ⚠️ **誤検出ではありません** — --drop を付けると xs の drop と b の drop が
+#   同じ文字列を 2 回解放します（AddressSanitizer が heap-use-after-free と言う）。
+#
+# ★ この形は長らく**診断が出ていませんでした**（docs/roadmap.md A-21c）。
+#   ownck が借用の保存を MV_FIELD と MV_APPEND でしか見ておらず、
+#   MV_OWN_ARG が漏れていたためです。
+#   正しい書き方: b: Box = Box(copy(xs[0]))
+class Box:
+    s: str
+
+    def init(self, s: own str) -> None:
+        self.s = s
+
+def main() -> int:
+    xs: list[str] = ["hello" + "!"]
+    b: Box = Box(xs[0])
+    print(b.s)
+    return 0

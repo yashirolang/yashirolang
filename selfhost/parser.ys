@@ -512,14 +512,14 @@ class Parser:
                 if not mopen.is_punct("("):
                     f: rc[ast.Node] = ast.new_node(ast.ND_FIELD, name_tok)
                     f.lhs = n
-                    f.name = name_tok.text
+                    f.name = copy(name_tok.text)
                     n = f
                     continue
                 self.advance()
 
                 m: rc[ast.Node] = ast.new_node(ast.ND_METHOD, name_tok)
                 m.lhs = n
-                m.name = name_tok.text
+                m.name = copy(name_tok.text)
                 m.args = self.arg_list(mopen)
                 n = m
                 continue
@@ -534,7 +534,7 @@ class Parser:
                                "関数を値として扱うことは v1 では対応していません")
 
             call: rc[ast.Node] = ast.new_node(ast.ND_CALL, n.tok)
-            call.name = n.name
+            call.name = copy(n.name)
             call.args = self.arg_list(open_tok)
             n = call
         return n
@@ -773,7 +773,7 @@ class Parser:
         self.advance()   # "="
 
         n: rc[ast.Node] = ast.new_node(ast.ND_VARDECL, name_tok)
-        n.name = name_tok.text
+        n.name = copy(name_tok.text)
         n.type_ref = tr
         n.rhs = self.expr()
         return n
@@ -1497,14 +1497,14 @@ class Parser:
         t: rc[token.Token] = self.type_name_token(what)
 
         n: rc[ast.Node] = ast.new_node(ast.ND_TYPEREF, t)
-        n.name = t.text
+        n.name = copy(t.text)
 
         # モジュール修飾 lexer.Token（★ 1 段だけ）
         if self.peek().is_punct("."):
             self.advance()
             m: rc[token.Token] = self.type_name_token("モジュール修飾の後には型名を書きます")
-            n.mod_name = n.name
-            n.name = m.text
+            n.mod_name = copy(n.name)
+            n.name = copy(m.text)
             n.tok = m
             if self.peek().is_punct("."):
                 self.fail_hint(self.peek(),
@@ -1567,7 +1567,7 @@ class Parser:
         if (allow_self and name_tok.text == "self" and
                 not self.peek().is_punct(":")):
             n0: rc[ast.Node] = ast.new_node(ast.ND_PARAM, name_tok)
-            n0.name = name_tok.text
+            n0.name = copy(name_tok.text)
             if lead is not None:
                 if lead.is_kw("own"):
                     self.fail_hint(lead,
@@ -1596,7 +1596,7 @@ class Parser:
         tr: rc[ast.Node] = self.type_ref("引数には型注釈が必須です（例: n: int）")
 
         n: rc[ast.Node] = ast.new_node(ast.ND_PARAM, name_tok)
-        n.name = name_tok.text
+        n.name = copy(name_tok.text)
         n.type_ref = tr
         n.mode = mode
         return n
@@ -1633,7 +1633,7 @@ class Parser:
         self.advance()
 
         n: rc[ast.Node] = ast.new_node(ast.ND_FUNC, kw)
-        n.name = name_tok.text
+        n.name = copy(name_tok.text)
 
         # ★ 型引数 def first[T](xs: list[T]) -> T:
         #   ⚠️ クラスと同じ形（名前だけを並べる。制約は書けない）
@@ -1649,7 +1649,7 @@ class Parser:
                                    "型引数の名前が必要です")
                 self.advance()
                 fslot: rc[ast.Node] = ast.new_node(ast.ND_TYPEREF, ftp)
-                fslot.name = ftp.text
+                fslot.name = copy(ftp.text)
                 if fttail is not None:
                     fttail.next = fslot
                 else:
@@ -1736,7 +1736,7 @@ class Parser:
         self.advance()
 
         n2: rc[ast.Node] = ast.new_node(ast.ND_IFACE, kw2)
-        n2.name = nt.text
+        n2.name = copy(nt.text)
 
         self.expect_colon("interface の宣言")
         self.expect(token.TK_NEWLINE, "改行",
@@ -1773,12 +1773,12 @@ class Parser:
         t: rc[token.Token] = self.type_name_token(
             "raises にはエラーの型名を書きます（例: raises IOError）")
         n: rc[ast.Node] = ast.new_node(ast.ND_TYPEREF, t)
-        n.name = t.text
+        n.name = copy(t.text)
         if self.peek().is_punct("."):
             self.advance()
             m: rc[token.Token] = self.type_name_token("モジュール修飾の後には型名を書きます")
-            n.mod_name = n.name
-            n.name = m.text
+            n.mod_name = copy(n.name)
+            n.name = copy(m.text)
             n.tok = m
         return n
 
@@ -1808,7 +1808,7 @@ class Parser:
                                    "as の後には変数名を書きます（例: except IOError as e:）",
                                    "変数名が必要です")
                 self.advance()
-                ex.name = nm.text
+                ex.name = copy(nm.text)
             self.expect_colon("except")
             ex.body = self.block()
             cur.next = ex
@@ -1827,7 +1827,7 @@ class Parser:
         self.advance()                           # ":"
 
         n: rc[ast.Node] = ast.new_node(ast.ND_FIELDDECL, name_tok)
-        n.name = name_tok.text
+        n.name = copy(name_tok.text)
         n.type_ref = self.type_ref("フィールドには型注釈が必須です（例: kind: int）")
 
         if self.peek().is_punct("="):
@@ -1850,7 +1850,7 @@ class Parser:
         self.advance()
 
         n: rc[ast.Node] = ast.new_node(ast.ND_CLASS, kw)
-        n.name = name_tok.text
+        n.name = copy(name_tok.text)
 
         # ★ 型引数 class Dict[K, V]:
         #   ⚠️ 名前だけを並べる（制約は書けない）
@@ -1865,7 +1865,7 @@ class Parser:
                                    "型引数の名前が必要です")
                 self.advance()
                 slot: rc[ast.Node] = ast.new_node(ast.ND_TYPEREF, tp)
-                slot.name = tp.text
+                slot.name = copy(tp.text)
                 if ttail is not None:
                     ttail.next = slot
                 else:
@@ -1890,7 +1890,7 @@ class Parser:
                                    "インタフェース名が必要です")
                 self.advance()
                 islot: rc[ast.Node] = ast.new_node(ast.ND_TYPEREF, it2)
-                islot.name = it2.text
+                islot.name = copy(it2.text)
                 if self.peek().is_punct("."):
                     self.advance()
                     m3: rc[token.Token] = self.peek()
@@ -1898,8 +1898,8 @@ class Parser:
                         self.fail_hint(m3, "モジュール修飾の後には名前を書きます",
                                        "インタフェース名が必要です")
                     self.advance()
-                    islot.mod_name = islot.name
-                    islot.name = m3.text
+                    islot.mod_name = copy(islot.name)
+                    islot.name = copy(m3.text)
                     islot.tok = m3
                 if itail is not None:
                     itail.next = islot
@@ -1990,7 +1990,7 @@ class Parser:
                            "'->' が必要です")
 
         n: rc[ast.Node] = ast.new_node(ast.ND_FUNC, name_tok)
-        n.name = name_tok.text
+        n.name = copy(name_tok.text)
         n.params = params
         n.type_ref = self.type_ref("戻り型を書いてください（例: -> int）")
 
@@ -2021,7 +2021,7 @@ class Parser:
                            "'" + name_tok.text + "' の後に '.' は書けません")
 
         n: rc[ast.Node] = ast.new_node(ast.ND_IMPORT, kw)
-        n.name = name_tok.text
+        n.name = copy(name_tok.text)
         self.expect_newline()
         return n
 

@@ -743,6 +743,24 @@ static Node *callee_of(Own *o, Node *n) {
     return lookup_func(o, n->ir_name);
 }
 
+// 「この呼び出しの戻り値は借りものか」を呼び出しノードに書き写す。
+//
+// ★ なぜ要るか（A-21e）
+//   codegen は「式の途中の一時値」を解放しますが、**戻り値が借りものの
+//   呼び出し**は解放してはいけません（実体の持ち主は別にいる）。
+//   `v.field("k").as_str()` のように `return self.text` を返すメソッドが
+//   その例で、解放すると持ち主の中身が消えます。
+//
+// ⚠️ move_expr でも同じ印を付けていますが、あちらは**結果を束縛するとき**
+//   しか通りません。二項演算のオペランドや引数の位置では通らないので、
+//   ここで全部の呼び出しに付けます（collect_funcs が事前パスで
+//   関数側の binds_borrow を立て終えているので、ここで引けます）。
+static void mark_call_binds_borrow(Own *o, Node *n) {
+    if (n->binds_borrow) return;
+    Node *fn = callee_of(o, n);
+    if (fn && fn->binds_borrow) n->binds_borrow = true;
+}
+
 // 実引数を、仮引数の受け取り方（ParamMode）に従って評価する。
 //
 //   既定（借用）… 読むだけ。所有権は呼び出し側に残る
@@ -1132,10 +1150,12 @@ static void use_expr(Own *o, Flow *f, Node *n) {
             return;
 
         case ND_CALL:
+            mark_call_binds_borrow(o, n);
             call_args(o, f, n, n->cls != NULL);
             return;
 
         case ND_METHOD:
+            mark_call_binds_borrow(o, n);
             // xs.append(v) … コンテナが v の所有権を受け取る（仕様 v2 §3.1）
             if (n->lhs && n->lhs->type && n->lhs->type->kind == TY_LIST &&
                 strcmp(n->name, "append") == 0) {

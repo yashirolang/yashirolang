@@ -541,11 +541,61 @@ self.ovf_flag = saved                  # 戻す
 貸し手の中身が書き換わるかを追うには、フィールドの内容を流れに沿って
 追跡する必要があります（`E-BORROW-6` は貸し手の寿命しか見ていません）。
 
+#### 📏 ⑥ `--drop` を全ケースに付けて測り直しました
+
+```bash
+PLC_EXTRA_FLAGS=--drop tests/run_tests.sh
+```
+
+| 分類 | 件数 | 中身 |
+|---|---|---|
+| ①「壊れて当然」（**診断を見せるための**テスト） | 7 | `warn_*` 系と `mod_class_across` |
+| ② v1 の参照セマンティクス前提で書かれたケース | 5 | `class_ref_eq` / `class_reference_semantics` / `list_reference_semantics` / `nullable_linked_list` / `lexer_perf_note` |
+| ③ **診断が出ないまま壊れるケース** | **0** ✅ | — |
+
+**12 件すべてに診断が出ていることを 1 件ずつ確かめました。**
+
+```
+class_ref_eq / class_reference_semantics / lexer_perf_note        E-MOVE-1
+list_reference_semantics / nullable_linked_list / warn_move_default E-MOVE-1
+warn_share_without_rc                                            E-MOVE-1
+warn_listcomp_borrow                                             E-BORROW-3
+warn_return_borrow                                               E-BORROW-8
+warn_store_borrow_field / warn_store_borrow_own_arg              E-BORROW-7
+mod_class_across                                                 E-BORROW-7
+```
+
+**★ これが A-21 の目的地です。** 「`--drop` を付けると壊れる場所はあるが、
+**壊れる場所は必ずコンパイラが指摘する**」状態になりました。
+
+#### 🐛 A-21g — `binds_borrow` が式の途中で伝播していなかった
+
+⚠️ **A-21e で入れた一時値の解放が、本物の不具合を 3 件作っていました**
+（`generics` / `lib_dict_hash` / `lib_json`）。しかも**診断ゼロ・終了コード 0 で
+出力だけが違う**という、いちばん悪い壊れ方でした。
+
+```
+期待: {"xs":[true,null,"a\nb"],"o":{"k":"v"}}
+実際: {"xs":[true,null,"\"pi\""],"o":{"k":"1"}}   ← 解放済みが再利用されている
+```
+
+`as_str()` のような **`return self.text`（借用を返す）メソッド**の戻り値を
+「一時値」と誤認して解放し、持ち主の中身を消していました。
+
+原因は `binds_borrow`（戻り値が借りもの）の伝播漏れです。`move_expr` は
+**結果を束縛するとき**しか通らないので、二項演算のオペランドや引数の位置では
+旗が立っていませんでした。`collect_funcs` が事前パスで関数側の旗を立て
+終えているので、**すべての呼び出しノード**に伝播させて直しました。
+
+> ★ **測る道具を先に作っておくと、自分で入れた不具合を自分で捕まえられます。**
+> この 3 件は `PLC_EXTRA_FLAGS=--drop` の全ケース実行で見つかりました。
+
 > **残っていること（A-21）**: 順序は
 > **①`selfhost/` の 40 件（✅ 済）→ ②`MV_OWN_ARG` の検査（✅ 済）→
 > ③`move_out` と A-21d（✅ 済）→ ④A-21e：中間の一時値（✅ 済。メソッド引数だけ残）→
-> ⑤`--drop` 版で 3 段ビルドを通す（✅ 済）→ ⑥v1 前提のテストを v2 の書き方へ移す →
-> ⑦`--drop` を既定にする → ⑧`--no-drop` を逃げ道に残す**。
+> ⑤`--drop` 版で 3 段ビルドを通す（✅ 済）→ ⑥全ケースの実測と分類（✅ 済。③が 0 件）→
+> ⑦②の 5 件を v2 の書き方へ移す → ⑧`--drop` を既定にする →
+> ⑨`--no-drop` を逃げ道に残す**。
 > **これが終わるまで、サーバや常駐プロセスは書けません。**
 
 ### 1.5.2 2 番目の穴 — 名前空間

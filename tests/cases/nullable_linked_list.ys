@@ -1,7 +1,14 @@
+# FLAGS: --drop
 # OUTPUT: 1
 # OUTPUT: 2
 # OUTPUT: 3
+# EXIT: 0
 # ゴール：連結リストの走査。while で絞り込み、代入で解除される
+#
+# ⚠️ v1 では a → b → c の順に作って `a.next = b` と繋いでいましたが、
+#   **フィールドへの代入は移動**なので、繋いだ後に b を使うと
+#   E-MOVE-1 になります（仕様 §3.1）。**後ろから作れば**、
+#   各 Node は 1 度しか使われないので移動だけで繋がります。
 class Node:
     v: int
     next: Node | None
@@ -10,11 +17,11 @@ class Node:
         self.v = v
 
 def main() -> int:
-    a: Node = Node(1)
-    b: Node = Node(2)
     c: Node = Node(3)
-    a.next = b
-    b.next = c
+    b: Node = Node(2)
+    b.next = c            # c を b へ移す
+    a: Node = Node(1)
+    a.next = b            # b を a へ移す
 
     cur: Node | None = a
     while cur is not None:

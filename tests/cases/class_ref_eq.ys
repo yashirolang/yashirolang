@@ -1,15 +1,22 @@
+# FLAGS: --drop
 # OUTPUT: True
 # OUTPUT: False
 # OUTPUT: True
+# EXIT: 0
 # クラスの == / != は参照（アドレス）の比較。中身は見ない（言語仕様 4.3）
+#
+# ⚠️ v1 では `c: C = a` と書いて共有を観測していましたが、**v2 では移動**です
+#   （仕様 §3.1）。同じ実体を 2 つの名前で持つには `rc[T]` を使います。
+#   ここで見たいのは「== が中身ではなくアドレスを見る」ことなので、
+#   共有の作り方を rc に変えても性質はそのまま確かめられます。
 class C:
     v: int
 
 def main() -> int:
-    a: C = C()
-    b: C = C()
-    c: C = a
-    print(a == c)
-    print(a == b)
+    a: rc[C] = rc(C())
+    b: rc[C] = rc(C())
+    c: rc[C] = a          # ★ 同じ実体を指す（rc なので a も生きている）
+    print(a == c)         # 同じアドレス
+    print(a == b)         # 中身は同じでもアドレスが違う
     print(a != b)
     return 0

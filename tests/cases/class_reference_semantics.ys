@@ -1,13 +1,21 @@
+# FLAGS: --drop
 # OUTPUT: 99
 # OUTPUT: 99
-# インスタンスは参照。代入でコピーされない（list と同じ、str と違う）
+# EXIT: 0
+# インスタンスは参照。**代入で中身が複製されない**（list と同じ、str と違う）
+#
+# ⚠️ v1 では `b: Cell = a` と書いていましたが、**v2 では移動**なので a が
+#   使えなくなります（仕様 §3.1）。複製されないことを 2 つの名前から
+#   観測するには `rc[T]` を使います。
+#   ★ 見たい性質は「片方から書いた値がもう片方から見える」＝複製されていない、
+#     です。rc にしても実体は 1 つのままなので、そこは変わりません。
 class Cell:
     v: int
 
 def main() -> int:
-    a: Cell = Cell()
-    b: Cell = a
+    a: rc[Cell] = rc(Cell())
+    b: rc[Cell] = a       # ★ 同じ実体（複製しない）
     b.v = 99
-    print(a.v)
+    print(a.v)            # b から書いた値が a から見える
     print(b.v)
     return 0

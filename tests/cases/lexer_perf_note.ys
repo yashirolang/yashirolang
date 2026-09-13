@@ -1,18 +1,31 @@
+# FLAGS: --drop
 # OUTPUT: ok
 # EXIT: 0
-# トークンが「ソース全体」を持つときは **借用**であること
+# トークンが「ソース全体」を持つときは **共有**であること
 #
 #   ⚠️ Token.init が copy(src) していたころ、トークン数 × ソース長 で
 #     O(n²) になっていました。セルフホスト版が自分自身を IR にするのに
-#     3.79 秒（C 版 0.12 秒）。借用に直して 0.32 秒になりました。
+#     3.79 秒（C 版 0.12 秒）。複製をやめて 0.32 秒になりました。
 #
 #   ★ ここでは「大きな文字列を持つオブジェクトを大量に作っても、
 #     実体が増えない」ことを確かめます。複製していれば時間が跳ねます。
+#
+# ⚠️ v1 では `Tok(big, i)` を 4000 回書いて共有していましたが、**v2 では
+#   own 引数へ渡すのは移動**なので、2 回目から E-MOVE-1 になります。
+#   ★ **本物の字句解析器と同じ形に直しました** — ソース全体を `rc[Src]` で
+#     包み、全トークンで**参照を共有**します（selfhost/token の SrcText と
+#     同じ手。A-14 で入れた形です）。複製しないという性質はそのままです。
+class Src:
+    text: str
+
+    def init(self, text: own str) -> None:
+        self.text = text
+
 class Tok:
-    src: str
+    src: rc[Src]   # ★ 全トークンで共有する（複製しない）
     pos: int
-    # ⚠️ own で受け取る（copy しない）。呼び出し側は同じ文字列を渡す
-    def init(self, src: own str, pos: int) -> None:
+
+    def init(self, src: rc[Src], pos: int) -> None:
         self.src = src
         self.pos = pos
 
@@ -26,12 +39,15 @@ def main() -> int:
     for p in parts:
         big = big + p
 
+    # ★ ソース全体を持つのは、この 1 つだけ
+    s: rc[Src] = rc(Src(big))
+
     toks: list[Tok] = []
     i = 0
     while i < 4000:
-        toks.append(Tok(big, i))
+        toks.append(Tok(s, i))   # 参照を配るだけ（40000 バイトは複製しない）
         i = i + 1
 
-    if len(toks) == 4000 and len(toks[3999].src) == 40000:
+    if len(toks) == 4000 and len(toks[3999].src.text) == 40000:
         print("ok")
     return 0

@@ -1,10 +1,19 @@
+# FLAGS: --drop
 # OUTPUT: 1
-# OUTPUT: 1
-# ★ list は参照型かつ可変なので、共有が観測できる（str と違う）
+# OUTPUT: 2
+# EXIT: 0
+# ★ list は参照型かつ可変なので、**写しが渡らない**ことを観測できる（str と違う）
+#
+# ⚠️ v1 では `ys: list[int] = xs` と書いて共有を観測していましたが、
+#   **v2 では移動**です（仕様 §3.1）。写しが渡らないことは、
+#   `mut` で貸し出して確かめます（呼ばれた側の append が呼び出し側から見える）。
+def push(xs: mut list[int], v: int) -> None:
+    xs.append(v)
+
 def main() -> int:
     xs: list[int] = []
-    ys: list[int] = xs
-    ys.append(1)
+    push(xs, 10)
+    print(len(xs))        # 写しなら 0 のまま。参照なので 1
+    push(xs, 20)
     print(len(xs))
-    print(len(ys))
     return 0

@@ -1464,11 +1464,15 @@ class Emitter:
         ot: rc[ast.Type] = type_of(obj_node)
         obj: str = self.gen_expr(obj_node)
         # ⚠️ 入れ子（xs[ys[i * 2]]）に備えて、貯め場所を退避してから使う
-        saved: str = self.ovf_flag
-        self.ovf_flag = ""
+        #
+        # ★ move_out で「持っていく」こと（docs/roadmap.md A-21f）。
+        #   借用のまま saved に置くと、次の `self.ovf_flag = ...` が
+        #   **古い値を解放**するので saved が宙に浮きます（--drop のとき）。
+        #   move_out なら持ち主ごと移るので、代入しても消えません。
+        saved: str = move_out(self.ovf_flag)
         idx0: str = self.gen_index_expr(node_of(n.rhs))
-        ovf: str = self.ovf_flag
-        self.ovf_flag = copy(saved)
+        ovf: str = move_out(self.ovf_flag)
+        self.ovf_flag = saved
 
         # str の添字は 1 文字の str を返す。
         # ★ こちらは 1 文字の str を**新しく作る**ので、どのみち確保が

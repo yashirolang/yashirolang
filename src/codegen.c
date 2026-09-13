@@ -1611,10 +1611,17 @@ static void gen_args(Emitter *e, Node *args, StrBuf *vals, StrBuf *types,
     }
 }
 
-// 控えておいた一時値を解放して、控えを空にする（A-21e）
-static void flush_pending_temps(Emitter *e) {
+// 控えておいた一時値を解放して、控えを空にする（A-21e）。
+//
+// ⚠️ **戻り値が借りものの呼び出しでは解放しません。**
+//   `def pick(a: str) -> str: return a` のように引数をそのまま返す関数だと、
+//   戻り値が実引数と**同じ実体**です。呼び出し後に実引数を解放すると、
+//   受け取ったばかりの戻り値が消えます（ASan が heap-use-after-free と言う）。
+//   ownck が呼び出しノードに binds_borrow を立てているので、それを見ます。
+static void flush_pending_temps(Emitter *e, Node *call) {
     TempArg *t = g_pending_temps;
     g_pending_temps = NULL;
+    if (call && call->binds_borrow) return;   // 漏れるが、壊れない
     for (; t; t = t->next) emit_drop_value(e, t->node->type, t->val);
 }
 
@@ -1683,7 +1690,7 @@ static char *emit_call(Emitter *e, Node *n, const char *args) {
     // ★ 実引数の一時値をここで解放します（A-21e）。
     //   ⚠️ **呼び出しを出し終えてから**です。gen_args の直後に解放すると、
     //     まだ渡していない値を解放してしまいます。
-    flush_pending_temps(e);
+    flush_pending_temps(e, n);
     return t;
 }
 

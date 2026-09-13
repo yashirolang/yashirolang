@@ -25,13 +25,13 @@ def format_token(i: int, t: rc[token.Token]) -> str:
         parts.append(str(t.ival))
     elif t.kind == token.TK_FLOAT:
         # ★ 正規化した後の文字列を出します（ソースのままではありません）
-        parts.append(t.text)
+        parts.append(copy(t.text))   # ★ 借用なので複製する（E-BORROW-3）
     elif t.kind == token.TK_EOF or t.kind == token.TK_NEWLINE:
         parts.append("")
     elif t.kind == token.TK_INDENT or t.kind == token.TK_DEDENT:
         parts.append("")
     else:
-        parts.append(t.raw)
+        parts.append(copy(t.raw))    # ★ 借用なので複製する（E-BORROW-3）
 
     return strings.join(parts, "")
 

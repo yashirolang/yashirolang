@@ -11,6 +11,7 @@ import strings
 import module
 import sema
 import codegen
+import ownck
 import langinfo
 
 def main() -> int:
@@ -46,6 +47,9 @@ def main() -> int:
     mods: rc[module.Module] | None = module.load_modules(path)
     entry: rc[module.Module] | None = module.entry_of(mods, path)
     sema.sema_program(mods, entry)
+    # ★ 所有権検査。解放（--drop）は binds_borrow / moved_out の印に
+    #   依存するので、IR を出す前に必ず通します（C 版 src/main.c と同じ順序）。
+    ownck.ownck_program(mods, ownck.Options())
 
     if entry is None:
         panic("emit_ir: 入口モジュールがありません")

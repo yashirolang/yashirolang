@@ -710,9 +710,55 @@ error: クラス 'Node' にフィールド 'binds_borrow' はありません
 | 診断 | `E-BORROW-6`（借りものが貸し手より長生き） | ✅ |
 | 走査 | `place_of` / `check_use` / `use_expr` / `move_expr` / `call_args` | ✅ |
 | 借用の登録 | `remember_decl` / `mark_borrow_bind` / `bind_alias` | ✅ |
-| 走査 | `stmt` / `check_while`（不動点反復） | ⬜ |
-| 入口 | `check_func` / `ownck_program` | ⬜ |
-| 診断 | `E-MUT-1` / `E-BORROW-5` / `E-SEND-1`〜`4` | ⬜ 後回し |
+| 走査 | `stmt` / `check_while`（不動点反復） | ✅ |
+| 入口 | `collect_funcs` / `check_func` / `check_module` / `ownck_program` | ✅ |
+| 診断 | `E-MUT-1` / `E-BORROW-5` | ✅ |
+| 診断 | `E-SEND-1`〜`4` / `E-UNSAFE-1` | ⬜ 後回し（並行実行と unsafe。メモリ安全性とは独立） |
+
+**📏 C 版との突き合わせ（513 ケース）**
+
+```
+507 件で診断が完全一致（98.8%）
+残る 6 件は E-SEND-* が 5 件、E-UNSAFE-1 が 1 件
+```
+
+**★ 比較したから見つかった移植バグ 3 件**
+
+| 症状 | 原因 |
+|---|---|
+| `Box(xs[0])` で `E-BORROW-7` が出ない | **インスタンス生成も呼び出し**だが `callee_of` が `init` を引いていなかった |
+| 内包表記で `E-BORROW-3` が出ない | `ND_LISTCOMP` の移植漏れ（C 版のコメントが警告していたとおり） |
+| `spawn(work, j)` で `E-MOVE-1` が出ない | spawn 引数の移動が未記録 |
+
+#### 🔶 ⑪ セルフホスト版で解放を有効化 — 進行中
+
+`ownck` を `selfhost/main{{ext}}` と `selfhost/emit_ir{{ext}}` に組み込み、
+`--drop` を解禁しました。**IR をバイト単位で突き合わせて差分を潰しています。**
+
+```
+--drop 付きの IR 一致：88 → 107 → 138 → 141 → 152 件（全 331 ケース中）
+```
+
+⚠️ **既定（`--drop` なし）の IR は無傷**です（330/331 一致。残り 1 件は前からある差）。
+既定の出力を変えないことが、`make selfhost-test` を通す条件です。
+
+見つかった未移植は**すべて解放まわりの部品**でした。
+
+| 欠けていたもの | 内容 |
+|---|---|
+| 静的文字列の印 | `--drop` 時に `1<<62` を立てる（リテラルは解放しない） |
+| `maybe_retain` | `rc[T]` を場所から読んで置くとき参照数 +1 |
+| `emit_drop_value` | 値 1 つを解放 |
+| 代入時の古い値の解放 | `s = s + "!"` の上書きで漏れる |
+| 式文の結果の解放 | 捨てられる戻り値 |
+| `emit_ir` が `ownck` 未呼び出し | **印が立たないので解放が出なかった** |
+| `is_owned_temp` / `drop_temp` | A-21e の中間一時値 |
+
+> ★ **IR をバイト単位で比べる**という手法が、移植漏れを 1 つずつ確実に
+> 炙り出します。`make selfhost-test` が最終的にこれを自動でやります。
+
+残り 179 件は `emit_drops_until` の呼び出し位置など、制御構文まわりの差と
+見られます。
 
 **★ 移植の順番は「メモリ安全性に直結するものから」。**
 `--drop` したときに壊れるかを決めるのは `E-MOVE-1` と `E-BORROW-1,3,4,6,7,8`

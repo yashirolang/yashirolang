@@ -18,6 +18,7 @@ import ast
 import strings
 import token
 import diag
+import module
 
 # ── 場所（Place）の種類 ─────────────────────────────────
 #
@@ -285,6 +286,25 @@ MV_APPEND: int = 2    # xss.append(a)  コンテナへ保存
 MV_RETURN: int = 3    # return a       返す
 MV_OWN_ARG: int = 4   # take(a)        own 引数へ渡す
 
+# ── 書き換えの種類（E-MUT-1 の文面が変わる）────────────────
+# ★ 対になる定義: src/ownck.c の WriteKind
+WR_ASSIGN: int = 0    # p.f = v / xs[i] = v
+WR_METHOD: int = 1    # mut self のメソッドを呼んだ
+WR_APPEND: int = 2    # append した
+WR_ARG: int = 3       # mut 引数に渡した
+
+# ── 1 つの呼び出しに渡す実引数の記録（E-BORROW-5 の判定に使う）──
+# ★ 対になる定義: src/ownck.c の struct ArgRef
+class ArgRef:
+    expr: rc[ast.Node]   # 実引数の式（self なら受け手）
+    is_mut: bool         # 可変借用として渡すか
+    kind: int            # 診断の言い回し
+
+    def init(self, expr: rc[ast.Node], is_mut: bool, kind: int) -> None:
+        self.expr = expr
+        self.is_mut = is_mut
+        self.kind = kind
+
 
 # ── 検査の設定と、報告の数え上げ ────────────────────────────
 #
@@ -486,6 +506,69 @@ class Reporter:
 
 
 
+    # ── E-BORROW-5: 同じ場所を可変借用と他の借用で同時に渡した ──
+    #
+    # ★ 対になる定義: src/ownck.c の report_alias
+    def report_alias(mut self, m: rc[ArgRef], other: rc[ArgRef],
+                     p: rc[Place]) -> None:
+        if self.opt.quiet:
+            return
+        msg: str = "'" + p.disp + "' を可変借用と共有借用で同時に渡しています"
+        rel: str = "こちらは共有借用です"
+        if other.is_mut:
+            msg = "'" + p.disp + "' を 2 つの可変借用として同時に渡しています"
+            rel = "こちらも可変借用です"
+        d: diag.Diag = diag.Diag(msg)
+        d.code = "E-BORROW-5"
+        mt: rc[token.Token] | None = m.expr.tok
+        if mt is not None:
+            d.primary = diag.Label(mt, "こちらは可変借用（書き換える側）です")
+        ot: rc[token.Token] | None = other.expr.tok
+        if ot is not None:
+            d.related = diag.Label(ot, rel)
+        d.hint = ("同じ値を同時に貸せるのは「共有借用を何個でも」か" +
+                  "「可変借用を 1 つだけ」のどちらかです（仕様 §4.3）")
+        self.emit(d, self.opt.deny_borrow)
+
+    # ── E-MUT-1: 読み取り専用の借用を書き換えた ──────────────
+    #
+    # ★ 対になる定義: src/ownck.c の check_mut
+    def report_mut(mut self, at: rc[token.Token], p: rc[Place],
+                   br: rc[BorrowRoot], kind: int, fn_name: str) -> None:
+        if self.opt.quiet:
+            return
+        label: str = "この代入で書き換えています"
+        if kind == WR_METHOD:
+            label = "このメソッドは self を書き換えます"
+        elif kind == WR_APPEND:
+            label = "append はリストを書き換えます"
+        elif kind == WR_ARG:
+            label = "この引数は 'mut' で受け取られます"
+
+        rel: str = "引数 '" + br.origin.name + "' は読み取り専用の借用です（既定）"
+        if br.is_self:
+            rel = "'self' は読み取り専用で借りています"
+
+        tname: str = "T"
+        ot: rc[ast.Type] | None = br.origin.type
+        if ot is not None:
+            tname = ast.type_name(ot)
+        hint: str = "引数を '" + br.origin.name + ": mut " + tname + "' にしてください"
+        if br.is_self:
+            nm: str = fn_name
+            if len(nm) == 0:
+                nm = "メソッド名"
+            hint = "メソッドの宣言を 'def " + nm + "(mut self, ...)' にしてください"
+
+        d: diag.Diag = diag.Diag("読み取り専用の借用 '" + p.disp + "' を書き換えています")
+        d.code = "E-MUT-1"
+        d.primary = diag.Label(at, label)
+        obt: rc[token.Token] | None = br.origin.tok
+        if obt is not None:
+            d.related = diag.Label(obt, rel)
+        d.hint = hint
+        self.emit(d, self.opt.deny_mut)
+
     # ── E-BORROW-6: 借りものが貸し手より長生きする ───────────
     #
     # ★ 借用の寿命を「呼び出しの間」に固定した（仕様 §4.4）のと同じ考えを、
@@ -535,6 +618,7 @@ class Own:
     depth: int               # 今いるスコープの深さ（借用の寿命の検査に使う）
     cur_fn: rc[ast.Node] | None  # いま検査中の関数（診断の「直し方」に名前が要る）
     scope_depth: int         # scope: の中にいる深さ（0 なら外）
+    loop: rc[Loop] | None    # いま中にいるループ（break / continue の合流先）
     # 関数の定義を IR 名から引く表（この引数は own か、を知るのに要る）
     func_keys: list[str]
     func_nodes: list[rc[ast.Node]]
@@ -547,6 +631,7 @@ class Own:
         self.depth = 0
         self.cur_fn = None
         self.scope_depth = 0
+        self.loop = None
         self.func_keys = []
         self.func_nodes = []
 
@@ -716,6 +801,41 @@ def use_expr(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
         use_expr(o, f, nn.lhs)
         return
 
+    # ★ 内包表記 [E for x in xs if C]
+    #
+    # ⚠️ **ここを書かないと、警告が静かに消えます。** 同じことを for で
+    #   書けば止まるのに、内包表記だと素通りしていました（移植時に実際に
+    #   warn_listcomp_borrow が落ちて分かりました）。
+    if k == ast.ND_LISTCOMP:
+        if nn.args is not None:
+            a0: rc[ast.Node] | None = nn.args
+            while a0 is not None:
+                an0: rc[ast.Node] = a0
+                use_expr(o, f, an0)
+                a0 = an0.next
+        else:
+            use_expr(o, f, nn.rhs)
+
+        lv: rc[ast.Node] = node_of_opt(nn.body)   # ループ変数の宣言
+        lv.binds_borrow = True   # 要素は借りもの（list が持ち主のまま）
+        remember_decl(o, lv)
+
+        # ★ 「対象の要素を借りている」ことを登録します。
+        #   脱糖した for が `x = for.it.N[for.ix.N]` を作るのと同じ関係を、
+        #   添字の節点を 1 つ組み立てて伝えます（それが無いと「誰から
+        #   借りたか」が分からず、警告が出ません）。
+        if nn.rhs is not None:
+            lvt: rc[token.Token] | None = lv.tok
+            elem_ref: rc[ast.Node] = ast.new_node(ast.ND_INDEX, lvt)
+            elem_ref.lhs = nn.rhs
+            elem_ref.rhs = nn.rhs   # 添字の中身は見ないので何でもよい
+            bind_alias(o, lv, elem_ref)
+
+        if nn.els is not None:
+            use_expr(o, f, nn.els)
+        move_expr(o, f, nn.lhs, MV_APPEND)
+        return
+
     if k == ast.ND_LIST:
         e: rc[ast.Node] | None = nn.body
         while e is not None:
@@ -738,6 +858,13 @@ def use_expr(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
             if lt is not None and lt.kind == ast.TY_LIST:
                 use_expr(o, f, nn.lhs)
                 move_expr(o, f, nn.args, MV_APPEND)
+                # ★ append はリストを書き換えます。読み取り専用の借用なら止めます。
+                check_mut(o, lh, lh, WR_APPEND)
+                # ★ xs.append(xs) のような自己参照も、ここで B1 に引っかかります。
+                arefs: list[rc[ArgRef]] = [rc(ArgRef(lh, True, WR_APPEND))]
+                if nn.args is not None:
+                    arefs.append(rc(ArgRef(node_of_opt(nn.args), False, WR_ARG)))
+                check_arg_aliases(o, arefs)
                 return
         # ⚠️ 'mod.f(args)'（他モジュールの関数・クラス）は ND_METHOD ですが
         #   self を取りません。第 1 引数をずらすかは
@@ -746,6 +873,16 @@ def use_expr(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
         #     mod.f(args)  → f(args)。飛ばさない
         #     mod.C(args)  → C.init(new, args)。self を飛ばす
         use_expr(o, f, nn.lhs)
+        # ★ mut self を取るメソッドは、受け手を書き換えます。
+        #   読み取り専用の借用に対して呼んでいたら止めます。
+        if lh is not None and len(nn.mod_name) == 0:
+            fnm: rc[ast.Node] | None = callee_of(o, nn)
+            if fnm is not None:
+                fp: rc[ast.Node] | None = node_of_opt(fnm).params
+                if fp is not None:
+                    self_pm: rc[ast.Node] = node_of_opt(fp)
+                    if self_pm.mode == ast.PM_MUT:
+                        check_mut(o, node_of_opt(lh), node_of_opt(lh), WR_METHOD)
         skip: bool = True
         if len(nn.mod_name) > 0:
             skip = nn.cls is not None
@@ -770,8 +907,25 @@ def mark_call_binds_borrow(o: mut Own, n: mut rc[ast.Node]) -> None:
             n.binds_borrow = True
 
 # 呼び出し先の定義ノード（ND_FUNC）。組み込みなら None。
+#
+# ⚠️ **インスタンス生成も呼び出しです。** `Box(xs[0])` は Box.init の
+#   仮引数と突き合わせないと、own 引数へ借りものを渡した形（E-BORROW-7）を
+#   見逃します。移植時にここを落として、warn_store_borrow_own_arg が
+#   出なくなっていました。
 def callee_of(o: Own, n: rc[ast.Node]) -> rc[ast.Node] | None:
     if len(n.builtin) > 0:
+        return None
+    nc: rc[ast.Class] | None = n.cls
+    if nc is not None:
+        c: rc[ast.Class] = nc
+        if not c.has_init or c.node is None:
+            return None
+        m: rc[ast.Node] | None = node_of_opt(c.node).body
+        while m is not None:
+            mm: rc[ast.Node] = m
+            if mm.kind == ast.ND_FUNC and mm.name == "init":
+                return mm
+            m = mm.next
         return None
     return o.lookup_func(n.ir_name)
 
@@ -781,6 +935,19 @@ def callee_of(o: Own, n: rc[ast.Node]) -> rc[ast.Node] | None:
 #   own         … 移動する
 #   mut         … 借用（書き換えるが、所有権は移らない）
 def call_args(o: mut Own, f: mut rc[Flow], n: rc[ast.Node], skip_self: bool) -> None:
+    # ★ spawn(f, a) は「引数 1 つを別スレッドへ手放す」呼び出しです。
+    #   ふつうの呼び出しとは渡し方が違うので、ここで分けます。
+    #
+    # ⚠️ **いまは「移動を記録する」ぶんだけ**移植しています。E-SEND-1〜4
+    #   （スレッドに渡してよいかの検査）は後回しです（docs/roadmap.md A-21 ⑩）。
+    #   移動の記録はメモリ安全性に直結する（spawn に渡した値を後から使うと
+    #   E-MOVE-1）ので、そこだけ先に入れます。
+    nt0: rc[ast.Type] | None = node_type(n)
+    if n.kind == ast.ND_CALL and len(n.ir_name) == 0:
+        if nt0 is not None and nt0.kind == ast.TY_THREAD:
+            spawn_args(o, f, n)
+            return
+
     fn: rc[ast.Node] | None = callee_of(o, n)
     pm: rc[ast.Node] | None = None
     if fn is not None:
@@ -789,19 +956,43 @@ def call_args(o: mut Own, f: mut rc[Flow], n: rc[ast.Node], skip_self: bool) -> 
         if skip_self and pm is not None:
             pmn: rc[ast.Node] = pm
             pm = pmn.next
+    refs: list[rc[ArgRef]] = []
+    # ★ メソッドの受け手（self）も「渡している実引数」の 1 つです。
+    #   mut self なら可変借用なので、別名の判定に入れます。
+    if n.kind == ast.ND_METHOD and n.lhs is not None and len(n.mod_name) == 0:
+        recv_mut: bool = False
+        fnr: rc[ast.Node] | None = callee_of(o, n)
+        if fnr is not None:
+            fpr: rc[ast.Node] | None = node_of_opt(fnr).params
+            if fpr is not None:
+                recv_mut = node_of_opt(fpr).mode == ast.PM_MUT
+        refs.append(rc(ArgRef(node_of_opt(n.lhs), recv_mut, WR_METHOD)))
+
     a: rc[ast.Node] | None = n.args
     while a is not None:
         an: rc[ast.Node] = a
         is_own: bool = False
+        is_mut_param: bool = False
         if pm is not None:
             pn: rc[ast.Node] = pm
             is_own = pn.mode == ast.PM_OWN
+            is_mut_param = pn.mode == ast.PM_MUT
             pm = pn.next
         if is_own:
             move_expr(o, f, an, MV_OWN_ARG)
         else:
             use_expr(o, f, an)
+            # ★ mut で受け取る引数へ、読み取り専用の借用を渡していないか（B3）
+            #
+            # ⚠️ ここは check_call_borrows の①だけです。②（同じ場所を
+            #   可変借用と他の借用で同時に渡す＝E-BORROW-5）は未移植
+            #   （docs/roadmap.md A-21 ⑩）。
+            if is_mut_param:
+                check_mut(o, an, an, WR_ARG)
+        refs.append(rc(ArgRef(an, is_mut_param, WR_ARG)))
         a = an.next
+    # ② 同じ場所を可変借用と他の借用で同時に渡していないか（B1）
+    check_arg_aliases(o, refs)
 
 
 # ── 所有権を動かす（移動したら True）────────────────────────
@@ -1039,3 +1230,521 @@ def node_of_opt(n: rc[ast.Node] | None) -> rc[ast.Node]:
     if n is None:
         panic("ownck: 貸し手の宣言がありません（呼び出し側の条件が誤っています）")
     return n
+
+
+# ── ループの記録（break / continue の合流先）────────────────
+#
+# ★ 対になる定義: src/ownck.c の struct Loop
+class Loop:
+    brk: rc[Flow]      # break で抜けたときの状態の結合
+    cont: rc[Flow]     # continue で戻るときの状態の結合
+    outer: rc[Loop] | None
+
+    def init(self, outer: rc[Loop] | None) -> None:
+        self.brk = rc(Flow())
+        self.brk.dead = True     # まだ誰も通っていない
+        self.cont = rc(Flow())
+        self.cont.dead = True
+        self.outer = outer
+
+
+# ── 文をたどる ──────────────────────────────────────────
+#
+# ★ 対になる定義: src/ownck.c の stmt / stmt_list / while_once / check_while
+
+def stmt_list(o: mut Own, f: mut rc[Flow], first: rc[ast.Node] | None) -> None:
+    n: rc[ast.Node] | None = first
+    while n is not None:
+        if f.dead:
+            return          # return の後ろは実行されない
+        nn: rc[ast.Node] = n
+        stmt(o, f, nn)
+        n = nn.next
+
+# while を 1 周ぶん解析する。
+#   back … 本体を通って入口へ戻るときの状態（逆辺）
+#   exit … ループから抜けるときの状態（条件が偽 / break）
+#
+# ⚠️ この言語には「複数の値を返す」形が無いので、結果は WhileOnce に詰めます。
+class WhileOnce:
+    back: rc[Flow]
+    exit_: rc[Flow]
+
+    def init(self, back: rc[Flow], exit_: rc[Flow]) -> None:
+        self.back = back
+        self.exit_ = exit_
+
+def while_once(o: mut Own, n: rc[ast.Node], entry: rc[Flow]) -> rc[WhileOnce]:
+    cur: rc[Flow] = flow_copy(entry)
+    use_expr(o, cur, n.lhs)          # 条件は毎周評価される
+    exit_: rc[Flow] = flow_copy(cur)  # 条件が偽なら、ここで抜ける
+
+    lp: rc[Loop] = rc(Loop(o.loop))
+    o.loop = lp
+    stmt(o, cur, n.body)
+    flow_join(cur, lp.cont)          # continue は本体末尾と同じ場所へ合流
+    if n.incr is not None:
+        stmt(o, cur, n.incr)         # for の増分
+    o.loop = lp.outer
+
+    flow_join(exit_, lp.brk)
+    return rc(WhileOnce(cur, exit_))
+
+# while の解析。**CFG は作りません**（設計 ownership.md §4.2）。
+def check_while(o: mut Own, f: mut rc[Flow], n: rc[ast.Node]) -> None:
+    # ── ① 入口の状態を不動点まで下げる（診断は出さない）──
+    #
+    # 🤔 なぜ 2 周で収束するのか
+    #   格子の高さが 2（Valid → MaybeMoved → Moved）で、状態は単調にしか
+    #   下がらないためです。3 周目で変化することはありません。
+    #   崩れたらコンパイラの不具合なので、panic して落とします。
+    entry: rc[Flow] = flow_copy(f)
+    rnd: int = 0
+
+    o.quiet_depth = o.quiet_depth + 1
+    o.rep.opt.quiet = True
+    while True:
+        w: rc[WhileOnce] = while_once(o, n, entry)
+        nxt: rc[Flow] = flow_copy(entry)
+        flow_join(nxt, w.back)
+        if flow_eq(nxt, entry):
+            break
+        entry = nxt
+        rnd = rnd + 1
+        if rnd >= 3:
+            panic("ownck: while の所有権解析が収束しません（格子が壊れています）")
+    o.quiet_depth = o.quiet_depth - 1
+    if o.quiet_depth == 0:
+        o.rep.opt.quiet = False
+
+    # ── ② 収束した入口で、もう一度だけ解析して診断を出す ──
+    #
+    # ★ 反復のたびに報告すると、同じ警告が何度も出てしまいます。
+    w2: rc[WhileOnce] = while_once(o, n, entry)
+    f.ents = w2.exit_.ents
+    f.dead = w2.exit_.dead
+
+
+# ── 隠し変数（脱糖が作った別名）────────────────────────────
+#
+# ★ for.it.0 = xs や aug.obj.0 = t は、対象を 1 回だけ評価するための別名です。
+#   利用者が書いた代入ではないので、**移動ではなく借用**として扱います
+#   （仕様 v2 §3.1「for の要素は移動しない」）。
+#   名前に '.' が入るのは脱糖で作った変数だけなので、これで見分けられます。
+def is_hidden_var(name: str) -> bool:
+    return strings.find(name, ".") >= 0
+
+# ★ 隠し変数のうち、`swap.N` だけは**所有します**。
+#
+#   ⚠️ ほかの隠し変数は「対象を 1 回だけ評価するための借り」ですが、
+#     `swap.N` は**右辺の値そのものを預かる場所**なので、借りにすると
+#     `a, b = b, a` で二重解放になります（--drop 付きで実際に壊れました）。
+def is_owning_hidden(name: str) -> bool:
+    return strings.startswith(name, "swap.")
+
+# 入れ物が読み取り専用の借用なら書き換えられません（B3）
+#
+# ★ 局所変数への代入（ND_VAR）は借用を作らないので対象外です（仕様 §5.1）。
+def check_mut(o: mut Own, at: rc[ast.Node], target: rc[ast.Node],
+              kind: int) -> None:
+    p: rc[Place] | None = place_of(target)
+    if p is None:
+        return
+    pp: rc[Place] = p
+    br: rc[BorrowRoot] | None = o.borrow_root_of(pp)
+    if br is None:
+        return          # 借りものではない＝自分のもの。書き換え自由（仕様 §5.1）
+    brr: rc[BorrowRoot] = br
+    if brr.is_mut:
+        return          # mut で借りている
+    t: rc[token.Token] | None = at.tok
+    if t is None:
+        return
+    fname: str = ""
+    cf: rc[ast.Node] | None = o.cur_fn
+    if cf is not None:
+        fname = copy(node_of_opt(cf).name)
+    o.rep.report_mut(t, pp, brr, kind, fname)
+
+# 代入先の場所を「ふたたび Valid」にする
+def assign_to(o: mut Own, f: mut rc[Flow], target: rc[ast.Node]) -> None:
+    if target.kind != ast.ND_VAR:
+        # self.f = v / xs[i] = v … 「入れ物」を読む必要がある
+        use_expr(o, f, target.lhs)
+        if target.kind == ast.ND_INDEX:
+            use_expr(o, f, target.rhs)
+        check_mut(o, target, target, WR_ASSIGN)
+    p: rc[Place] | None = place_of(target)
+    if p is not None:
+        flow_clear(f, p)
+
+# ── 文をたどる ──────────────────────────────────────────
+def stmt(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
+    if n is None or f.dead:
+        return
+    nn: rc[ast.Node] = n
+    k: int = nn.kind
+
+    if k == ast.ND_VARDECL:
+        # ★ 右辺を所有したかどうかで、この変数を解放するかが決まります。
+        #   脱糖が作った隠し変数（for.it.0 など）は必ず借りものです。
+        owns: bool = False
+        if is_hidden_var(nn.name) and not is_owning_hidden(nn.name):
+            use_expr(o, f, nn.rhs)
+        else:
+            owns = move_expr(o, f, nn.rhs, MV_ASSIGN)
+        vt: rc[ast.Type] | None = node_type(nn)
+        if not owns and vt is not None and ty_is_owned(vt):
+            nn.binds_borrow = True
+        remember_decl(o, nn)
+        bind_alias(o, nn, nn.rhs)
+        if len(nn.ir_name) > 0:
+            pk: int = PL_LOCAL
+            if strings.startswith(nn.ir_name, "@"):
+                pk = PL_GLOBAL
+            flow_clear(f, rc(Place(pk, None, copy(nn.ir_name), copy(nn.name))))
+        return
+
+    if k == ast.ND_ASSIGN:
+        lhs: rc[ast.Node] = node_of_opt(nn.lhs)
+        owns2: bool = False
+        if lhs.kind == ast.ND_VAR and is_hidden_var(lhs.name):
+            use_expr(o, f, nn.rhs)
+        else:
+            # ★ グローバルはプログラムが終わるまで残るので、
+            #   フィールドへの保存と同じ扱いにします（B2）。
+            ctx: int = MV_ASSIGN
+            if lhs.kind == ast.ND_FIELD or strings.startswith(lhs.ir_name, "@"):
+                ctx = MV_FIELD
+            owns2 = move_expr(o, f, nn.rhs, ctx)
+        # 借りものを入れ直した変数は、もう自分のものではない
+        if lhs.kind == ast.ND_VAR and not owns2 and nn.rhs is not None:
+            rt: rc[ast.Type] | None = node_type(node_of_opt(nn.rhs))
+            if rt is not None and ty_is_owned(rt):
+                mark_borrow_bind(o, lhs.ir_name)
+        if lhs.kind == ast.ND_VAR:
+            bind_alias(o, lhs, nn.rhs)
+        assign_to(o, f, lhs)
+        return
+
+    if k == ast.ND_BLOCK:
+        o.depth = o.depth + 1
+        stmt_list(o, f, nn.body)
+        o.depth = o.depth - 1
+        return
+
+    if k == ast.ND_SCOPE:
+        o.scope_depth = o.scope_depth + 1
+        stmt(o, f, nn.body)
+        o.scope_depth = o.scope_depth - 1
+        return
+
+    if k == ast.ND_IF:
+        use_expr(o, f, nn.lhs)
+        then_f: rc[Flow] = flow_copy(f)
+        stmt(o, then_f, nn.body)
+        else_f: rc[Flow] = flow_copy(f)
+        if nn.els is not None:
+            stmt(o, else_f, nn.els)
+        # ⚠️ then 側を f に写してから else 側を合流させる（C 版と同じ順序）
+        f.ents = then_f.ents
+        f.dead = then_f.dead
+        flow_join(f, else_f)
+        return
+
+    if k == ast.ND_WHILE:
+        check_while(o, f, nn)
+        return
+
+    if k == ast.ND_TRY:
+        body: rc[Flow] = flow_copy(f)
+        stmt(o, body, nn.body)
+        result: rc[Flow] = flow_copy(body)
+        ex: rc[ast.Node] | None = nn.els
+        while ex is not None:
+            exn: rc[ast.Node] = ex
+            ef: rc[Flow] = flow_copy(f)
+            stmt(o, ef, exn.body)
+            flow_join(result, ef)
+            ex = exn.next
+        f.ents = result.ents
+        f.dead = result.dead
+        return
+
+    if k == ast.ND_RAISE:
+        # ★ エラーオブジェクトは呼び出し元へ渡る＝ return と同じ移動
+        move_expr(o, f, nn.lhs, MV_RETURN)
+        f.dead = True
+        return
+
+    if k == ast.ND_BREAK:
+        lp: rc[Loop] | None = o.loop
+        if lp is not None:
+            flow_join(lp.brk, f)
+        f.dead = True
+        return
+
+    if k == ast.ND_CONTINUE:
+        lp2: rc[Loop] | None = o.loop
+        if lp2 is not None:
+            flow_join(lp2.cont, f)
+        f.dead = True
+        return
+
+    if k == ast.ND_RETURN:
+        # ★ return は移動です。戻り値の所有権は呼び出し側に渡ります。
+        move_expr(o, f, nn.lhs, MV_RETURN)
+        f.dead = True
+        return
+
+    if k == ast.ND_PASS or k == ast.ND_IMPORT or k == ast.ND_FIELDDECL:
+        return
+
+    use_expr(o, f, nn)   # 式文（呼び出し）
+
+
+# ── 入口 ────────────────────────────────────────────────
+#
+# ★ 対になる定義: src/ownck.c の collect_funcs / check_func / ownck_program
+
+# 代入ノードに、その変数の「借りものか」の印を写す。
+#
+# ⚠️ codegen は代入のときに**古い値を解放**します。借りものを束縛している
+#   変数でそれをやると、他人の値を解放してしまいます。
+#   印が付くのは解析の途中（後の行の代入かもしれない）なので、
+#   **解析が終わってから**まとめて写します。
+def propagate_borrow_binds(o: Own, n: rc[ast.Node] | None) -> None:
+    if n is None:
+        return
+    nn: rc[ast.Node] = n
+    if nn.kind == ast.ND_ASSIGN and nn.lhs is not None:
+        lh: rc[ast.Node] = node_of_opt(nn.lhs)
+        if lh.kind == ast.ND_VAR and len(lh.ir_name) > 0:
+            d: rc[DeclEnt] | None = o.find_decl(lh.ir_name)
+            if d is not None:
+                dd: rc[DeclEnt] = d
+                if dd.decl.binds_borrow:
+                    nn.binds_borrow = True
+    propagate_borrow_binds(o, nn.lhs)
+    propagate_borrow_binds(o, nn.rhs)
+    propagate_borrow_binds(o, nn.els)
+    propagate_borrow_binds(o, nn.incr)
+    st: rc[ast.Node] | None = nn.body
+    while st is not None:
+        sn: rc[ast.Node] = st
+        propagate_borrow_binds(o, sn)
+        st = sn.next
+
+# この式は「引数に根ざした場所」か（self を含む）
+def rooted_in_param(fn: rc[ast.Node], n: rc[ast.Node] | None) -> bool:
+    cur: rc[ast.Node] | None = n
+    while cur is not None:
+        c: rc[ast.Node] = cur
+        if c.kind != ast.ND_FIELD and c.kind != ast.ND_INDEX:
+            break
+        cur = c.lhs
+    if cur is None:
+        return False
+    cn: rc[ast.Node] = cur
+    if cn.kind != ast.ND_VAR:
+        return False
+    pm: rc[ast.Node] | None = fn.params
+    while pm is not None:
+        p: rc[ast.Node] = pm
+        if len(p.ir_name) > 0 and len(cn.ir_name) > 0 and p.ir_name == cn.ir_name:
+            return True
+        pm = p.next
+    return False
+
+# この関数は「借りものを返す」か（仕様 §4.5）
+def returns_borrow(fn: rc[ast.Node], n: rc[ast.Node] | None) -> bool:
+    if n is None:
+        return False
+    nn: rc[ast.Node] = n
+    if nn.kind == ast.ND_RETURN:
+        return rooted_in_param(fn, nn.lhs)
+    if returns_borrow(fn, nn.body):
+        return True
+    if returns_borrow(fn, nn.els):
+        return True
+    if nn.kind != ast.ND_FUNC and returns_borrow(fn, nn.next):
+        return True
+    return False
+
+def mark_returns_borrow(fn: mut rc[ast.Node]) -> None:
+    if fn.body is None:
+        return
+    b: rc[ast.Node] = node_of_opt(fn.body)
+    fn.binds_borrow = returns_borrow(fn, b.body)
+
+# 関数の表を作る（★ 事前パス。呼び出し側が「戻り値は借りものか」を引ける）
+def collect_funcs(o: mut Own, root: rc[ast.Node]) -> None:
+    d: rc[ast.Node] | None = root.body
+    while d is not None:
+        dn: rc[ast.Node] = d
+        if dn.kind == ast.ND_FUNC and len(dn.ir_name) > 0:
+            mark_returns_borrow(dn)
+            o.func_keys.append(copy(dn.ir_name))
+            o.func_nodes.append(dn)
+        elif dn.kind == ast.ND_CLASS:
+            m: rc[ast.Node] | None = dn.body
+            while m is not None:
+                mm: rc[ast.Node] = m
+                if mm.kind == ast.ND_FUNC and len(mm.ir_name) > 0:
+                    mark_returns_borrow(mm)
+                    o.func_keys.append(copy(mm.ir_name))
+                    o.func_nodes.append(mm)
+                m = mm.next
+        d = dn.next
+
+# 関数 1 つを検査する
+def check_func(o: mut Own, fn: rc[ast.Node]) -> None:
+    if fn.body is None:
+        return          # extern 宣言には本体が無い
+
+    # ── この関数が「借りている」ものを並べる ──
+    #
+    # ★ own の引数は借りものではありません（所有権を受け取っている）。
+    #   コピー型（int / bool）はそもそも移動しないので、入れても意味がありません。
+    o.roots = []
+    o.decls = []
+    o.depth = 0
+
+    pm: rc[ast.Node] | None = fn.params
+    while pm is not None:
+        p: rc[ast.Node] = pm
+        remember_decl(o, p)
+        pm = p.next
+
+    first: rc[ast.Node] | None = fn.params
+    pm2: rc[ast.Node] | None = fn.params
+    while pm2 is not None:
+        p2: rc[ast.Node] = pm2
+        pt: rc[ast.Type] | None = node_type(p2)
+        ok: bool = p2.mode != ast.PM_OWN and len(p2.ir_name) > 0
+        if ok and pt is not None and ty_is_owned(pt):
+            # self は「型注釈の無い第 1 引数」（parser がそう作る）
+            is_self: bool = False
+            if first is not None:
+                fp: rc[ast.Node] = node_of_opt(first)
+                is_self = p2.ir_name == fp.ir_name and p2.type_ref is None
+            # ★ init だけは self を可変として扱います。生成中のオブジェクトは
+            #   まだ誰にも貸していない「自分のもの」だからです（仕様 §4.2）。
+            is_mut: bool = p2.mode == ast.PM_MUT or (is_self and fn.name == "init")
+            # ★ 借りている引数は所有していないので、解放しません。
+            p2.binds_borrow = True
+            o.roots.append(rc(BorrowRoot(copy(p2.ir_name), p2, True,
+                                         is_self, is_mut, 0)))
+        pm2 = p2.next
+
+    # 引数は、借用でも own でも、関数に入った時点では必ず有効です。
+    f: rc[Flow] = rc(Flow())
+    o.cur_fn = fn
+    body: rc[ast.Node] = node_of_opt(fn.body)
+    stmt_list(o, f, body.body)
+    propagate_borrow_binds(o, fn.body)
+    o.cur_fn = None
+    o.roots = []
+    o.decls = []
+
+# モジュール 1 つのトップレベルを検査する
+def check_module(o: mut Own, root: rc[ast.Node]) -> None:
+    d: rc[ast.Node] | None = root.body
+    while d is not None:
+        dn: rc[ast.Node] = d
+        if dn.kind == ast.ND_FUNC:
+            check_func(o, dn)
+        elif dn.kind == ast.ND_CLASS:
+            m: rc[ast.Node] | None = dn.body
+            while m is not None:
+                mm: rc[ast.Node] = m
+                if mm.kind == ast.ND_FUNC:
+                    check_func(o, mm)
+                m = mm.next
+        d = dn.next
+
+
+# spawn(f, a...) の引数を、始める関数の受け取り方に従って評価する。
+#
+# ⚠️ E-SEND-1〜4（スレッドに渡してよいかの検査）はまだ移植していません。
+#   ここでやるのは**移動の記録**だけです。
+def spawn_args(o: mut Own, f: mut rc[Flow], n: rc[ast.Node]) -> None:
+    fexpr: rc[ast.Node] | None = n.args
+    if fexpr is None:
+        return          # sema がすでに止めているはず
+    fe: rc[ast.Node] = fexpr
+    use_expr(o, f, fe)
+
+    # 始める関数が分かれば、引数の受け取り方（own / 借り / mut）が分かります。
+    spawned: rc[ast.Node] | None = o.lookup_func(fe.ir_name)
+    pm: rc[ast.Node] | None = None
+    if spawned is not None:
+        pm = node_of_opt(spawned).params
+
+    a: rc[ast.Node] | None = fe.next
+    while a is not None:
+        an: rc[ast.Node] = a
+        is_own: bool = True     # 定義が引けないときは移動として扱う（安全側）
+        if pm is not None:
+            p: rc[ast.Node] = pm
+            is_own = p.mode == ast.PM_OWN
+            pm = p.next
+        if is_own:
+            move_expr(o, f, an, MV_OWN_ARG)
+        else:
+            use_expr(o, f, an)
+        a = an.next
+
+
+# 同じ場所を、可変借用と他の借用で同時に渡していないか（B1。仕様 §4.3）
+#
+# ★ 設計 ownership.md §5.1 に書いたとおり、これは**二重ループだけ**です。
+#   借用の寿命が「呼び出しの間」に固定されているので、比べる範囲が
+#   1 つの呼び出しの中に閉じています。
+def check_arg_aliases(o: mut Own, args: list[rc[ArgRef]]) -> None:
+    i: int = 0
+    while i < len(args):
+        a: rc[ArgRef] = args[i]
+        k: int = i + 1
+        while k < len(args):
+            b: rc[ArgRef] = args[k]
+            if a.is_mut or b.is_mut:
+                pa: rc[Place] | None = place_of(a.expr)
+                pb: rc[Place] | None = place_of(b.expr)
+                if pa is not None and pb is not None:
+                    ppa: rc[Place] = pa
+                    ppb: rc[Place] = pb
+                    if place_overlaps(ppa, ppb):
+                        if a.is_mut:
+                            o.rep.report_alias(a, b, ppa)
+                        else:
+                            o.rep.report_alias(b, a, ppa)
+            k = k + 1
+        i = i + 1
+
+
+# ── プログラム全体を検査する（C 版 ownck_program と対）────────
+#
+# ★ 既定は警告です。移動済みの値を使っていても、生成される IR は
+#   変わりません（解放を挿すのは --drop のときだけ）。
+#
+# ⚠️ **2 パスです。** 先に全モジュールの関数表を作ってから検査します。
+#   「この呼び出しの戻り値は借りものか」を引くのに、呼び先の解析が
+#   先に終わっている必要があるためです。
+def ownck_program(mods: rc[module.Module] | None, opt: own Options) -> Own:
+    o: Own = Own(Reporter(opt))
+    # ① 事前パス：関数の表を作り、「借りものを返すか」を印す
+    m: rc[module.Module] | None = mods
+    while m is not None:
+        mm: rc[module.Module] = m
+        if mm.ast is not None:
+            collect_funcs(o, node_of_opt(mm.ast))
+        m = mm.next
+    # ② 本検査
+    m2: rc[module.Module] | None = mods
+    while m2 is not None:
+        mm2: rc[module.Module] = m2
+        if mm2.ast is not None:
+            check_module(o, node_of_opt(mm2.ast))
+        m2 = mm2.next
+    return o

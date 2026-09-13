@@ -7,6 +7,7 @@
 # 生成規約は docs/design/ir-conventions.md にあります。
 import strings
 import ast
+import ownck
 import langinfo
 import module
 import token
@@ -460,8 +461,17 @@ class Emitter:
 
         n: int = len(bytes_)
         parts: list[str] = []
+        # ★ --drop のときは長さのヘッダに「静的」の印を立てます。
+        #   リテラルは .rodata にあるので、解放しようとすると落ちるためです
+        #   （runtime/core.c の PL_STR_STATIC を参照）。
+        #
+        # ⚠️ 印を立てるのは --drop のときだけです。既定の出力を 1 バイトも
+        #   変えないため。対になる定義: src/codegen.c の intern_str
+        hdr: int = n
+        if self.drop:
+            hdr = n | 4611686018427387904   # 1 << 62
         parts.append(lab + " = private unnamed_addr constant { i64, [" +
-                     str(n + 1) + " x i8] } { i64 " + str(n) + ", [" +
+                     str(n + 1) + " x i8] } { i64 " + str(hdr) + ", [" +
                      str(n + 1) + " x i8] c\"")
         i: int = 0
         while i < n:
@@ -1825,6 +1835,72 @@ class Emitter:
     #   使うのは 2 か所です：クラスを作るとき（init の書き忘れ対策）と、
     #   move_out(場所) が値を持っていったあとの書き戻しです。
     #   対になる定義: src/codegen.c の gen_empty_value
+    # rc[T] の参照を 1 つ増やす。
+    #
+    # ★ 増やすのは「場所から読んだ参照を、別の場所に置く」ときだけです。
+    #   rc(...) や関数の戻り値は**新しい参照**なので、そのまま置けます。
+    # ⚠️ retain と release は対です。解放を挿さない（--drop 無し）ときは、
+    #   どちらも出しません（数が合わなくなるより、何もしないほうが安全）。
+    # ⚠️ **`rc[T] | None` も数えます。** ここを TY_RC だけで見ていたので、
+    #   nullable な rc を共有すると数が足りず、--drop で早すぎる解放でした。
+    #   対になる定義: src/codegen.c の maybe_retain / ty_is_rc_shared
+    # 値 1 つを解放する（一時値・上書きされる古い値など）
+    #
+    # ★ 対になる定義: src/codegen.c の emit_drop_value
+    # ── 式の途中に現れる「一時値」の解放（A-21e）──────────────
+    #
+    # ★ `s: str = "x" + str(i)` の **str(i) の結果**は、どこにも束縛されない
+    #   まま pl_str_concat に渡され、**誰も解放しません**。束縛すれば解放
+    #   されるので、式の途中に現れる一時値だけが漏れていました。
+    #
+    # ⚠️ **所有権が移る場所では呼んではいけません。** xs.append(str(i)) は
+    #   リストが所有権を受け取るので、ここで解放すると二重解放になります。
+    #   対になる定義: src/codegen.c の is_owned_temp / drop_temp
+    def is_owned_temp(self, n: rc[ast.Node]) -> bool:
+        t: rc[ast.Type] | None = n.type
+        if t is None or not ownck.ty_is_owned(t):
+            return False
+        if n.binds_borrow:
+            return False   # 借用を返す関数の戻り値（仕様 §4.5）
+        k: int = n.kind
+        # 新しく作られる値。ほかに持ち主がいない。
+        return (k == ast.ND_CALL or k == ast.ND_METHOD or
+                k == ast.ND_BINOP or k == ast.ND_LIST)
+
+    def drop_temp(mut self, n: rc[ast.Node], val: str) -> None:
+        if not self.drop or len(val) == 0 or not self.is_owned_temp(n):
+            return
+        t: rc[ast.Type] | None = n.type
+        if t is not None:
+            self.emit_drop_value(t, val)
+
+    def emit_drop_value(mut self, t: rc[ast.Type], val: str) -> None:
+        fn: str = self.drop_fn_for(t)
+        if len(fn) == 0:
+            return
+        self.emit("  call void " + fn + "(ptr " + val + ")\n")
+
+    def ty_is_rc_shared(self, t: rc[ast.Type]) -> bool:
+        if t.kind == ast.TY_RC:
+            return True
+        if t.kind == ast.TY_OPT:
+            return ast.elem_of(t).kind == ast.TY_RC
+        return False
+
+    def maybe_retain(mut self, rhs: rc[ast.Node], val: str) -> str:
+        if not self.drop:
+            return val
+        rt: rc[ast.Type] | None = rhs.type
+        if rt is None or not self.ty_is_rc_shared(rt):
+            return val
+        if (rhs.kind != ast.ND_VAR and rhs.kind != ast.ND_FIELD and
+                rhs.kind != ast.ND_INDEX):
+            return val
+        self.declare_rt("ptr @pl_rc_retain(ptr)")
+        t: str = self.new_tmp()
+        self.emit("  " + t + " = call ptr @pl_rc_retain(ptr " + val + ")\n")
+        return t
+
     def gen_empty_value(mut self, ty: rc[ast.Type]) -> str:
         if ty.kind == ast.TY_STR:
             return self.intern_str("")
@@ -2567,10 +2643,14 @@ class Emitter:
 
         if rt.kind == ast.TY_NONE:
             self.emit("  call void @" + n.builtin + "(" + argty + " " + v + ")\n")
+            self.drop_temp(node_of(n.args), v)   # A-21e
             return ""
         t: str = self.new_tmp()
         self.emit("  " + t + " = call " + self.llvm_type(rt) + " @" + n.builtin +
                   "(" + argty + " " + v + ")\n")
+        # ⚠️ 組み込みはどれも**借りて読むだけ**です（所有権を受け取りません）。
+        #   だから引数が一時値なら、呼び終わったところで解放できます（A-21e）。
+        self.drop_temp(node_of(n.args), v)
         return t
 
     # ── エラー処理の道具 ──────────────────────────────
@@ -3088,9 +3168,31 @@ class Emitter:
             if self.nobc and len(self.iv_ir) > 0 and tgt0.kind == ast.ND_VAR:
                 if tgt0.ir_name == self.iv_ir:
                     self.no_ovf = True
-            v4: str = self.gen_expr(node_of(n.rhs))
+            v4: str = self.maybe_retain(node_of(n.rhs), self.gen_expr(node_of(n.rhs)))
             self.no_ovf = saved_ovf67
             target: rc[ast.Node] = node_of(n.lhs)
+
+            # ★ 入れ替える前に、古い値を解放します。
+            #   `s = s + "!"` のような上書きは、解放しないと漏れます。
+            #   ⚠️ 借りものを束縛している変数（ownck が印を付けた）は
+            #     所有者ではないので触りません。
+            #   対になる定義: src/codegen.c の ND_ASSIGN
+            if self.drop and not n.binds_borrow:
+                # ⚠️ グローバル（@g.x）は「プログラムが終わるまで生きる場所」
+                #   なので、ここでは触りません（解放するのは所有者だけ）。
+                if target.kind == ast.ND_VAR and strings.startswith(target.ir_name, "%"):
+                    self.emit_drop_value(type_of(n),
+                                         self.gen_load(type_of(n), target.ir_name))
+                # ⚠️ 対象を 2 回評価しないこと。古い値を読むために
+                #   gen_field_ptr をもう一度通すので、対象が単純な変数の
+                #   ときだけに限ります（xs[f()].g = v で f が 2 回走るのを防ぐ）。
+                elif target.kind == ast.ND_FIELD and len(target.mod_name) == 0:
+                    tl: rc[ast.Node] | None = target.lhs
+                    if tl is not None and node_of(tl).kind == ast.ND_VAR:
+                        self.emit_drop_value(type_of(n),
+                                             self.gen_load_tb(type_of(n),
+                                                              self.gen_field_ptr(target),
+                                                              TBAA_FIELD))
 
             # 添字への代入 xs[i] = v
             if target.kind == ast.ND_INDEX:
@@ -3112,7 +3214,17 @@ class Emitter:
             self.gen_store(type_of(n), v4, target.ir_name)
             return ""
 
-        return self.gen_expr(n)                # 式文
+        # 式文
+        #
+        # ★ 捨てられる一時値（呼び出しの戻り値）を解放します。
+        #   ⚠️ 借用を返す関数（仕様 §4.5）の戻り値は所有していません。
+        #   対になる定義: src/codegen.c の gen_stmt の既定枝
+        ev: str = self.gen_expr(n)
+        if self.drop and not n.binds_borrow:
+            nte: rc[ast.Type] | None = n.type
+            if nte is not None and len(ev) > 0:
+                self.emit_drop_value(nte, ev)
+        return ev
 
     # ── alloca の収集（規約 R1）────────────────────────────
 

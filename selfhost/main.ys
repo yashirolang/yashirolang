@@ -20,6 +20,7 @@ import parser
 import sema
 import token
 import codegen
+import ownck
 
 # 実行するステージ（C 版の Stage と同じ）
 STAGE_ALL: int = 0          # 実行ファイルまで作る
@@ -37,6 +38,11 @@ class Options:
     keep_ll: bool
     no_ovf: bool     # --no-overflow-check
     drop: bool       # --drop / --no-drop（解放を挿入する。後勝ち）
+    # ★ 所有権検査の指摘をエラーに上げるか（C 版 src/main.c と対）
+    deny_move: bool
+    deny_borrow: bool
+    deny_mut: bool
+    deny_store_borrow: bool
     jobs: int        # -j N（clang を同時に何本走らせるか。0 = コア数）
     inc: list[str]   # -I <dir>（import を探す場所。何度でも書ける）
 
@@ -48,6 +54,10 @@ class Options:
         self.keep_ll = False
         self.no_ovf = False
         self.drop = False
+        self.deny_move = False
+        self.deny_borrow = False
+        self.deny_mut = False
+        self.deny_store_borrow = False
         self.jobs = 0
         self.inc = []
 
@@ -143,8 +153,15 @@ def parse_args(args: list[str]) -> Options:
         #   借りものや移動済みの値まで解放して壊れます。
         #   移植の状況は docs/roadmap.md の A-21 ⑨ を参照。
         elif a == "--drop":
-            panic("--drop はまだセルフホスト版では使えません" +
-                  "（所有権検査の移植待ち。docs/roadmap.md A-21 ⑨）")
+            o.drop = True
+        elif a == "--deny-move":
+            o.deny_move = True
+        elif a == "--deny-borrow":
+            o.deny_borrow = True
+        elif a == "--deny-mut":
+            o.deny_mut = True
+        elif a == "--deny-store-borrow":
+            o.deny_store_borrow = True
         elif a == "--no-drop":
             o.drop = False
         # ★ 既定は検査あり。速さのために外したいときだけ付ける。
@@ -281,6 +298,18 @@ def main() -> int:
 
     # ── ③ 意味解析・型検査（全モジュールまとめて）──
     sema.sema_program(mods, entry)
+
+    # ── ④ 所有権の検査 ──
+    #
+    # ★ 既定は警告です。移動済みの値を使っていても、生成される IR は
+    #   変わりません（解放を挿すのは --drop のときだけ）。
+    #   対になる定義: src/main.c の ownck_program 呼び出し
+    oopt: ownck.Options = ownck.Options()
+    oopt.deny_move = opt.deny_move
+    oopt.deny_borrow = opt.deny_borrow
+    oopt.deny_mut = opt.deny_mut
+    oopt.deny_store_borrow = opt.deny_store_borrow
+    ownck.ownck_program(mods, oopt)
 
     # --check : ここで終わり
     if opt.stage == STAGE_CHECK:

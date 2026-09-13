@@ -2,16 +2,27 @@
 # OUTPUT: 3
 # OUTPUT: 5
 # 他モジュールのクラスを list に入れ、nullable なフィールドを絞り込んで使う
+#
+#   ⚠️ **v2（所有権）の書き方に直しました。** 前は `a.next = xs[1]` と
+#     リストの要素をフィールドへ入れていて、所有者が 2 つになっていました
+#     （E-BORROW-7）。--drop を既定にすると xs と a が同じ Node を
+#     2 回解放します。確かめたいこと（他モジュールのクラス・nullable な
+#     フィールドの絞り込み・絞り込んだ先での書き換え）は変えていません。
 import ast
 
 def main() -> int:
     xs: list[ast.Node] = [ast.make(2), ast.make(3)]
     print(xs[0].v)
     print(xs[1].v)
+
     a: ast.Node = ast.Node(0)
-    a.next = xs[1]
-    nxt: ast.Node | None = a.next
+    a.next = ast.make(4)          # ★ その場で作る（所有者は 1 つ）
+
+    nxt: ast.Node | None = a.next  # 借りて絞り込む
     if nxt is not None:
-        nxt.v = 5
-    print(xs[1].v)
+        nxt.v = 5                  # 借りたまま書き換える
+
+    after: ast.Node | None = a.next
+    if after is not None:
+        print(after.v)             # 書き換えが持ち主にも見えている
     return 0

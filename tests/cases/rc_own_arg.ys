@@ -1,0 +1,50 @@
+# OUTPUT: 1
+# OUTPUT: 7
+# EXIT: 0
+# rc[T] を own の仮引数へ渡す（A-21 ⑬ で見つかった二重解放の再現）
+#
+#   ⚠️ **rc[T] は移動しません。** 所有者を 1 つに決められないための型なので、
+#     所有権検査は共有として扱います。だから own の仮引数へ渡すときは
+#     **呼び出し側が参照を 1 つ増やして**渡す必要があります。
+#     増やさないと、受け取った側の「出口で手放す」だけが残り、
+#     呼び出し側の解放と合わせて二重解放になります。
+#
+#   ★ この形は make drop-asan（rc_* が対象）で AddressSanitizer にかけます。
+#     20,000 行のコンパイラ自身をコンパイルするまで気づけませんでした。
+
+class TB:
+    n: int
+
+    def init(self, n: int) -> None:
+        self.n = n
+
+class Inst:
+    b: rc[TB] | None
+
+    def init(self, b: own rc[TB]) -> None:
+        self.b = b
+
+class S:
+    tb: rc[TB] | None
+    pend: list[Inst]
+
+    def init(self) -> None:
+        self.tb = None
+        self.pend = []
+
+    def go(mut self) -> None:
+        saved: rc[TB] | None = self.tb
+        b: rc[TB] = rc(TB(7))
+        self.tb = b                 # 共有（参照 +1）
+        self.pend.append(Inst(b))   # ★ own の仮引数へ渡す（参照 +1）
+        self.tb = saved             # 元に戻す（参照 -1）
+
+def main() -> int:
+    s: S = S()
+    s.go()
+    print(len(s.pend))
+    it: Inst = s.pend[0]
+    held: rc[TB] | None = it.b
+    if held is not None:
+        print(held.n)               # 解放されていないので読める
+    return 0

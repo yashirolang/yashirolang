@@ -4,6 +4,8 @@
 # rc[T] を使わずに「入れ物に入れて、なおかつ返す」と警告が出る
 #   ⚠️ これは **誤検出ではありません**。--drop を付けると null を返して落ちます。
 #     正しい書き方は own_share_needs_rc（rc[T] を使う）。
+# FLAGS: --no-drop
+#   ★ 既定が --drop になっても、この試験は解放しません（--drop だと落ちるのが正しい）。
 class Node:
     v: int
     def init(self, v: int) -> None:

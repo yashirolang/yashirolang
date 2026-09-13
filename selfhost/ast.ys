@@ -594,6 +594,12 @@ class Node:
     #   ⚠️ **既定（False）が安全側**です。分からない経路では解放しません。
     #   対になる定義: src/ast.h の arg_is_borrowed
     arg_is_borrowed: bool
+    # ★ この実引数は「own の仮引数」へ渡す rc[T] か（A-21 ⑬）。
+    #   rc[T] は移動しないので、own へ渡すときは**呼び出し側が参照を 1 つ
+    #   増やして**渡します。増やさないと、受け取った側の「出口で手放す」
+    #   だけが残って二重解放になります。
+    #   対になる定義: src/ast.h の arg_own_rc
+    arg_own_rc: bool
     binds_borrow: bool   # 借りものを束縛している（解放してはいけない）
     moved_out: bool      # 移動済み（解放してはいけない）
     # ★ ジェネリクス。
@@ -640,6 +646,7 @@ class Node:
         self.is_list_str = False
         self.is_move_out = False
         self.arg_is_borrowed = False
+        self.arg_own_rc = False
         self.binds_borrow = False
         self.moved_out = False
         self.is_wrap = False

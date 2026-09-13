@@ -7,6 +7,9 @@
 # 解放されるので、--drop を付けると解放済みの文字列を返します。
 #   正しい書き方: return move_out(hits[0])（持ち主から取り上げる）
 #                 return copy(hits[0]) （複製する）
+# FLAGS: --no-drop
+#   ★ 既定が --drop になっても、この試験は解放しません。
+#     下に書いたとおり --drop だと解放済みを返すのが**正しい結果**です。
 def pick() -> str:
     hits: list[str] = []
     hits.append("a" + "b")

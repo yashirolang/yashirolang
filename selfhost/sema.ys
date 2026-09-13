@@ -18,6 +18,32 @@ import types
 #
 # ⚠️ 本言語のグローバルにはリストを書けないので、
 #   Sema の init で 1 回だけ組み立てます（keywords と同じ）。
+# 実引数に「own の仮引数へ渡す rc[T] か」を書き写す（A-21 ⑬）。
+#
+# ⚠️ **rc[T] を own の仮引数へ渡すときは、呼び出し側が参照を 1 つ増やします**
+#   （ast.Node.arg_own_rc）。rc[T] は移動しないので、増やさないと受け取った
+#   側の「出口で手放す」だけが残り、二重解放になります。
+#
+# ⚠️ arg_is_borrowed は**触りません**。あちらは既定（False＝解放しない）が
+#   安全側なので、メソッドと生成では立てないままにしてあります。
+#   対になる定義: src/sema.c の mark_arg_own_rc
+def mark_arg_own_rc(arg: mut rc[ast.Node], f: rc[types.FuncSig], pi: int) -> None:
+    if pi >= len(f.pmodes):
+        return
+    at: rc[ast.Type] | None = arg.type
+    if at is None:
+        arg.arg_own_rc = False
+    else:
+        arg.arg_own_rc = f.pmodes[pi] == ast.PM_OWN and ty_is_rc_shared(at)
+
+# rc[T] / rc[T] | None（ownck の ty_is_rc と同じ判定）
+def ty_is_rc_shared(t: rc[ast.Type]) -> bool:
+    if t.kind == ast.TY_RC:
+        return True
+    if t.kind == ast.TY_OPT:
+        return ty_is_rc_shared(ast.elem_of(t))
+    return False
+
 class Builtin:
     name: str
     arg: int    # 引数の TypeKind
@@ -2404,6 +2430,7 @@ class Sema:
             self.expected = want
             at: rc[ast.Type] = self.check_expr(arg)
             self.expected = None
+            mark_arg_own_rc(arg, f, i + 1)
             if not ast.type_assignable(at, want):
                 diag.error_full(unwrap_tok(arg.tok),
                                 "メソッド '" + mname + "' の第 " + str(i + 1) +
@@ -2744,6 +2771,7 @@ class Sema:
             self.expected = want
             at: rc[ast.Type] = self.check_expr(arg)
             self.expected = None
+            mark_arg_own_rc(arg, f, i + 1)
             if not ast.type_assignable(at, want):
                 diag.error_full(unwrap_tok(arg.tok),
                                 "'" + c.name + "' の生成の第 " + str(i + 1) +
@@ -2989,6 +3017,7 @@ class Sema:
             #   メソッドは別経路なので旗が立たず、解放しません（安全側）。
             if i < len(f.pmodes):
                 arg.arg_is_borrowed = f.pmodes[i] != ast.PM_OWN
+            mark_arg_own_rc(arg, f, i)
             want: rc[ast.Type] = f.params[i]
             if not ast.type_assignable(at, want):
                 diag.error_full(unwrap_tok(arg.tok),
@@ -3991,7 +4020,10 @@ def sema_program(mods: rc[module.Module] | None, entry: rc[module.Module] | None
     # ⚠️ 検査の途中で **さらに実体が増える**ことがある
     #   （Dict[str, Box[int]] のように入れ子の場合）。増えなくなるまで繰り返す。
     while len(s.pending) > 0:
-        batch: list[Instance] = s.pending
+        # ⚠️ move_out で**持ち主ごと**取り出します。ただの代入だと次の行の
+        #   `s.pending = []` が古いリストを解放し、batch が宙に浮きます
+        #   （A-21f。--drop を既定にして stage1 が落ちて見つかりました）。
+        batch: list[Instance] = move_out(s.pending)
         s.pending = []                  # ★ 先に外す（この回の分だけを処理する）
         # ⚠️ **新しく積んだものから**処理する。C 版は連結リストの先頭に
         #   足して先頭から辿るので、この向きでないと実体を出す順番が

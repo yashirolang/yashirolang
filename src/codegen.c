@@ -144,6 +144,7 @@ static void emit_drops_until(Emitter *e, struct ScopeCtx *stop);
 static void emit_default_ret(Emitter *e);
 static char *deref_rc(Emitter *e, Type *t, char *v);
 static char *maybe_retain(Emitter *e, Node *rhs, char *val);
+static char *force_retain(Emitter *e, char *val);
 
 // 新しい一時値の名前を返す（"%t0", "%t1", ...）
 //
@@ -1598,6 +1599,10 @@ static void gen_args(Emitter *e, Node *args, StrBuf *vals, StrBuf *types,
         g_pending_temps = NULL;
         char *v = gen_expr(e, a);
         g_pending_temps = saved;   // 内側は自分で解放済み
+        // ★ rc[T] を own の仮引数へ渡すときは、参照を 1 つ増やして渡します。
+        //   rc[T] は移動しないので（ownck は共有として扱う）、増やさないと
+        //   受け取った側の「出口で手放す」だけが残り、二重解放になります。
+        if (e->drop && a->arg_own_rc) v = force_retain(e, v);
         sb_printf(vals, "%s%s %s", first ? "" : ", ", llvm_type(a->type), v);
         sb_printf(types, "%s%s", first ? "" : ", ", llvm_type(a->type));
         first = false;
@@ -1915,6 +1920,14 @@ static bool ty_is_rc_shared(Type *t) {
     return t->kind == TY_OPT && t->elem && t->elem->kind == TY_RC;
 }
 
+// 参照を 1 つ増やす（場所かどうかを問わない）。
+static char *force_retain(Emitter *e, char *val) {
+    declare_rt(e, "ptr @pl_rc_retain(ptr)");
+    char *t = new_tmp(e);
+    sb_printf(&e->fn, "  %s = call ptr @pl_rc_retain(ptr %s)\n", t, val);
+    return t;
+}
+
 static char *maybe_retain(Emitter *e, Node *rhs, char *val) {
     if (!e->drop || !rhs || !ty_is_rc_shared(rhs->type)) return val;
     if (rhs->kind != ND_VAR && rhs->kind != ND_FIELD && rhs->kind != ND_INDEX)
@@ -2131,6 +2144,9 @@ static char *gen_new(Emitter *e, Node *n) {
     sb_printf(&ptypes, "ptr");
     for (Node *a = n->args; a; a = a->next) {
         char *v = gen_expr(e, a);
+        // ★ gen_args と同じ理由で、own の仮引数へ渡す rc[T] は参照 +1。
+        //   （生成は init を直に呼ぶので、gen_args を通りません）
+        if (e->drop && a->arg_own_rc) v = force_retain(e, v);
         sb_printf(&args, ", %s %s", llvm_type(a->type), v);
         sb_printf(&ptypes, ", %s", llvm_type(a->type));
     }

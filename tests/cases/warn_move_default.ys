@@ -3,6 +3,8 @@
 # EXIT: 3
 # 既定は警告。生成される IR は v1 のままなので、実行はできる
 #         （--deny-move を付けるとエラーになる。err_move_assign を参照）
+# FLAGS: --no-drop
+#   ★ 既定が --drop になっても、この試験は解放しません（移動済みを使う例）。
 def main() -> int:
     xs: list[int] = [1, 2, 3]
     ys: list[int] = xs

@@ -23,7 +23,8 @@ def main() -> int:
     # ⚠️ 引数の形は C 版に合わせます（オプションは入力ファイルより前）。
     path: str = ""
     no_ovf: bool = False
-    drop: bool = False
+    # ★ 解放（drop）は**既定で入れる**（A-21 ⑬。C 版 src/main.c と対）
+    drop: bool = True
     ai: int = 1
     while ai < len(args):
         a: str = args[ai]

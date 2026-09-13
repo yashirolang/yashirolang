@@ -156,7 +156,12 @@ for case_file in "${CASES[@]}"; do
     # ★ 全ケースに同じオプションを足して回すための口。
     #   「--drop を既定にしたら何件壊れるか」のような棚卸しに使います。
     #     PLC_EXTRA_FLAGS=--drop tests/run_tests.sh
-    extra_flags="$extra_flags ${PLC_EXTRA_FLAGS:-}"
+    #
+    #   ⚠️ **ケースの FLAGS より前**に置きます。打ち消し合うオプション
+    #     （--drop と --no-drop）は後に書いたほうが勝つので、この順なら
+    #     ケース側の指定が勝ちます。診断を見せるためのテストが
+    #     「--no-drop」と書いて自衛できるのは、この順のおかげです。
+    extra_flags="${PLC_EXTRA_FLAGS:-} $extra_flags"
     stage0_only="$(sed -n 's/^# *STAGE0-ONLY: *//p' "$case_file" | head -1)"
 
     # ★ C 版でしか動かないケースは、セルフホスト版で回すときに飛ばす

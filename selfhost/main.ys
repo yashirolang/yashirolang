@@ -53,7 +53,8 @@ class Options:
         self.stage = STAGE_ALL
         self.keep_ll = False
         self.no_ovf = False
-        self.drop = False
+        # ★ 解放（drop）は**既定で入れる**（A-21 ⑬。逃げ道は --no-drop）
+        self.drop = True
         self.deny_move = False
         self.deny_borrow = False
         self.deny_mut = False
@@ -84,7 +85,7 @@ def usage(status: int) -> None:
     print("  --dump-ast      AST を S 式で表示して終了（構文解析のデバッグ用）")
     print("  --keep-ll       実行ファイル生成後も .ll を残す")
     print("  --check         型検査までで止める（エラーが無ければ何も出さない）")
-    print("  --drop          スコープの出口に解放（drop）を挿入する")
+    print("  --drop          スコープの出口に解放（drop）を挿入する（既定）")
     print("  --no-drop       解放を挿入しない（--drop を打ち消す。後勝ち）")
     print("  --no-overflow-check")
     print("                  数の実行時検査を外す（既定は検査する）:")
@@ -145,13 +146,10 @@ def parse_args(args: list[str]) -> Options:
             o.keep_ll = True
         elif a == "--check":
             o.stage = STAGE_CHECK
-        # ★ 解放（drop）の挿入。**後に書いたほうが勝ち**（C 版 src/main.c と対）
-        #
-        # ⚠️ **セルフホスト版ではまだ受け付けません。** 解放の挿入は所有権検査
-        #   （ownck）が立てる binds_borrow / moved_out に依存しますが、
-        #   ownck はまだ C 版にしかありません。印が無いまま解放を挿すと、
-        #   借りものや移動済みの値まで解放して壊れます。
-        #   移植の状況は docs/roadmap.md の A-21 ⑨ を参照。
+        # ★ 解放（drop）の挿入。**既定で入る**。
+        #   **後に書いたほうが勝ち**（C 版 src/main.c と対）。
+        #   診断を見せるためのテスト（warn_* など）は危険な書き方をわざとして
+        #   いるので、そこに --no-drop を付けます。
         elif a == "--drop":
             o.drop = True
         elif a == "--deny-move":
@@ -301,8 +299,9 @@ def main() -> int:
 
     # ── ④ 所有権の検査 ──
     #
-    # ★ 既定は警告です。移動済みの値を使っていても、生成される IR は
-    #   変わりません（解放を挿すのは --drop のときだけ）。
+    # ★ 既定は警告です（--deny-* でエラーに上げられます）。ただし解放は
+    #   既定で挿すので、ここで立つ印（binds_borrow / moved_out）に
+    #   codegen が従います。
     #   対になる定義: src/main.c の ownck_program 呼び出し
     oopt: ownck.Options = ownck.Options()
     oopt.deny_move = opt.deny_move

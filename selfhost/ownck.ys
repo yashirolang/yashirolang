@@ -227,7 +227,9 @@ def flow_join(dst: mut rc[Flow], src: rc[Flow]) -> None:
         return          # 到達しない経路は合流に参加しない（設計 4.2）
     if dst.dead:
         cp: rc[Flow] = flow_copy(src)
-        dst.ents = cp.ents
+        # ★ move_out で持ち主ごと移す。ただの代入だと cp と dst が同じ
+        #   リストを持ち、cp のスコープ出口で解放されて dst が宙に浮きます。
+        dst.ents = move_out(cp.ents)
         dst.dead = cp.dead
         return
 
@@ -1321,7 +1323,7 @@ def check_while(o: mut Own, f: mut rc[Flow], n: rc[ast.Node]) -> None:
     #
     # ★ 反復のたびに報告すると、同じ警告が何度も出てしまいます。
     w2: rc[WhileOnce] = while_once(o, n, entry)
-    f.ents = w2.exit_.ents
+    f.ents = move_out(w2.exit_.ents)   # ★ 持ち主ごと移す（下の flow_join と同じ理由）
     f.dead = w2.exit_.dead
 
 
@@ -1447,7 +1449,7 @@ def stmt(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
         if nn.els is not None:
             stmt(o, else_f, nn.els)
         # ⚠️ then 側を f に写してから else 側を合流させる（C 版と同じ順序）
-        f.ents = then_f.ents
+        f.ents = move_out(then_f.ents)   # ★ 持ち主ごと移す
         f.dead = then_f.dead
         flow_join(f, else_f)
         return
@@ -1467,7 +1469,7 @@ def stmt(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
             stmt(o, ef, exn.body)
             flow_join(result, ef)
             ex = exn.next
-        f.ents = result.ents
+        f.ents = move_out(result.ents)   # ★ 持ち主ごと移す
         f.dead = result.dead
         return
 

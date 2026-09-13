@@ -1,0 +1,49 @@
+# OUTPUT: 2
+# OUTPUT: ab
+# EXIT: 0
+# 「退避して戻す」形（A-21f）。move_out が要ります
+#
+#   ⚠️ **代入は古い値を解放します。** だから
+#
+#       saved: list[int] = self.xs
+#       self.xs = []            ← ここで古いリストが解放され、saved が宙に浮く
+#
+#     となります。持ち主ごと取り出す move_out を使えば直ります。
+#     コンパイラ自身がこの形を 4 か所に持っていて、--drop を既定にしたら
+#     stage1 が自分自身をコンパイルする途中で落ちました。
+#
+#   ★ make drop-asan（drop_* が対象）で AddressSanitizer にかけます。
+
+class Buf:
+    xs: list[int]
+    tag: str
+
+    def init(self) -> None:
+        self.xs = []
+        self.tag = ""
+
+    # 貯めたものを取り出して、入れ物を空に戻す
+    def take(mut self) -> list[int] :
+        out: list[int] = move_out(self.xs)
+        self.xs = []
+        return out
+
+    # 旗を退避して、別の値で作業してから戻す
+    def swap_tag(mut self, t: str) -> str:
+        saved: str = move_out(self.tag)
+        self.tag = copy(t)
+        back: str = move_out(self.tag)
+        self.tag = saved
+        return back
+
+def main() -> int:
+    b: Buf = Buf()
+    b.xs.append(10)
+    b.xs.append(20)
+    got: list[int] = b.take()
+    print(len(got))          # 2（取り出したほうは生きている）
+
+    b.tag = "a"
+    t: str = b.swap_tag("b")
+    print(b.tag + t)         # "a" + "b"
+    return 0

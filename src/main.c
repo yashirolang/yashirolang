@@ -82,7 +82,7 @@ static void usage(int status) {
             "  --deny-store-borrow\n"
             "                  借りものを所有スロットへ入れる箇所をエラーにする\n"
             "  --explain-mut   呼び出しで変更される実引数を一覧表示して終了\n"
-            "  --drop          スコープの出口に解放（drop）を挿入する\n"
+            "  --drop          スコープの出口に解放（drop）を挿入する（既定）\n"
             "  --no-drop       解放を挿入しない（--drop を打ち消す。後勝ち）\n"
             "  --no-overflow-check\n"
             "                  数の実行時検査を外す（既定は検査する）:\n"
@@ -136,6 +136,10 @@ static Options parse_args(int argc, char **argv) {
     o.output = "a.out";
     o.opt_level = "-O0";
     o.stage = STAGE_ALL;
+    // ★ 解放（drop）は**既定で入れます**（A-21 ⑬。決定 D16 を改めました）。
+    //   逃げ道は --no-drop です。所有権検査（ownck）が「借りもの」「移動済み」に
+    //   印を付けているので、それに従って安全な場所にだけ解放を挿します。
+    o.drop = 1;
 
     for (int i = 1; i < argc; i++) {
         char *a = argv[i];
@@ -172,7 +176,7 @@ static Options parse_args(int argc, char **argv) {
         if (strcmp(a, "--deny-borrow") == 0) { o.deny_borrow = 1; continue; }
         if (strcmp(a, "--deny-mut") == 0) { o.deny_mut = 1; continue; }
         if (strcmp(a, "--deny-store-borrow") == 0) { o.deny_store_borrow = 1; continue; }
-        // ★ 解放（drop）の挿入。既定では入れません（決定 D16）。
+        // ★ 解放（drop）の挿入。**既定で入ります**（A-21 ⑬）。
         //
         // ⚠️ **後に書いたほうが勝ちます**（--drop --no-drop なら入れない）。
         //   既定を解放ありに変えるとき（A-21 ⑨）、逃げ道として --no-drop が要ります。

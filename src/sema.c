@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "diag.h"
+#include "ownck.h"   // ty_is_rc（rc[T] / rc[T] | None は「共有」型）
 #include "types.h"
 #include "util.h"
 
@@ -2428,6 +2429,22 @@ static Type *check_field(Sema *s, Node *n) {
 //   名前を修飾して関数表に載せておいたので、引ける表はそのまま。
 static void check_can_fail(Sema *s, Node *n, FuncSig *f, const char *shown);
 
+// 実引数に「own の仮引数へ渡す rc[T] か」を書き写す（A-21 ⑬）。
+//
+// ★ pi は仮引数の番号です。メソッド・生成は self があるので 1 から始まります。
+//
+// ⚠️ **rc[T] を own の仮引数へ渡すときは、呼び出し側が参照を 1 つ増やします**
+//   （ast.h の arg_own_rc）。rc[T] は移動しないので、増やさないと
+//   受け取った側の「出口で手放す」だけが残り、二重解放になります。
+//
+// ⚠️ ここで arg_is_borrowed は**触りません**。あちらは「呼び出しのあとで
+//   一時値を解放してよいか」の旗で、既定（false＝解放しない）が安全側です。
+//   メソッドと生成では立てないままにしてあります（漏れるが、壊れない）。
+static void mark_arg_own_rc(Node *a, FuncSig *f, int pi) {
+    if (!f->pmodes) return;
+    a->arg_own_rc = f->pmodes[pi] == PM_OWN && ty_is_rc(a->type);
+}
+
 static Type *check_class_method(Sema *s, Node *n, Class *c) {
     // ★ メソッドは「クラスが定義されたモジュール」の表にいます。
     //   自分のモジュールの表を引くと、import したクラスのメソッドが見つかりません。
@@ -2467,6 +2484,7 @@ static Type *check_class_method(Sema *s, Node *n, Class *c) {
         s->expected = f->params[i + 1];
         Type *at = check_expr(s, a);
         s->expected = NULL;
+        mark_arg_own_rc(a, f, i + 1);
         if (!type_assignable(at, f->params[i + 1])) {
             Diag d = {0};
             d.message = diag_fmt("メソッド '%s' の第 %d 引数: 型 '%s' を '%s' に渡せません",
@@ -2874,6 +2892,7 @@ static Type *check_new(Sema *s, Node *n, Class *c) {
         s->expected = f->params[i + 1];
         Type *at = check_expr(s, a);
         s->expected = NULL;
+        mark_arg_own_rc(a, f, i + 1);
         if (!type_assignable(at, f->params[i + 1])) {
             Diag d = {0};
             d.message = diag_fmt("'%s' の生成の第 %d 引数: 型 '%s' を '%s' に渡せません",
@@ -3264,6 +3283,7 @@ static Type *check_call_sig(Sema *s, Node *n, FuncSig *f, const char *what) {
         // ⚠️ ここは check_call_sig＝**通常の関数**だけを通ります。メソッドは
         //   別経路なので旗が立たず、codegen は解放しません（安全側）。
         a->arg_is_borrowed = f->pmodes && f->pmodes[i] != PM_OWN;
+        mark_arg_own_rc(a, f, i);
         if (!type_assignable(at, f->params[i])) {
             Diag d = {0};
             d.message = diag_fmt("%s '%s' の第 %d 引数: 型 '%s' を '%s' に渡せません",

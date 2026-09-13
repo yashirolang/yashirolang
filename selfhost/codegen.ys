@@ -1595,11 +1595,14 @@ class Emitter:
         obj_node: rc[ast.Node] = node_of(target.lhs)
         elem: rc[ast.Type] = ast.elem_of(type_of(obj_node))
         obj: str = self.gen_expr(obj_node)
-        saved: str = self.ovf_flag
+        # ⚠️ move_out で**持ち主ごと**退避します（A-21f）。ただの代入だと
+        #   次の行の `self.ovf_flag = ""` が古い文字列を解放し、saved が
+        #   宙に浮きます。取り出したあとの self.ovf_flag は "" です。
+        saved: str = move_out(self.ovf_flag)
         self.ovf_flag = ""
         idx: str = self.gen_index_expr(node_of(target.rhs))
-        ovf: str = self.ovf_flag
-        self.ovf_flag = copy(saved)
+        ovf: str = move_out(self.ovf_flag)
+        self.ovf_flag = saved
 
         sty: str = self.slot_ty(elem)
         # ⚠️ 代入側は負の添字を正規化しない。
@@ -1622,13 +1625,19 @@ class Emitter:
             # ⚠️ 内側の呼び出しに、外側の控えを触らせないこと。
             #   f(g(x)) のとき、g の emit_call が f の控えまで解放してしまい、
             #   **まだ渡していない値**が消えます。
-            saved_n: list[rc[ast.Node]] = self.pending_nodes
-            saved_v: list[str] = self.pending_vals
+            #   ⚠️ move_out で**持ち主ごと**退避します。ただの代入だと控えの
+            #     実体を self と saved_* が二重に持ち、解放が二度走ります。
+            saved_n: list[rc[ast.Node]] = move_out(self.pending_nodes)
+            saved_v: list[str] = move_out(self.pending_vals)
             self.pending_nodes = []
             self.pending_vals = []
             v: str = self.gen_expr(arg)
             self.pending_nodes = saved_n   # 内側は自分で解放済み
             self.pending_vals = saved_v
+            # ★ rc[T] を own の仮引数へ渡すときは参照を 1 つ増やして渡します。
+            #   （対になる定義: src/codegen.c の gen_args の force_retain）
+            if self.drop and arg.arg_own_rc:
+                v = self.force_retain(v)
             sep: str = ", "
             if is_first:
                 sep = ""
@@ -1714,8 +1723,10 @@ class Emitter:
     #   戻り値が実引数と**同じ実体**です。呼び出し後に実引数を解放すると、
     #   受け取ったばかりの戻り値が消えます。
     def flush_pending_temps(mut self, call: rc[ast.Node]) -> None:
-        nodes: list[rc[ast.Node]] = self.pending_nodes
-        vals: list[str] = self.pending_vals
+        # ⚠️ move_out で**持ち主ごと**取り出します（A-21f）。ただの代入だと
+        #   下の 2 行が古いリストを解放し、nodes / vals が宙に浮きます。
+        nodes: list[rc[ast.Node]] = move_out(self.pending_nodes)
+        vals: list[str] = move_out(self.pending_vals)
         self.pending_nodes = []
         self.pending_vals = []
         if call.binds_borrow:
@@ -1976,7 +1987,17 @@ class Emitter:
             return ast.elem_of(t).kind == ast.TY_RC
         return False
 
-    def maybe_retain(mut self, rhs: rc[ast.Node], val: str) -> str:
+    # ⚠️ val は **own** で受け取ります。素通しで返す経路があるので、借用で
+    #   受けると「借りものを返す」ことになり、呼び出し側と二重に解放されます。
+    # 参照を 1 つ増やす（場所かどうかを問わない）
+    #   対になる定義: src/codegen.c の force_retain
+    def force_retain(mut self, val: str) -> str:
+        self.declare_rt("ptr @pl_rc_retain(ptr)")
+        t: str = self.new_tmp()
+        self.emit("  " + t + " = call ptr @pl_rc_retain(ptr " + val + ")\n")
+        return t
+
+    def maybe_retain(mut self, rhs: rc[ast.Node], val: own str) -> str:
         if not self.drop:
             return val
         rt: rc[ast.Type] | None = rhs.type
@@ -3208,8 +3229,10 @@ class Emitter:
             if catcher >= 0:
                 self.store_err(self.err_slot(), n.err_tag, obj)
                 # ★ 捕まえる try まで、抜けるスコープを解放します。
+                # ⚠️ emit_drops_until も self を可変借用するので、先に読みます
                 if self.drop:
-                    self.emit_drops_until(self.try_scopes[catcher])
+                    upto: rc[ScopeCtx] | None = self.try_scopes[catcher]
+                    self.emit_drops_until(upto)
                 # ⚠️ emit_br は self を可変借用するので、先に読みます
                 catch_l: str = copy(self.try_labels[catcher])
                 self.emit_br(catch_l)

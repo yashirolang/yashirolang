@@ -1,0 +1,36 @@
+# STAGE0-ONLY: 解放の挿入は C 版だけ
+# FLAGS: --drop
+# OUTPUT: 11
+# EXIT: 0
+# 式の途中に現れる「一時値」も解放されること（docs/roadmap.md A-21e）
+#
+# ★ どれも str(i) や連結の結果が**どこにも束縛されない**まま使われます。
+#   束縛すればスコープ終端で解放されますが、式の途中の値には持ち主がいません。
+#   ⚠️ このファイルは tests/drop_asan.sh が --drop + AddressSanitizer で
+#     動かすので、解放しすぎ（二重解放）もここで捕まります。
+def borrow(s: str) -> int:
+    return len(s)
+
+def main() -> int:
+    total: int = 0
+
+    # ① 二項演算のオペランド（内側の str(...) に持ち主がいない）
+    s: str = "n=" + str(7)
+    total = total + len(s)
+
+    # ② 組み込みの引数
+    total = total + len(str(42))
+
+    # ③ 入れ子（連結の結果が len に渡る）
+    total = total + len("ab" + str(9))
+
+    # ④ 借用で受け取るユーザ関数へ渡す
+    total = total + borrow("z" + str(1))
+
+    # ⑤ 所有権が移る先（append）。⚠️ ここで解放すると二重解放になる
+    xs: list[str] = []
+    xs.append("k" + str(3))
+    total = total + len(xs)
+
+    print(str(total))
+    return 0

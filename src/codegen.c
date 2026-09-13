@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "ownck.h"   // ty_is_owned（A-21e の一時値判別で使う）
 
 #include <string.h>
 
@@ -443,6 +444,11 @@ static void emit_ir_byte(StrBuf *sb, unsigned char c) {
         sb_printf(sb, "\\%02X", c);
 }
 
+// A-21e: 式の途中の一時値を解放する（定義は下の方。宣言だけ先に置く）
+static void drop_temp(Emitter *e, Node *n, const char *val);
+static bool is_owned_temp(Node *n);
+static void emit_drop_value(Emitter *e, Type *t, const char *val);
+
 static char *intern_str(Emitter *e, const char *bytes, int len) {
     for (StrLit *sl = e->strs; sl; sl = sl->next)
         if (sl->len == len && memcmp(sl->bytes, bytes, (size_t)len) == 0)
@@ -589,6 +595,7 @@ static char *gen_expr(Emitter *e, Node *n) {
                 sb_printf(&e->fn,
                           "  %s = call ptr @pl_str_repeat(ptr %s, i64 %s)\n", t,
                           l, r);
+                drop_temp(e, n->lhs, l);   // A-21e
                 return t;
             }
             if (ot->kind == TY_LIST &&
@@ -604,6 +611,8 @@ static char *gen_expr(Emitter *e, Node *n) {
                               "  %s = call ptr @pl_list_repeat(ptr %s, i64 %s)\n",
                               t, l, r);
                 }
+                drop_temp(e, n->lhs, l);   // A-21e
+                drop_temp(e, n->rhs, r);
                 return t;
             }
 
@@ -613,6 +622,8 @@ static char *gen_expr(Emitter *e, Node *n) {
                     declare_rt(e, "ptr @pl_str_concat(ptr, ptr)");
                     sb_printf(&e->fn, "  %s = call ptr @pl_str_concat(ptr %s, ptr %s)\n",
                               t, l, r);
+                    drop_temp(e, n->lhs, l);   // A-21e
+                    drop_temp(e, n->rhs, r);
                     return t;
                 }
                 // ⚠️ 比較は「内容」で行う（言語仕様 4.3）。ポインタ比較ではない。
@@ -622,6 +633,8 @@ static char *gen_expr(Emitter *e, Node *n) {
                 char *c = new_tmp(e);
                 sb_printf(&e->fn, "  %s = call i64 @pl_str_cmp(ptr %s, ptr %s)\n", c,
                           l, r);
+                drop_temp(e, n->lhs, l);   // A-21e
+                drop_temp(e, n->rhs, r);
                 sb_printf(&e->fn, "  %s = icmp %s i64 %s, 0\n", t,
                           icmp_pred(n->op, ty_int), c);
                 return t;
@@ -1558,14 +1571,51 @@ static void gen_index_store(Emitter *e, Node *target, char *val) {
 static char *gen_new(Emitter *e, Node *n);
 
 // 引数を評価して "型 値, 型 値" と "型, 型"（declare 用）を同時に作る
+// 呼び出し後に解放する一時値の控え（A-21e）。
+//
+// ★ なぜ「呼び出し後」なのか
+//   gen_args は引数の文字列を組み立てるだけで、call を出すのは emit_call です。
+//   引数を作った直後に解放すると、**まだ渡していない値を解放**してしまいます。
+//
+// ⚠️ 入れるのは「借用で渡す」と**分かっている**実引数だけです。
+//   own なら所有権が相手に移るので解放してはいけません。分からない経路
+//   （メソッド呼び出し）も入れません。sema が arg_is_borrowed に入れます。
+typedef struct TempArg {
+    Node *node;
+    char *val;
+    struct TempArg *next;
+} TempArg;
+
+static TempArg *g_pending_temps;  // gen_args → emit_call のあいだだけ使う
+
 static void gen_args(Emitter *e, Node *args, StrBuf *vals, StrBuf *types,
                      bool first) {
     for (Node *a = args; a; a = a->next) {
+        // ⚠️ 内側の呼び出しに、外側の控えを触らせないこと。
+        //   f(g(x)) のとき、g の emit_call が f の控えまで解放してしまい、
+        //   **まだ渡していない値**が消えます。
+        TempArg *saved = g_pending_temps;
+        g_pending_temps = NULL;
         char *v = gen_expr(e, a);
+        g_pending_temps = saved;   // 内側は自分で解放済み
         sb_printf(vals, "%s%s %s", first ? "" : ", ", llvm_type(a->type), v);
         sb_printf(types, "%s%s", first ? "" : ", ", llvm_type(a->type));
         first = false;
+        if (e->drop && a->arg_is_borrowed && is_owned_temp(a)) {
+            TempArg *t = xmalloc(sizeof(TempArg));
+            t->node = a;
+            t->val = v;
+            t->next = g_pending_temps;
+            g_pending_temps = t;
+        }
     }
+}
+
+// 控えておいた一時値を解放して、控えを空にする（A-21e）
+static void flush_pending_temps(Emitter *e) {
+    TempArg *t = g_pending_temps;
+    g_pending_temps = NULL;
+    for (; t; t = t->next) emit_drop_value(e, t->node->type, t->val);
 }
 
 // 呼び出しを 1 行出す（戻り値が None なら値を返さない）
@@ -1630,6 +1680,10 @@ static char *emit_call(Emitter *e, Node *n, const char *args) {
         }
         emit_label(e, ok_l);
     }
+    // ★ 実引数の一時値をここで解放します（A-21e）。
+    //   ⚠️ **呼び出しを出し終えてから**です。gen_args の直後に解放すると、
+    //     まだ渡していない値を解放してしまいます。
+    flush_pending_temps(e);
     return t;
 }
 
@@ -2415,6 +2469,43 @@ static void emit_drop_slot(Emitter *e, Node *decl) {
 }
 
 // 一時的な値を解放する（式文の結果など）
+static void emit_drop_value(Emitter *e, Type *t, const char *val);
+
+// ── 式の途中に現れる「一時値」の解放（A-21e）────────────────
+//
+// ★ 何が問題だったか（docs/roadmap.md A-21e）
+//   `s: str = "x" + str(i)` の **str(i) の結果**は、どこにも束縛されないまま
+//   pl_str_concat に渡され、**誰も解放しません**。束縛すれば解放されるので、
+//   式の途中に現れる一時値だけが漏れていました。
+//
+// ⚠️ **所有権が移る場所では呼んではいけません。** xs.append(str(i)) は
+//   リストが所有権を受け取るので、ここで解放すると二重解放になります。
+//   呼んでよいのは「借りて読むだけ」の場所です:
+//     ・二項演算のオペランド（連結・比較）
+//     ・組み込みの引数（len / str / print …）
+//     ・own でない仮引数へ渡した実引数
+static bool is_owned_temp(Node *n) {
+    if (!n || !n->type || !ty_is_owned(n->type)) return false;
+    if (n->binds_borrow) return false;  // 借用を返す関数の戻り値（仕様 §4.5）
+    switch (n->kind) {
+        // 新しく作られる値。ほかに持ち主がいない。
+        case ND_CALL:
+        case ND_METHOD:
+        case ND_BINOP:
+        case ND_LIST:
+            return true;
+        // 変数・フィールド・添字の読みは借用。リテラルは静的。
+        default:
+            return false;
+    }
+}
+
+// 一時値なら解放する（--drop のときだけ）。
+static void drop_temp(Emitter *e, Node *n, const char *val) {
+    if (!e->drop || !val || !is_owned_temp(n)) return;
+    emit_drop_value(e, n->type, val);
+}
+
 static void emit_drop_value(Emitter *e, Type *t, const char *val) {
     const char *fn = drop_fn_for(e, t);
     if (!fn) return;
@@ -2964,15 +3055,19 @@ static char *gen_len(Emitter *e, Node *n, Type *at) {
         sb_printf(&e->fn, "  %s = getelementptr i8, ptr %s, i64 8\n", p, obj);
         char *t = new_tmp(e);
         sb_printf(&e->fn, "  %s = load i64, ptr %s" TBAA_LISTHDR "\n", t, p);
+        drop_temp(e, n->args, obj);   // A-21e: len(作ったばかりのリスト)
         return t;
     }
     // str：ptr[-8] を読んで、PL_STR_STATIC（1 << 62）を落とす
+    //
+    // ⚠️ 解放は**長さを読み終えてから**です。先に解放すると読めません。
     char *p = new_tmp(e);
     sb_printf(&e->fn, "  %s = getelementptr i8, ptr %s, i64 -8\n", p, obj);
     char *raw = new_tmp(e);
     sb_printf(&e->fn, "  %s = load i64, ptr %s\n", raw, p);
     char *t = new_tmp(e);
     sb_printf(&e->fn, "  %s = and i64 %s, -4611686018427387905\n", t, raw);
+    drop_temp(e, n->args, obj);   // A-21e: len(作ったばかりの文字列)
     return t;
 }
 
@@ -3033,11 +3128,15 @@ static char *gen_builtin_call(Emitter *e, Node *n) {
 
     if (rt->kind == TY_NONE) {
         sb_printf(&e->fn, "  call void @%s(%s %s)\n", b->impl, argty, v);
+        drop_temp(e, n->args, v);   // A-21e: print(作ったばかりの文字列) など
         return NULL;
     }
     char *t = new_tmp(e);
     sb_printf(&e->fn, "  %s = call %s @%s(%s %s)\n", t, llvm_type(rt), b->impl,
               argty, v);
+    // ⚠️ 組み込みはどれも**借りて読むだけ**です（所有権を受け取りません）。
+    //   だから引数が一時値なら、呼び終わったところで解放できます（A-21e）。
+    drop_temp(e, n->args, v);
     return t;
 }
 

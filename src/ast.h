@@ -393,6 +393,16 @@ struct Node {
     //   ⚠️ 旗は**末尾に足します**（selfhost 側と揃えるため）。
     bool is_move_out;
 
+    // ★ この実引数は「借用」の仮引数へ渡されると **分かっている** か（A-21e）。
+    //
+    // ⚠️ **既定（false）が安全側**であることが大事です。
+    //   分からない経路（メソッド呼び出しなど、仮引数のモードを
+    //   codegen に渡していない経路）では false のままになり、
+    //   codegen は解放しません。漏れるだけで、二重解放にはなりません。
+    //   逆向きの旗（passed_by_own）にしていたときは、メソッドの own 引数を
+    //   解放してしまい drop_fields / drop_lib_dict が二重解放で落ちました。
+    bool arg_is_borrowed;
+
     // ★ この class が実装するインタフェースの並び（ND_TYPEREF）
     Node *ifaces;
 

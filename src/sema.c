@@ -67,6 +67,10 @@ struct FuncSig {
     int nraises;
     Type **params;  // 引数の型
     char **pnames;  // 引数名（エラーメッセージ用）
+    // ★ 引数の受け取り方（own か、借用か）。
+    //   codegen が「実引数の一時値を呼び出し後に解放してよいか」を
+    //   判断するのに使います（A-21e）。own なら所有権が移るので解放しません。
+    ParamMode *pmodes;
     int nparams;
     Token *tok;     // 定義位置（「この関数はここで定義されています」用）
     ModuleSyms *owner;  // どのモジュールのものか
@@ -3252,8 +3256,14 @@ static Type *check_call_sig(Sema *s, Node *n, FuncSig *f, const char *what) {
     int i = 0;
     for (Node *a = n->args; a; a = a->next, i++) {
         // ⚠️ 引数には期待型を渡しません。
-        //    take([]) の [] は「型注釈を書いてください」というエラーになります。
+        //    move_out([]) の [] は「型注釈を書いてください」というエラーになります。
         Type *at = check_expr(s, a);
+        // ★ codegen へ「この実引数は借用で渡す」と**分かっている**ことを伝えます。
+        //   借用なら相手は所有権を受け取らないので、呼び出し後に一時値を
+        //   解放できます（A-21e）。
+        // ⚠️ ここは check_call_sig＝**通常の関数**だけを通ります。メソッドは
+        //   別経路なので旗が立たず、codegen は解放しません（安全側）。
+        a->arg_is_borrowed = f->pmodes && f->pmodes[i] != PM_OWN;
         if (!type_assignable(at, f->params[i])) {
             Diag d = {0};
             d.message = diag_fmt("%s '%s' の第 %d 引数: 型 '%s' を '%s' に渡せません",
@@ -3731,6 +3741,7 @@ static void declare_method(Sema *s, Class *c, Node *fn) {
     f->nparams = nparams;
     f->params = xmalloc(sizeof(Type *) * (size_t)nparams);
     f->pnames = xmalloc(sizeof(char *) * (size_t)nparams);
+    f->pmodes = xmalloc(sizeof(ParamMode) * (size_t)nparams);
     f->tok = fn->tok;
 
     int i = 0;
@@ -3743,6 +3754,7 @@ static void declare_method(Sema *s, Class *c, Node *fn) {
                           "引数の型に None は使えません");
         f->params[i] = pt;
         f->pnames[i] = pm->name;
+        f->pmodes[i] = pm->mode;   // A-21e
         pm->type = pt;
     }
 
@@ -4157,6 +4169,7 @@ static void declare_func(Sema *s, Node *n) {
     f->nparams = nparams;
     f->params = nparams ? xmalloc(sizeof(Type *) * (size_t)nparams) : NULL;
     f->pnames = nparams ? xmalloc(sizeof(char *) * (size_t)nparams) : NULL;
+    f->pmodes = nparams ? xmalloc(sizeof(ParamMode) * (size_t)nparams) : NULL;
     f->tok = n->tok;
 
     int i = 0;
@@ -4167,6 +4180,7 @@ static void declare_func(Sema *s, Node *n) {
                           "引数の型に None は使えません");
         f->params[i] = pt;
         f->pnames[i] = pm->name;
+        f->pmodes[i] = pm->mode;   // A-21e
         pm->type = pt;
     }
 

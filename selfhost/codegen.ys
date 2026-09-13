@@ -127,6 +127,14 @@ class Emitter:
     dropfn_keys: list[str]   # 型 → 解放関数（重複を出さないための表）
     dropfn_names: list[str]
     drop_counter: int        # @drop.list.N の連番
+    # ── 呼び出し後に解放する一時値の控え（A-21e）──────────────
+    #
+    # ★ なぜ「呼び出し後」なのか
+    #   gen_args は引数の文字列を組み立てるだけで、call を出すのは
+    #   emit_call です。引数を作った直後に解放すると、**まだ渡していない
+    #   値を解放**してしまいます。
+    pending_nodes: list[rc[ast.Node]]
+    pending_vals: list[str]
     # ★ モジュールのトップレベル宣言（自分のモジュールのクラスか判定するのに使う）
     #   対になる定義: src/codegen.c の e->ast
     ast_body: rc[ast.Node] | None
@@ -187,6 +195,8 @@ class Emitter:
         self.dropfn_keys = []
         self.dropfn_names = []
         self.drop_counter = 0
+        self.pending_nodes = []
+        self.pending_vals = []
         self.ast_body = None     # codegen() が上書きする
         self.ovf_flag = ""
         self.last_ovf = ""
@@ -684,7 +694,15 @@ class Emitter:
             if n.is_func_ref:
                 return "@" + n.ir_name
             # 変数の読み出し（規約 R2）。sema が割り当てた ir_name を使う
-            return self.gen_load(type_of(n), n.ir_name)
+            vv: str = self.gen_load(type_of(n), n.ir_name)
+            # ★ ここで所有権が移ったなら、スロットに null を書きます。
+            #   これが drop フラグの代わりです（設計 §6.3。決定 D17）。
+            #   ⚠️ 書かないと、移動したはずの値をスコープ終端でもう一度
+            #     解放してしまいます（二重解放）。
+            #   対になる定義: src/codegen.c の ND_VAR
+            if self.drop and n.moved_out and not n.is_global:
+                self.emit("  store ptr null, ptr " + n.ir_name + "\n")
+            return vv
 
         if n.kind == ast.ND_UNARY:
             return self.gen_unary(n)
@@ -895,6 +913,7 @@ class Emitter:
             self.declare_rt("ptr @pl_str_repeat(ptr, i64)")
             self.emit("  " + t + " = call ptr @pl_str_repeat(ptr " + l +
                       ", i64 " + r + ")\n")
+            self.drop_temp(lhs, l)   # A-21e
             return t
         if ot.kind == ast.TY_LIST and (n.op == ast.OP_ADD or n.op == ast.OP_MUL):
             if n.op == ast.OP_ADD:
@@ -905,6 +924,8 @@ class Emitter:
                 self.declare_rt("ptr @pl_list_repeat(ptr, i64)")
                 self.emit("  " + t + " = call ptr @pl_list_repeat(ptr " + l +
                           ", i64 " + r + ")\n")
+            self.drop_temp(lhs, l)   # A-21e
+            self.drop_temp(node_of(n.rhs), r)
             return t
 
         # ── 文字列──
@@ -913,12 +934,16 @@ class Emitter:
                 self.declare_rt("ptr @pl_str_concat(ptr, ptr)")
                 self.emit("  " + t + " = call ptr @pl_str_concat(ptr " + l +
                           ", ptr " + r + ")\n")
+                self.drop_temp(lhs, l)   # A-21e
+                self.drop_temp(node_of(n.rhs), r)
                 return t
             # ⚠️ 比較は「内容」で行う（言語仕様 4.3）
             self.declare_rt("i64 @pl_str_cmp(ptr, ptr)")
             c: str = self.new_tmp()
             self.emit("  " + c + " = call i64 @pl_str_cmp(ptr " + l + ", ptr " +
                       r + ")\n")
+            self.drop_temp(lhs, l)   # A-21e
+            self.drop_temp(node_of(n.rhs), r)
             self.emit("  " + t + " = icmp " +
                       self.icmp_pred(n.op, self.int_type()) + " i64 " + c +
                       ", 0\n")
@@ -1590,12 +1615,26 @@ class Emitter:
         a: rc[ast.Node] | None = args
         while a is not None:
             arg: rc[ast.Node] = a
+            # ⚠️ 内側の呼び出しに、外側の控えを触らせないこと。
+            #   f(g(x)) のとき、g の emit_call が f の控えまで解放してしまい、
+            #   **まだ渡していない値**が消えます。
+            saved_n: list[rc[ast.Node]] = self.pending_nodes
+            saved_v: list[str] = self.pending_vals
+            self.pending_nodes = []
+            self.pending_vals = []
             v: str = self.gen_expr(arg)
+            self.pending_nodes = saved_n   # 内側は自分で解放済み
+            self.pending_vals = saved_v
             sep: str = ", "
             if is_first:
                 sep = ""
             vals.append(sep + self.llvm_type(type_of(arg)) + " " + v)
             atypes.append(sep + self.llvm_type(type_of(arg)))
+            # ⚠️ 入れるのは「借用で渡す」と**分かっている**実引数だけです。
+            #   own なら所有権が相手に移るので解放してはいけません。
+            if self.drop and arg.arg_is_borrowed and self.is_owned_temp(arg):
+                self.pending_nodes.append(arg)
+                self.pending_vals.append(copy(v))
             is_first = False
             a = arg.next
 
@@ -1644,7 +1683,31 @@ class Emitter:
                 self.emit("  unreachable\n")
                 self.terminated = True
             self.emit_label(ok_l)
+        # ★ 実引数の一時値をここで解放します（A-21e）。
+        #   ⚠️ **呼び出しを出し終えてから**です。gen_args の直後に解放すると、
+        #     まだ渡していない値を解放してしまいます。
+        self.flush_pending_temps(n)
         return t
+
+    # 控えておいた一時値を解放して、控えを空にする（A-21e）。
+    #
+    # ⚠️ **戻り値が借りものの呼び出しでは解放しません。**
+    #   `def pick(a: str) -> str: return a` のように引数をそのまま返す関数だと、
+    #   戻り値が実引数と**同じ実体**です。呼び出し後に実引数を解放すると、
+    #   受け取ったばかりの戻り値が消えます。
+    def flush_pending_temps(mut self, call: rc[ast.Node]) -> None:
+        nodes: list[rc[ast.Node]] = self.pending_nodes
+        vals: list[str] = self.pending_vals
+        self.pending_nodes = []
+        self.pending_vals = []
+        if call.binds_borrow:
+            return          # 漏れるが、壊れない
+        i: int = 0
+        while i < len(nodes):
+            t2: rc[ast.Type] | None = nodes[i].type
+            if t2 is not None:
+                self.emit_drop_value(t2, vals[i])
+            i = i + 1
 
     def gen_method(mut self, n: rc[ast.Node]) -> str:
         # ★ '.' の左がモジュールだった場合
@@ -3134,7 +3197,10 @@ class Emitter:
 
         if n.kind == ast.ND_VARDECL:
             # alloca は entry ブロックに出済み（規約 R1）。ここでは store だけ
-            v3: str = self.gen_expr(node_of(n.rhs))
+            #
+            # ★ rc[T] を場所から読んで別の場所に置くときは参照数を +1 します
+            #   （対になる定義: src/codegen.c の ND_VARDECL の maybe_retain）。
+            v3: str = self.maybe_retain(node_of(n.rhs), self.gen_expr(node_of(n.rhs)))
             self.gen_store(type_of(n), v3, n.ir_name)
             self.scope_add(n)   # このスコープの解放対象に加える
             return ""
@@ -3312,6 +3378,17 @@ class Emitter:
         # ② ローカル変数の alloca
         self.collect_allocas(n.body)
 
+        # ★ 引数のスコープ。own で受け取った引数は、この関数が所有者なので
+        #   出口で解放します（借用の引数には ownck が「借りもの」の印を
+        #   付けています）。対になる定義: src/codegen.c の gen_func
+        params_sc: rc[ScopeCtx] = rc(ScopeCtx(None))
+        self.scope = params_sc
+        pmf: rc[ast.Node] | None = n.params
+        while pmf is not None:
+            pf: rc[ast.Node] = pmf
+            self.scope_add(pf)
+            pmf = pf.next
+
         # ③ 本体
         self.gen_stmt(node_of(n.body))
 
@@ -3484,12 +3561,16 @@ def codegen(mod: rc[module.Module], main_ir_name: str, triple: str,
     if len(main_ir_name) > 0:
         e.gen_c_main(main_ir_name)
 
-    # 4 つのバッファを規定の順に連結する
+    # バッファを規定の順に連結する
+    #
+    # ⚠️ 順番は C 版（src/codegen.c）と**同じでなければいけません**。
+    #   dropdefs（@drop.* の定義）は body の後・thunkdefs の前です。
     out: list[str] = []
     out.append(strings.join(e.header, ""))
     out.append(strings.join(e.globals_, ""))
     out.append(strings.join(e.decls, ""))
     out.append(strings.join(e.body, ""))
+    out.append(strings.join(e.dropdefs, ""))
     out.append(strings.join(e.thunkdefs, ""))
     # ⑥ 別名解析（TBAA）の型タグ。
     #   ⚠️ 番号は固定。**2 実装が同じ IR を出す**ため、使っていなくても

@@ -590,6 +590,10 @@ class Node:
     #   依存するので、**ownck を移植するまで --drop は無効**にしてあります
     #   （docs/roadmap.md A-21 ⑨）。場所だけ先に用意しておきます。
     #   対になる定義: src/ast.h の binds_borrow / moved_out
+    # ★ この実引数は「借用」の仮引数へ渡されると **分かっている** か（A-21e）。
+    #   ⚠️ **既定（False）が安全側**です。分からない経路では解放しません。
+    #   対になる定義: src/ast.h の arg_is_borrowed
+    arg_is_borrowed: bool
     binds_borrow: bool   # 借りものを束縛している（解放してはいけない）
     moved_out: bool      # 移動済み（解放してはいけない）
     # ★ ジェネリクス。
@@ -635,6 +639,7 @@ class Node:
         self.is_minmax = False
         self.is_list_str = False
         self.is_move_out = False
+        self.arg_is_borrowed = False
         self.binds_borrow = False
         self.moved_out = False
         self.is_wrap = False

@@ -2982,6 +2982,13 @@ class Sema:
             arg: rc[ast.Node] = a
             # ⚠️ 引数には期待型を渡さない
             at: rc[ast.Type] = self.check_expr(arg)
+            # ★ codegen へ「この実引数は借用で渡すと**分かっている**」ことを
+            #   伝えます。借用なら相手は所有権を受け取らないので、呼び出し後に
+            #   一時値を解放できます（A-21e）。
+            # ⚠️ ここは check_call_sig ＝**通常の関数**だけを通ります。
+            #   メソッドは別経路なので旗が立たず、解放しません（安全側）。
+            if i < len(f.pmodes):
+                arg.arg_is_borrowed = f.pmodes[i] != ast.PM_OWN
             want: rc[ast.Type] = f.params[i]
             if not ast.type_assignable(at, want):
                 diag.error_full(unwrap_tok(arg.tok),
@@ -3247,6 +3254,7 @@ class Sema:
                                    "引数の型に None は使えません")
             f.params.append(pt)
             f.pnames.append(copy(p.name))
+            f.pmodes.append(p.mode)        # A-21e
             f.nparams = f.nparams + 1
             p.type = pt
             pm = p.next
@@ -3717,6 +3725,7 @@ class Sema:
                                    "引数の型に None は使えません")
             f.params.append(pt)
             f.pnames.append(copy(p.name))
+            f.pmodes.append(p.mode)        # A-21e
             f.nparams = f.nparams + 1
             p.type = pt
             pm = p.next

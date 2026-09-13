@@ -24,6 +24,10 @@ class FuncSig:
     ret: rc[ast.Type] | None
     params: list[rc[ast.Type]]
     pnames: list[str]
+    # ★ 引数の受け取り方（own か、借用か）。
+    #   codegen が「実引数の一時値を呼び出し後に解放してよいか」を
+    #   判断するのに使います（A-21e）。対になる定義: src/sema.c の pmodes
+    pmodes: list[int]
     nparams: int
     tok: rc[token.Token] | None
     owner: rc[ModuleSyms] | None
@@ -36,6 +40,7 @@ class FuncSig:
     raises_cls: list[rc[ast.Class]]
 
     def init(self, name: str, tok: rc[token.Token] | None) -> None:
+        self.pmodes = []
         self.name = copy(name)
         self.ir_name = ""
         self.nparams = 0

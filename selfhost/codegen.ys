@@ -112,6 +112,9 @@ class Emitter:
     prop_used: bool          # 伝播ブロックが使われたか
     try_stack: list[rc[ast.Node]]      # 今いる try（入れ子）
     try_labels: list[str]          # その振り分けラベル
+    # ★ try に入ったときのスコープ。失敗の経路は**ここまで**を解放する。
+    #   対になる定義: src/codegen.c の TryCtxG.scope
+    try_scopes: list[rc[ScopeCtx] | None]
 
     # ── 整数の桁あふれ検査 ──
     no_ovf: bool             # --no-overflow-check（検査を出さない）
@@ -188,6 +191,7 @@ class Emitter:
         self.prop_used = False
         self.try_stack = []
         self.try_labels = []
+        self.try_scopes = []
         self.no_ovf = False
         self.drop = False
         self.scope = None
@@ -1672,6 +1676,20 @@ class Emitter:
             tag: str = self.load_tag(slot)
             bad: str = self.new_tmp()
             self.emit("  " + bad + " = icmp ne i64 " + tag + ", 0\n")
+            # ⚠️ 解放が有効なら、失敗の経路でも「抜けるスコープ」を解放します。
+            #   分岐の辺には命令を置けないので、専用のブロックを 1 つ挟みます。
+            if self.drop:
+                fail_l: str = "call.fail." + str(cid)
+                self.emit_cond_br(bad, fail_l, ok_l)
+                self.emit_label(fail_l)
+                stop: rc[ScopeCtx] | None = None
+                if len(self.try_scopes) > 0:
+                    stop = self.try_scopes[len(self.try_scopes) - 1]
+                self.emit_drops_until(stop)
+                self.emit_fail_br()
+                self.emit_label(ok_l)
+                self.flush_pending_temps(n)
+                return t
             fl: str = self.fail_label()
             if len(fl) > 0:
                 self.emit_cond_br(bad, fl, ok_l)
@@ -1702,12 +1720,16 @@ class Emitter:
         self.pending_vals = []
         if call.binds_borrow:
             return          # 漏れるが、壊れない
-        i: int = 0
-        while i < len(nodes):
+        # ⚠️ **後ろからたどります。** C 版は連結リストの先頭に足して前から
+        #   たどるので、結果は「引数の逆順」です。こちらは末尾に足すので、
+        #   同じ順序にするには後ろから回します（IR がバイト単位で一致する
+        #   ことが条件なので、順序も合わせる必要があります）。
+        i: int = len(nodes) - 1
+        while i >= 0:
             t2: rc[ast.Type] | None = nodes[i].type
             if t2 is not None:
                 self.emit_drop_value(t2, vals[i])
-            i = i + 1
+            i = i - 1
 
     def gen_method(mut self, n: rc[ast.Node]) -> str:
         # ★ '.' の左がモジュールだった場合
@@ -2646,6 +2668,7 @@ class Emitter:
             self.emit("  " + p + " = getelementptr i8, ptr " + obj + ", i64 8\n")
             t: str = self.new_tmp()
             self.emit("  " + t + " = load i64, ptr " + p + TBAA_LISTHDR + "\n")
+            self.drop_temp(node_of(n.args), obj)   # A-21e: len(作ったばかりのリスト)
             return t
         # str：ptr[-8] を読んで、PL_STR_STATIC（1 << 62）を落とす
         p2: str = self.new_tmp()
@@ -2654,6 +2677,8 @@ class Emitter:
         self.emit("  " + raw + " = load i64, ptr " + p2 + "\n")
         t2: str = self.new_tmp()
         self.emit("  " + t2 + " = and i64 " + raw + ", -4611686018427387905\n")
+        # ⚠️ 解放は**長さを読み終えてから**です。先に解放すると読めません。
+        self.drop_temp(node_of(n.args), obj)   # A-21e: len(作ったばかりの文字列)
         return t2
 
     def gen_builtin_call(mut self, n: rc[ast.Node]) -> str:
@@ -3108,9 +3133,11 @@ class Emitter:
 
             self.try_stack.append(n)
             self.try_labels.append(copy(disp_l))
+            self.try_scopes.append(self.scope)   # 失敗の経路はここまで解放する
             self.gen_stmt(node_of(n.body))
             self.try_stack = pop_nodes(self.try_stack)
             self.try_labels = pop_strs(self.try_labels)
+            self.try_scopes = pop_scopes(self.try_scopes)
             if not self.terminated:
                 self.emit_br(end_l)
 
@@ -3397,6 +3424,9 @@ class Emitter:
         # ★ 使われたときだけ出します（使わないブロックは LLVM が嫌がる）
         if self.prop_used:
             self.emit_label("err.propagate")
+            # ★ 伝播で抜けるときも、抜けるスコープを全部解放します。
+            if self.drop:
+                self.emit_drops_until(None)
             self.ensure_err_type()
             ev: str = self.new_tmp()
             self.emit("  " + ev + " = load %pl.err, ptr %err.slot\n")
@@ -3405,6 +3435,10 @@ class Emitter:
 
         # ④ 終端されていなければ終端する（規約 R6）
         if not self.terminated:
+            # ★ 関数の出口。引数のスコープ（own で受け取ったもの）を解放します。
+            #   ⚠️ これが無いと `def init(self, s: own str)` の s が漏れます。
+            if self.drop:
+                self.emit_scope_drops(params_sc)
             if type_of(n).kind == ast.TY_NONE:
                 self.emit("  ret void\n")      # 規約 R9
             else:
@@ -3623,6 +3657,15 @@ def pop_strs(xs: list[str]) -> list[str]:
     i: int = 0
     while i < len(xs) - 1:
         out.append(copy(xs[i]))
+        i = i + 1
+    return out
+
+# 末尾を落とした新しいリストを返す（スコープの積み降ろし用）
+def pop_scopes(xs: list[rc[ScopeCtx] | None]) -> list[rc[ScopeCtx] | None]:
+    out: list[rc[ScopeCtx] | None] = []
+    i: int = 0
+    while i < len(xs) - 1:
+        out.append(xs[i])
         i = i + 1
     return out
 

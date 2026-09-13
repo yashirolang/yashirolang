@@ -1901,6 +1901,22 @@ static char *deref_rc(Emitter *e, Type *t, char *v) {
     return g;
 }
 
+// ── 「空の値」を作る ────────────────────────────────────────
+//
+// ★ ゼロ初期化では足りない型に入れる、有効で中身が無い値です。
+//     str    → ""（静的なので --drop でも解放されません）
+//     list[T] → 新しい空のリスト
+//
+//   使うのは 2 か所です：クラスを作るとき（init の書き忘れ対策）と、
+//   move_out(場所) が値を持っていったあとの書き戻しです。
+static char *gen_empty_value(Emitter *e, Type *ty) {
+    if (ty->kind == TY_STR) return intern_str(e, "", 0);
+    declare_rt(e, "ptr @pl_list_new()");
+    char *val = new_tmp(e);
+    sb_printf(&e->fn, "  %s = call ptr @pl_list_new()\n", val);
+    return val;
+}
+
 static char *gen_field_ptr(Emitter *e, Node *n) {
     Type *ot = n->lhs->type;
     Class *c = ot->kind == TY_RC ? ot->elem->cls : ot->cls;
@@ -2037,14 +2053,7 @@ static char *gen_new(Emitter *e, Node *n) {
     for (Field *f = c->fields; f; f = f->next) {
         if (f->type->kind != TY_STR && f->type->kind != TY_LIST) continue;
 
-        char *val;
-        if (f->type->kind == TY_STR) {
-            val = intern_str(e, "", 0);
-        } else {
-            declare_rt(e, "ptr @pl_list_new()");
-            val = new_tmp(e);
-            sb_printf(&e->fn, "  %s = call ptr @pl_list_new()\n", val);
-        }
+        char *val = gen_empty_value(e, f->type);
         char *p = new_tmp(e);
         sb_printf(&e->fn, "  %s = getelementptr %%%s.type, ptr %s, i32 0, i32 %d\n",
                   p, class_type(e, c), obj, f->index);
@@ -3163,6 +3172,32 @@ static char *gen_call(Emitter *e, Node *n) {
         char *t = new_tmp(e);
         sb_printf(&e->fn, "  %s = %s i64 %s, %s\n", t, ins, a, b);
         return t;
+    }
+
+    // ── move_out(場所) — 所有権を取り出して、その場所は空にする ──────
+    //
+    // ★ 出す形は 3 行です（docs/roadmap.md A-21d）:
+    //     ① いまの値を読む      … これが戻り値（所有権ごともらう）
+    //     ② 空の値を作る        … str なら ""、list なら新しい空リスト
+    //     ③ その場所へ書き戻す  … 場所は有効なまま残る
+    //
+    // ⚠️ **retain も release も出しません。** 参照の数は動いていません
+    //   （持ち主が「場所」から「呼び出し側」へ移っただけです）。
+    //   だから move_out は --drop の有無で意味が変わりません。
+    if (n->is_move_out) {
+        Node *a = n->args;
+        char *v = gen_expr(e, a);                     // ①
+        char *empty = gen_empty_value(e, a->type);    // ②
+        if (a->kind == ND_INDEX) {                    // ③
+            gen_index_store(e, a, empty);
+        } else if (a->kind == ND_FIELD && !a->mod_name) {
+            gen_store_tb(e, a->type, empty, gen_field_ptr(e, a), TBAA_FIELD);
+        } else {
+            // 他モジュールのグローバル、または自分のグローバル
+            if (a->is_extern) declare_extern_global(e, a);
+            gen_store(e, a->type, empty, a->ir_name);
+        }
+        return v;
     }
 
     // ★ print(xs) / str(xs)

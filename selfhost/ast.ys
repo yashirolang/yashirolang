@@ -579,6 +579,9 @@ class Node:
     is_minmax: bool
     # ★ print(list) / str(list)（要素の型で呼び分ける）
     is_list_str: bool
+    # ★ move_out(場所)（所有権を取り出して、その場所は空にする）
+    #   対になる定義: src/ast.h の is_move_out
+    is_move_out: bool
     # ★ ジェネリクス。
     #   ND_TYPEREF … 型引数の並び（Dict[str, int] の str と int）
     #   ND_CLASS   … 型引数の名前の並び（class Dict[K, V] の K と V）
@@ -621,6 +624,7 @@ class Node:
         self.is_indirect = False
         self.is_minmax = False
         self.is_list_str = False
+        self.is_move_out = False
         self.is_wrap = False
         self.targs = None
         self.ifaces = None

@@ -1,0 +1,9 @@
+# STAGE0-ONLY: 組み込みの検査は C 版だけ
+# ERROR: error: move_out は「場所」からしか取り出せません
+# move_out は書き戻せる「場所」にしか使えません（値を持っていったあと、
+# 空の値を書き戻すためです）。局所変数はそのまま返せば所有権ごと動きます。
+def main() -> int:
+    xs: list[int] = [1, 2]
+    ys: list[int] = move_out(xs)
+    print(str(len(ys)))
+    return 0

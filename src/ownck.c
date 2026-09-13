@@ -491,6 +491,43 @@ static void report_borrow(Own *o, BorrowRoot *br, Place *p, Node *at, MoveCtx ct
 }
 
 
+// 自分が所有しているものの「一部」を返した、と報告する（A-21d）。
+//
+// ★ なぜ危ないか（docs/roadmap.md A-21d）
+//   `return hits[0]` や `return self.out` は、**その場所の持ち主が
+//   関数の出口で解放される**なら、解放済みを返すことになります。
+//   戻り値の型に「これは借用だ」と書く手段が無いので、呼ぶ側は
+//   所有として受け取り、自分でも解放します。
+//
+//   直し方は 2 つだけです：
+//     move_out(場所)  … 持ち主から**取り上げて**返す（場所は空になる）
+//     copy(場所)  … 複製して返す（場所はそのまま）
+static void report_return_borrow(Own *o, Place *p, Node *at) {
+    if (o->quiet) return;
+
+    Place *root = p;
+    while (root->base) root = root->base;
+    Node *lender = NULL;
+    if (root->kind == PL_LOCAL) {
+        DeclEnt *d = find_decl(o, root->key);
+        if (d) lender = d->decl;
+    }
+
+    Diag d = {0};
+    d.code = "E-BORROW-8";
+    d.message = diag_fmt("借用した値 '%s' を返しています", p->disp);
+    d.primary.tok = at->tok;
+    d.primary.label = "返した先では所有になりますが、ここでは借りものです";
+    if (lender) {
+        d.related.tok = lender->tok;
+        d.related.label = diag_fmt("'%s' が所有していて、この関数の出口で解放されます",
+                                   lender->name);
+    }
+    d.hint = "持ち主から取り上げるなら move_out(...)、複製するなら copy(...) を"
+             "使ってください";
+    emit_ownck(o, &d, o->opt.deny_store_borrow);
+}
+
 // 所有しているスロット（フィールド／リストの要素）へ「借りもの」を入れた、と報告する。
 //
 // ★ report_borrow は BorrowRoot（借用引数などの貸し手）が分かっている場合の版です。
@@ -1188,6 +1225,7 @@ static bool move_expr(Own *o, Flow *f, Node *n, MoveCtx ctx) {
     if (p->kind == PL_INDEX) {
         if (ctx == MV_FIELD || ctx == MV_APPEND || ctx == MV_OWN_ARG)
             report_store_borrow(o, p, n, ctx);
+        else if (ctx == MV_RETURN) report_return_borrow(o, p, n);
         use_expr(o, f, n);
         return false;
     }
@@ -1212,6 +1250,7 @@ static bool move_expr(Own *o, Flow *f, Node *n, MoveCtx ctx) {
     if (p->kind == PL_FIELD) {
         if (ctx == MV_FIELD || ctx == MV_APPEND || ctx == MV_OWN_ARG)
             report_store_borrow(o, p, n, ctx);
+        else if (ctx == MV_RETURN) report_return_borrow(o, p, n);
         use_expr(o, f, n);
         return false;
     }

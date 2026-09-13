@@ -1950,6 +1950,11 @@ class Sema:
             i = i + 1
 
     def is_builtin_name(self, name: str) -> bool:
+        # ★ move_out は表に載せられません（戻り型が引数と同じ型そのもので、
+        #   表は TypeKind しか持てないため）。名前だけここで数えます。
+        #   対になる定義: src/sema.c の is_builtin_name
+        if name == "move_out":
+            return True
         i: int = 0
         while i < len(self.builtins):
             if self.builtins[i].name == name:
@@ -2012,6 +2017,35 @@ class Sema:
             if n.name == "print":
                 return self.ty_none()
             return self.ty_str()
+
+        # ── move_out(場所) — 所有権を取り出し、その場所は空にする ──────
+        #
+        # ★ なぜ要るか（docs/roadmap.md A-21d）
+        #   `return self.out` は仕様 §4.5 が許しますが、**戻り値の型に
+        #   「借用だ」と書く手段がありません**。呼ぶ側は所有として受け取り、
+        #   自分でも解放するので、--drop すると二重解放になります。
+        #
+        # ⚠️ 戻り型は**引数と同じ型そのもの**です。
+        #   対になる定義: src/sema.c の check_builtin_call
+        if n.name == "move_out":
+            is_place: bool = (arg.kind == ast.ND_FIELD or
+                              arg.kind == ast.ND_INDEX or
+                              (arg.kind == ast.ND_VAR and arg.is_global))
+            if not is_place:
+                diag.error_full(unwrap_tok(arg.tok),
+                                "move_out は「場所」からしか取り出せません",
+                                "ここは書き戻せる場所ではありません", None, "",
+                                "move_out(self.xs) / move_out(obj.f) / move_out(xs[i]) の形で" +
+                                "使ってください（局所変数は、そのまま返せば" +
+                                "所有権ごと動きます）")
+            if at.kind != ast.TY_STR and at.kind != ast.TY_LIST:
+                diag.error_full(unwrap_tok(arg.tok),
+                                "move_out は '" + ast.type_name(at) + "' 型を取り出せません",
+                                "これは '" + ast.type_name(at) + "' 型です", None, "",
+                                "move_out が受け取れるのは str と list[T] です" +
+                                "（取り出したあとに書き戻す「空の値」が要るためです）")
+            n.is_move_out = True        # ★ codegen はこれを見る
+            return at
 
         i: int = 0
         while i < len(self.builtins):

@@ -1957,6 +1957,9 @@ static bool is_wrap_name(const char *name) {
 
 // その名前の組み込みが 1 つでもあるか
 bool is_builtin_name(const char *name) {
+    // ★ move_out は BUILTINS の表に載せられません（戻り型が引数と同じ型そのもので、
+    //   表は TypeKind しか持てないため）。名前だけここで数えます。
+    if (strcmp(name, "move_out") == 0) return true;
     for (int i = 0; BUILTINS[i].name; i++)
         if (strcmp(BUILTINS[i].name, name) == 0) return true;
     return false;
@@ -2023,6 +2026,48 @@ static Type *check_builtin_call(Sema *s, Node *n) {
         }
         n->is_list_str = true;
         return strcmp(n->name, "print") == 0 ? ty_none : ty_str;
+    }
+
+    // ── move_out(場所) — 所有権を取り出し、その場所は空にする ──────
+    //
+    // ★ なぜ要るか（docs/roadmap.md A-21d）
+    //   `return self.out` は仕様 §4.5 が許しますが、**戻り値の型に
+    //   「借用だ」と書く手段がありません**。呼ぶ側は所有として受け取り、
+    //   自分でも解放するので、--drop すると二重解放になります。
+    //   take は「持っていく」と書けるようにして、この形を無くします。
+    //
+    //       return move_out(self.out)   # self.out は空のリストになる
+    //
+    // ⚠️ 戻り型は**引数と同じ型そのもの**です（list[rc[Token]] なら
+    //   list[rc[Token]]）。BUILTINS の表は TypeKind しか持てないので、
+    //   表引きの前にここで返します。
+    if (strcmp(n->name, "move_out") == 0) {
+        // ① 引数は「場所」でなければならない。
+        //    値を取り出したあと**空を書き戻す**ので、書ける場所が要ります。
+        Node *a = n->args;
+        bool is_place = a->kind == ND_FIELD || a->kind == ND_INDEX ||
+                        (a->kind == ND_VAR && a->is_global);
+        if (!is_place) {
+            Diag d = {0};
+            d.message = "move_out は「場所」からしか取り出せません";
+            d.primary.tok = a->tok;
+            d.primary.label = "ここは書き戻せる場所ではありません";
+            d.hint = "move_out(self.xs) / move_out(obj.f) / move_out(xs[i]) の形で使ってください"
+                     "（局所変数は、そのまま返せば所有権ごと動きます）";
+            diag_fail(&d);
+        }
+        // ② 空の値を作れる型だけ。str は ""、list[T] は [] を書き戻します。
+        if (at->kind != TY_STR && at->kind != TY_LIST) {
+            Diag d = {0};
+            d.message = diag_fmt("move_out は '%s' 型を取り出せません", type_name(at));
+            d.primary.tok = a->tok;
+            d.primary.label = diag_fmt("これは '%s' 型です", type_name(at));
+            d.hint = "move_out が受け取れるのは str と list[T] です"
+                     "（取り出したあとに書き戻す「空の値」が要るためです）";
+            diag_fail(&d);
+        }
+        n->is_move_out = true;  // ★ codegen と ownck はこれを見る
+        return at;
     }
 
     for (int i = 0; BUILTINS[i].name; i++) {

@@ -1,0 +1,17 @@
+# STAGE0-ONLY: 所有権検査は C 版だけ
+# WARN: warning[E-BORROW-8]: 借用した値 'hits[…]' を返しています
+# OUTPUT: ab
+# EXIT: 0
+# 自分が所有しているリストの要素を返すと、返した先では所有になりますが、
+# ここでは借りものです。⚠️ **誤検出ではありません** — hits は関数の出口で
+# 解放されるので、--drop を付けると解放済みの文字列を返します。
+#   正しい書き方: return move_out(hits[0])（持ち主から取り上げる）
+#                 return copy(hits[0]) （複製する）
+def pick() -> str:
+    hits: list[str] = []
+    hits.append("a" + "b")
+    return hits[0]
+
+def main() -> int:
+    print(pick())
+    return 0

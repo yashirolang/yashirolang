@@ -408,7 +408,11 @@ class Emitter:
         while sl is not None:
             s: rc[StrLit] = sl
             if s.bytes_ == bytes_:
-                return s.label
+                # ★ copy で返す。StrLit は同じラベルを持ち続けるので take は使えません。
+                #   ⚠️ そのまま return s.label と書くと、呼び出し側が所有として
+                #     解放し、次の intern_str が解放済みを読みます
+                #     （docs/roadmap.md A-21d と同じ形）。
+                return copy(s.label)
             sl = s.next
 
         lab: str = "@.str." + str(self.str_counter)
@@ -1768,6 +1772,23 @@ class Emitter:
     # ── class の生成 ──────────────────────────────────
 
     # フィールドのアドレスを求める（読み出しにも代入にも使う）
+    # ── 「空の値」を作る ────────────────────────────────────
+    #
+    # ★ ゼロ初期化では足りない型に入れる、有効で中身が無い値です。
+    #     str     → ""（静的なので --drop でも解放されません）
+    #     list[T] → 新しい空のリスト
+    #
+    #   使うのは 2 か所です：クラスを作るとき（init の書き忘れ対策）と、
+    #   move_out(場所) が値を持っていったあとの書き戻しです。
+    #   対になる定義: src/codegen.c の gen_empty_value
+    def gen_empty_value(mut self, ty: rc[ast.Type]) -> str:
+        if ty.kind == ast.TY_STR:
+            return self.intern_str("")
+        self.declare_rt("ptr @pl_list_new()")
+        val: str = self.new_tmp()
+        self.emit("  " + val + " = call ptr @pl_list_new()\n")
+        return val
+
     def gen_field_ptr(mut self, n: rc[ast.Node]) -> str:
         obj_node: rc[ast.Node] = node_of(n.lhs)
         ot0: rc[ast.Type] = type_of(obj_node)
@@ -1888,13 +1909,7 @@ class Emitter:
             fld: rc[ast.Field] = f
             ft: rc[ast.Type] = type_of_field(fld)
             if ft.kind == ast.TY_STR or ft.kind == ast.TY_LIST:
-                val: str = ""
-                if ft.kind == ast.TY_STR:
-                    val = self.intern_str("")
-                else:
-                    self.declare_rt("ptr @pl_list_new()")
-                    val = self.new_tmp()
-                    self.emit("  " + val + " = call ptr @pl_list_new()\n")
+                val: str = self.gen_empty_value(ft)
                 p: str = self.new_tmp()
                 self.emit("  " + p + " = getelementptr %" + self.class_type(c) +
                           ".type, ptr " + obj + ", i32 0, i32 " +
@@ -2460,6 +2475,31 @@ class Emitter:
                       self.llvm_type(nt2) + " " + ma + ", " +
                       self.llvm_type(nt2) + " " + mb + "\n")
             return mt
+
+        # ── move_out(場所) — 所有権を取り出して、その場所は空にする ──────
+        #
+        # ★ 出す形は 3 行です（docs/roadmap.md A-21d）:
+        #     ① いまの値を読む      … これが戻り値（所有権ごともらう）
+        #     ② 空の値を作る        … str なら ""、list なら新しい空リスト
+        #     ③ その場所へ書き戻す  … 場所は有効なまま残る
+        #
+        # ⚠️ **retain も release も出しません。** 参照の数は動いていません
+        #   （持ち主が「場所」から「呼び出し側」へ移っただけです）。
+        #   対になる定義: src/codegen.c の is_move_out
+        if n.is_move_out:
+            ta: rc[ast.Node] = node_of(n.args)
+            tv: str = self.gen_expr(ta)                        # ①
+            tempty: str = self.gen_empty_value(type_of(ta))    # ②
+            if ta.kind == ast.ND_INDEX:                        # ③
+                self.gen_index_store(ta, tempty)
+            elif ta.kind == ast.ND_FIELD and len(ta.mod_name) == 0:
+                self.gen_store_tb(type_of(ta), tempty,
+                                  self.gen_field_ptr(ta), TBAA_FIELD)
+            else:
+                if ta.is_extern:
+                    self.declare_extern_global(ta)
+                self.gen_store(type_of(ta), tempty, ta.ir_name)
+            return tv
 
         # ★ print(xs) / str(xs)
         if n.is_list_str:

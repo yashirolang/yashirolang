@@ -1,0 +1,29 @@
+# OUTPUT: 2 / 0
+# EXIT: 0
+# move_out(場所) — 所有権を取り出して、その場所は空にする。
+#
+# ★ なぜ要るか（docs/roadmap.md A-21d）
+#   `return self.out` は仕様 §4.5 が許しますが、戻り値の型に「借用だ」と
+#   書く手段がありません。呼ぶ側は所有として受け取り自分でも解放するので、
+#   --drop すると二重解放になります。move_out なら持ち主が移るので安全です。
+#
+# ⚠️ 取り出したあとの self.out は**空のリスト**です（None ではありません）。
+class Maker:
+    out: list[int]
+
+    def init(self) -> None:
+        self.out = []
+
+    def run(mut self) -> list[int]:
+        self.out.append(1)
+        self.out.append(2)
+        return move_out(self.out)
+
+    def left(self) -> int:
+        return len(self.out)
+
+def main() -> int:
+    m: Maker = Maker()
+    xs: list[int] = m.run()
+    print(str(len(xs)) + " / " + str(m.left()))
+    return 0

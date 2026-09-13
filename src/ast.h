@@ -389,6 +389,10 @@ struct Node {
     // ★ print(list) / str(list)（要素の型で呼び分ける）
     bool is_list_str;
 
+    // ★ move_out(場所)（所有権を取り出して、その場所は空にする）。
+    //   ⚠️ 旗は**末尾に足します**（selfhost 側と揃えるため）。
+    bool is_move_out;
+
     // ★ この class が実装するインタフェースの並び（ND_TYPEREF）
     Node *ifaces;
 

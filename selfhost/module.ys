@@ -186,9 +186,12 @@ def path_for(ld: Loader, name: str, from_: rc[token.Token] | None) -> str:
         else:
             diag.error_full(from_, msg, "どちらを指しているか決められません",
                             None, "", hint)
+    # ★ move_out で「持っていく」。hits と cand は関数の出口で解放されるので、
+    #   そのまま return hits[0] と書くと解放済みの文字列を返していました
+    #   （docs/roadmap.md A-21d と同じ形。要素版）。
     if len(hits) == 1:
-        return hits[0]
-    return cand[0]   # 見つからない場合も「利用者側のパス」を返す（診断に出すため）
+        return move_out(hits[0])
+    return move_out(cand[0])   # 見つからない場合も「利用者側のパス」を返す（診断に出すため）
 
 # dir か -I の探索場所に <name> があるか
 #（「import を書き忘れていませんか」の診断用。★ lib/ は見ません）

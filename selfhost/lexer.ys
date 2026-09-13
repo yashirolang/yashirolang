@@ -620,7 +620,11 @@ class Lexer:
             self.push(token.TK_DEDENT, end_loc, "")
 
         self.push(token.TK_EOF, end_loc, "")
-        return self.out
+        # ★ move_out で「持っていく」（self.out は空のリストになる）。
+        #   ⚠️ そのまま return self.out と書くと、呼び出し側は所有として
+        #     受け取るのに Lexer 側も解放するので、--drop で二重解放でした
+        #     （docs/roadmap.md A-21d）。
+        return move_out(self.out)
 
 
 def tokenize(file: str, src: str) -> list[rc[token.Token]]:

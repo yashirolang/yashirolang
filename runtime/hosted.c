@@ -47,6 +47,16 @@
 //    「どの OS でも同じ結果」という約束が崩れます（CI の Windows ジョブが
 //    出力の不一致で見つけました）。binary モードに切り替えて、
 //    print が書いた通りのバイトを出します。
+// ⚠️ **winsock2.h は windows.h より前に include すること。**
+//   windows.h は古い winsock.h を連れてくるので、あとから winsock2.h を
+//   読むと「再定義」の山になります（Windows で最初に踏む穴です）。
+//   WIN32_LEAN_AND_MEAN を立てて winsock.h を外し、winsock2.h を先に読みます。
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN 1
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
 #include <direct.h>
 #include <fcntl.h>
 #include <io.h>
@@ -912,8 +922,8 @@ char *pl_capture(const char *cmd) {
 //   -1 に正規化して、言語側からは「負なら失敗」だけを見れば済むようにします。
 
 #ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
+// ★ winsock2.h / ws2tcpip.h はファイルの先頭で読んであります
+//   （windows.h より前でなければならないため。上の説明を参照）。
 typedef int pl_socklen;
 #define PL_SOCK_ERRNO WSAGetLastError()
 #else

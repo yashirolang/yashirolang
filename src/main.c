@@ -83,6 +83,7 @@ static void usage(int status) {
             "                  借りものを所有スロットへ入れる箇所をエラーにする\n"
             "  --explain-mut   呼び出しで変更される実引数を一覧表示して終了\n"
             "  --drop          スコープの出口に解放（drop）を挿入する\n"
+            "  --no-drop       解放を挿入しない（--drop を打ち消す。後勝ち）\n"
             "  --no-overflow-check\n"
             "                  数の実行時検査を外す（既定は検査する）:\n"
             "                  整数の + - * の桁あふれ／float の 0 除算\n"
@@ -172,7 +173,13 @@ static Options parse_args(int argc, char **argv) {
         if (strcmp(a, "--deny-mut") == 0) { o.deny_mut = 1; continue; }
         if (strcmp(a, "--deny-store-borrow") == 0) { o.deny_store_borrow = 1; continue; }
         // ★ 解放（drop）の挿入。既定では入れません（決定 D16）。
+        //
+        // ⚠️ **後に書いたほうが勝ちます**（--drop --no-drop なら入れない）。
+        //   既定を解放ありに変えるとき（A-21 ⑨）、逃げ道として --no-drop が要ります。
+        //   診断を見せるためのテスト（warn_* など）は、危険な書き方をわざとして
+        //   いるので解放すると壊れます。そこに付けるのが --no-drop です。
         if (strcmp(a, "--drop") == 0) { o.drop = 1; continue; }
+        if (strcmp(a, "--no-drop") == 0) { o.drop = 0; continue; }
         // ★ 既定は検査あり。速さのために外したいときだけ付ける。
         if (strcmp(a, "--no-overflow-check") == 0) { o.no_ovf = 1; continue; }
         // ★ ベアメタル向け。リンクは自分でやるので -c で止める。

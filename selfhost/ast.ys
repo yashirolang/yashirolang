@@ -582,6 +582,16 @@ class Node:
     # ★ move_out(場所)（所有権を取り出して、その場所は空にする）
     #   対になる定義: src/ast.h の is_move_out
     is_move_out: bool
+
+    # ── 所有権検査（ownck）が立てる印 ───────────────────────
+    #
+    # ⚠️ **いまのセルフホスト版はまだ ownck を持っていません。** だから
+    #   この 2 つは常に False のままです。解放の挿入（--drop）はこの印に
+    #   依存するので、**ownck を移植するまで --drop は無効**にしてあります
+    #   （docs/roadmap.md A-21 ⑨）。場所だけ先に用意しておきます。
+    #   対になる定義: src/ast.h の binds_borrow / moved_out
+    binds_borrow: bool   # 借りものを束縛している（解放してはいけない）
+    moved_out: bool      # 移動済み（解放してはいけない）
     # ★ ジェネリクス。
     #   ND_TYPEREF … 型引数の並び（Dict[str, int] の str と int）
     #   ND_CLASS   … 型引数の名前の並び（class Dict[K, V] の K と V）
@@ -625,6 +635,8 @@ class Node:
         self.is_minmax = False
         self.is_list_str = False
         self.is_move_out = False
+        self.binds_borrow = False
+        self.moved_out = False
         self.is_wrap = False
         self.targs = None
         self.ifaces = None

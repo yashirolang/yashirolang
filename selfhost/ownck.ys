@@ -1,0 +1,495 @@
+# ownck — 所有権・借用・可変性の検査（C 版 src/ownck.c と対）
+#
+# ★ なぜセルフホスト版にも要るのか（docs/roadmap.md A-21 ⑩）
+#   解放の挿入（--drop）は「いつ・何を解放してよいか」の判断が要り、
+#   その判断は**所有権の解析結果そのもの**です。C 版だけが所有権を知って
+#   いる状態では、セルフホスト版は「解放しないコンパイラ」にしかなれません。
+#   配る実行ファイルは stage1 由来なので、そのままでは**利用者に配られる
+#   コンパイラが解放しない**ままです。自己ホストの意味を保つには、
+#   検査ごと移すしかありません。
+#
+# ⚠️ **移植中です。** いまは土台（Place と Flow）だけがあります。
+#   進み具合は docs/roadmap.md の A-21 ⑩ を参照。
+#
+# ★ 対になる定義: src/ownck.c
+#   ここを直したら向こうも直すこと。ずれると 2 実装の出力が食い違い、
+#   `make selfhost-test` が落ちます（つまりテストが自動で見張ります）。
+import ast
+import strings
+import token
+import diag
+
+# ── 場所（Place）の種類 ─────────────────────────────────
+#
+# ★ 「移動したか」を追いかける単位です。変数そのものだけでなく、
+#   フィールドや添字も 1 つの場所として扱います。
+PL_LOCAL: int = 0
+PL_FIELD: int = 1
+PL_INDEX: int = 2
+PL_GLOBAL: int = 3
+
+# ★ 対になる定義: src/ownck.c の struct Place
+class Place:
+    kind: int
+    base: rc[Place] | None   # FIELD / INDEX の親
+    # 同一性の判定に使う名前
+    #   LOCAL / GLOBAL … sema が振った IR 名（%x / @g.x）
+    #   FIELD          … フィールド名
+    key: str
+    disp: str                # 診断に出す見た目（"xs" / "self.name" / "xs[…]"）
+
+    def init(self, kind: int, base: rc[Place] | None, key: own str,
+             disp: own str) -> None:
+        self.kind = kind
+        self.base = base
+        self.key = key
+        self.disp = disp
+
+# ── 借用の根（誰から借りているか）────────────────────────
+#
+# ★ 対になる定義: src/ownck.c の struct BorrowRoot
+class BorrowRoot:
+    key: str                  # 借りている変数の IR 名（%xs）
+    origin: rc[ast.Node]      # 貸し手の宣言（ND_PARAM または ND_VARDECL）
+    is_param: bool            # 引数から借りているか（ローカルからもありうる）
+    is_self: bool             # self か（仕様 §4.5 の例外）
+    is_mut: bool              # 書き換えてよいか
+    depth: int                # 貸し手が宣言されたスコープの深さ（寿命の検査）
+
+    def init(self, key: own str, origin: rc[ast.Node], is_param: bool,
+             is_self: bool, is_mut: bool, depth: int) -> None:
+        self.key = key
+        self.origin = origin
+        self.is_param = is_param
+        self.is_self = is_self
+        self.is_mut = is_mut
+        self.depth = depth
+
+
+# ── 所有の状態 ──────────────────────────────────────────
+ST_VALID: int = 0
+ST_MAYBE: int = 1
+ST_MOVED: int = 2
+
+def st_join(a: int, b: int) -> int:
+    if a == b:
+        return a
+    return ST_MAYBE
+
+# ★ 対になる定義: src/ownck.c の struct Ent
+class Ent:
+    pl: rc[Place]
+    st: int
+    at: rc[ast.Node] | None   # 移動した位置（診断の note: に出す）
+
+    def init(self, pl: rc[Place], st: int, at: rc[ast.Node] | None) -> None:
+        self.pl = pl
+        self.st = st
+        self.at = at
+
+# ある時点での「全ての場所の状態」。
+#
+# ★ 表に無い場所は Valid です（移動されていないものを全部並べる必要はない）。
+class Flow:
+    ents: list[rc[Ent]]
+    dead: bool   # この経路は return / break / continue で終わっている
+
+    def init(self) -> None:
+        self.ents = []
+        self.dead = False
+
+# ── 場所の比較 ──────────────────────────────────────────
+#
+# ⚠️ 添字（PL_INDEX）は**どれも同じ場所**として扱います。xs[0] と xs[1] は
+#   コンパイル時に区別できないためです（設計 ownership.md §3）。
+def place_eq(a: rc[Place], b: rc[Place]) -> bool:
+    if a.kind != b.kind:
+        return False
+    if a.key != b.key:
+        return False
+    ab: rc[Place] | None = a.base
+    bb: rc[Place] | None = b.base
+    if ab is None and bb is None:
+        return True
+    if ab is None or bb is None:
+        return False
+    return place_eq(ab, bb)
+
+# a が b の接頭辞か（xs は xs[…] の接頭辞）
+def place_prefix_of(a: rc[Place], b: rc[Place]) -> bool:
+    cur: rc[Place] | None = b
+    while cur is not None:
+        c: rc[Place] = cur
+        if place_eq(a, c):
+            return True
+        cur = c.base
+    return False
+
+# 2 つの場所が重なるか（どちらかがもう一方の一部）
+def place_overlaps(a: rc[Place], b: rc[Place]) -> bool:
+    return place_prefix_of(a, b) or place_prefix_of(b, a)
+
+# ── 型の分類（C 版 ty_is_rc / ty_is_owned と対）──────────────
+def ty_is_rc(t: rc[ast.Type]) -> bool:
+    if t.kind == ast.TY_RC:
+        return True
+    if t.kind == ast.TY_OPT:
+        return ty_is_rc(ast.elem_of(t))
+    return False
+
+# 所有型か（解放の対象になりうる型か）
+def ty_is_owned(t: rc[ast.Type]) -> bool:
+    if (t.kind == ast.TY_STR or t.kind == ast.TY_LIST or
+            t.kind == ast.TY_CLASS or t.kind == ast.TY_RC):
+        return True
+    # T | None も中身が所有型なら所有型
+    if t.kind == ast.TY_OPT:
+        return ty_is_owned(ast.elem_of(t))
+    return False
+
+
+# ── Flow の操作（C 版 flow_* と対）─────────────────────────
+#
+# ⚠️ C 版は連結リストを継ぎ替えますが、こちらは list[rc[Ent]] を作り直します。
+#   結果は同じです（表に無い場所は Valid、という約束が同じなので）。
+
+def flow_copy(src: rc[Flow]) -> rc[Flow]:
+    out: rc[Flow] = rc(Flow())
+    out.dead = src.dead
+    i: int = 0
+    while i < len(src.ents):
+        e: rc[Ent] = src.ents[i]
+        out.ents.append(rc(Ent(e.pl, e.st, e.at)))
+        i = i + 1
+    return out
+
+def flow_find(f: rc[Flow], p: rc[Place]) -> rc[Ent] | None:
+    i: int = 0
+    while i < len(f.ents):
+        e: rc[Ent] = f.ents[i]
+        if place_eq(e.pl, p):
+            return e
+        i = i + 1
+    return None
+
+# p（またはそれと重なる場所）の状態。いちばん悪いものを返す。
+#
+# ★ 重なりを見るのがここです。'a' を移動した後に 'a.f' を読むのも、
+#   'a.f' を移動した後に 'a' を丸ごと読むのも、どちらもエラーです。
+def state_of(f: rc[Flow], p: rc[Place]) -> int:
+    worst: int = ST_VALID
+    found: bool = False
+    i: int = 0
+    while i < len(f.ents):
+        e: rc[Ent] = f.ents[i]
+        if e.st != ST_VALID and place_overlaps(e.pl, p):
+            if not found or e.st > worst:
+                worst = e.st
+                found = True
+        i = i + 1
+    if found:
+        return worst
+    return ST_VALID
+
+# 「誰が移動したか」も要るとき（診断の note: 用）
+def mover_of(f: rc[Flow], p: rc[Place]) -> rc[Ent] | None:
+    worst: int = ST_VALID
+    who: rc[Ent] | None = None
+    i: int = 0
+    while i < len(f.ents):
+        e: rc[Ent] = f.ents[i]
+        if e.st != ST_VALID and place_overlaps(e.pl, p):
+            if who is None or e.st > worst:
+                worst = e.st
+                who = e
+        i = i + 1
+    return who
+
+# p と重なる記録を消す（＝ふたたび Valid にする）
+def flow_clear(f: mut rc[Flow], p: rc[Place]) -> None:
+    keep: list[rc[Ent]] = []
+    i: int = 0
+    while i < len(f.ents):
+        e: rc[Ent] = f.ents[i]
+        if not place_overlaps(e.pl, p):
+            keep.append(e)
+        i = i + 1
+    f.ents = keep
+
+def flow_move(f: mut rc[Flow], p: rc[Place], at: rc[ast.Node] | None) -> None:
+    flow_clear(f, p)
+    f.ents.append(rc(Ent(p, ST_MOVED, at)))
+
+# dst ← dst ⊔ src（合流）
+def flow_join(dst: mut rc[Flow], src: rc[Flow]) -> None:
+    if src.dead:
+        return          # 到達しない経路は合流に参加しない（設計 4.2）
+    if dst.dead:
+        cp: rc[Flow] = flow_copy(src)
+        dst.ents = cp.ents
+        dst.dead = cp.dead
+        return
+
+    # dst 側にある場所：src に記録が無ければ、src では Valid だったということ
+    i: int = 0
+    while i < len(dst.ents):
+        e: rc[Ent] = dst.ents[i]
+        sfound: rc[Ent] | None = flow_find(src, e.pl)
+        other: int = ST_VALID
+        if sfound is not None:
+            other = sfound.st
+        joined: int = st_join(e.st, other)
+        if joined != e.st and sfound is not None:
+            sf: rc[Ent] = sfound
+            if sf.at is not None:
+                e.at = sf.at   # 位置は「片方の枝」を指せれば足りる
+        e.st = joined
+        i = i + 1
+
+    # src にしか無い場所：dst 側は Valid なので、必ず MaybeMoved になる
+    k: int = 0
+    while k < len(src.ents):
+        se: rc[Ent] = src.ents[k]
+        if se.st != ST_VALID and flow_find(dst, se.pl) is None:
+            # 片方が Valid なので MaybeMoved
+            dst.ents.append(rc(Ent(se.pl, st_join(ST_VALID, se.st), se.at)))
+        k = k + 1
+
+def flow_eq(a: rc[Flow], b: rc[Flow]) -> bool:
+    if a.dead != b.dead:
+        return False
+    i: int = 0
+    while i < len(a.ents):
+        e: rc[Ent] = a.ents[i]
+        o: rc[Ent] | None = flow_find(b, e.pl)
+        ost: int = ST_VALID
+        if o is not None:
+            ost = o.st
+        if ost != e.st:
+            return False
+        i = i + 1
+    k: int = 0
+    while k < len(b.ents):
+        be: rc[Ent] = b.ents[k]
+        if be.st != ST_VALID and flow_find(a, be.pl) is None:
+            return False
+        k = k + 1
+    return True
+
+
+# ── 移動の文脈（借用のときに何と言うかが変わる）──────────────
+# ★ 対になる定義: src/ownck.c の MoveCtx
+MV_ASSIGN: int = 0    # ys = xs        変数への代入
+MV_FIELD: int = 1     # self.xs = a    フィールドへ保存
+MV_APPEND: int = 2    # xss.append(a)  コンテナへ保存
+MV_RETURN: int = 3    # return a       返す
+MV_OWN_ARG: int = 4   # take(a)        own 引数へ渡す
+
+
+# ── 検査の設定と、報告の数え上げ ────────────────────────────
+#
+# ★ 対になる定義: src/ownck.c の OwnckOptions / Own
+class Options:
+    deny_move: bool
+    deny_borrow: bool
+    deny_mut: bool
+    deny_store_borrow: bool
+    explain_mut: bool
+    quiet: bool
+    max_report: int
+
+    def init(self) -> None:
+        self.deny_move = False
+        self.deny_borrow = False
+        self.deny_mut = False
+        self.deny_store_borrow = False
+        self.explain_mut = False
+        self.quiet = False
+        self.max_report = 20
+
+
+# 報告を 1 件出す（deny なら error に上げて止める）
+#
+# ⚠️ 上限を超えたぶんは数えるだけにします（C 版 OWNCK_MAX_REPORT と同じ）。
+#   ただし **error は必ず出します**（黙って通すわけにいかないため）。
+class Reporter:
+    opt: Options
+    nreport: int
+    nmore: int
+
+    def init(self, opt: own Options) -> None:
+        self.opt = opt
+        self.nreport = 0
+        self.nmore = 0
+
+    def emit(mut self, d: mut diag.Diag, deny: bool) -> None:
+        if self.opt.quiet:
+            return
+        if self.opt.explain_mut:
+            return      # --explain-mut は一覧を出すだけの道具
+        if not deny and self.nreport >= self.opt.max_report:
+            self.nmore = self.nmore + 1
+            return
+        self.nreport = self.nreport + 1
+        if deny:
+            d.severity = "error"
+            diag.fail(d)
+        d.severity = "warning"
+        diag.emit(d)
+
+    # ── E-MOVE-1: 移動済みの値を使った ────────────────────
+    #
+    # ★ 対になる定義: src/ownck.c の report_use。
+    #   ⚠️ **文面を 1 文字でも変えたら向こうも変えること。**
+    #     ずれると make selfhost-test が落ちます（それが見張りです）。
+    def report_use(mut self, p: rc[Place], moved: rc[Ent],
+                   at: rc[token.Token]) -> None:
+        if self.opt.quiet:
+            return
+        maybe: bool = moved.st == ST_MAYBE
+        # ★ 移動した場所と使った場所が同じなら、それはループの前の反復です。
+        #   「分岐によっては」では読み手に意味が通らないので言い換えます。
+        prev_round: bool = False
+        mt: rc[token.Token] | None = tok_of_node(moved.at)
+        if mt is not None:
+            prev_round = same_tok(mt, at)
+
+        msg: str = "移動済みの値 '" + p.disp + "' を使っています"
+        if maybe:
+            msg = "移動済みかもしれない値 '" + p.disp + "' を使っています"
+
+        rel: str = "'" + moved.pl.disp + "' はここで移動しました"
+        if prev_round:
+            rel = "'" + moved.pl.disp + "' は前の繰り返しで、ここで移動しています"
+        elif maybe:
+            rel = "分岐によっては、'" + moved.pl.disp + "' はここで移動しています"
+
+        hint: str = "移動した後も使うなら、値を作り直して代入してください（例: xs = [...]）"
+        if prev_round:
+            hint = ("繰り返しのたびに移動するので、2 周目には値がありません" +
+                    "（ループの中で作り直すか、借用で足りないか確かめてください）")
+        elif maybe:
+            hint = "どの経路を通っても有効になるように、分岐の後で代入し直してください"
+
+        d: diag.Diag = diag.Diag(msg)
+        d.code = "E-MOVE-1"
+        d.primary = diag.Label(at, "ここで使われています")
+        if mt is not None:
+            d.related = diag.Label(mt, rel)
+        d.hint = hint
+        self.emit(d, self.opt.deny_move)
+
+
+    # ── E-BORROW-1/3/4: 借用した値を動かそうとした ───────────
+    #
+    # ★ 「なぜ駄目か」より「どう直すか」を先に出します（仕様 §12）。
+    #   直し方はいつも同じ：**その引数を own にする**。
+    #   対になる定義: src/ownck.c の report_borrow
+    def report_borrow(mut self, br: rc[BorrowRoot], p: rc[Place],
+                      at: rc[token.Token], ctx: int) -> None:
+        if self.opt.quiet:
+            return
+        code: str = "E-BORROW-1"
+        msg: str = "借用した値 '" + p.disp + "' は移動できません"
+        label: str = "ここで移動しようとしています"
+        if ctx == MV_FIELD:
+            code = "E-BORROW-3"
+            msg = "借用した値 '" + p.disp + "' をフィールドに保存できません"
+            label = "保存すると、貸してくれた相手より長生きしてしまいます"
+        elif ctx == MV_APPEND:
+            code = "E-BORROW-3"
+            msg = "借用した値 '" + p.disp + "' をリストに保存できません"
+            label = "保存すると、貸してくれた相手より長生きしてしまいます"
+        elif ctx == MV_RETURN:
+            code = "E-BORROW-4"
+            msg = "借用した値 '" + p.disp + "' は返せません"
+            label = "返すと、呼び出しが終わった後も生き続けてしまいます"
+
+        rel: str = "'" + br.origin.name + "' が所有しています（借りているだけです）"
+        if br.is_self:
+            rel = "'self' は借用です（メソッドはインスタンスを借りているだけです）"
+        elif br.is_param:
+            rel = "引数 '" + br.origin.name + "' は借用です（既定）"
+
+        tname: str = "T"
+        ot: rc[ast.Type] | None = br.origin.type
+        if ot is not None:
+            tname = ast.type_name(ot)
+
+        hint: str = ("引数を '" + br.origin.name + ": own " + tname +
+                     "' にすると、所有権を受け取れます")
+        if br.is_self:
+            hint = ("返してよいのは self のフィールドの借用だけです（仕様 §4.5）。" +
+                    "値そのものが要るなら copy(...) を使ってください")
+        elif not br.is_param:
+            hint = ("'" + br.origin.name + "' が生きている間しか使えません。" +
+                    "所有権ごと渡すなら、作った値を直接渡してください")
+        elif ctx == MV_ASSIGN:
+            hint = ("別の名前を付けずに、そのまま使ってください" +
+                    "（所有権ごと要るなら '" + br.origin.name + ": own " +
+                    tname + "' にします）")
+
+        d: diag.Diag = diag.Diag(msg)
+        d.code = code
+        d.primary = diag.Label(at, label)
+        obt: rc[token.Token] | None = br.origin.tok
+        if obt is not None:
+            d.related = diag.Label(obt, rel)
+        d.hint = hint
+        self.emit(d, self.opt.deny_borrow)
+
+    # ── E-BORROW-8: 自分が所有しているものの一部を返した（A-21d）──
+    def report_return_borrow(mut self, p: rc[Place], at: rc[token.Token],
+                             lender: rc[ast.Node] | None) -> None:
+        if self.opt.quiet:
+            return
+        d: diag.Diag = diag.Diag("借用した値 '" + p.disp + "' を返しています")
+        d.code = "E-BORROW-8"
+        d.primary = diag.Label(at, "返した先では所有になりますが、ここでは借りものです")
+        if lender is not None:
+            ld: rc[ast.Node] = lender
+            lt: rc[token.Token] | None = ld.tok
+            if lt is not None:
+                d.related = diag.Label(lt, "'" + ld.name +
+                                       "' が所有していて、この関数の出口で解放されます")
+        d.hint = ("持ち主から取り上げるなら move_out(...)、複製するなら copy(...) を" +
+                  "使ってください")
+        self.emit(d, self.opt.deny_store_borrow)
+
+    # ── E-BORROW-7: 借りものを所有する側へ渡した ─────────────
+    def report_store_borrow(mut self, p: rc[Place], at: rc[token.Token],
+                            ctx: int, lender: rc[ast.Node] | None) -> None:
+        if self.opt.quiet:
+            return
+        msg: str = "借用した値 '" + p.disp + "' をフィールドに保存しています"
+        label: str = "保存すると、所有者が 2 つになります"
+        if ctx == MV_APPEND:
+            msg = "借用した値 '" + p.disp + "' をリストに保存しています"
+        elif ctx == MV_OWN_ARG:
+            msg = "借用した値 '" + p.disp + "' を own 引数へ渡しています"
+            label = "渡すと、所有者が 2 つになります"
+
+        d: diag.Diag = diag.Diag(msg)
+        d.code = "E-BORROW-7"
+        d.primary = diag.Label(at, label)
+        if lender is not None:
+            ld2: rc[ast.Node] = lender
+            lt2: rc[token.Token] | None = ld2.tok
+            if lt2 is not None:
+                d.related = diag.Label(lt2, "'" + ld2.name +
+                                       "' が所有しています（読んだだけでは借りものです）")
+        d.hint = ("入れる値をその場で作るか、copy(...) で複製してください" +
+                  "（共有したままにするなら rc[T] です）")
+        self.emit(d, self.opt.deny_store_borrow)
+
+
+# ── 小道具 ──────────────────────────────────────────────
+def tok_of_node(n: rc[ast.Node] | None) -> rc[token.Token] | None:
+    if n is None:
+        return None
+    nn: rc[ast.Node] = n
+    return nn.tok
+
+# 同じ位置を指しているか（行と桁で見る。C 版はポインタ比較）
+def same_tok(a: rc[token.Token], b: rc[token.Token]) -> bool:
+    return a.line == b.line and a.col == b.col

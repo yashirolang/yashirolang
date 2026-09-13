@@ -41,12 +41,16 @@ class LoopCtx:
     outer: rc[LoopCtx] | None
     break_label: str
     continue_label: str
+    # ★ ループに入ったときのスコープ。break / continue は**ここまで**を解放する。
+    #   対になる定義: src/codegen.c の LoopCtx.scope
+    scope: rc[ScopeCtx] | None
 
     def init(self, outer: rc[LoopCtx] | None, break_label: str,
-             continue_label: str) -> None:
+             continue_label: str, scope: rc[ScopeCtx] | None) -> None:
         self.outer = outer
         self.break_label = copy(break_label)
         self.continue_label = copy(continue_label)
+        self.scope = scope
 
 
 # 出力済みの文字列リテラル（同じ内容は 1 つにまとめる）
@@ -58,6 +62,20 @@ class StrLit:
     def init(self, bytes_: str, label: str) -> None:
         self.bytes_ = copy(bytes_)
         self.label = copy(label)
+
+
+# ── スコープ（出口で解放するものの一覧）──────────────────
+#
+# ★ 対になる定義: src/codegen.c の ScopeCtx。
+#   ents は「このスコープで宣言された、解放対象の変数」です。
+#   **先頭に足す**ので、たどると宣言の逆順になります（設計 §6.1）。
+class ScopeCtx:
+    outer: rc[ScopeCtx] | None
+    ents: list[rc[ast.Node]]
+
+    def init(self, outer: rc[ScopeCtx] | None) -> None:
+        self.outer = outer
+        self.ents = []
 
 
 class Emitter:
@@ -96,6 +114,21 @@ class Emitter:
 
     # ── 整数の桁あふれ検査 ──
     no_ovf: bool             # --no-overflow-check（検査を出さない）
+
+    # ── 解放（drop）の挿入。対になる定義: src/codegen.c ──────────
+    #
+    # ★ スコープの出口で、そのスコープが持っているものを**宣言と逆順に**
+    #   解放します（設計 §6.1）。型ごとの @drop.* は 1 度だけ出し、
+    #   モジュールの末尾にまとめて置きます。
+    drop: bool               # --drop（解放を挿入する）
+    scope: rc[ScopeCtx] | None   # 今いるスコープ
+    dropdefs: list[str]      # 生成した @drop.* の定義（末尾に出す）
+    dropfn_keys: list[str]   # 型 → 解放関数（重複を出さないための表）
+    dropfn_names: list[str]
+    drop_counter: int        # @drop.list.N の連番
+    # ★ モジュールのトップレベル宣言（自分のモジュールのクラスか判定するのに使う）
+    #   対になる定義: src/codegen.c の e->ast
+    ast_body: rc[ast.Node] | None
 
     # ── 添字の中で貯めた「あふれの旗」（空文字列なら無し）──
     # ⚠️ C 版（src/codegen.c）は out 引数で渡しています。この言語に
@@ -146,7 +179,14 @@ class Emitter:
         self.prop_used = False
         self.try_stack = []
         self.try_labels = []
-        self.no_ovf = False     # codegen() が上書きする
+        self.no_ovf = False
+        self.drop = False
+        self.scope = None
+        self.dropdefs = []
+        self.dropfn_keys = []
+        self.dropfn_names = []
+        self.drop_counter = 0
+        self.ast_body = None     # codegen() が上書きする
         self.ovf_flag = ""
         self.last_ovf = ""
 
@@ -1974,6 +2014,219 @@ class Emitter:
         self.header.append(strings.join(parts, ""))
 
     # クラスの型名を返す（まだ出していなければ定義も出す）
+    # ── 解放（drop）：型ごとの @drop.* を作る ────────────────
+    #
+    # ★ 対になる定義: src/codegen.c の drop_fn_for 一族。
+    #   同じ型に 2 度出さないよう、鍵（型の名前）で覚えておきます。
+    def drop_fn_cached(self, key: str) -> str:
+        i: int = 0
+        while i < len(self.dropfn_keys):
+            if self.dropfn_keys[i] == key:
+                return copy(self.dropfn_names[i])
+            i = i + 1
+        return ""
+
+    def drop_fn_remember(mut self, key: str, name: str) -> None:
+        self.dropfn_keys.append(copy(key))
+        self.dropfn_names.append(copy(name))
+
+    # クラス C を解放する関数 @drop.<C> を作る。
+    #
+    #   ① drop メソッドがあれば先に呼ぶ（デストラクタ。仕様 §6.2）
+    #   ② 所有型のフィールドを宣言順に解放する
+    #   ③ インスタンス自身を解放する
+    #
+    # ⚠️ 自分自身を含むクラス（連結リストなど）では再帰します。
+    def gen_class_drop(mut self, c: rc[ast.Class]) -> str:
+        key: str = "class:" + c.ir_name
+        hit: str = self.drop_fn_cached(key)
+        if len(hit) > 0:
+            return hit
+
+        name: str = "@drop." + c.ir_name
+        # ★ 先に登録する。フィールドが自分自身の型でも無限再帰しないため。
+        self.drop_fn_remember(key, name)
+
+        # ユーザー定義の drop メソッド（デストラクタ）を探す
+        dtor_ir: str = ""
+        dtor_local: bool = False
+        cn: rc[ast.Node] | None = c.node
+        if cn is not None:
+            m: rc[ast.Node] | None = node_of(cn).body
+            while m is not None:
+                mm: rc[ast.Node] = m
+                if mm.kind == ast.ND_FUNC and mm.name == "drop":
+                    dtor_ir = copy(mm.ir_name)
+                m = mm.next
+
+        # ★ フィールドの解放関数を**先に**作る（本体を書き始める前に）。
+        #   drop_fn_for が dropdefs に書き足すので、書きかけと混ざらないように。
+        ftype: str = self.class_type(c)
+        fdrops: list[str] = []
+        f: rc[ast.Field] | None = c.fields
+        while f is not None:
+            fld: rc[ast.Field] = f
+            fdrops.append(self.drop_fn_for(type_of_field(fld)))
+            f = fld.next
+
+        if len(dtor_ir) > 0:
+            # ⚠️ 別モジュールのクラスなら declare が要る。自分のモジュールの
+            #   クラスに declare を出すと「再定義」で落ちる。
+            d: rc[ast.Node] | None = self.ast_body
+            while d is not None:
+                dn: rc[ast.Node] = d
+                if dn.kind == ast.ND_CLASS and dn.targs is None and dn.cls is not None:
+                    if class_of(dn.cls).ir_name == c.ir_name:
+                        dtor_local = True
+                d = dn.next
+            if not dtor_local:
+                self.declare_extern("void", dtor_ir, "ptr")
+
+        b: list[str] = []
+        b.append("\ndefine internal void " + name + "(ptr %p) {\nentry:\n")
+        b.append("  %isnull = icmp eq ptr %p, null\n")
+        b.append("  br i1 %isnull, label %done, label %body\nbody:\n")
+        if len(dtor_ir) > 0:
+            b.append("  call void @" + dtor_ir + "(ptr %p)\n")
+
+        i2: int = 0
+        f2: rc[ast.Field] | None = c.fields
+        while f2 is not None:
+            fld2: rc[ast.Field] = f2
+            if len(fdrops[i2]) > 0:
+                b.append("  %f" + str(i2) + " = getelementptr %" + ftype +
+                         ".type, ptr %p, i32 0, i32 " + str(fld2.index) + "\n")
+                b.append("  %v" + str(i2) + " = load ptr, ptr %f" + str(i2) + "\n")
+                b.append("  call void " + fdrops[i2] + "(ptr %v" + str(i2) + ")\n")
+            i2 = i2 + 1
+            f2 = fld2.next
+
+        self.declare_rt("void @pl_drop_obj(ptr)")
+        b.append("  call void @pl_drop_obj(ptr %p)\n")
+        b.append("  br label %done\ndone:\n  ret void\n}\n")
+        self.dropdefs.append(strings.join(b, ""))
+        return name
+
+    # list[T] を解放する関数を作る。
+    #
+    # ★ pl_drop_list は「要素を解放する関数」を受け取ります（コピー型なら null）。
+    #   引数が 2 つあるので、そのままでは「ptr を 1 つ取る」形に合いません。
+    #   包む関数を 1 つ作れば、あとはどの型でも同じ形で扱えます。
+    def gen_list_drop(mut self, t: rc[ast.Type]) -> str:
+        key: str = "list:" + ast.type_name(t)
+        hit: str = self.drop_fn_cached(key)
+        if len(hit) > 0:
+            return hit
+        name: str = "@drop.list." + str(self.drop_counter)
+        self.drop_counter = self.drop_counter + 1
+        self.drop_fn_remember(key, name)
+
+        elem: str = self.drop_fn_for(ast.elem_of(t))
+        if len(elem) == 0:
+            elem = "null"
+        self.declare_rt("void @pl_drop_list(ptr, ptr)")
+        self.dropdefs.append("\ndefine internal void " + name +
+                             "(ptr %l) {\nentry:\n" +
+                             "  call void @pl_drop_list(ptr %l, ptr " + elem + ")\n" +
+                             "  ret void\n}\n")
+        return name
+
+    # rc[T] を手放す関数を作る（カウントを 1 減らす）
+    def gen_rc_drop(mut self, t: rc[ast.Type]) -> str:
+        key: str = "rc:" + ast.type_name(t)
+        hit: str = self.drop_fn_cached(key)
+        if len(hit) > 0:
+            return hit
+        name: str = "@drop.rc." + str(self.drop_counter)
+        self.drop_counter = self.drop_counter + 1
+        self.drop_fn_remember(key, name)
+
+        inner: str = self.drop_fn_for(ast.elem_of(t))
+        if len(inner) == 0:
+            inner = "null"
+        self.declare_rt("void @pl_rc_release(ptr, ptr)")
+        self.dropdefs.append("\ndefine internal void " + name +
+                             "(ptr %p) {\nentry:\n" +
+                             "  call void @pl_rc_release(ptr %p, ptr " + inner + ")\n" +
+                             "  ret void\n}\n")
+        return name
+
+    # 型 t の値 1 つを解放する関数の名前。コピー型なら ""（空）。
+    def drop_fn_for(mut self, t: rc[ast.Type]) -> str:
+        if t.kind == ast.TY_STR:
+            self.declare_rt("void @pl_drop_str(ptr)")
+            return "@pl_drop_str"
+        if t.kind == ast.TY_LIST:
+            return self.gen_list_drop(t)
+        if t.kind == ast.TY_RC:
+            return self.gen_rc_drop(t)
+        if t.kind == ast.TY_CLASS:
+            return self.gen_class_drop(class_of(t.cls))
+        # T | None は中身と同じ扱い（解放関数はどれも null を受け取れる）
+        if t.kind == ast.TY_OPT:
+            return self.drop_fn_for(ast.elem_of(t))
+        return ""   # int / bool / None
+
+    # ── 解放（drop）：スコープの出入りと解放の挿入 ────────────
+    #
+    # 対になる定義: src/codegen.c の is_droppable / scope_add /
+    #   emit_scope_drops / emit_drops_until / emit_drop_slot。
+    #
+    # ⚠️ 借りものを束縛している変数（`t = xs[i]` や for のループ変数）は
+    #   **所有していない**ので解放しません。ownck が印を付けています。
+    def is_droppable(self, decl: rc[ast.Node]) -> bool:
+        if decl.is_global or decl.binds_borrow:
+            return False
+        t: rc[ast.Type] = type_of(decl)
+        return (t.kind == ast.TY_STR or t.kind == ast.TY_LIST or
+                t.kind == ast.TY_CLASS or t.kind == ast.TY_OPT or
+                t.kind == ast.TY_RC)
+
+    # このスコープの解放対象に加える（**先頭に足す**＝たどると宣言の逆順）
+    def scope_add(mut self, decl: rc[ast.Node]) -> None:
+        if not self.drop:
+            return
+        sc: rc[ScopeCtx] | None = self.scope
+        if sc is None:
+            return
+        if not self.is_droppable(decl):
+            return
+        cur: rc[ScopeCtx] = sc
+        cur.ents.append(decl)
+
+    # 変数 1 つを解放する（スロットを読んで、解放関数に渡すだけ）
+    def emit_drop_slot(mut self, decl: rc[ast.Node]) -> None:
+        fn: str = self.drop_fn_for(type_of(decl))
+        if len(fn) == 0:
+            return
+        v: str = self.new_tmp()
+        self.emit("  " + v + " = load ptr, ptr " + decl.ir_name + "\n")
+        self.emit("  call void " + fn + "(ptr " + v + ")\n")
+
+    # スコープ 1 つぶんの解放を出す（宣言と逆順。設計 §6.1）
+    #
+    # ⚠️ ents は末尾に足しているので、**後ろから**たどると宣言の逆順になります
+    #   （C 版は先頭に足して前からたどる。出る順序は同じ）。
+    def emit_scope_drops(mut self, sc: rc[ScopeCtx]) -> None:
+        i: int = len(sc.ents) - 1
+        while i >= 0:
+            self.emit_drop_slot(sc.ents[i])
+            i = i - 1
+
+    # 今のスコープから stop（含まない）まで、抜けるスコープすべてを解放する。
+    #   return  … stop = None（関数の外まで抜ける）
+    #   break   … stop = ループに入ったときのスコープ
+    def emit_drops_until(mut self, stop: rc[ScopeCtx] | None) -> None:
+        if not self.drop:
+            return
+        sc: rc[ScopeCtx] | None = self.scope
+        while sc is not None:
+            cur: rc[ScopeCtx] = sc
+            if stop is not None and cur == stop:
+                return
+            self.emit_scope_drops(cur)
+            sc = cur.outer
+
     def class_type(mut self, c: rc[ast.Class]) -> str:
         self.gen_class_type(c)
         return copy(c.ir_name)
@@ -2035,7 +2288,7 @@ class Emitter:
             cont_l = "for.incr." + str(id_)
 
         # break / continue の飛び先を積む
-        ctx: rc[LoopCtx] = rc(LoopCtx(self.loop, copy(end_l), cont_l))
+        ctx: rc[LoopCtx] = rc(LoopCtx(self.loop, copy(end_l), cont_l, self.scope))
         self.loop = ctx
 
         self.emit_label(body_l)
@@ -2634,6 +2887,9 @@ class Emitter:
         self.ensure_block()
 
         if n.kind == ast.ND_BLOCK:
+            # ★ ブロック＝スコープ。抜けるときに宣言の逆順で解放する。
+            sc: rc[ScopeCtx] = rc(ScopeCtx(self.scope))
+            self.scope = sc
             last: str = ""
             st: rc[ast.Node] | None = n.body
             while st is not None:
@@ -2642,6 +2898,10 @@ class Emitter:
                 if len(v) > 0:
                     last = v
                 st = s.next
+            # 終端済み（return / break で抜けた）なら、そちらで解放済み
+            if self.drop and not self.terminated:
+                self.emit_scope_drops(sc)
+            self.scope = sc.outer
             return last
 
         # ★ scope: ブロック（A-18 の scoped spawn）。
@@ -2652,6 +2912,11 @@ class Emitter:
             self.declare_rt("void @pl_scope_begin()")
             self.declare_rt("void @pl_scope_end()")
             self.emit("  call void @pl_scope_begin()\n")
+            # ⚠️ ND_BLOCK を呼ばずに自分で展開する。**join を解放より先に**
+            #   行う必要があるため（スレッドがこのブロックの局所変数を
+            #   借りていることがある）。
+            sc68: rc[ScopeCtx] = rc(ScopeCtx(self.scope))
+            self.scope = sc68
             blk: rc[ast.Node] = node_of(n.body)
             sst: rc[ast.Node] | None = blk.body
             while sst is not None:
@@ -2660,6 +2925,9 @@ class Emitter:
                 sst = ss.next
             self.ensure_block()
             self.emit("  call void @pl_scope_end()\n")
+            if self.drop:
+                self.emit_scope_drops(sc68)
+            self.scope = sc68.outer
             return ""
 
         if n.kind == ast.ND_IF:
@@ -2672,10 +2940,14 @@ class Emitter:
 
         if n.kind == ast.ND_RETURN:
             if n.lhs is None:
+                # ⚠️ 解放は ret の**直前**に出す（抜けるスコープを全部）
+                self.emit_drops_until(None)
                 self.emit("  ret void\n")      # 規約 R9
             else:
                 val: rc[ast.Node] = node_of(n.lhs)
                 v2: str = self.gen_expr(val)
+                # ⚠️ 返す値を**先に**作ってから解放する（解放してから読めない）
+                self.emit_drops_until(None)
                 self.emit("  ret " + self.llvm_type(type_of(val)) + " " + v2 +
                           "\n")
             self.terminated = True
@@ -2771,9 +3043,12 @@ class Emitter:
 
         # 飛び先は sema が保証している
         if n.kind == ast.ND_BREAK:
+            # ★ ループに入ったときのスコープまでを解放する
+            self.emit_drops_until(loop_of(self.loop).scope)
             self.emit_br(loop_of(self.loop).break_label)
             return ""
         if n.kind == ast.ND_CONTINUE:
+            self.emit_drops_until(loop_of(self.loop).scope)
             self.emit_br(loop_of(self.loop).continue_label)
             return ""
 
@@ -2781,6 +3056,7 @@ class Emitter:
             # alloca は entry ブロックに出済み（規約 R1）。ここでは store だけ
             v3: str = self.gen_expr(node_of(n.rhs))
             self.gen_store(type_of(n), v3, n.ir_name)
+            self.scope_add(n)   # このスコープの解放対象に加える
             return ""
 
         # ★ 分解代入 q, r = f()
@@ -2797,6 +3073,7 @@ class Emitter:
                           uobj + ", i32 0, i32 " + str(uk) + "\n")
                 uval: str = self.gen_load(type_of(uvn), upt)
                 self.gen_store(type_of(uvn), uval, uvn.ir_name)
+                self.scope_add(uvn)   # 受け取る名前も解放対象
                 uk = uk + 1
                 uvi = uvn.next
             return ""
@@ -3027,10 +3304,12 @@ class Emitter:
 #
 # モジュール 1 つぶんの IR を作る（★ 1 ファイル = 1 モジュール = 1 つの .ll）
 def codegen(mod: rc[module.Module], main_ir_name: str, triple: str,
-            no_ovf: bool) -> str:
+            no_ovf: bool, drop: bool) -> str:
     root: rc[ast.Node] = node_of(mod.ast)
     e: Emitter = Emitter(triple)
     e.no_ovf = no_ovf
+    e.drop = drop
+    e.ast_body = root.body
     # ① ヘッダ
     e.header.append("; Generated by " + langinfo.cc() + "\n")
     e.header.append("source_filename = \"" + mod.path + "\"\n")
@@ -3185,7 +3464,7 @@ def field_of(f: rc[ast.Field] | None) -> rc[ast.Field]:
 def loop_of(l: rc[LoopCtx] | None) -> rc[LoopCtx]:
     if l is None:
         panic("codegen: ループの外に break / continue があります")
-        return rc(LoopCtx(None, "", ""))
+        return rc(LoopCtx(None, "", "", None))
     else:
         return l
 

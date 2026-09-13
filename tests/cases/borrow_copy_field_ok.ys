@@ -1,0 +1,30 @@
+# STAGE0-ONLY: 所有権検査は C 版だけ
+# OUTPUT: 7
+# EXIT: 0
+# コピー型のフィールドを外側の変数へ読むのは**借用ではない**（誤検出の回帰）
+#
+# ⚠️ かつては E-BORROW-6「借りたもの（'e' の一部）は 'e' より長く持てません」
+#   が出ていました。`worst = e.st` は int を**コピー**しているだけで、
+#   e への参照は残りません。借用として追うのは、解放の対象になりうる型だけです。
+#   ★ ownck をセルフホスト版へ移植している途中に、自分のコードで踏みました
+#     （docs/roadmap.md A-21 ⑩）。
+class Ent:
+    st: int
+
+    def init(self, st: int) -> None:
+        self.st = st
+
+def main() -> int:
+    ents: list[rc[Ent]] = []
+    ents.append(rc(Ent(3)))
+    ents.append(rc(Ent(7)))
+
+    worst: int = 0              # 外側のスコープ
+    i: int = 0
+    while i < len(ents):
+        e: rc[Ent] = ents[i]    # 内側のスコープ
+        if e.st > worst:
+            worst = e.st        # ★ 警告が出てはいけない
+        i = i + 1
+    print(str(worst))
+    return 0

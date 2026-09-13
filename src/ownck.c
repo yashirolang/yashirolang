@@ -1298,6 +1298,14 @@ static DeclEnt *find_decl(Own *o, const char *ir_name) {
 static void bind_alias(Own *o, Node *target, Node *rhs) {
     if (!target->ir_name) return;
 
+    // ⚠️ **コピー型は借りものになりません。**
+    //   `worst = e.st`（st は int）のように、借りた入れ物から**値をコピー**
+    //   しているだけの代入は借用ではありません。ここを見ていなかったので、
+    //   内側のスコープの rc から int を読んで外側の変数に入れると
+    //   E-BORROW-6 が出ていました（11 行で再現。移植中に見つけました）。
+    //   ★ 借用として追うのは、解放の対象になりうる型だけで足ります。
+    if (target->type && !ty_is_owned(target->type)) return;
+
     // ⚠️ **rc[T] は借りものではありません。**
     //   `m = mm.next`（`rc[Module] | None`）のような**共有の付け替え**を
     //   「mm の一部を借りた」と記録していたので、内側で作った rc を外側の

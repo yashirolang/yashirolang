@@ -36,6 +36,7 @@ class Options:
     stage: int
     keep_ll: bool
     no_ovf: bool     # --no-overflow-check
+    drop: bool       # --drop / --no-drop（解放を挿入する。後勝ち）
     jobs: int        # -j N（clang を同時に何本走らせるか。0 = コア数）
     inc: list[str]   # -I <dir>（import を探す場所。何度でも書ける）
 
@@ -46,6 +47,7 @@ class Options:
         self.stage = STAGE_ALL
         self.keep_ll = False
         self.no_ovf = False
+        self.drop = False
         self.jobs = 0
         self.inc = []
 
@@ -72,6 +74,8 @@ def usage(status: int) -> None:
     print("  --dump-ast      AST を S 式で表示して終了（構文解析のデバッグ用）")
     print("  --keep-ll       実行ファイル生成後も .ll を残す")
     print("  --check         型検査までで止める（エラーが無ければ何も出さない）")
+    print("  --drop          スコープの出口に解放（drop）を挿入する")
+    print("  --no-drop       解放を挿入しない（--drop を打ち消す。後勝ち）")
     print("  --no-overflow-check")
     print("                  数の実行時検査を外す（既定は検査する）:")
     print("                  整数の + - * の桁あふれ／float の 0 除算")
@@ -131,6 +135,18 @@ def parse_args(args: list[str]) -> Options:
             o.keep_ll = True
         elif a == "--check":
             o.stage = STAGE_CHECK
+        # ★ 解放（drop）の挿入。**後に書いたほうが勝ち**（C 版 src/main.c と対）
+        #
+        # ⚠️ **セルフホスト版ではまだ受け付けません。** 解放の挿入は所有権検査
+        #   （ownck）が立てる binds_borrow / moved_out に依存しますが、
+        #   ownck はまだ C 版にしかありません。印が無いまま解放を挿すと、
+        #   借りものや移動済みの値まで解放して壊れます。
+        #   移植の状況は docs/roadmap.md の A-21 ⑨ を参照。
+        elif a == "--drop":
+            panic("--drop はまだセルフホスト版では使えません" +
+                  "（所有権検査の移植待ち。docs/roadmap.md A-21 ⑨）")
+        elif a == "--no-drop":
+            o.drop = False
         # ★ 既定は検査あり。速さのために外したいときだけ付ける。
         elif a == "--no-overflow-check":
             o.no_ovf = True
@@ -287,7 +303,7 @@ def main() -> int:
         name: str = ""
         if mm.name == entry.name:
             name = copy(main_ir)
-        ir: str = codegen.codegen(mm, name, triple, opt.no_ovf)
+        ir: str = codegen.codegen(mm, name, triple, opt.no_ovf, opt.drop)
 
         if opt.stage == STAGE_EMIT_IR:
             # -S : IR を出して終了。複数モジュールなら区切りを入れて並べる

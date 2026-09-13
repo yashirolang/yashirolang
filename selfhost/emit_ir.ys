@@ -22,16 +22,21 @@ def main() -> int:
     # ⚠️ 引数の形は C 版に合わせます（オプションは入力ファイルより前）。
     path: str = ""
     no_ovf: bool = False
+    drop: bool = False
     ai: int = 1
     while ai < len(args):
         a: str = args[ai]
         if a == "--no-overflow-check":
             no_ovf = True
+        elif a == "--drop":
+            drop = True
+        elif a == "--no-drop":
+            drop = False
         else:
             path = a
         ai = ai + 1
     if len(path) == 0:
-        print("使い方: stage1-codegen [--no-overflow-check] <入力" + langinfo.ext() + ">")
+        print("使い方: stage1-codegen [--no-overflow-check] [--drop] <入力" + langinfo.ext() + ">")
         return 1
 
     # ⚠️ target triple はビルド時に埋め込めない（プリプロセッサが無い）ので、
@@ -63,6 +68,6 @@ def main() -> int:
         name: str = ""
         if mm.name == entry.name:
             name = main_ir
-        io.print_raw(codegen.codegen(mm, name, triple, no_ovf))
+        io.print_raw(codegen.codegen(mm, name, triple, no_ovf, drop))
         m = mm.next
     return 0

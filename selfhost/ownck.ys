@@ -485,6 +485,29 @@ class Reporter:
 
 
 
+
+    # ── E-BORROW-6: 借りものが貸し手より長生きする ───────────
+    #
+    # ★ 借用の寿命を「呼び出しの間」に固定した（仕様 §4.4）のと同じ考えを、
+    #   ローカル変数どうしにも当てはめます。
+    #   対になる定義: src/ownck.c の bind_alias の中
+    def report_outlive(mut self, target: rc[ast.Node],
+                       origin: rc[ast.Node]) -> None:
+        if self.opt.quiet:
+            return
+        d: diag.Diag = diag.Diag("借りたもの（'" + origin.name + "' の一部）は、'" +
+                                 origin.name + "' より長く持てません")
+        d.code = "E-BORROW-6"
+        tt: rc[token.Token] | None = target.tok
+        if tt is not None:
+            d.primary = diag.Label(tt, "こちらのほうが長生きします")
+        ot: rc[token.Token] | None = origin.tok
+        if ot is not None:
+            d.related = diag.Label(ot, "'" + origin.name +
+                                   "' はこのスコープが終わると消えます")
+        d.hint = ("内側で作った値は、内側で使い切ってください" +
+                  "（外へ渡すなら所有権ごと渡します）")
+        self.emit(d, self.opt.deny_borrow)
 # ── 変数宣言の表 ────────────────────────────────────────
 #
 # ★ 「この変数は借りものを束縛している」という印は、代入した場所ではなく
@@ -637,3 +660,382 @@ def node_type(n: rc[ast.Node]) -> rc[ast.Type] | None:
 # 同じ位置を指しているか（行と桁で見る。C 版はポインタ比較）
 def same_tok(a: rc[token.Token], b: rc[token.Token]) -> bool:
     return a.line == b.line and a.col == b.col
+
+
+# ── 式をたどる ──────────────────────────────────────────
+#
+# ★ 対になる定義: src/ownck.c の use_expr / move_expr / check_use。
+#
+# ⚠️ **移植の優先順位**（docs/roadmap.md A-21 ⑩）
+#   メモリ安全性に直結する検査から移しています。
+#     移植済み … E-MOVE-1（移動済みの使用）/ E-BORROW-1,3,4,7,8（借用の扱い）
+#     未移植   … E-BORROW-5（同時の可変借用）/ E-SEND-1〜4（スレッド）
+#   前者は「--drop したときに壊れるか」を決める検査で、後者は別の話です。
+
+# 移動済みの場所を使っていないか
+def check_use(o: mut Own, f: rc[Flow], p: rc[Place], at: rc[token.Token]) -> None:
+    if state_of(f, p) != ST_VALID:
+        who: rc[Ent] | None = mover_of(f, p)
+        if who is not None:
+            o.rep.report_use(p, who, at)
+
+# 読むだけ（所有権は動かない）
+def use_expr(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
+    if n is None:
+        return
+    nn: rc[ast.Node] = n
+    k: int = nn.kind
+
+    if k == ast.ND_VAR or k == ast.ND_FIELD:
+        p1: rc[Place] | None = place_of(nn)
+        if p1 is not None:
+            t1: rc[token.Token] | None = nn.tok
+            if t1 is not None:
+                check_use(o, f, p1, t1)
+            return          # 場所そのものなので、これ以上たどるものは無い
+        use_expr(o, f, nn.lhs)
+        return
+
+    if k == ast.ND_INDEX:
+        p2: rc[Place] | None = place_of(nn)
+        if p2 is not None:
+            t2: rc[token.Token] | None = nn.tok
+            if t2 is not None:
+                check_use(o, f, p2, t2)
+        else:
+            use_expr(o, f, nn.lhs)
+        use_expr(o, f, nn.rhs)   # 添字の式（呼び出しかもしれない）
+        return
+
+    if k == ast.ND_BINOP or k == ast.ND_LOGICAL:
+        use_expr(o, f, nn.lhs)
+        use_expr(o, f, nn.rhs)
+        return
+
+    if k == ast.ND_UNARY or k == ast.ND_PRINT:
+        use_expr(o, f, nn.lhs)
+        return
+
+    if k == ast.ND_LIST:
+        e: rc[ast.Node] | None = nn.body
+        while e is not None:
+            en: rc[ast.Node] = e
+            use_expr(o, f, en)
+            e = en.next
+        return
+
+    if k == ast.ND_CALL:
+        mark_call_binds_borrow(o, nn)
+        call_args(o, f, nn, nn.cls is not None)
+        return
+
+    if k == ast.ND_METHOD:
+        mark_call_binds_borrow(o, nn)
+        # xs.append(v) … コンテナが v の所有権を受け取る（仕様 v2 §3.1）
+        lh: rc[ast.Node] | None = nn.lhs
+        if lh is not None and nn.name == "append":
+            lt: rc[ast.Type] | None = node_type(lh)
+            if lt is not None and lt.kind == ast.TY_LIST:
+                use_expr(o, f, nn.lhs)
+                move_expr(o, f, nn.args, MV_APPEND)
+                return
+        # ⚠️ 'mod.f(args)'（他モジュールの関数・クラス）は ND_METHOD ですが
+        #   self を取りません。第 1 引数をずらすかは
+        #   「モジュール修飾か」「インスタンス生成か」で決まります。
+        #     obj.m(args)  → m(obj, args)。self を飛ばす
+        #     mod.f(args)  → f(args)。飛ばさない
+        #     mod.C(args)  → C.init(new, args)。self を飛ばす
+        use_expr(o, f, nn.lhs)
+        skip: bool = True
+        if len(nn.mod_name) > 0:
+            skip = nn.cls is not None
+        call_args(o, f, nn, skip)
+        return
+
+    return          # リテラル・None・型注釈など
+
+
+# 「この呼び出しの戻り値は借りものか」を呼び出しノードに書き写す。
+#
+# ★ move_expr でも同じ印を付けますが、あちらは**結果を束縛するとき**しか
+#   通りません。二項演算のオペランドや引数の位置では通らないので、
+#   ここで全部の呼び出しに付けます（A-21g）。
+def mark_call_binds_borrow(o: mut Own, n: mut rc[ast.Node]) -> None:
+    if n.binds_borrow:
+        return
+    fn: rc[ast.Node] | None = callee_of(o, n)
+    if fn is not None:
+        f2: rc[ast.Node] = fn
+        if f2.binds_borrow:
+            n.binds_borrow = True
+
+# 呼び出し先の定義ノード（ND_FUNC）。組み込みなら None。
+def callee_of(o: Own, n: rc[ast.Node]) -> rc[ast.Node] | None:
+    if len(n.builtin) > 0:
+        return None
+    return o.lookup_func(n.ir_name)
+
+# 実引数を、仮引数の受け取り方（ParamMode）に従って評価する。
+#
+#   既定（借用）… 読むだけ。所有権は呼び出し側に残る
+#   own         … 移動する
+#   mut         … 借用（書き換えるが、所有権は移らない）
+def call_args(o: mut Own, f: mut rc[Flow], n: rc[ast.Node], skip_self: bool) -> None:
+    fn: rc[ast.Node] | None = callee_of(o, n)
+    pm: rc[ast.Node] | None = None
+    if fn is not None:
+        fnn: rc[ast.Node] = fn
+        pm = fnn.params
+        if skip_self and pm is not None:
+            pmn: rc[ast.Node] = pm
+            pm = pmn.next
+    a: rc[ast.Node] | None = n.args
+    while a is not None:
+        an: rc[ast.Node] = a
+        is_own: bool = False
+        if pm is not None:
+            pn: rc[ast.Node] = pm
+            is_own = pn.mode == ast.PM_OWN
+            pm = pn.next
+        if is_own:
+            move_expr(o, f, an, MV_OWN_ARG)
+        else:
+            use_expr(o, f, an)
+        a = an.next
+
+
+# ── 所有権を動かす（移動したら True）────────────────────────
+#
+# ★ 対になる定義: src/ownck.c の move_expr
+def move_expr(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None, ctx: int) -> bool:
+    if n is None:
+        return False
+    nn: rc[ast.Node] = n
+
+    # ── rc[T] は共有型。代入しても元は無効になりません ──
+    #
+    # ★ 「所有者を 1 つに決められない」ためにある型なので、移動として扱いません。
+    #   束縛した側は**新しい参照**を持ちます（カウント +1）。
+    #
+    # ⚠️ **`rc[T] | None` も共有です。** ここを TY_RC だけで見ていたので、
+    #   `lhs: rc[Node] | None` のような**いちばん普通の形**が移動と見なされ、
+    #   移行しても指摘が減りませんでした（実測 345 → 340）。
+    nt: rc[ast.Type] | None = node_type(nn)
+    if nt is not None and ty_is_rc(nt):
+        use_expr(o, f, nn)
+        return True
+
+    p: rc[Place] | None = place_of(nn)
+    owned: bool = False
+    if nt is not None:
+        owned = ty_is_owned(nt)
+
+    if p is None or not owned:
+        # 一時値、またはコピー型 → ただの読み
+        use_expr(o, f, nn)
+        if p is not None or not owned:
+            return False
+        # ★ 一時値（呼び出しの戻り値やリテラル）は、束縛した側が所有します。
+        #   ただし「self の借用を返す関数」（仕様 §4.5）の戻り値は借りもの。
+        if nn.kind == ast.ND_CALL or nn.kind == ast.ND_METHOD:
+            fn: rc[ast.Node] | None = callee_of(o, nn)
+            if fn is not None:
+                fnn: rc[ast.Node] = fn
+                if fnn.binds_borrow:
+                    nn.binds_borrow = True  # codegen はこれを見て解放しない
+                    return False
+        return True
+
+    pp: rc[Place] = p
+    tk: rc[token.Token] | None = nn.tok
+
+    # ── 借りものは、呼び出しより長生きする場所へ渡せない（仕様 §4.4）──
+    #
+    # ★ 局所変数への束縛（`t: str = s`）は**許します**。局所変数は呼び出しより
+    #   長生きしないので、別名を作っても危険がありません。その代わり、
+    #   束縛された側も「借用」として扱います（bind_alias）。
+    #
+    # ★ もう 1 つの例外：**self の借用を返すこと**（仕様 §4.5）。
+    br: rc[BorrowRoot] | None = o.borrow_root_of(pp)
+    if br is not None:
+        brr: rc[BorrowRoot] = br
+        exempt: bool = ctx == MV_RETURN and brr.is_self
+        if ctx != MV_ASSIGN and not exempt and tk is not None:
+            o.rep.report_borrow(brr, pp, tk, ctx)
+        # ⚠️ 移動として記録しません。借りものは動いていないので、この後で
+        #   使っても E-MOVE-1 にはなりません（1 つの問題は 1 回だけ報告する）。
+        use_expr(o, f, nn)
+        return False
+
+    # ⚠️ 要素を 1 つだけ move out することは許しません（設計 ownership.md §3）。
+    #   添字はコンパイル時に分からないので、xs[0] と xs[1] を区別できません。
+    #   for のループ変数もここを通ります（仕様 v2 §3.1「for の要素は借用」）。
+    if pp.kind == PL_INDEX or pp.kind == PL_GLOBAL or pp.kind == PL_FIELD:
+        # ⚠️ グローバルはプログラムが終わるまで生きているので、読み出しは
+        #   「借りているだけ」として扱います（解放もしません）。
+        # ⚠️ フィールドの読み出しも借用です。当初は「取り出し禁止」に
+        #   していましたが、それでは**コンパイラ自身が書けません**
+        #   （`nx = cur.next` で連結リストをたどれない）。
+        if tk is not None:
+            if ctx == MV_FIELD or ctx == MV_APPEND or ctx == MV_OWN_ARG:
+                o.rep.report_store_borrow(pp, tk, ctx, lender_of(o, pp))
+            elif ctx == MV_RETURN and pp.kind != PL_GLOBAL:
+                o.rep.report_return_borrow(pp, tk, lender_of(o, pp))
+        use_expr(o, f, nn)
+        return False
+
+    if tk is not None:
+        check_use(o, f, pp, tk)   # 移動済みのものを再び移動するのもエラー
+    flow_move(f, pp, nn)
+
+    # ★ codegen はこの印を見て drop フラグを 0 にします。
+    if nn.kind == ast.ND_VAR:
+        nn.moved_out = True
+    return True
+
+
+# 場所の根がローカル変数なら、その宣言を返す（診断の note: に出す貸し手）
+def lender_of(o: Own, p: rc[Place]) -> rc[ast.Node] | None:
+    root: rc[Place] = p
+    nxt: rc[Place] | None = root.base
+    while nxt is not None:
+        root = nxt
+        nxt = root.base
+    if root.kind != PL_LOCAL:
+        return None
+    d: rc[DeclEnt] | None = o.find_decl(root.key)
+    if d is None:
+        return None
+    dd: rc[DeclEnt] = d
+    return dd.decl
+
+
+# ── 借用の登録（bind_alias）─────────────────────────────
+#
+# ★ これが無いと、`t: str = s` で**名前を変えるだけで検査をすり抜けます**。
+#   `for x in xs:` の脱糖（`for.it.0 = xs` → `x = for.it.0[i]`）もここを通るので、
+#   借用したリストの要素を保存しようとすると、ちゃんと止まります。
+#   対になる定義: src/ownck.c の remember_decl / mark_borrow_bind / bind_alias
+
+# 変数宣言を覚える（while の 2 周目は何もしない）
+def remember_decl(o: mut Own, n: rc[ast.Node]) -> None:
+    if len(n.ir_name) == 0:
+        return
+    if o.find_decl(n.ir_name) is not None:
+        return
+    o.decls.append(rc(DeclEnt(copy(n.ir_name), n, o.depth)))
+
+# 「この変数は借りものを束縛している」と記録する。
+#
+# ⚠️ 印は**宣言のノード**に付けます（codegen は宣言を見て drop を出すため）。
+def mark_borrow_bind(o: mut Own, ir_name: str) -> None:
+    d: rc[DeclEnt] | None = o.find_decl(ir_name)
+    if d is None:
+        return
+    dd: rc[DeclEnt] = d
+    dd.decl.binds_borrow = True
+
+# 借用の根の登録を外す（借用でない値を入れ直したら、もう借りものではない）
+def unbind_root(o: mut Own, ir_name: str) -> None:
+    keep: list[rc[BorrowRoot]] = []
+    i: int = 0
+    while i < len(o.roots):
+        b: rc[BorrowRoot] = o.roots[i]
+        if b.key != ir_name:
+            keep.append(b)
+        i = i + 1
+    o.roots = keep
+
+# 借用に根ざした値を局所変数に束縛したら、その変数も「借用」にする。
+def bind_alias(o: mut Own, target: rc[ast.Node], rhs: rc[ast.Node] | None) -> None:
+    if len(target.ir_name) == 0:
+        return
+
+    # ⚠️ **コピー型は借りものになりません。**
+    #   `worst = e.st`（st は int）のように、借りた入れ物から**値をコピー**
+    #   しているだけの代入は借用ではありません（C 版で誤検出を踏んだ箇所）。
+    tt: rc[ast.Type] | None = node_type(target)
+    if tt is not None and not ty_is_owned(tt):
+        return
+
+    # ⚠️ **rc[T] は借りものではありません。**
+    #   `m = mm.next`（rc[Module] | None）のような**共有の付け替え**を
+    #   「mm の一部を借りた」と記録していたので、内側で作った rc を外側の
+    #   変数に入れると E-BORROW-6 が出ていました。rc は独立した参照です。
+    if rhs is not None:
+        rn0: rc[ast.Node] = rhs
+        rt0: rc[ast.Type] | None = node_type(rn0)
+        if rt0 is not None and ty_is_rc(rt0):
+            unbind_root(o, target.ir_name)
+            return
+
+    # 右辺が「借りもの」なら、その根を引き継ぐ
+    found: bool = False
+    p_origin: rc[ast.Node] | None = None
+    p_is_param: bool = False
+    p_is_self: bool = False
+    p_is_mut: bool = False
+    p_depth: int = 0
+
+    if rhs is not None:
+        rn: rc[ast.Node] = rhs
+        rp: rc[Place] | None = place_of(rn)
+        if rp is not None:
+            rpp: rc[Place] = rp
+            src: rc[BorrowRoot] | None = o.borrow_root_of(rpp)
+            if src is not None:
+                sb: rc[BorrowRoot] = src
+                p_origin = sb.origin
+                p_is_param = sb.is_param
+                p_is_self = sb.is_self
+                p_is_mut = sb.is_mut
+                p_depth = sb.depth
+                found = True
+            elif rpp.kind == PL_FIELD or rpp.kind == PL_INDEX:
+                # ★ 自分が所有しているオブジェクトの一部を読んだ場合も
+                #   「借用」です（そのオブジェクトが所有者のまま）。
+                root: rc[Place] = rpp
+                nxt: rc[Place] | None = root.base
+                while nxt is not None:
+                    root = nxt
+                    nxt = root.base
+                if root.kind == PL_LOCAL:
+                    d2: rc[DeclEnt] | None = o.find_decl(root.key)
+                    if d2 is not None:
+                        dd2: rc[DeclEnt] = d2
+                        p_origin = dd2.decl
+                        p_is_param = False
+                        p_is_self = False
+                        p_is_mut = True   # 自分のものなので書き換えてよい
+                        p_depth = dd2.depth
+                        found = True
+
+    # 既に登録されていれば付け替える（同じ関数の中で ir_name は一意）
+    unbind_root(o, target.ir_name)
+    if not found:
+        return
+    org: rc[ast.Node] = node_of_opt(p_origin)
+    o.roots.append(rc(BorrowRoot(copy(target.ir_name), org, p_is_param,
+                                 p_is_self, p_is_mut, p_depth)))
+    mark_borrow_bind(o, target.ir_name)
+
+    # ── 借りものが貸し手より長生きしないか（E-BORROW-6）──
+    #
+    # ★ 借用の寿命を「呼び出しの間」に固定した（仕様 §4.4）のと同じ考えを、
+    #   ローカル変数どうしにも当てはめます。内側のスコープで作った値を、
+    #   外側の変数に貸したままにはできません。
+    tgt: rc[DeclEnt] | None = o.find_decl(target.ir_name)
+    if tgt is not None and not p_is_param:
+        tg: rc[DeclEnt] = tgt
+        if tg.depth < p_depth:
+            o.rep.report_outlive(target, org)
+
+
+# None でない前提で取り出す小道具
+#
+# ⚠️ 呼ぶのは「found が True のときだけ」です。found が立つ経路では
+#   必ず origin を入れているので、ここへ None は来ません。
+def node_of_opt(n: rc[ast.Node] | None) -> rc[ast.Node]:
+    if n is None:
+        panic("ownck: 貸し手の宣言がありません（呼び出し側の条件が誤っています）")
+    return n

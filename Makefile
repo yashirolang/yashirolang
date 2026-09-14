@@ -418,11 +418,13 @@ DESTDIR ?=
 
 .PHONY: install uninstall dist
 
+# ★ LICENSE も一緒に置きます（配る実体に付いて回るべきものなので）。
 install: all
 	@mkdir -p "$(DESTDIR)$(PREFIX)/bin" "$(DESTDIR)$(PREFIX)/lib/plc/lib"
 	cp $(TARGET) "$(DESTDIR)$(PREFIX)/bin/"
 	cp $(RUNTIME_OBJ) "$(DESTDIR)$(PREFIX)/lib/plc/"
 	cp lib/*$(LANG_EXT) "$(DESTDIR)$(PREFIX)/lib/plc/lib/"
+	cp LICENSE "$(DESTDIR)$(PREFIX)/lib/plc/"
 	@$(MAKE) --no-print-directory $(PM)
 	cp $(PM) "$(DESTDIR)$(PREFIX)/bin/"
 	@echo "インストールしました: $(DESTDIR)$(PREFIX)/bin/$(LANG_CC)$(EXEEXT)"

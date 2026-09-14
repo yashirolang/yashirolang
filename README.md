@@ -252,24 +252,25 @@ tick 3
 **カーネル本体（`kernel/kernel.ys`）に `unsafe` は 2 か所だけ**です。
 `print` も `for` も `list[str]` も、PC 上とまったく同じように書けます。
 
-## 言語名を変える
 
-**この言語の名前は 1 か所にしか書かれていません。** 改名は次の 1 行で終わります。
+---
 
-```bash
-tools/rename.sh --name 新しい名前 --ext .xx --cc xxc --pm xx --repo https://github.com/you/repo
-make clean && make test && make bootstrap
+## ライセンス
+
+**[Apache License 2.0](LICENSE)** です。
+
 ```
+Copyright 2026 The yashirolang Authors
 
-名前が決まるのは `Makefile` の `LANG_*` と、それと対になる
-`src/langinfo.h` / `lib/langinfo.ys` の 3 か所だけです。
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-- **ソースコード**は名前の文字列を持ちません（C 版は `PLC_LANG_*` マクロ、
-  この言語で書かれた側は `langinfo` モジュール経由で参照します）
-- **文書**（`docs/`）も名前を持ちません。`{{cc}}` `{{ext}}` `{{pm}}` のような
-  合い言葉で書いてあり、`make docs` で `build/docs/` に読める形が出ます
-- **この README** は `README.md.in` から `make readme` で生成しています
-- **スクリプトと GitHub Actions** は `make -s print-LANG_*` で make に訊きます
+    http://www.apache.org/licenses/LICENSE-2.0
 
-`make check-naming` が「名前の書き漏れが無いか」を見張っていて、CI でも回ります。
-詳しくは [docs/design/naming.md](docs/design/naming.md) を参照してください。
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```

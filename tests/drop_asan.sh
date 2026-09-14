@@ -31,6 +31,12 @@ PLC_CC="${PLC_CC:-$ROOT/build/$LANG_CC}"
 TMP="$ROOT/tests/tmp"
 mkdir -p "$TMP"
 
+# ⚠️ Windows では ws2_32 を明示的にリンクします（tests/selfhost.sh と同じ理由）。
+LINK_LIBS=""
+case "$(uname -s 2>/dev/null || echo unknown)" in
+    MINGW*|MSYS*|CYGWIN*) LINK_LIBS="-lws2_32" ;;
+esac
+
 DETECT_LEAKS=0
 if [ "${1:-}" = "--leaks" ]; then
     DETECT_LEAKS=1
@@ -85,7 +91,7 @@ for f in "${CASES[@]}"; do
 
     # ★ ランタイムも一緒に ASan でビルドする（解放するのはランタイム側なので）
     if ! "$CLANG" -fsanitize=address -O0 "$TMP/$base.drop".*.ll "$ROOT/runtime/core.c" "$ROOT/runtime/hosted.c" \
-            -o "$TMP/$base.asan" 2>"$TMP/$base.link"; then
+            $LINK_LIBS -o "$TMP/$base.asan" 2>"$TMP/$base.link"; then
         printf "  %sFAIL%s  %s（リンクに失敗）\n" "$C_NG" "$C_END" "$name"
         head -5 "$TMP/$base.link" | sed 's/^/          /'
         fail=$((fail + 1))

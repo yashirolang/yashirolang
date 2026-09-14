@@ -11,6 +11,16 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# ⚠️ **Windows では ws2_32 を明示的にリンクします。**
+#   ランタイム（runtime.a）がソケット（A-22）で socket / WSAStartup を
+#   呼ぶようになったので、runtime.a を**直に**リンクする場所には
+#   この指定が要ります（コンパイラ経由なら src/main.c が足します）。
+#   ★ CI の Windows ジョブが「stage1 の IR がリンクできない」で教えてくれました。
+LINK_LIBS=""
+case "$(uname -s 2>/dev/null || echo unknown)" in
+    MINGW*|MSYS*|CYGWIN*) LINK_LIBS="-lws2_32" ;;
+esac
 # ★ 実行ファイル名は Makefile の LANG_CC / LANG_PM が決めます。
 #   ここに名前を書き写すと改名のたびに直すことになるので、make に訊きます。
 LANG_CC="$(make -s -C "$ROOT" print-LANG_CC)"
@@ -83,6 +93,26 @@ failed_names=()
 
 for f in "${FILES[@]}"; do
     name="${f#$ROOT/}"
+
+    # ★ ケースの `# FLAGS:` のうち、**出す IR が変わるものだけ**を拾う。
+    #
+    #   ⚠️ これが無いと、`# FLAGS: --no-drop` と書いてあるケースを
+    #     既定（＝解放あり）でコンパイルして走らせることになります。
+    #     tests/cases/warn_*$EXT の 6 件は「--drop だと解放済みを返すのが
+    #     **正しい結果**」というケースなので、走らせると未定義動作になり、
+    #     ④⑤ の比較が**そのときのゴミの中身しだい**で通ったり落ちたりします
+    #     （0.16.0 で解放が既定になってから紛れ込みました）。
+    #
+    #   ⚠️ **`--deny-*` は混ぜません。** あれは診断を出すか出さないかだけの
+    #     指定で IR を変えず、付けるとケースによっては検査で止まってしまい、
+    #     ④⑤ が「両方エラーで空出力どうしが一致」と数えてしまいます。
+    #     `-O2` も IR（`-S` の出力）は変えないので混ぜません。
+    case_flags=""
+    for fl in $(sed -n 's/^# *FLAGS: *//p' "$f" | tr -d '\r'); do
+        case "$fl" in
+            --drop|--no-drop|--no-overflow-check) case_flags="$case_flags $fl" ;;
+        esac
+    done
 
     # ★ **C 版にしか無い構文**を使うケースは比較できないので飛ばす。
     #   stage1（セルフホスト版）にはまだ raises / try / except がありません。
@@ -191,8 +221,11 @@ for f in "${FILES[@]}"; do
     chkpass=$((chkpass + 1))
 
     # ── ④ IR──
-    "$PLC_CC" -S "$f" > "$TMP/c.ll" 2>/dev/null
-    "$STAGE1_CODEGEN" "$f" > "$TMP/m.ll" 2>"$TMP/m.err"
+    #
+    # ★ ケースの FLAGS は**両方に同じだけ**渡します（片方だけに渡すと、
+    #   一致しないのが当たり前になって比較の意味が無くなります）。
+    "$PLC_CC" -S $case_flags "$f" > "$TMP/c.ll" 2>/dev/null
+    "$STAGE1_CODEGEN" $case_flags "$f" > "$TMP/m.ll" 2>"$TMP/m.err"
 
     if ! diff -q "$TMP/c.ll" "$TMP/m.ll" > /dev/null; then
         fail=$((fail + 1)); failed_names+=("$name")
@@ -209,7 +242,7 @@ for f in "${FILES[@]}"; do
     if grep -q '^; ── module:' "$TMP/c.ll"; then
         continue
     fi
-    if ! "${PLC_CLANG:-clang}" "$TMP/m.ll" "$ROOT/build/runtime.a" -o "$TMP/m.bin" 2>/dev/null; then
+    if ! "${PLC_CLANG:-clang}" "$TMP/m.ll" "$ROOT/build/runtime.a" $LINK_LIBS -o "$TMP/m.bin" 2>/dev/null; then
         fail=$((fail + 1)); failed_names+=("$name")
         printf "  %sFAIL%s  %s（stage1 の IR がリンクできない）\n" \
                "$C_NG" "$C_END" "$name"
@@ -220,7 +253,7 @@ for f in "${FILES[@]}"; do
     #    標準入力を読んでしまい、結果が環境で変わります。
     m_out="$(timeout 10 "$TMP/m.bin" < /dev/null 2>/dev/null)"; m_rc=$?
 
-    "$PLC_CC" "$f" -o "$TMP/c.bin" 2>/dev/null
+    "$PLC_CC" $case_flags "$f" -o "$TMP/c.bin" 2>/dev/null
     c_out="$(timeout 10 "$TMP/c.bin" < /dev/null 2>/dev/null)"; c_rc=$?
 
     if [ "$m_out" != "$c_out" ] || [ "$m_rc" -ne "$c_rc" ]; then

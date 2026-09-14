@@ -2,8 +2,11 @@
 # OUTPUT: echo:hello
 # OUTPUT: 閉じた接続: ふつうに失敗する
 # OUTPUT: 誰もいないポート: ふつうに失敗する
+# OUTPUT: 待ち時間切れ: True / 接続は生きている: あとから
+# OUTPUT: 住所が複数あるとき順に試す: True
+# OUTPUT: IPv6: True
 # EXIT: 0
-# net — TCP ソケット（A-22）
+# net — TCP ソケット（A-22 / A-23）
 #
 #   ★ **ポートは 0 を渡して OS に選ばせます。** 決め打ちにすると、同じ
 #     機械で CI を 2 本走らせたときに衝突します。選ばれた番号は l.port です。
@@ -70,4 +73,77 @@ def main() -> int:
         print("誰もいないポート: つながってしまった")
     except net.NetError as e3:
         print("誰もいないポート: ふつうに失敗する")
+
+    # ── 待ち時間（A-23）──
+    #
+    # ★ **待ち時間切れは失敗と分けます。** 「まだ来ていない」だけで
+    #   接続は生きているので、そのあとも読み書きできます。
+    #   区別できないと、もう一度待つのか閉じるのかを呼び出し側が選べません。
+    try:
+        lt: net.Listener = net.listen("127.0.0.1", 0)
+        ct: net.Conn = net.connect("127.0.0.1", lt.port)
+        st: net.Conn = lt.accept()
+        st.set_timeout(200)
+
+        timed: bool = False
+        try:
+            got: str = st.recv(16)      # 相手はまだ何も送っていない
+            print("読めてしまった: " + str(len(got)))
+        except net.NetError as et:
+            timed = et.timed_out
+
+        ct.send("あとから")
+        print("待ち時間切れ: " + str(timed) + " / 接続は生きている: " + st.recv(64))
+        st.close()
+        ct.close()
+        lt.close()
+    except net.NetError as e4:
+        print("NG: " + e4.message)
+        return 1
+
+    # ── 住所が複数あるとき（A-23）──
+    #
+    # ★ `localhost` はふつう `::1` と `127.0.0.1` の両方を持ちます。
+    #   待ち受けているのは v4 の口だけなので、**1 つめで断られたら
+    #   次を試す**ようになっていないと繋がりません。
+    #   ⚠️ A-22 は AF_INET 決め打ちで、この形が書けませんでした。
+    try:
+        lh: net.Listener = net.listen("127.0.0.1", 0)
+        ch: net.Conn = net.connect("localhost", lh.port)
+        sh: net.Conn = lh.accept()
+        ch.send("ok")
+        print("住所が複数あるとき順に試す: " + str(sh.recv(16) == "ok"))
+        sh.close()
+        ch.close()
+        lh.close()
+    except net.NetError as e5:
+        print("住所が複数あるとき順に試す: NG " + e5.message)
+
+    print("IPv6: " + str(v6_ok()))
     return 0
+
+
+# IPv6 で往復できるか。
+#
+# ⚠️ **IPv6 が無い機械もあります**（一部の CI の入れ物）。そこで
+#   「待ち受けられたなら、往復もできること」を確かめます。使えない機械では
+#   確かめることが無いので True です——**使えるのに壊れている**のが
+#   見つけたいことで、それはこの形で捕まります。
+def v6_ok() -> bool:
+    l: net.Listener = net.Listener(-1, 0)
+    try:
+        l = net.listen("::1", 0)
+    except net.NetError as e:
+        return True                 # この機械に IPv6 が無い
+    try:
+        c: net.Conn = net.connect("::1", l.port)
+        s: net.Conn = l.accept()
+        c.send("v6")
+        ok: bool = s.recv(16) == "v6"
+        s.close()
+        c.close()
+        l.close()
+        return ok
+    except net.NetError as e2:
+        l.close()
+        return False

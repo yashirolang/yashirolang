@@ -1,0 +1,80 @@
+# FLAGS: --drop
+# OUTPUT: GET: hello
+# OUTPUT: POST: ぶんしょう
+# OUTPUT: チャンク: 11
+# OUTPUT: 404: 404
+# OUTPUT: 断られた: True
+# EXIT: 0
+# ソケットと HTTP を解放つきで回す（A-23）
+#
+#   ★ **ここは AddressSanitizer で回します**（make drop-asan）。
+#     A-22 の穴（借用を返す関数の戻り値をそのまま返すと、dict の中の
+#     文字列が消える）は、まさにこの層で出ました。解放が既定になった今、
+#     **文字列を貯めては切り出す** Reader とチャンクの解き方は、
+#     同じ形の間違いがいちばん起きやすいところです。
+#
+#   ⚠️ 借用のまま返している箇所があれば、二重解放か解放後の使用として
+#     ここで落ちます（普通に実行するだけでは、たいてい素通りします）。
+import http
+import net
+import strings
+
+def handle(req: http.Request) -> http.Response:
+    if req.path == "/":
+        return http.text(200, "hello")
+    if req.path == "/echo":
+        return http.text(200, req.body)
+    if req.path == "/len":
+        return http.text(200, str(len(req.body)))
+    return http.text(404, "ありません")
+
+
+def server(fd: int) -> int:
+    l: net.Listener = net.Listener(fd, 0)
+    l.set_conn_timeout(5000)
+    http.serve_n(l, handle, 4)
+    return 0
+
+
+def main() -> int:
+    try:
+        l: net.Listener = net.listen("127.0.0.1", 0)
+        base: str = "http://127.0.0.1:" + str(l.port)
+        t: Thread[int] = spawn(server, l.fd)
+
+        # ① クライアント（要求の組み立て → 応答の解釈）
+        r1: http.Response = http.get(base + "/")
+        print("GET: " + r1.body)
+
+        r2: http.Response = http.post(base + "/echo", "text/plain", "ぶんしょう")
+        print("POST: " + r2.body)
+
+        # ② チャンク転送（Reader が貯めては切り出す道）
+        c: net.Conn = net.connect("127.0.0.1", l.port)
+        c.send("POST /len HTTP/1.1\r\nHost: x\r\n" +
+               "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n" +
+               "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n")
+        got: str = c.recv_all()
+        c.close()
+        print("チャンク: " + copy(strings.split(got, "\r\n\r\n")[1]))
+
+        # ③ 失敗の道（HttpError を作って投げて捕まえる）
+        r4: http.Response = http.get(base + "/nope")
+        print("404: " + str(r4.status))
+
+        t.join()
+        l.close()
+    except http.HttpError as he:
+        print("NG: " + he.message)
+        return 1
+    except net.NetError as ne:
+        print("NG(net): " + ne.message)
+        return 1
+
+    # ④ 断る道（URL を組み立てずにエラーだけを作る）
+    try:
+        bad: http.Response = http.get("https://example.com/")
+        print("断られた: False " + str(bad.status))
+    except http.HttpError as e:
+        print("断られた: " + str(len(e.message) > 0))
+    return 0

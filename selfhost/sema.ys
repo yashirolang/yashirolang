@@ -3175,6 +3175,28 @@ class Sema:
                 return False
             return not self.has_break(node.body)
 
+        if node.kind == ast.ND_TRY:
+            # ★ try の中身と、**すべての** except が抜けるなら、この try は抜ける。
+            #
+            #   ⚠️ else が無い if と同じ話。1 つでも素通りする except が
+            #     あれば、そこから下へ落ちる。
+            #
+            #   ⚠️ どの except にも当たらないエラーは呼び出し元へ伝播する
+            #     ので、**これも「抜ける」ほうに数える**（伝播を except の
+            #     漏れと混同しないこと）。
+            #
+            #   📖 except の並びは els に next で繋がっている（if の else と
+            #     違って複数あるので、リストとしてたどる）。
+            if not self.always_returns(node.body):
+                return False
+            ex: rc[ast.Node] | None = node.els
+            while ex is not None:
+                exx: rc[ast.Node] = ex
+                if not self.always_returns(exx.body):
+                    return False
+                ex = exx.next
+            return True
+
         if node.kind == ast.ND_CALL:
             # ★ panic() / exit() を呼んだら、その先へは進まない。
             return self.never_returns_call(node)

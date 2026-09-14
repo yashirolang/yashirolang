@@ -50,6 +50,10 @@ def main() -> int:
 
     try:
         l: net.Listener = net.listen("127.0.0.1", port)
+        # ★ **待ち時間を決めておきます**（A-23）。繋いだきり何も送って
+        #   こない相手が 1 つあるだけで、1 本ずつ捌く輪はそこで止まります。
+        #   30 秒待って何も来なければ、その接続は切ります（408）。
+        l.set_conn_timeout(30000)
         print("http://127.0.0.1:" + str(l.port) + "/ で待っています")
         print("（Ctrl-C で止めます）")
         http.serve_on(l, handle)

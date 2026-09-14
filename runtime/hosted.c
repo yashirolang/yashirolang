@@ -908,9 +908,10 @@ char *pl_capture(const char *cmd) {
 // ★ **ここ（hosted.c）にしか置きません。** ベアメタルにネットワークは
 //   ありません。core.c の 4 フックを増やさない、という方針のとおりです。
 //
-// ★ 方針：**薄く、素直に。** 提供するのは BSD ソケットの 7 つだけです
-//   （listen / accept / connect / send / recv / close / port）。
-//   タイムアウトや多重化は、要るようになってから足します。
+// ★ 方針：**薄く、素直に。** 提供するのは BSD ソケットの 9 つだけです
+//   （listen / accept / connect / send / recv / close / port と、
+//   A-23 で足した set_timeout / timed_out）。多重化（select / epoll）は
+//   まだありません。要るようになってから足します。
 //
 // ⚠️ **失敗は戻り値で返します。panic しません。**
 //   「相手が切った」「ポートが使われている」は**ふつうに起きること**で、
@@ -931,6 +932,7 @@ typedef int pl_socklen;
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
+#include <sys/time.h>     // struct timeval（SO_RCVTIMEO。A-23）
 #include <sys/types.h>
 typedef socklen_t pl_socklen;
 #define PL_SOCK_ERRNO errno
@@ -940,7 +942,33 @@ typedef socklen_t pl_socklen;
 // 直前の失敗の理由（言語側は pl_sock_error() で取り出す）
 static char g_sock_err[256] = {0};
 
+// ⚠️ **待ち時間切れは、他の失敗と分けられなければ役に立ちません**（A-23）。
+//   「まだ来ないだけ」と「壊れた」を同じ NetError にしてしまうと、
+//   呼び出し側が「もう一度待つ」のか「あきらめて閉じる」のかを選べません。
+//   直前の失敗がそれだったかを覚えておき、pl_sock_timed_out() で渡します。
+static int g_sock_timeout = 0;
+
+// この失敗は「待ち時間を過ぎた」か。
+//
+// ⚠️ 待ち時間付きの recv が空振りしたときに返るのは ETIMEDOUT とは
+//   限りません。**POSIX は EAGAIN / EWOULDBLOCK を返します**（Linux では
+//   この 2 つは同じ値なので、|| で並べても 1 つぶんです）。
+static int pl_sock_is_timeout(int code) {
+#ifdef _WIN32
+    return code == WSAETIMEDOUT || code == WSAEWOULDBLOCK;
+#else
+    return code == ETIMEDOUT || code == EAGAIN || code == EWOULDBLOCK;
+#endif
+}
+
 static void pl_sock_fail(const char *what, int code) {
+    g_sock_timeout = pl_sock_is_timeout(code);
+    if (g_sock_timeout) {
+        // ★ 待ち時間切れは OS の文言（"Resource temporarily unavailable"）では
+        //   何が起きたのか伝わらないので、こちらで言い直します。
+        snprintf(g_sock_err, sizeof(g_sock_err), "%s: 待ち時間を過ぎました", what);
+        return;
+    }
 #ifdef _WIN32
     snprintf(g_sock_err, sizeof(g_sock_err), "%s: エラー番号 %d", what, code);
 #else
@@ -948,9 +976,49 @@ static void pl_sock_fail(const char *what, int code) {
 #endif
 }
 
-static void pl_sock_ok(void) { g_sock_err[0] = '\0'; }
+static void pl_sock_ok(void) { g_sock_err[0] = '\0'; g_sock_timeout = 0; }
 
 char *pl_sock_error(void) { return pl_str_from_cstr(g_sock_err); }
+
+// 直前の失敗は待ち時間切れだったか（1 なら yes）。
+long long pl_sock_timed_out(void) { return g_sock_timeout ? 1 : 0; }
+
+// 受け取り・送り出しの待ち時間を決める（ミリ秒。0 なら無期限）。
+//
+// ★ **これが無いと、サーバーは黙って止まります。** 繋いだまま何も
+//   送ってこない相手が 1 つあるだけで、accept の輪がそこで止まります
+//   （http.serve は 1 本ずつ順に捌くので、他の客も全員待たされます）。
+//
+// ⚠️ **繋ぎに行く（connect）の待ち時間はこれでは決まりません。**
+//   SO_RCVTIMEO / SO_SNDTIMEO は繋がったあとの読み書きにだけ効きます。
+//   connect を区切るには非同期の接続と select が要るので、まだありません。
+long long pl_sock_set_timeout(long long fd, long long ms) {
+    if (fd < 0) {
+        snprintf(g_sock_err, sizeof(g_sock_err), "閉じたソケットです");
+        g_sock_timeout = 0;
+        return -1;
+    }
+    if (ms < 0) ms = 0;
+#ifdef _WIN32
+    // ★ Windows はミリ秒の DWORD をそのまま渡します（timeval ではありません）。
+    DWORD v = (DWORD)ms;
+    const char *pv = (const char *)&v;
+    pl_socklen vn = (pl_socklen)sizeof(v);
+#else
+    struct timeval v;
+    v.tv_sec = (time_t)(ms / 1000);
+    v.tv_usec = (int)((ms % 1000) * 1000);
+    const char *pv = (const char *)&v;
+    pl_socklen vn = (pl_socklen)sizeof(v);
+#endif
+    if (setsockopt((int)fd, SOL_SOCKET, SO_RCVTIMEO, pv, vn) != 0 ||
+        setsockopt((int)fd, SOL_SOCKET, SO_SNDTIMEO, pv, vn) != 0) {
+        pl_sock_fail("setsockopt", PL_SOCK_ERRNO);
+        return -1;
+    }
+    pl_sock_ok();
+    return 0;
+}
 
 // ⚠️ **Windows は使う前に WSAStartup が要ります。**
 //   利用者に「最初に init を呼んでください」とは言いたくないので、
@@ -976,6 +1044,15 @@ static int pl_sock_start(void) {
 }
 
 // host:port を解決して addrinfo を返す（passive なら bind 用）。
+//
+// ★ **IPv4 と IPv6 の両方を返します**（A-23。A-22 では AF_INET だけでした）。
+//   どちらで繋がるかは相手と機械の設定しだいなので、ここでは選ばず、
+//   **呼び出し側が返ってきた順に試します**。
+//
+//   ⚠️ v4 だけにしていた頃は、`localhost` が `::1` に解決される機械で
+//     繋がりませんでした。名前が複数の住所を持つのがふつうで、
+//     「1 つめが駄目なら次」を**呼び出し側が書かなければならない**のが
+//     getaddrinfo の作法です。
 static struct addrinfo *pl_sock_resolve(const char *host, long long port,
                                         int passive) {
     char service[16];
@@ -983,7 +1060,7 @@ static struct addrinfo *pl_sock_resolve(const char *host, long long port,
 
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;        // ★ まず IPv4 だけ（v6 は要るときに）
+    hints.ai_family = AF_UNSPEC;      // ★ IPv4 も IPv6 も
     hints.ai_socktype = SOCK_STREAM;
     if (passive) hints.ai_flags = AI_PASSIVE;
 
@@ -1008,30 +1085,53 @@ long long pl_sock_listen(const char *host, long long port, long long backlog) {
     struct addrinfo *res = pl_sock_resolve(host, port, 1);
     if (!res) return -1;
 
-    int fd = (int)socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd < 0) {
-        pl_sock_fail("socket", PL_SOCK_ERRNO);
-        freeaddrinfo(res);
-        return -1;
-    }
+    // ★ 返ってきた住所を**順に試します**（A-23）。IPv6 しか使えない機械も、
+    //   IPv4 しか使えない機械もあるので、1 つめで決め打ちできません。
+    int fd = -1;
+    int last_code = 0;
+    const char *last_what = "socket";
 
-    // ⚠️ **SO_REUSEADDR を既定で立てます。** これが無いと、落としたばかりの
-    //   サーバーを立て直すときに「アドレスが使用中です」で数十秒待たされます
-    //   （TIME_WAIT）。サーバーを書く人がまず引っかかるところです。
-    int one = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof(one));
+    for (struct addrinfo *ai = res; ai != NULL; ai = ai->ai_next) {
+        fd = (int)socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd < 0) {
+            last_what = "socket"; last_code = PL_SOCK_ERRNO;
+            continue;
+        }
 
-    if (bind(fd, res->ai_addr, (pl_socklen)res->ai_addrlen) != 0) {
-        pl_sock_fail("bind", PL_SOCK_ERRNO);
-        closesocket(fd);
-        freeaddrinfo(res);
-        return -1;
+        // ⚠️ **SO_REUSEADDR を既定で立てます。** これが無いと、落としたばかりの
+        //   サーバーを立て直すときに「アドレスが使用中です」で数十秒待たされます
+        //   （TIME_WAIT）。サーバーを書く人がまず引っかかるところです。
+        int one = 1;
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof(one));
+
+#ifdef IPV6_V6ONLY
+        // ⚠️ **v6 の待ち受け口は、既定では v4 の客を受けない機械があります**
+        //   （Windows と多くの BSD。Linux は設定しだい）。0 を入れて
+        //   **1 本で両方**受けられるようにします。断られたら（OpenBSD は
+        //   これを許しません）v6 だけの待ち受け口として続けます。
+        if (ai->ai_family == AF_INET6) {
+            int off = 0;
+            setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY,
+                       (const char *)&off, sizeof(off));
+        }
+#endif
+
+        if (bind(fd, ai->ai_addr, (pl_socklen)ai->ai_addrlen) != 0) {
+            last_what = "bind"; last_code = PL_SOCK_ERRNO;
+            closesocket(fd); fd = -1;
+            continue;
+        }
+        if (listen(fd, (int)(backlog > 0 ? backlog : 16)) != 0) {
+            last_what = "listen"; last_code = PL_SOCK_ERRNO;
+            closesocket(fd); fd = -1;
+            continue;
+        }
+        break;                        // ここまで来たら成功
     }
     freeaddrinfo(res);
 
-    if (listen(fd, (int)(backlog > 0 ? backlog : 16)) != 0) {
-        pl_sock_fail("listen", PL_SOCK_ERRNO);
-        closesocket(fd);
+    if (fd < 0) {
+        pl_sock_fail(last_what, last_code);
         return -1;
     }
     pl_sock_ok();
@@ -1039,8 +1139,12 @@ long long pl_sock_listen(const char *host, long long port, long long backlog) {
 }
 
 // 実際に割り当てられたポート番号（listen(…, 0) のあとで使う）。
+//
+// ⚠️ **sockaddr_storage で受けます。** sockaddr_in（v4 ぶん）では IPv6 の
+//   住所が入りきらず、切り詰められた中身からポートを読むことになります
+//   （A-23 で v6 を受け付けるようになったので、v4 決め打ちは危険です）。
 long long pl_sock_port(long long fd) {
-    struct sockaddr_in a;
+    struct sockaddr_storage a;
     pl_socklen n = (pl_socklen)sizeof(a);
     memset(&a, 0, sizeof(a));
     if (getsockname((int)fd, (struct sockaddr *)&a, &n) != 0) {
@@ -1048,7 +1152,9 @@ long long pl_sock_port(long long fd) {
         return -1;
     }
     pl_sock_ok();
-    return (long long)ntohs(a.sin_port);
+    if (a.ss_family == AF_INET6)
+        return (long long)ntohs(((struct sockaddr_in6 *)&a)->sin6_port);
+    return (long long)ntohs(((struct sockaddr_in *)&a)->sin_port);
 }
 
 // 1 本受け付ける（相手が来るまで待つ）。失敗すれば -1。
@@ -1063,30 +1169,48 @@ long long pl_sock_accept(long long fd) {
 }
 
 // つなぎに行く。成功すれば fd、失敗すれば -1。
+//
+// ★ **繋がるまで住所を順に試します**（A-23）。`localhost` のように
+//   v6 と v4 の両方を持つ名前は珍しくなく、1 つめで断られても
+//   次で繋がることがあります。
 long long pl_sock_connect(const char *host, long long port) {
     if (!pl_sock_start()) return -1;
     struct addrinfo *res = pl_sock_resolve(host, port, 0);
     if (!res) return -1;
 
-    int fd = (int)socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd < 0) {
-        pl_sock_fail("socket", PL_SOCK_ERRNO);
-        freeaddrinfo(res);
-        return -1;
-    }
-    if (connect(fd, res->ai_addr, (pl_socklen)res->ai_addrlen) != 0) {
-        pl_sock_fail("connect", PL_SOCK_ERRNO);
-        closesocket(fd);
-        freeaddrinfo(res);
-        return -1;
+    int fd = -1;
+    int last_code = 0;
+    const char *last_what = "socket";
+
+    for (struct addrinfo *ai = res; ai != NULL; ai = ai->ai_next) {
+        fd = (int)socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd < 0) {
+            last_what = "socket"; last_code = PL_SOCK_ERRNO;
+            continue;
+        }
+        if (connect(fd, ai->ai_addr, (pl_socklen)ai->ai_addrlen) != 0) {
+            last_what = "connect"; last_code = PL_SOCK_ERRNO;
+            closesocket(fd); fd = -1;
+            continue;
+        }
+        break;
     }
     freeaddrinfo(res);
+
+    if (fd < 0) {
+        pl_sock_fail(last_what, last_code);
+        return -1;
+    }
     pl_sock_ok();
     return fd;
 }
 
 // 書けるだけ書く。**全部書けるまで繰り返します**（部分送信は上に見せない）。
 // 書いたバイト数を返す。失敗すれば -1。
+//
+// ⚠️ **待ち時間を決めてあると、途中まで書けた状態で失敗しえます**（A-23）。
+//   どこまで届いたかは分からないので、**送り出しが時間切れになった接続は
+//   閉じてください**。続きを書いても相手には壊れた列が届きます。
 long long pl_sock_send(long long fd, const char *s) {
     long long n = pl_str_len(s);
     long long sent = 0;

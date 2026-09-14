@@ -4,10 +4,14 @@
 # OUTPUT: あ b
 # OUTPUT: HTTP/1.1 404 Not Found
 # OUTPUT: keep-alive: 2 本 / 本体 ab
-# OUTPUT: 411: True
+# OUTPUT: チャンク転送: 11
+# OUTPUT: 後付けのヘッダも読み飛ばす: 5
+# OUTPUT: 長さと転送方式の二重指定: True
+# OUTPUT: 知らない転送方式: True
+# OUTPUT: 黙っている相手は切る: True
 # OUTPUT: 解釈: GET /a 1 x=1
 # EXIT: 0
-# http — HTTP/1.1 の最小限（A-22）
+# http — HTTP/1.1 の最小限（A-22 / A-23）
 #
 #   ★ 本物のソケットを通して確かめます（組み立てた文字列を解釈し直す
 #     だけだと、「recv の切れ目が要求の切れ目とは限らない」という
@@ -21,15 +25,26 @@ def handle(req: http.Request) -> http.Response:
         return http.text(200, "hello")
     if req.path == "/echo":
         return http.text(200, req.body)
+    if req.path == "/len":
+        return http.text(200, str(len(req.body)))
     if req.path == "/q":
         return http.text(200, req.param("name"))
     return http.text(404, "nope")
 
-# ★ **6 本だけ捌いて戻ります。** serve_on は永久に回るので、
+# ★ **9 本だけ捌いて戻ります。** serve_on は永久に回るので、
 #   別スレッドで回すと join できません（最初にそう書いて固まりました）。
 def server(fd: int) -> int:
     l: net.Listener = net.Listener(fd, 0)
-    http.serve_n(l, handle, 6)
+    http.serve_n(l, handle, 9)
+    return 0
+
+# ★ 待ち時間を決めた待ち受け口（A-23）。
+#   ⚠️ **これが無いと、繋いだきり黙っている相手 1 つで輪が止まります。**
+#     serve_n は 1 本ずつ順に捌くので、他の客も全員待たされます。
+def slow_server(fd: int) -> int:
+    l: net.Listener = net.Listener(fd, 0)
+    l.set_conn_timeout(300)
+    http.serve_n(l, handle, 1)
     return 0
 
 # 1 回つないで、送って、相手が閉じるまで読む
@@ -90,15 +105,57 @@ def main() -> int:
         b2: str = copy(segs[2])
         print("keep-alive: " + str(n) + " 本 / 本体 " + b1 + b2)
 
-        # 411（チャンク転送には未対応と、はっきり断る）
-        r5: str = once(port, "POST /echo HTTP/1.1\r\n" +
-                             "Transfer-Encoding: chunked\r\n\r\n")
-        print("411: " + str(strings.contains(line0(r5), "411")))
+        # ★ チャンク転送（A-23。A-22 では 411 で断っていました）。
+        #   "hello" + " world" = 11 バイト
+        r5: str = once(port, "POST /len HTTP/1.1\r\nHost: x\r\n" +
+                             "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n" +
+                             "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n")
+        print("チャンク転送: " + body_of(r5))
+
+        # ⚠️ 最後の 0 のうしろには**後付けのヘッダ**が来ることがあります。
+        #   読み飛ばさないと、次の要求の頭がずれます。
+        r6: str = once(port, "POST /len HTTP/1.1\r\nHost: x\r\n" +
+                             "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n" +
+                             "5\r\nhello\r\n0\r\nX-Checksum: abc\r\n\r\n")
+        print("後付けのヘッダも読み飛ばす: " + body_of(r6))
+
+        # ★ **要求の密輸を断ります**（RFC 9112 §6.1）。Content-Length と
+        #   Transfer-Encoding の両方があると、こちらと間に挟まる機械とで
+        #   要求の切れ目がずれます。
+        r7: str = once(port, "POST /len HTTP/1.1\r\nHost: x\r\n" +
+                             "Content-Length: 5\r\nTransfer-Encoding: chunked\r\n" +
+                             "Connection: close\r\n\r\n0\r\n\r\n")
+        print("長さと転送方式の二重指定: " + str(strings.contains(line0(r7), "400")))
+
+        # 知らない転送方式は 501（黙って壊れるより、はっきり断る）
+        r8: str = once(port, "POST /len HTTP/1.1\r\nHost: x\r\n" +
+                             "Transfer-Encoding: gzip\r\nConnection: close\r\n\r\n")
+        print("知らない転送方式: " + str(strings.contains(line0(r8), "501")))
 
         t.join()
         l.close()
     except net.NetError as e:
         print("NG: " + e.message)
+        return 1
+
+    # ── 待ち時間（A-23）──
+    #
+    # ★ 繋いだきり**何も送らない**相手。待ち時間が無いとここで永久に
+    #   止まります（この試験そのものが固まります）。
+    try:
+        l2: net.Listener = net.listen("127.0.0.1", 0)
+        t2: Thread[int] = spawn(slow_server, l2.fd)
+
+        c: net.Conn = net.connect("127.0.0.1", l2.port)
+        # 何も送らずに、相手が音を上げるのを待つ
+        got: str = c.recv_all()
+        c.close()
+        print("黙っている相手は切る: " + str(strings.contains(got, "408")))
+
+        t2.join()
+        l2.close()
+    except net.NetError as e2:
+        print("NG: " + e2.message)
         return 1
 
     # 解釈だけを直に確かめる

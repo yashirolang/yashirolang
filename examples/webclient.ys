@@ -1,0 +1,37 @@
+# HTTP で取ってくる
+#
+#   $ <cc> examples/webclient<ext> -o fetch && ./fetch http://127.0.0.1:8080/
+#
+# ★ **外部のライブラリは要りません。** curl も要りません。
+#
+# ⚠️ **https はまだ繋げません**（TLS が未実装）。http:// だけです。
+#   黙って暗号化なしで繋ぐと危ないので、http にはっきり断らせています。
+import http
+import strings
+import sys
+
+def main() -> int:
+    args: list[str] = sys.argv()
+    if len(args) < 2:
+        print("使い方: fetch <url>  （例: http://127.0.0.1:8080/）")
+        return 1
+
+    try:
+        res: http.Response = http.get(args[1])
+        print(str(res.status) + " " + http.reason(res.status))
+
+        # 何が返ってきたかを 2 つだけ見せます
+        ct: str = res.header("content-type")
+        if len(ct) > 0:
+            print("content-type: " + ct)
+        print("本体 " + str(len(res.body)) + " バイト")
+        print("────────")
+        print(res.body)
+    except http.HttpError as e:
+        # ⚠️ **繋がらない・名前が引けない・応答が壊れている**の
+        #   どれもここに来ます（http は HttpError だけを投げます）。
+        print("取ってこられません: " + e.message)
+        if e.timed_out:
+            print("（待ち時間を過ぎました）")
+        return 1
+    return 0

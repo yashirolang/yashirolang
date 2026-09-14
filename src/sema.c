@@ -3637,6 +3637,23 @@ static bool always_returns(Node *n) {
             return n->lhs && n->lhs->kind == ND_BOOL && n->lhs->ival != 0 &&
                    !has_break(n->body);
 
+        case ND_TRY:
+            // ★ try の中身と、**すべての** except が抜けるなら、この try は抜けます。
+            //
+            //   ⚠️ else が無い if と同じ話です。1 つでも素通りする except が
+            //     あれば、そこから下へ落ちます。
+            //
+            //   ⚠️ どの except にも当たらないエラーは呼び出し元へ伝播する
+            //     ので、**これも「抜ける」ほうに数えます**（伝播を except の
+            //     漏れと混同しないこと）。
+            //
+            //   📖 except の並びは els に next で繋がっています（if の else と
+            //     違って複数あるので、リストとしてたどります）。
+            if (!always_returns(n->body)) return false;
+            for (Node *ex = n->els; ex; ex = ex->next)
+                if (!always_returns(ex->body)) return false;
+            return true;
+
         case ND_CALL:
             // ★ panic() / exit() を呼んだら、その先へは進まない。
             return never_returns_call(n);

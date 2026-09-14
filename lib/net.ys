@@ -7,6 +7,14 @@
 #   send / recv / close をそのまま包んだだけで、独自の概念は足しません。
 #   HTTP は この上（lib/http<ext>）に乗ります。
 #
+# ★ **IPv4 と IPv6 のどちらでも繋がります**（A-23）。名前を引くと住所が
+#   何個か返るので、**繋がるまで順に試します**。どちらを使うかは
+#   利用者が選びません（`::1` しか無い相手にも繋がります）。
+#
+# ★ **待ち時間を決められます**（A-23。`set_timeout(ms)`。0 なら無期限）。
+#   時間切れは `NetError.timed_out` で見分けられます。
+#   ⚠️ 決まるのは**繋がったあとの読み書き**だけで、connect は区切れません。
+#
 # ⚠️ **失敗は raises で返します。panic しません。**
 #   「ポートが使われている」「相手が切った」は**ふつうに起きること**で、
 #   プログラムが続けられなければ困るからです。
@@ -23,6 +31,8 @@ extern def pl_sock_send(fd: int, s: str) -> int
 extern def pl_sock_recv(fd: int, max: int) -> str | None
 extern def pl_sock_close(fd: int) -> None
 extern def pl_sock_error() -> str
+extern def pl_sock_set_timeout(fd: int, ms: int) -> int
+extern def pl_sock_timed_out() -> int
 
 # 1 回の recv で受け取る上限（増やしても速くはなりません）
 CHUNK: int = 65536
@@ -33,11 +43,32 @@ CHUNK: int = 65536
 # ★ この言語の例外はスタックを巻き戻しません（設計 §4-3）。
 #   `raises NetError` と書いた関数の戻り値を、呼び出し側が
 #   try / except で受け取る形です。
+#
+# ★ **timed_out で「待ち時間切れ」だけを見分けられます**（A-23）。
+#   待ち時間切れは「まだ来ていない」だけで、接続はまだ生きています。
+#   「壊れた」と同じ扱いにすると、もう一度待つ／あきらめる の判断が
+#   呼び出し側で書けません。
+#
+#     except net.NetError as e:
+#         if e.timed_out:
+#             ...   # もう一度待つ、あるいは自分から閉じる
 class NetError:
     message: str
+    timed_out: bool
 
     def init(self, message: own str) -> None:
         self.message = message
+        self.timed_out = False
+
+
+# 直前のソケット呼び出しの失敗から NetError を作る。
+#
+# ★ 「待ち時間切れだったか」はランタイムが覚えているので、**失敗の直後に**
+#   取り出します（次のソケット呼び出しで上書きされます）。
+def last_error() -> NetError:
+    e: NetError = NetError(pl_sock_error())
+    e.timed_out = pl_sock_timed_out() == 1
+    return e
 
 
 # つながっている 1 本の接続
@@ -56,7 +87,7 @@ class Conn:
             raise NetError("閉じた接続から読もうとしました")
         got: str | None = pl_sock_recv(self.fd, max)
         if got is None:
-            raise NetError(pl_sock_error())
+            raise last_error()
         return got
 
     # 相手が閉じるまで全部読む
@@ -75,8 +106,21 @@ class Conn:
             raise NetError("閉じた接続へ書こうとしました")
         n: int = pl_sock_send(self.fd, s)
         if n < 0:
-            raise NetError(pl_sock_error())
+            raise last_error()
         return n
+
+    # 読み書きの待ち時間を決める（ミリ秒。**0 なら無期限**）。
+    #
+    # ★ **繋がったあとの読み書きにだけ効きます。** 相手が繋いだきり
+    #   何も送ってこない、という形の止まり方を防ぐためのものです。
+    #
+    # ⚠️ 時間切れになった send は「どこまで届いたか分かりません」。
+    #   そうなった接続は**閉じてください**（続きを書いても壊れた列が届きます）。
+    def set_timeout(mut self, ms: int) -> None raises NetError:
+        if self.fd < 0:
+            raise NetError("閉じた接続に待ち時間を決めようとしました")
+        if pl_sock_set_timeout(self.fd, ms) < 0:
+            raise last_error()
 
     # 閉じる（2 回呼んでもよい）
     def close(mut self) -> None:
@@ -89,10 +133,13 @@ class Conn:
 class Listener:
     fd: int
     port: int
+    # accept した接続に入れる待ち時間（ミリ秒。0 なら無期限）
+    conn_timeout_ms: int
 
     def init(self, fd: int, port: int) -> None:
         self.fd = fd
         self.port = port
+        self.conn_timeout_ms = 0
 
     # 1 本受け付ける（相手が来るまで待ちます）
     def accept(mut self) -> Conn raises NetError:
@@ -100,8 +147,36 @@ class Listener:
             raise NetError("閉じた待ち受け口で accept しました")
         c: int = pl_sock_accept(self.fd)
         if c < 0:
-            raise NetError(pl_sock_error())
-        return Conn(c)
+            raise last_error()
+        conn: Conn = Conn(c)
+        if self.conn_timeout_ms > 0:
+            conn.set_timeout(self.conn_timeout_ms)
+        return conn
+
+    # **これから accept する接続**の読み書きの待ち時間を決める。
+    #
+    # ★ サーバーを書くときに欲しいのはふつうこちらです。接続 1 本ごとに
+    #   set_timeout を書かずに済みます（http.serve_n は accept しか
+    #   していないので、この指定がそのまま効きます）。
+    #
+    # ⚠️ **すでに accept した接続は変わりません。** 変えたいときは
+    #   その Conn の set_timeout を呼んでください。
+    def set_conn_timeout(mut self, ms: int) -> None:
+        self.conn_timeout_ms = ms
+
+    # **accept そのもの**の待ち時間を決める（ミリ秒。0 なら無期限）。
+    #
+    # ★ 「客が来なければ戻ってくる」輪を書くためのものです。時間切れは
+    #   NetError の timed_out で分かるので、そこで終わりの合図を見て
+    #   やめる、という形が書けます。
+    #
+    # ⚠️ **set_conn_timeout とは別ものです。** こちらは待ち受け口に、
+    #   あちらは受け付けた接続に効きます。
+    def set_timeout(mut self, ms: int) -> None raises NetError:
+        if self.fd < 0:
+            raise NetError("閉じた待ち受け口に待ち時間を決めようとしました")
+        if pl_sock_set_timeout(self.fd, ms) < 0:
+            raise last_error()
 
     def close(mut self) -> None:
         if self.fd >= 0:
@@ -120,11 +195,11 @@ def listen(host: str, port: int) -> Listener raises NetError:
 def listen_backlog(host: str, port: int, backlog: int) -> Listener raises NetError:
     fd: int = pl_sock_listen(host, port, backlog)
     if fd < 0:
-        raise NetError(pl_sock_error())
+        raise last_error()
     actual: int = pl_sock_port(fd)
     if actual < 0:
         pl_sock_close(fd)
-        raise NetError(pl_sock_error())
+        raise last_error()
     return Listener(fd, actual)
 
 
@@ -132,7 +207,7 @@ def listen_backlog(host: str, port: int, backlog: int) -> Listener raises NetErr
 def connect(host: str, port: int) -> Conn raises NetError:
     fd: int = pl_sock_connect(host, port)
     if fd < 0:
-        raise NetError(pl_sock_error())
+        raise last_error()
     return Conn(fd)
 
 

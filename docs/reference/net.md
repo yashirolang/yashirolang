@@ -1,7 +1,8 @@
 # ソケットと HTTP
 
-**サーバーが書けます。** `{{!cc}}` は TCP ソケットを標準で持っていて、
-その上に HTTP/1.1 の最小限が乗っています。外部のライブラリは要りません。
+**サーバーもクライアントも書けます。** `{{!cc}}` は TCP ソケットを標準で
+持っていて、その上に HTTP/1.1 の最小限が乗っています。外部のライブラリは
+要りません（`curl` も要りません）。
 
 ```python
 import http
@@ -23,6 +24,13 @@ def main() -> int:
 
 ```bash
 {{!cc}} server{{!ext}} -o server && ./server
+```
+
+取ってくるほうは 1 行です。
+
+```python
+res: http.Response = http.get("http://127.0.0.1:8080/")
+print(str(res.status) + " " + res.body)
 ```
 
 ---
@@ -51,7 +59,10 @@ def main() -> int:
 | `Conn.recv(max) -> str` | 最大 max バイト読む |
 | `Conn.recv_all() -> str` | 相手が閉じるまで読む |
 | `Conn.send(s) -> int` | 全部書く |
+| `Conn.set_timeout(ms)` | 読み書きの待ち時間（**0 なら無期限**） |
 | `Conn.close()` | 閉じる（2 回呼んでもよい） |
+| `Listener.set_conn_timeout(ms)` | **これから** `accept` する接続の待ち時間 |
+| `Listener.set_timeout(ms)` | `accept` そのものの待ち時間 |
 
 **★ ポートに `0` を渡すと、OS が空いているポートを選びます。**
 選ばれた番号は `l.port` で読めます。
@@ -102,11 +113,19 @@ while True:
 | クエリ文字列 `?a=1&b=2` | ✅ |
 | パーセント符号化の復号（`%E3%81%82` と `+`） | ✅ |
 | keep-alive（1 本で何度も） | ✅ |
-| チャンク転送 | ⬜ 受け取ると **411** を返す |
-| TLS（https） | ⬜ |
+| チャンク転送 | ✅ 受けるのも、送られてくるのも |
+| クライアント（`get` / `post` / `request`） | ✅ |
+| 待ち時間 | ✅ |
+| TLS（https） | ⬜ **はっきり断ります** |
+| 接続を貯めておく（クライアント側の keep-alive） | ⬜ 毎回繋ぎます |
 
 **⚠️ 未対応のものは、黙って壊れるのではなく、はっきり断ります。**
-チャンク転送を受け取ったら `411 Length Required` です。
+`https://` を `http.get` に渡すと、平文で繋ぎにいかずにエラーを返します
+（暗号化されていると思って鍵を送ってしまうのが、いちばん困るからです）。
+
+**★ `http` が投げるのは `HttpError` だけです。** 下の `net` が投げる
+`NetError` も包み直すので、「HTTP を使いたいだけなのにソケットの
+エラーも書かされる」ことになりません。`e.timed_out` は引き継ぎます。
 
 ### 3.2 要求
 
@@ -162,6 +181,76 @@ while True:
     t: Thread[int] = spawn(worker, c)   # ⚠️ join は自分で管理すること
 ```
 
+### 3.5 クライアント
+
+| 関数 | 意味 |
+|---|---|
+| `http.get(url) -> Response` | 取ってくる |
+| `http.post(url, content_type, body) -> Response` | 送る |
+| `http.request(method, url, headers, body, timeout_ms)` | 全部自分で決める |
+| `http.parse_url(url) -> Url` | `scheme` / `host` / `port` / `target` に分ける |
+
+```python
+res: http.Response = http.get("http://example.com/")
+print(str(res.status))                 # 200
+print(res.header("content-type"))      # text/html
+print(res.body)
+```
+
+**★ 受け取る入れ物はサーバーと同じ `Response` です。** 本体の終わりの
+決め方（`Content-Length` / チャンク / 本体なし）も、読み取りの
+`Reader` も、サーバー側と同じものを使っています。**送る側と受ける側で
+別々に書いた解釈が食い違う**のを避けるためです。
+
+**⚠️ 1 回の要求ごとに繋いで閉じます**（`Connection: close`）。接続を
+貯めておく仕組みはまだありません。何十回も叩くなら `net` で 1 本の接続を
+自分で持ち回ってください。
+
+**⚠️ `https://` は断ります。** TLS がまだ無いので、平文で繋ぎにいくより
+エラーにするほうが安全です。
+
+ヘッダを足したいときは `request` です。
+
+```python
+h: dict.Dict[str, str] = dict.Dict()
+h.set("authorization", "Bearer " + token)
+res: http.Response = http.request("GET", url, h, "", 5000)
+```
+
+`host` / `content-length` / `connection` はこちらで入れるので、
+渡しても無視します（二重に書かれるのを防ぐため）。
+
+### 3.6 待ち時間
+
+**★ サーバーには待ち時間を決めてください。**
+
+```python
+l: net.Listener = net.listen("127.0.0.1", 8080)
+l.set_conn_timeout(30000)      # 受け付けた接続は 30 秒で見切る
+http.serve_on(l, handle)
+```
+
+**⚠️ これが無いと、繋いだきり何も送ってこない相手 1 つでサーバーが
+止まります。** `http` は 1 本ずつ順に捌くので、その間ほかの客も全員
+待たされます。待ち時間を過ぎた接続には `408 Request Timeout` を返して
+閉じます。
+
+クライアントの既定は 30 秒（`http.CLIENT_TIMEOUT_MS`）です。
+`http.request` の最後の引数で変えられます。
+
+**★ 待ち時間切れは、他の失敗と区別できます。**「まだ来ていない」だけで
+接続はまだ生きているので、もう一度待つこともできます。
+
+```python
+try:
+    part: str = c.recv(4096)
+except net.NetError as e:
+    if e.timed_out:
+        ...        # まだ来ていないだけ（接続は生きている）
+    else:
+        ...        # 本当に壊れた
+```
+
 ---
 
 ## 4. 落とし穴
@@ -174,6 +263,15 @@ while True:
 **⚠️ `Connection` ヘッダを見てください。** HTTP/1.1 は既定で継続します。
 `Connection: close` が来たら、応答を返してから閉じます。
 
+**⚠️ `Content-Length` と `Transfer-Encoding` の両方がある要求は断ります**
+（`400`）。どちらを見るかで**要求の切れ目がずれる**ため、間に挟まる機械と
+解釈が食い違うと、1 本の接続に別人の要求を紛れ込ませられます
+（要求の密輸。RFC 9112 §6.1）。**どちらを選んでも危ないので、断ります。**
+
+**⚠️ 本体の終わりの決め方は 3 つあり、順番が決まっています。**
+チャンクが先、`Content-Length` が後、どちらも無ければ相手が閉じるまで。
+逆にすると、両方書いてある応答で切れ目がずれます。
+
 ---
 
 ## 5. 動く例
@@ -182,7 +280,8 @@ while True:
 
 | 例 | 中身 |
 |---|---|
-| `webserver{{!ext}}` | ファイルを返す小さな Web サーバー |
+| `webserver{{!ext}}` | 小さな Web サーバー（待ち時間つき） |
+| `webclient{{!ext}}` | 取ってくるだけのクライアント（`curl` の代わり） |
 
 ---
 
@@ -190,9 +289,17 @@ while True:
 
 | 制限 | 状況 |
 |---|---|
-| IPv6 | まだ（`AF_INET` だけ） |
-| TLS（https） | まだ |
-| チャンク転送 | まだ（411 で断る） |
-| タイムアウト | まだ（`recv` は来るまで待ちます） |
+| IPv6 | ✅ 入りました（名前が複数の住所を持つときは**順に試します**） |
+| チャンク転送 | ✅ 入りました |
+| タイムアウト | ✅ 入りました（**読み書きだけ**。下を見てください） |
+| TLS（https） | まだ。**黙って平文で繋がず、断ります** |
+| `connect` の待ち時間 | まだ（`SO_RCVTIMEO` は繋がったあとにしか効きません） |
+| 接続を貯めておく（クライアント） | まだ（1 要求ごとに繋ぎ直します） |
 | UDP | まだ |
+| 多重化（`select` / `epoll`） | まだ（同時に捌くなら `spawn`） |
 | ベアメタル | **できません**（`runtime/hosted.c` だけが持っています） |
+
+**⚠️ `connect` だけは区切れません。** `Conn.set_timeout` が決めるのは
+**繋がったあとの読み書き**です。返事の無い相手に繋ぎにいくと、OS が
+あきらめるまで（数十秒）待ちます。区切るには非同期の接続と `select` が
+要るので、まだ入れていません。

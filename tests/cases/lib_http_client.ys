@@ -1,0 +1,160 @@
+# OUTPUT: GET: 200 hello
+# OUTPUT: POST: 200 こんにちは
+# OUTPUT: 404: 404 nope
+# OUTPUT: ヘッダ: text/plain; charset=utf-8
+# OUTPUT: チャンクの応答: hello world
+# OUTPUT: 204 は本体を待たない: 204 /
+# OUTPUT: URL: http 127.0.0.1 8080 /a?b=1
+# OUTPUT: URL（経路なし）: example.com 80 /
+# OUTPUT: URL（IPv6）: ::1 8080 /x
+# OUTPUT: URL（問い合わせだけ）: /?x=1
+# OUTPUT: URL（かけらは送らない）: /a?x=1
+# OUTPUT: https は断る: True
+# OUTPUT: 繋がらない先: True
+# EXIT: 0
+# http のクライアント（A-23）
+#
+#   ★ **サーバーと同じ部品で書けているか**を確かめます。応答の読み取りは
+#     サーバー側の Reader とチャンクの解き方をそのまま使っています。
+#
+#   ⚠️ **本体の終わりの決め方 3 通りを全部通します**（Content-Length /
+#     チャンク / 本体なし）。ここを取り違えると「来ないものを待って
+#     止まる」形の不具合になり、試験では**固まって**現れます。
+import http
+import net
+import strings
+
+def handle(req: http.Request) -> http.Response:
+    if req.path == "/":
+        return http.text(200, "hello")
+    if req.path == "/echo":
+        return http.text(200, req.body)
+    return http.text(404, "nope")
+
+
+def server(fd: int) -> int:
+    l: net.Listener = net.Listener(fd, 0)
+    http.serve_n(l, handle, 3)
+    return 0
+
+
+# ★ 手書きの応答を返す相手（Response.encode は必ず Content-Length を
+#   付けるので、**チャンクで返す相手はここで作ります**）。
+def raw_server(fd: int) -> int:
+    try:
+        l: net.Listener = net.Listener(fd, 0)
+
+        # ① チャンクで返す
+        c: net.Conn = l.accept()
+        c.recv(4096)
+        c.send("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n" +
+               "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n" +
+               "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n")
+        c.close()
+
+        # ② 204（**本体は来ません**。Content-Length を書いてあっても）
+        c2: net.Conn = l.accept()
+        c2.recv(4096)
+        c2.send("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+        c2.close()
+    except net.NetError as e:
+        print("raw_server NG: " + e.message)
+    return 0
+
+
+def main() -> int:
+    # ── ふつうの往復 ──
+    try:
+        l: net.Listener = net.listen("127.0.0.1", 0)
+        base: str = "http://127.0.0.1:" + str(l.port)
+        t: Thread[int] = spawn(server, l.fd)
+
+        r1: http.Response = http.get(base + "/")
+        print("GET: " + str(r1.status) + " " + r1.body)
+
+        r2: http.Response = http.post(base + "/echo", "text/plain", "こんにちは")
+        print("POST: " + str(r2.status) + " " + r2.body)
+
+        r3: http.Response = http.get(base + "/nope")
+        print("404: " + str(r3.status) + " " + r3.body)
+        print("ヘッダ: " + r3.header("Content-Type"))
+
+        t.join()
+        l.close()
+    except http.HttpError as he:
+        print("NG: " + he.message)
+        return 1
+    except net.NetError as ne:
+        print("NG(net): " + ne.message)
+        return 1
+
+    # ── 本体の終わりの決め方（チャンク / 本体なし）──
+    try:
+        l2: net.Listener = net.listen("127.0.0.1", 0)
+        base2: str = "http://127.0.0.1:" + str(l2.port)
+        t2: Thread[int] = spawn(raw_server, l2.fd)
+
+        r4: http.Response = http.get(base2 + "/chunked")
+        print("チャンクの応答: " + r4.body)
+
+        r5: http.Response = http.get(base2 + "/nocontent")
+        print("204 は本体を待たない: " + str(r5.status) + " /" + r5.body)
+
+        t2.join()
+        l2.close()
+    except http.HttpError as he2:
+        print("NG: " + he2.message)
+        return 1
+    except net.NetError as ne2:
+        print("NG(net): " + ne2.message)
+        return 1
+
+    # ── URL の分解 ──
+    try:
+        u: http.Url = http.parse_url("http://127.0.0.1:8080/a?b=1")
+        print("URL: " + u.scheme + " " + u.host + " " + str(u.port) + " " + u.target)
+
+        u2: http.Url = http.parse_url("http://example.com")
+        print("URL（経路なし）: " + u2.host + " " + str(u2.port) + " " + u2.target)
+
+        # ⚠️ 角括弧が無いと、住所の中のコロンとポートの前のコロンが
+        #   見分けられません
+        u3: http.Url = http.parse_url("http://[::1]:8080/x")
+        print("URL（IPv6）: " + u3.host + " " + str(u3.port) + " " + u3.target)
+
+        # ⚠️ 住所の終わりは "/" だけではありません（"?" でも終わります）。
+        #   "/" だけを探すと、問い合わせが名前の側に紛れ込みます。
+        u4: http.Url = http.parse_url("http://example.com?x=1")
+        print("URL（問い合わせだけ）: " + u4.target)
+
+        # ⚠️ かけら（# のうしろ）は相手に送りません（ブラウザの中だけの印）。
+        u5: http.Url = http.parse_url("http://example.com/a?x=1#frag")
+        print("URL（かけらは送らない）: " + u5.target)
+    except http.HttpError as he3:
+        print("URL NG: " + he3.message)
+        return 1
+
+    # ★ **https は黙って http で繋ぎません。** 暗号化されていると思って
+    #   鍵を送ってしまうので、はっきり断ります。
+    try:
+        bad: http.Response = http.get("https://example.com/")
+        print("https は断る: 繋いでしまった " + str(bad.status))
+    except http.HttpError as he4:
+        print("https は断る: " + str(strings.contains(he4.message, "TLS")))
+
+    # 誰もいないところへ（NetError ではなく **HttpError** で返る）
+    dead: int = 0
+    try:
+        d: net.Listener = net.listen("127.0.0.1", 0)
+        dead = d.port
+        d.close()
+    except net.NetError as ne3:
+        print("NG: " + ne3.message)
+        return 1
+
+    try:
+        r6: http.Response = http.get("http://127.0.0.1:" + str(dead) + "/")
+        print("繋がらない先: 繋がってしまった " + str(r6.status))
+    except http.HttpError as he5:
+        print("繋がらない先: True")
+    return 0

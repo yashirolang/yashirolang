@@ -108,9 +108,11 @@ for f in "${FILES[@]}"; do
     #     ④⑤ が「両方エラーで空出力どうしが一致」と数えてしまいます。
     #     `-O2` も IR（`-S` の出力）は変えないので混ぜません。
     case_flags=""
+    deny_case=0
     for fl in $(sed -n 's/^# *FLAGS: *//p' "$f" | tr -d '\r'); do
         case "$fl" in
             --drop|--no-drop|--no-overflow-check) case_flags="$case_flags $fl" ;;
+            --deny-*) deny_case=1 ;;
         esac
     done
 
@@ -240,6 +242,23 @@ for f in "${FILES[@]}"; do
     # ★ 単一モジュールのケースだけ。複数モジュールの -S 出力は
     #   区切りを入れて並べたものなので、そのままではリンクできません。
     if grep -q '^; ── module:' "$TMP/c.ll"; then
+        continue
+    fi
+
+    # ⚠️ **`--deny-*` のケースは走らせません**（IR までは比べます）。
+    #
+    #   あれは「この書き方は断るべきだ」を見せるためのケースで、断られる
+    #   はずのプログラムそのものは**たいてい安全ではありません**。
+    #   たとえば tests/cases/err_borrow_mut$EXT は借りものをフィールドへ
+    #   入れるので、既定（解放あり）で走らせると二重解放になります。
+    #
+    #   ⚠️ 診断の指定なので $case_flags には混ぜられず（混ぜると検査で
+    #     止まって ④ が「両方エラーで空出力どうしが一致」になります）、
+    #     かといって外して走らせると**未定義動作を 2 回見るだけ**になって、
+    #     そのときのゴミの中身しだいで通ったり落ちたりします
+    #     （C が rc=134、stage1 が rc=139 という形で現れました。
+    #     ④ が「IR は 1 バイトも違わない」と言っているのに、です）。
+    if [ "$deny_case" -eq 1 ]; then
         continue
     fi
     if ! "${PLC_CLANG:-clang}" "$TMP/m.ll" "$ROOT/build/runtime.a" $LINK_LIBS -o "$TMP/m.bin" 2>/dev/null; then

@@ -124,8 +124,19 @@ class Response:
         self.headers = dict.Dict()
         self.body = body
 
+    # ヘッダを足す。
+    #
+    # 🔒 **改行を取り除いてから入れます。** 取っ手が受け取った値を
+    #   そのままヘッダに入れることは、ふつうにあります。
+    #
+    #       r.set("location", req.param("url"))
+    #
+    #   その値に改行が混ざっていると、**送り手が好きなヘッダを足せます**
+    #   （応答の分割。`\r\nSet-Cookie: admin=1` を入れられる）。
+    #   ⚠️ **取っ手を書く人に気をつけさせる形にはしません** — 気をつけ
+    #     忘れたほうが穴になるなら、それは library 側の落ち度です。
     def set(mut self, name: str, value: str) -> None:
-        self.headers.set(lower(name), copy(value))
+        self.headers.set(no_newline(lower(name)), no_newline(value))
 
     # ヘッダを引く（**大小を区別しません**）。
     # ★ 応答を受け取る側（クライアント）が使います。
@@ -287,6 +298,22 @@ class Reader:
 
 
 # ── 解釈 ────────────────────────────────────────────────
+
+# 🔒 改行（CR / LF）を取り除く。
+#
+# ★ **ヘッダに入れる前に必ず通します。** HTTP は改行で区切る形式なので、
+#   値の中の改行は「区切り」になってしまいます。ここを素通りさせると、
+#   値を決められる相手が**ヘッダも本体も好きに足せます**。
+def no_newline(s: str) -> str:
+    out: list[str] = []
+    i: int = 0
+    while i < len(s):
+        b: int = strings.byte_at(s, i)
+        if b != 13 and b != 10:
+            out.append(strings.substr(s, i, 1))
+        i = i + 1
+    return strings.join(out, "")
+
 
 # ASCII の小文字化（ヘッダ名は ASCII と決まっています）
 def lower(s: str) -> str:
@@ -576,10 +603,18 @@ def read_chunked(rd: mut Reader, c: mut net.Conn) -> str raises HttpError:
     # ★ 最後のチャンク（0）のあとには、**後付けのヘッダ**が来ることが
     #   あります。空行まで読み飛ばします（読まないと、次の要求の頭が
     #   ずれます）。
+    #
+    # 🔒 **本数にも上限が要ります。** 「空行が来るまで」だけで回すと、
+    #   `X: y\r\n` を送り続ける相手に**永久に付き合わされます**
+    #   （1 本ずつは小さいので、長さの上限では止まりません）。
+    trailers: int = 0
     while True:
         t: str = rd.read_line(c, 1024)
         if len(t) == 0:
             break
+        trailers = trailers + 1
+        if trailers > 64:
+            raise HttpError("後付けのヘッダが多すぎます", 400)
     return strings.join(parts, "")
 
 
@@ -588,8 +623,17 @@ def read_chunked(rd: mut Reader, c: mut net.Conn) -> str raises HttpError:
 # ★ **同時接続は分けていません。** 1 本ずつです。同時に捌きたいときは
 #   serve_conn を spawn で呼ぶ輪を自分で書いてください——この層が
 #   スレッドの方針を決めてしまわないようにしています。
+# 🔒 serve が自分で立てる待ち受け口に入れる待ち時間。
+#
+# ★ **0（無期限）にはしません。** serve は待ち受け口を自分で作るので、
+#   呼び出し側には set_conn_timeout を呼ぶ機会がありません。既定が
+#   無期限だと、**いちばん簡単な入口がいちばん無防備**になります。
+#   自分で決めたい人は net.listen してから serve_on を使ってください。
+DEFAULT_CONN_TIMEOUT_MS: int = 30000
+
 def serve(host: str, port: int, handler: fn(Request) -> Response) -> None raises net.NetError:
     l: net.Listener = net.listen(host, port)
+    l.set_conn_timeout(DEFAULT_CONN_TIMEOUT_MS)
     serve_on(l, handler)
 
 # すでに開いてある待ち受け口で捌く（ポートを呼び出し側が知りたいとき）。
@@ -632,6 +676,17 @@ def send_error(c: mut net.Conn, status: int, msg: str) -> None:
 #
 # ⚠️ 組み込みの int(s) は数でないと**実行時エラーで落ちます**。
 #   受け取ったヘッダは信用できないので、ここで自分で読みます。
+#
+# 🔒 **桁数にも上限が要ります。** ここに上限が無いと、
+#
+#       Content-Length: 99999999999999999999999
+#
+#   という 1 行でサーバーが落ちます。この言語は既定で桁あふれを
+#   検査するので、`n * 10` が
+#   **`runtime error: integer overflow in *`** になり、**プロセスごと**
+#   死ぬからです（要求 1 本で誰でも落とせる、ということです）。
+#   ⚠️ 上限は「掛けても溢れない」ところに置きます——
+#   9223372036854775807 ÷ 10 の切り捨てです。
 def to_int(s: str) -> int:
     if len(s) == 0:
         return -1
@@ -640,6 +695,8 @@ def to_int(s: str) -> int:
     while i < len(s):
         b: int = strings.byte_at(s, i)
         if b < 48 or b > 57:
+            return -1
+        if n > 922337203685477579:
             return -1
         n = n * 10 + (b - 48)
         i = i + 1
@@ -690,6 +747,14 @@ class Url:
 #   括弧が無いと、住所の中のコロンとポート番号の前のコロンが見分けられません。
 def parse_url(u: str) -> Url raises HttpError:
     out: Url = Url()
+
+    # 🔒 **改行の混ざった URL は断ります。** 要求行にそのまま書くので、
+    #   通すと「取ってくる先」を決められる相手が**こちらの送る要求に
+    #   好きなヘッダを足せます**（要求の分割）。
+    #   ⚠️ ここは取り除くのではなく断ります——URL は組み立てるものではなく
+    #     渡されるもので、壊れているなら黙って直すより教えるべきです。
+    if strings.contains(u, "\r") or strings.contains(u, "\n"):
+        raise HttpError("URL に改行が入っています", 0)
 
     sep: int = strings.find(u, "://")
     if sep < 0:
@@ -798,7 +863,9 @@ def build_request(u: mut Url, method: str, headers: mut dict.Dict[str, str],
         lk: str = lower(k)
         if lk == "host" or lk == "content-length" or lk == "connection":
             continue
-        parts.append(lk + ": " + headers.get(k) + CRLF)
+        # 🔒 送るほうも同じです（Response.set と対）。中身を決められる
+        #   相手がいる値——合言葉、利用者の入力——が入ることがあります。
+        parts.append(no_newline(lk) + ": " + no_newline(headers.get(k)) + CRLF)
 
     # ⚠️ **本体が無くても content-length を書きます。** 省くと相手によっては
     #   「本体は接続が切れるまで」と解釈します。

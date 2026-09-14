@@ -125,6 +125,9 @@ def parse_args(args: list[str]) -> Options:
             if i + 1 >= len(args):
                 panic("-o の後に出力ファイル名が必要です")
             i = i + 1
+            # 🔒 clang へはシェル経由で渡ります。中間の .ll の名前も
+            #   ここから作るので、**入口で 1 回**確かめれば足ります。
+            check_shell_safe(args[i], "出力ファイル名")
             o.output = copy(args[i])
         # ★ import を探す場所を足す（-I deps / -Ideps のどちらでも）
         elif a == "-I":
@@ -207,6 +210,37 @@ def clang_cmd() -> str:
     if len(env) > 0:
         return env
     return "clang"
+
+
+# 🔒 clang へ渡す道を確かめる（シェルに解釈される字が無いか）。
+#   対になる定義: src/main.c :: check_shell_safe
+#
+# ⚠️ **リンクはシェルを通ります。** 道は "…" で囲んでいますが、POSIX の
+#   sh は**二重引用符の中でも** `$` ・ ` ・ `\` を解釈します。囲んで
+#   あるから安全、ではありません。
+#
+# ★ **囲い方を賢くするのではなく、断ります。** 引用の規則は sh と
+#   cmd.exe で違い、両方に効く「正しい囲み方」を書こうとすると、
+#   そこが次の穴になります。
+#
+#   ⚠️ `\` は Windows の区切り文字なので、そちらでは通します。
+#     `%` は逆に cmd.exe だけが展開します。
+def check_shell_safe(path: str, what: str) -> None:
+    windows: bool = strings.contains(target_triple(), "windows")
+    i: int = 0
+    while i < len(path):
+        b: int = strings.byte_at(path, i)
+        bad: bool = b == 34 or b == 96 or b == 36 or b == 10 or b == 13
+        if windows:
+            if b == 37:
+                bad = True
+        else:
+            if b == 92:
+                bad = True
+        if bad:
+            panic(what + " に使えない字 '" + strings.substr(path, i, 1) +
+                  "' が入っています（シェルが解釈してしまうため断ります）")
+        i = i + 1
 
 
 def runtime_o() -> str:

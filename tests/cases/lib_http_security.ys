@@ -1,0 +1,116 @@
+# OUTPUT: 長い Content-Length: 400 / サーバーは生きている: True
+# OUTPUT: 後付けのヘッダは無限に受けない: True
+# OUTPUT: ヘッダに改行を入れられない: True
+# OUTPUT: 送る側も同じ: True
+# OUTPUT: URL の改行を断る: True
+# EXIT: 0
+# http — 送られてきたもので壊されないこと（A-23）
+#
+#   ★ **どれも「遠くの誰か」に決められる値**です。ここが通ると、
+#     要求 1 本でサーバーを落とせたり、応答に好きなヘッダを足せたりします。
+#
+#   ⚠️ **取っ手を書く人に気をつけさせる形にはしません。** 気をつけ忘れた
+#     ほうが穴になるなら、それは library 側の落ち度です。
+import dict
+import http
+import net
+import strings
+
+def handle(req: http.Request) -> http.Response:
+    return http.text(200, "ok")
+
+
+def server(fd: int) -> int:
+    l: net.Listener = net.Listener(fd, 0)
+    l.set_conn_timeout(3000)
+    http.serve_n(l, handle, 3)
+    return 0
+
+
+def line0(s: str) -> str:
+    return copy(strings.split(s, "\r\n")[0])
+
+
+def once(port: int, msg: str) -> str raises net.NetError:
+    c: net.Conn = net.connect("127.0.0.1", port)
+    c.send(msg)
+    got: str = c.recv_all()
+    c.close()
+    return got
+
+
+def main() -> int:
+    try:
+        l: net.Listener = net.listen("127.0.0.1", 0)
+        port: int = l.port
+        t: Thread[int] = spawn(server, l.fd)
+
+        # ① 🔒 桁あふれでプロセスごと落とせないこと。
+        #
+        #   ⚠️ この言語は既定で桁あふれを検査するので、上限の無い
+        #     to_int は "integer overflow in *" で**プロセスを終わらせます**。
+        #     要求 1 本で誰でも落とせる、ということでした。
+        r1: str = once(port, "POST / HTTP/1.1\r\nHost: x\r\n" +
+                             "Content-Length: 99999999999999999999999\r\n" +
+                             "Connection: close\r\n\r\n")
+        alive: str = once(port, "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        code: str = "その他"
+        if strings.contains(line0(r1), "400"):
+            code = "400"
+        print("長い Content-Length: " + code +
+              " / サーバーは生きている: " + str(strings.contains(alive, "200")))
+
+        # ⑤ 🔒 後付けのヘッダを無限に送りつけられないこと。
+        #
+        #   ⚠️ 「空行が来るまで」だけで回すと、1 本ずつ小さい行を送り
+        #     続ける相手に永久に付き合わされます（長さの上限では
+        #     止まりません）。
+        trailers: list[str] = []
+        trailers.append("POST / HTTP/1.1\r\nHost: x\r\n")
+        trailers.append("Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
+        trailers.append("0\r\n")
+        i: int = 0
+        while i < 200:
+            trailers.append("X-A: b\r\n")
+            i = i + 1
+        trailers.append("\r\n")
+        r5: str = once(port, strings.join(trailers, ""))
+        print("後付けのヘッダは無限に受けない: " +
+              str(strings.contains(line0(r5), "400")))
+
+        t.join()
+        l.close()
+    except net.NetError as e:
+        print("NG: " + e.message)
+        return 1
+
+    # ② 🔒 応答のヘッダに改行を入れられないこと（応答の分割）。
+    #
+    #   取っ手が受け取った値をそのままヘッダに入れるのは、ふつうにあります。
+    #       r.set("location", req.param("url"))
+    r: http.Response = http.text(302, "")
+    r.set("location", "/next\r\nSet-Cookie: admin=1")
+    enc: str = r.encode(False)
+    print("ヘッダに改行を入れられない: " +
+          str(not strings.contains(enc, "\r\nSet-Cookie:")))
+
+    # ③ 🔒 送る側（クライアント）も同じこと。
+    try:
+        h: dict.Dict[str, str] = dict.Dict()
+        h.set("x-token", "abc\r\nX-Admin: 1")
+        u: http.Url = http.parse_url("http://127.0.0.1:1/")
+        req_bytes: str = http.build_request(u, "GET", h, "")
+        print("送る側も同じ: " + str(not strings.contains(req_bytes, "\r\nX-Admin:")))
+    except http.HttpError as he0:
+        print("送る側も同じ: NG " + he0.message)
+
+    # ④ 🔒 URL の改行を断ること（要求の分割）。
+    #
+    #   ⚠️ ここは取り除くのではなく断ります——URL は組み立てるものでは
+    #     なく渡されるもので、壊れているなら黙って直すより教えるべきです。
+    try:
+        bad: http.Url = http.parse_url("http://h/a\r\nX-Evil: 1")
+        print("URL の改行を断る: 通してしまった " + bad.target)
+    except http.HttpError as he:
+        print("URL の改行を断る: " + str(strings.contains(he.message, "改行")))
+    return 0

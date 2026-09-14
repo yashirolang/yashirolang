@@ -50,6 +50,41 @@ static const char *clang_cmd(void) {
     return PLC_CLANG;
 }
 
+// 🔒 clang へ渡す道を確かめる（シェルに解釈される字が無いか）。
+//
+// ⚠️ **リンクは system() でシェルを通ります。** 道は "…" で囲んでいますが、
+//   POSIX の sh は**二重引用符の中でも** `$` ・ ` ・ `\` を解釈します。
+//   囲んであるから安全、ではありません。実際、
+//
+//       <コンパイラ> a<拡張子> -o 'out$(touch X)x'
+//
+//   は touch を実行しました。⚠️ `-o` は自分で打つものなので自分で自分を
+//   撃つだけですが、**道を組み立てるのが人とは限りません**
+//   （書き出し先を設定から作る作業手順書や、雛形から作る仕組み）。
+//
+// ★ **囲い方を賢くするのではなく、断ります。** 引用の規則は sh と
+//   cmd.exe で違い、両方に効く「正しい囲み方」を書こうとすると、
+//   そこが次の穴になります。使えなくなるのは、道に入れないほうがよい字
+//   だけです。
+//
+//   ⚠️ `\` は Windows の区切り文字なので、そちらでは通します
+//     （cmd.exe は `\` を逃がし字として扱いません）。
+//     `%` は逆に cmd.exe だけが展開します。
+static void check_shell_safe(const char *path, const char *what) {
+    for (const char *p = path; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        int bad = (c == '"' || c == '`' || c == '$' || c == '\n' || c == '\r');
+#ifdef _WIN32
+        if (c == '%') bad = 1;
+#else
+        if (c == '\\') bad = 1;
+#endif
+        if (bad)
+            error("%s に使えない字 '%c' が入っています"
+                  "（シェルが解釈してしまうため断ります）", what, c);
+    }
+}
+
 // ★ --version が出す内容。
 //
 //   版番号だけでなく **stage と target triple** も出します。この処理系は
@@ -161,6 +196,9 @@ static Options parse_args(int argc, char **argv) {
 
         if (strcmp(a, "-o") == 0) {
             if (i + 1 >= argc) error("-o の後に出力ファイル名が必要です");
+            // 🔒 clang へはシェル経由で渡ります。中間の .ll の名前も
+            //   ここから作るので、**入口で 1 回**確かめれば足ります。
+            check_shell_safe(argv[i + 1], "出力ファイル名");
             o.output = argv[++i];
             continue;
         }

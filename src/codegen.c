@@ -2875,9 +2875,26 @@ static void gen_while_plain(Emitter *e, Node *n) {
 #define VZ_MAX_SITES 16
 
 // ループが版分けできるなら、誘導変数の IR 名を返す（できなければ NULL）。
+//
+// ⚠️ **かつてここは `if (e->drop) return NULL;` で始まっていました**
+//    （理由は「本体を 2 回出すと解放の記録が二重になる」）。0.16.0 で
+//    `--drop` が既定になった結果、**版分けが既定で丸ごと死んでいました**。
+//    512³ の行列積（平坦な list[float]）が 36.6 ms → 357.5 ms です。
+//
+//    測り直したところ、その心配は起きません。理由は 2 つあります。
+//
+//    ① **速い側と遅い側は「並ぶ」のではなく「どちらか」です。**
+//       解放は各ブロックに 1 つずつ出ますが、実行時に通るのは片方だけです。
+//    ② **スコープの記帳は共有されていません。** ND_BLOCK を生成するたびに
+//       ScopeCtx をその場の局所変数として作るので（gen_stmt の ND_BLOCK）、
+//       2 回目の本体は 1 回目とは別の一覧に積みます。
+//
+//    そもそも版分けできる本体には、解放すべきものがほとんど生まれません
+//    （vz_body_ok が呼び出し・list と str の宣言と代入・内包表記・連結を
+//    すべて外しているため）。残るのは rc[T] や T | None の束縛ぐらいで、
+//    それも ① と ② のとおり各ブロックで釣り合います。
+//    ★ 回帰テスト: tests/cases/vz_drop（拡張子は make info）が ASan で釣り合いを見張ります。
 static const char *vz_analyze(Emitter *e, Node *n, Node **sites, int *nsites) {
-    // ⚠️ --drop のときは外します。本体を 2 回出すと解放の記録が二重になります。
-    if (e->drop) return NULL;
     if (n->kind != ND_WHILE) return NULL;
 
     // ① 形：while v < L:

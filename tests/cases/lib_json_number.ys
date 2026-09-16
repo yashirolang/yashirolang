@@ -1,0 +1,79 @@
+# OUTPUT: 0 ok
+# OUTPUT: -0 ok
+# OUTPUT: 1.5 ok
+# OUTPUT: 1e5 ok
+# OUTPUT: 1E-5 ok
+# OUTPUT: 1e+5 ok
+# OUTPUT: 0.5e-3 ok
+# OUTPUT: -12.75E+2 ok
+# OUTPUT: 1e ng
+# OUTPUT: 1E ng
+# OUTPUT: 1e+ ng
+# OUTPUT: -0e ng
+# OUTPUT: 1.2.3 ng
+# OUTPUT: 1--2 ng
+# OUTPUT: 1. ng
+# OUTPUT: .5 ng
+# OUTPUT: +1 ng
+# OUTPUT: - ng
+# OUTPUT: 01 ng
+# OUTPUT: 00.1 ng
+# OUTPUT: [1e] ng
+# OUTPUT: {"a":1e} ng
+# EXIT: 0
+# JSON の数値を RFC 8259 §6 の文法どおりに読む。
+#
+# ⚠️ **これは panic しないことの番人です。** 以前の parse_number は
+#   '.' 'e' 'E' '+' '-' をどこにでも許して読み飛ばし、集めた文字列を
+#   そのまま float() へ渡していました。すると "1e" のような入力が
+#   float() の中で panic し、`parse` の「失敗しても panic しない」という
+#   約束（Result を返す）が破れます。外から来た JSON 1 行で
+#   プロセスを落とせる形だったので、library 側で塞ぎました。
+#
+# ⚠️ 併せて「緩すぎた」ぶんも締めています（"01" "00.1" "1." は JSON では不正）。
+import json
+
+def status(text: str) -> str:
+    r: json.Result = json.parse(text)
+    if r.ok:
+        return "ok"
+    return "ng"
+
+def show(text: str) -> None:
+    print(text + " " + status(text))
+
+def main() -> int:
+    # ── 通るもの ──
+    show("0")
+    show("-0")
+    show("1.5")
+    show("1e5")
+    show("1E-5")
+    show("1e+5")
+    show("0.5e-3")
+    show("-12.75E+2")
+
+    # ── 指数が欠けている（以前は panic していました）──
+    show("1e")
+    show("1E")
+    show("1e+")
+    show("-0e")
+
+    # ── 記号が続く（以前は panic していました）──
+    show("1.2.3")
+    show("1--2")
+
+    # ── 数字が欠けている ──
+    show("1.")
+    show(".5")
+    show("+1")
+    show("-")
+
+    # ── 先頭の 0（JSON では 1 桁だけ）──
+    show("01")
+    show("00.1")
+
+    # ── 入れ子の中でも同じ ──
+    show("[1e]")
+    show("{\"a\":1e}")
+    return 0

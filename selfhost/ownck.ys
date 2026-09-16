@@ -399,7 +399,10 @@ class Reporter:
         if mt is not None:
             d.related = diag.Label(mt, rel)
         d.hint = hint
-        self.emit(d, self.opt.deny_move)
+        # ⚠️ emit は self を可変で借ります。同じ式の中で self.opt を
+        #   共有借用すると E-BORROW-5 になるので、先に読み出します。
+        deny: bool = self.opt.deny_move
+        self.emit(d, deny)
 
 
     # ── E-BORROW-1/3/4: 借用した値を動かそうとした ───────────
@@ -458,7 +461,10 @@ class Reporter:
         if obt is not None:
             d.related = diag.Label(obt, rel)
         d.hint = hint
-        self.emit(d, self.opt.deny_borrow)
+        # ⚠️ emit は self を可変で借ります。同じ式の中で self.opt を
+        #   共有借用すると E-BORROW-5 になるので、先に読み出します。
+        deny: bool = self.opt.deny_borrow
+        self.emit(d, deny)
 
     # ── E-BORROW-8: 自分が所有しているものの一部を返した（A-21d）──
     def report_return_borrow(mut self, p: rc[Place], at: rc[token.Token],
@@ -476,7 +482,10 @@ class Reporter:
                                        "' が所有していて、この関数の出口で解放されます")
         d.hint = ("持ち主から取り上げるなら move_out(...)、複製するなら copy(...) を" +
                   "使ってください")
-        self.emit(d, self.opt.deny_store_borrow)
+        # ⚠️ emit は self を可変で借ります。同じ式の中で self.opt を
+        #   共有借用すると E-BORROW-5 になるので、先に読み出します。
+        deny: bool = self.opt.deny_store_borrow
+        self.emit(d, deny)
 
     # ── E-BORROW-7: 借りものを所有する側へ渡した ─────────────
     def report_store_borrow(mut self, p: rc[Place], at: rc[token.Token],
@@ -502,7 +511,10 @@ class Reporter:
                                        "' が所有しています（読んだだけでは借りものです）")
         d.hint = ("入れる値をその場で作るか、copy(...) で複製してください" +
                   "（共有したままにするなら rc[T] です）")
-        self.emit(d, self.opt.deny_store_borrow)
+        # ⚠️ emit は self を可変で借ります。同じ式の中で self.opt を
+        #   共有借用すると E-BORROW-5 になるので、先に読み出します。
+        deny: bool = self.opt.deny_store_borrow
+        self.emit(d, deny)
 
 
 
@@ -530,7 +542,10 @@ class Reporter:
             d.related = diag.Label(ot, rel)
         d.hint = ("同じ値を同時に貸せるのは「共有借用を何個でも」か" +
                   "「可変借用を 1 つだけ」のどちらかです（仕様 §4.3）")
-        self.emit(d, self.opt.deny_borrow)
+        # ⚠️ emit は self を可変で借ります。同じ式の中で self.opt を
+        #   共有借用すると E-BORROW-5 になるので、先に読み出します。
+        deny: bool = self.opt.deny_borrow
+        self.emit(d, deny)
 
     # ── E-MUT-1: 読み取り専用の借用を書き換えた ──────────────
     #
@@ -569,7 +584,10 @@ class Reporter:
         if obt is not None:
             d.related = diag.Label(obt, rel)
         d.hint = hint
-        self.emit(d, self.opt.deny_mut)
+        # ⚠️ emit は self を可変で借ります。同じ式の中で self.opt を
+        #   共有借用すると E-BORROW-5 になるので、先に読み出します。
+        deny: bool = self.opt.deny_mut
+        self.emit(d, deny)
 
     # ── E-BORROW-6: 借りものが貸し手より長生きする ───────────
     #
@@ -592,7 +610,10 @@ class Reporter:
                                    "' はこのスコープが終わると消えます")
         d.hint = ("内側で作った値は、内側で使い切ってください" +
                   "（外へ渡すなら所有権ごと渡します）")
-        self.emit(d, self.opt.deny_borrow)
+        # ⚠️ emit は self を可変で借ります。同じ式の中で self.opt を
+        #   共有借用すると E-BORROW-5 になるので、先に読み出します。
+        deny: bool = self.opt.deny_borrow
+        self.emit(d, deny)
 # ── 変数宣言の表 ────────────────────────────────────────
 #
 # ★ 「この変数は借りものを束縛している」という印は、代入した場所ではなく

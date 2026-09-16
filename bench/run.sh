@@ -222,10 +222,10 @@ echo ""
 echo "═══ コンパイルの速さ（⚠️ どれもプロセスの起動を含みます）═══"
 echo "  ★ このコンパイラは LLVM IR のテキストを出すところまでが自分の仕事で、"
 echo "    最適化とリンクは clang に任せます。-S は「自分の仕事だけ」の時間です。"
-tstart "$LANG_CC -S mat$EXT（46 行）" "$POC" -S mat$EXT
+tstart "$LANG_CC -S mat${EXT}（46 行）" "$POC" -S mat$EXT
 tstart "$LANG_CC -S selfhost（10641 行）" "$POC" -S "$ROOT/selfhost/main$EXT"
 tstart "$LANG_CC --check selfhost" "$POC" --check "$ROOT/selfhost/main$EXT"
-tstart "$LANG_CC -O2 mat$EXT（clang 込み）" "$POC" -O2 mat$EXT -o $OUT/mat_tmp_out
+tstart "$LANG_CC -O2 mat${EXT}（clang 込み）" "$POC" -O2 mat$EXT -o $OUT/mat_tmp_out
 tstart "clang    -O2 mat.c（比較）" $CC -O2 mat.c -o $OUT/mat_tmp_out_c
 fi
 

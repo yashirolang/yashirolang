@@ -1,0 +1,91 @@
+# OUTPUT: 5450
+# OUTPUT: 5450
+# OUTPUT: 5
+# OUTPUT: 1225
+# OUTPUT: 6048
+# OUTPUT: 0
+# EXIT: 0
+# IR: vz.fast.
+# 版分けされたループの中で、解放が釣り合っているか
+#
+# ★ **版分けは本体を 2 回出します**（速い側＝検査なし、遅い側＝今までどおり）。
+#   解放も 2 か所に出ますが、実行時に通るのは**どちらか片方だけ**なので
+#   釣り合います。ここはそれを実際に走らせて確かめる番人です。
+#
+# ⚠️ かつて vz_analyze は「--drop なら版分けしない」で始まっていました。
+#   0.16.0 で --drop が既定になった結果、**版分けが既定で死にました**
+#   （512³ の行列積が 36.6 → 357.5 ms）。入口の判定を外したので、
+#   代わりにここで釣り合いを見張ります。
+#
+# ⚠️ このファイルは drop_* なので tests/drop_asan.sh が拾います。
+#   二重解放・解放後の使用があれば AddressSanitizer が落とします。
+class P:
+    x: int
+    y: int
+    def init(self, x: int, y: int) -> None:
+        self.x = x
+        self.y = y
+
+
+# ① rc[T] の束縛 —— 反復ごとに参照カウントが +1 / -1 する
+def with_rc(shared: rc[P], xs: list[int], n: int) -> int:
+    s: int = 0
+    i: int = 0
+    while i < n:
+        q: rc[P] = shared
+        s = s + xs[i] + q.x
+        i = i + 1
+    return s
+
+
+# ② T | None の束縛 —— 解放対象だが中身は無い
+def with_opt(xs: list[int], n: int) -> int:
+    s: int = 0
+    i: int = 0
+    while i < n:
+        t: str | None = None
+        if t is None:
+            s = s + xs[i]
+        i = i + 1
+    return s
+
+
+# ③ 借りものの束縛 —— **解放してはいけない**（ownck が印を付けている）
+def with_borrow(ps: list[P], n: int) -> int:
+    s: int = 0
+    i: int = 0
+    while i < n:
+        p: P = ps[i]
+        s = s + p.x + p.y
+        i = i + 1
+    return s
+
+
+def main() -> int:
+    xs: list[int] = []
+    k: int = 0
+    while k < 100:
+        xs.append(k)
+        k = k + 1
+
+    shared: rc[P] = rc(P(5, 0))
+    # ★ 2 回呼ぶのが要点です。1 回目で解放しすぎていれば 2 回目で落ちます。
+    print(str(with_rc(shared, xs, 100)))
+    print(str(with_rc(shared, xs, 100)))
+    print(str(shared.x))            # ← まだ生きていること
+
+    ys: list[int] = []
+    m: int = 0
+    while m < 50:
+        ys.append(m)
+        m = m + 1
+    print(str(with_opt(ys, 50)))
+
+    ps: list[P] = []
+    j: int = 0
+    while j < 64:
+        ps.append(P(j, j * 2))
+        j = j + 1
+    print(str(with_borrow(ps, 64)))
+    print(str(with_borrow(ps, 0)))  # ← 1 回も回らない（ガードだけ通る）
+    return 0

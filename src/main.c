@@ -467,14 +467,6 @@ int main(int argc, char **argv) {
     // ── ③ 意味解析・型検査（全モジュールまとめて）──
     sema_program(mods, entry);
 
-    // --check : ここで終わり（エラーがあれば sema が既に終了している）
-    //
-    // ⚠️ --check は「③ 型検査まで」です。所有権の検査（④）は走りません。
-    //    stage1（セルフホスト版）にはまだ ownck が無く、--check の出力を
-    //    突き合わせて比較しているためです（tests/selfhost.sh）。
-    //    セルフホスト版へ移植したら、ここも ownck を通すように変えます。
-    if (opt.stage == STAGE_CHECK) return 0;
-
     // ── target triple を決める ──
     //
     //   ① --target=... が最優先
@@ -503,6 +495,18 @@ int main(int argc, char **argv) {
     ownck_program(mods, &own);
 
     if (opt.stage == STAGE_EXPLAIN_MUT) return 0;
+
+    // --check : ここで終わり（エラーがあれば sema / ownck が既に終了している）
+    //
+    // ★ ④ 所有権の検査まで通します。かつてここは ③ の直後にあり、
+    //   「stage1（セルフホスト版）にはまだ ownck が無いので --check の出力を
+    //   突き合わせられない」ことが理由でした。0.16.0 で ownck を
+    //   セルフホスト版へ移したので、その理由は無くなっています。
+    //   ⚠️ 直すまで 2 実装の --check は食い違っていました
+    //   （stage1 だけが E-MOVE-1 を出し、--check --deny-move で 1 を返す）。
+    //   ★ --check は編集中のコードを見る入口（将来の LSP）でもあるので、
+    //     ここで所有権の指摘が落ちると、その先で全部落ちます。
+    if (opt.stage == STAGE_CHECK) return 0;
 
     // 入口モジュールの main の IR 名（@main のラッパが呼ぶ相手）
     StrBuf main_ir;

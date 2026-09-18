@@ -1,0 +1,12 @@
+# STDIN: -3
+# EXIT: 1
+# A-28: 戻り値も入れ先です（return の値を確かめます）。
+type Percent = int range(0, 100)
+
+def to_percent(n: int) -> Percent:
+    return n
+
+def main() -> int:
+    n: int = int(input())
+    print(str(to_percent(n)))
+    return 0

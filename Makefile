@@ -72,7 +72,7 @@ LANG_NAME := yashirolang
 LANG_EXT  := .ys
 LANG_CC   := yashirolang
 LANG_PM   := ysm
-LANG_VERSION := 0.17.2
+LANG_VERSION := 0.20.0
 LANG_REPO := https://github.com/yashirolang/yashirolang
 CFLAGS  += -DPLC_LANG_NAME='"$(LANG_NAME)"' \
            -DPLC_LANG_EXT='"$(LANG_EXT)"' \
@@ -217,18 +217,21 @@ inline-check: $(TARGET) $(RUNTIME_OBJ)
 #
 #   make own-report        … 種別ごと・ファイルごとの件数
 #   make own-report LIST=1 … 指摘そのものを全部出す
+#
+# ⚠️ **--warn-own が要ります**（A-24）。所有権の指摘は既定でエラーになり、
+#   1 件目で止まるようになったので、数えるには警告へ落とし直します。
 own-report: $(RUNTIME_OBJ)
 	@mkdir -p build
 	@$(CC) $(CFLAGS) -w -DOWNCK_MAX_REPORT=100000 $(SRCS) -o build/$(LANG_CC)-ownall
 	@if [ -n "$(LIST)" ]; then \
-	  ./build/$(LANG_CC)-ownall selfhost/main$(LANG_EXT) -o /dev/null 2>&1 | grep -v "^$$"; \
+	  ./build/$(LANG_CC)-ownall --warn-own selfhost/main$(LANG_EXT) -o /dev/null 2>&1 | grep -v "^$$"; \
 	else \
 	  echo "── 種別ごと"; \
-	  ./build/$(LANG_CC)-ownall selfhost/main$(LANG_EXT) -o /dev/null 2>&1 \
+	  ./build/$(LANG_CC)-ownall --warn-own selfhost/main$(LANG_EXT) -o /dev/null 2>&1 \
 	    | grep -oE "^warning\[E-[A-Z]+-[0-9]\]" | sort | uniq -c | sort -rn; \
 	  echo ""; \
 	  echo "── ファイルごと（指摘 1 件が数行に出るので目安です）"; \
-	  ./build/$(LANG_CC)-ownall selfhost/main$(LANG_EXT) -o /dev/null 2>&1 \
+	  ./build/$(LANG_CC)-ownall --warn-own selfhost/main$(LANG_EXT) -o /dev/null 2>&1 \
 	    | grep -oE "selfhost/[a-z_]+\$(LANG_EXT)" | sort | uniq -c | sort -rn; \
 	fi
 

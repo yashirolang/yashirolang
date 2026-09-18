@@ -117,6 +117,10 @@ class Sema:
     scope: rc[types.Scope] | None
     loop_depth: int
     scope_depth: int   # scope: の中にいる深さ（0 なら外）
+    # ★ 'result' が「戻り値そのもの」を指すのは、**ensures の式の中だけ**
+    #   （この処理系自身が result という局所変数を何か所も使っている）。
+    #   対になる定義: src/sema.c の ensures_depth
+    ensures_depth: int
     used: rc[UsedNames]                 # 割り当て済みの IR 名（関数ごとにリセット）
     cur_func: rc[types.FuncSig] | None
     cur: rc[types.ModuleSyms] | None        # 今検査中のモジュール
@@ -144,6 +148,7 @@ class Sema:
         self.prims = ast.Prims()
         self.loop_depth = 0
         self.scope_depth = 0
+        self.ensures_depth = 0
         self.used = rc(UsedNames())
         self.mods = []
         self.err_classes = []
@@ -320,6 +325,21 @@ class Sema:
 
     def lookup_iface(self, name: str) -> rc[ast.Iface] | None:
         return self.lookup_iface_in(self.cur_syms(), name)
+
+    # ── 範囲型（部分型。A-28）の表 ────────────────────────
+    #   対になる定義: src/sema.c の lookup_range_in / lookup_range
+    def lookup_range_in(self, ms: rc[types.ModuleSyms],
+                        name: str) -> rc[types.RangeTy] | None:
+        r: rc[types.RangeTy] | None = ms.ranges
+        while r is not None:
+            rr: rc[types.RangeTy] = r
+            if rr.name == name:
+                return rr
+            r = rr.next
+        return None
+
+    def lookup_range(self, name: str) -> rc[types.RangeTy] | None:
+        return self.lookup_range_in(self.cur_syms(), name)
 
     def lookup_class_in(self, ms: rc[types.ModuleSyms], name: str) -> rc[ast.Class] | None:
         c: rc[ast.Class] | None = ms.classes
@@ -688,6 +708,17 @@ class Sema:
                                 "ファイルの先頭に 'import " + tr.mod_name +
                                 "' を書いてください")
                 return self.ty_int()
+            # ★ 他のモジュールの範囲型（A-28）
+            mr: rc[types.RangeTy] | None = self.lookup_range_in(ms, tr.name)
+            if mr is not None:
+                mrr: rc[types.RangeTy] = mr
+                if tr.lhs is not None:
+                    diag.error_at_hint(unwrap_tok(tr.tok),
+                                       "範囲型は要素型を取りません",
+                                       "型 '" + tr.mod_name + "." + tr.name +
+                                       "' は要素型を取りません")
+                return unwrap_type(mrr.type)
+
             # ★ 他のモジュールのインタフェース
             mif: rc[ast.Iface] | None = self.lookup_iface_in(ms, tr.name)
             if mif is not None:
@@ -803,6 +834,16 @@ class Sema:
                                    "要素型を取るのは list と rc だけです",
                                    "型 '" + tr.name + "' は要素型を取りません")
             return t
+
+        # ★ 範囲型（部分型。A-28）。クラス名より先に引く
+        rt: rc[types.RangeTy] | None = self.lookup_range(tr.name)
+        if rt is not None:
+            rtt: rc[types.RangeTy] = rt
+            if tr.lhs is not None:
+                diag.error_at_hint(unwrap_tok(tr.tok),
+                                   "範囲型は要素型を取りません",
+                                   "型 '" + tr.name + "' は要素型を取りません")
+            return unwrap_type(rtt.type)
 
         # ★ インタフェース名も型として書ける（list[Show] など）
         ifc1: rc[ast.Iface] | None = self.lookup_iface(tr.name)
@@ -1339,6 +1380,28 @@ class Sema:
     def check_var(self, n: mut rc[ast.Node]) -> rc[ast.Type]:
         v: rc[types.VarEntry] | None = self.lookup(n.name)
 
+        # ★ 契約（A-29）：ensures の式の中の 'result' は**戻り値そのもの**。
+        #   ⚠️ 局所変数のほうが先（result という名前の変数を壊さないため）。
+        #   対になる定義: src/sema.c の check_var
+        if v is None and self.ensures_depth > 0 and n.name == "result":
+            cf: rc[types.FuncSig] | None = self.cur_func
+            if cf is None:
+                diag.error_at_hint(unwrap_tok(n.tok),
+                                   "関数の外では 'result' を書けません",
+                                   "ここでは result を使えません")
+                return self.ty_int()
+            cff: rc[types.FuncSig] = cf
+            ret: rc[ast.Type] = unwrap_type(cff.ret)
+            if ret.kind == ast.TY_NONE:
+                diag.error_full(unwrap_tok(n.tok),
+                                "戻り値の無い関数では 'result' を書けません",
+                                "この関数は値を返しません", None, "",
+                                "戻り値を見ない ensures（グローバルの条件など）に" +
+                                "するか、戻り型を付けてください")
+            n.kind = ast.ND_RESULT   # ★ 箱は作らない（返す値をそのまま使う）
+            n.type = ret
+            return ret
+
         # ★ 変数に無ければ **関数を探す**（関数の名前を値にする）
         #   ⚠️ 変数が先。同名の局所変数があればそちらが勝つ。
         if v is None:
@@ -1427,6 +1490,49 @@ class Sema:
 
     # ── 文の検査 ────────────────────────────────────────────
 
+    # ── 範囲型（部分型）の検査を挿す（A-28）────────────────
+    #
+    # ★ 「入れるとき」だけ確かめる（Ada と同じ）。途中の計算は基底型（int）で
+    #   行うので、`p * 2` のたびに止まることはない。
+    #
+    # ★ 定数なら**コンパイル時に**断る。それ以外は ND_RANGECHK で包み、
+    #   codegen が比較 2 つを出す。
+    #
+    # ⚠️ 仮引数はここでは包まない。呼び出し側は 5 通りあるので、関数の入口で
+    #   1 回だけ確かめる（codegen の gen_func）。
+    #   対になる定義: src/sema.c の range_coerce
+    def range_coerce(mut self, val: rc[ast.Node] | None,
+                     want: rc[ast.Type]) -> rc[ast.Node] | None:
+        if val is None:
+            return None
+        if not ast.ty_is_range(want):
+            return val
+        v: rc[ast.Node] = val
+        vt: rc[ast.Type] | None = v.type
+        if vt is not None:
+            vtt: rc[ast.Type] = vt
+            # 同じ部分型なら確かめ済み（名前で見る。C 版はポインタ比較）
+            if ast.ty_is_range(vtt) and vtt.name == want.name:
+                return val
+
+        # ★ 定数はコンパイル時に決まる
+        if v.kind == ast.ND_INT:
+            if v.ival < want.lo or v.ival > want.hi:
+                diag.error_full(unwrap_tok(v.tok),
+                                str(v.ival) + " は '" + want.name +
+                                "' の範囲（" + str(want.lo) + ".." +
+                                str(want.hi) + "）の外です",
+                                "この値はこの型に入りません", None, "",
+                                "'" + want.name + "' に入れられるのは " +
+                                str(want.lo) + " から " + str(want.hi) +
+                                " までです")
+            return val
+
+        chk: rc[ast.Node] = ast.new_node(ast.ND_RANGECHK, v.tok)
+        chk.lhs = v
+        chk.type = want
+        return chk
+
     def check_vardecl(mut self, n: mut rc[ast.Node]) -> None:
         # ① 型注釈を解決する（型注釈が無いのは for の脱糖）
         declared: rc[ast.Type] | None = None
@@ -1481,6 +1587,9 @@ class Sema:
                             "変数 '" + n.name + "' は '" +
                             ast.type_name(want) + "' 型として宣言されています",
                             self.no_implicit_hint(actual, want))
+
+        # ★ 範囲型なら、入れる前に確かめる（A-28）
+        n.rhs = self.range_coerce(n.rhs, want)
 
         # ④ スコープに登録する（★ 初期化式を検査した「後」に）
         v: rc[types.VarEntry] = self.declare(n.name, want, n.tok)
@@ -1553,6 +1662,7 @@ class Sema:
                                 target.tok,
                                 "この要素は '" + ast.type_name(et) + "' 型です",
                                 self.no_implicit_hint(av, et))
+            n.rhs = self.range_coerce(n.rhs, et)   # A-28
             n.type = et
             return
 
@@ -1577,6 +1687,7 @@ class Sema:
                                 "型が一致しません",
                                 "型 '" + ast.type_name(av2) + "' の式",
                                 rel, rel_label, self.no_implicit_hint(av2, ft))
+            n.rhs = self.range_coerce(n.rhs, ft)   # A-28
             n.type = ft
             return
 
@@ -1606,6 +1717,8 @@ class Sema:
                             "変数 '" + v.name + "' は '" +
                             ast.type_name(declared2) + "' 型として宣言されています",
                             self.no_implicit_hint(actual2, declared2))
+
+        n.rhs = self.range_coerce(n.rhs, declared2)   # A-28
 
         # ★ 代入したら絞り込みは解除する（15.5 節）
         v.type = declared2
@@ -1765,6 +1878,23 @@ class Sema:
             self.scope_depth = self.scope_depth - 1
             # ⚠️ 検査は**型検査のあと**。can_fail は検査中に付くため。
             self.scope_escape(n.body, 0, 0)
+        elif n.kind == ast.ND_REQUIRES or n.kind == ast.ND_ENSURES:
+            # ★ 契約（A-29）。置ける場所は関数の本体の先頭だけ（check_func が見る）。
+            #   ここでは「bool か」と、ensures の中の 'result' を見る。
+            if n.kind == ast.ND_ENSURES:
+                self.ensures_depth = self.ensures_depth + 1
+            ct: rc[ast.Type] = self.check_expr(unwrap_node(n.lhs))
+            if n.kind == ast.ND_ENSURES:
+                self.ensures_depth = self.ensures_depth - 1
+            if ct.kind != ast.TY_BOOL:
+                kw: str = "ensures"
+                if n.kind == ast.ND_REQUIRES:
+                    kw = "requires"
+                diag.error_full(unwrap_tok(unwrap_node(n.lhs).tok),
+                                kw + " には bool の式を書きます",
+                                "これは '" + ast.type_name(ct) + "' 型です",
+                                None, "",
+                                "比べる式を書いてください（例: requires b != 0）")
         elif n.kind == ast.ND_RETURN:
             self.check_return(n)
         elif n.kind == ast.ND_PASS:
@@ -2095,7 +2225,7 @@ class Sema:
 
     # ── リテラル・添字 ──────────────────────────────────────
 
-    def check_list_lit(mut self, n: rc[ast.Node]) -> rc[ast.Type]:
+    def check_list_lit(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
         want: rc[ast.Type] | None = self.expected   # ★ 使う前に控える
 
         if n.body is None:
@@ -2128,8 +2258,13 @@ class Sema:
                 if ast.type_assignable(first, welem):
                     et = welem
 
+        # ★ 範囲型なら、要素も入れる前に確かめる（A-28）。
+        #   ⚠️ 並びの途中を差し替えるので、1 つ前を覚えながら進む。
+        n.body = self.range_coerce(n.body, et)
+        prev: rc[ast.Node] = unwrap_node(n.body)
+
         i: int = 2
-        el: rc[ast.Node] | None = first_node.next
+        el: rc[ast.Node] | None = prev.next
         while el is not None:
             e: rc[ast.Node] = el
             self.expected = et
@@ -2142,8 +2277,17 @@ class Sema:
                                 first_node.tok,
                                 "最初の要素は '" + ast.type_name(et) + "' 型です",
                                 "リストの要素はすべて同じ型でなければなりません")
+            # ★ A-28：差し替えたら、次の周回のために繋ぎ直す
+            #   ⚠️ 同じノードかどうかは**種別**で見ます（この言語には
+            #     参照の同一性を比べる書き方がありません）。包んだときだけ
+            #     ND_RANGECHK に変わります。
+            co: rc[ast.Node] = unwrap_node(self.range_coerce(e, et))
+            if co.kind == ast.ND_RANGECHK and e.kind != ast.ND_RANGECHK:
+                co.next = e.next
+                prev.next = co
+            prev = co
             i = i + 1
-            el = e.next
+            el = co.next
         self.expected = None
         return ast.type_list(et)
 
@@ -2659,6 +2803,7 @@ class Sema:
                                 ast.type_name(at) + "' を追加できません",
                                 "これは '" + ast.type_name(at) + "' 型です",
                                 None, "", self.no_implicit_hint(at, elem))
+            n.args = self.range_coerce(n.args, elem)   # A-28
             return self.ty_none()
 
         diag.error_full(unwrap_tok(n.tok),
@@ -3067,7 +3212,7 @@ class Sema:
             vi = vn.next
         n.type = rt
 
-    def check_return(mut self, n: rc[ast.Node]) -> None:
+    def check_return(mut self, n: mut rc[ast.Node]) -> None:
         fn: rc[types.FuncSig] = unwrap_sig(self.cur_func)
         want: rc[ast.Type] = unwrap_type(fn.ret)
 
@@ -3099,6 +3244,7 @@ class Sema:
                             "関数 '" + fn.name + "' の戻り型は '" +
                             ast.type_name(want) + "' です",
                             self.no_implicit_hint(got, want))
+        n.lhs = self.range_coerce(n.lhs, want)   # A-28
 
     # この while から抜ける break があるか
     #
@@ -3337,9 +3483,57 @@ class Sema:
 
     # ── 未初期化フィールドの検査 ──────────────────────
     #
-    # ⚠️ 構文的な検査です。init のどこかに self.f = ... があるかを見るだけで、
-    #    実行されるかまでは見ません。だからランタイム検査も残します。
-    def assigns_field(self, n: rc[ast.Node] | None, fname: str) -> bool:
+    # ★ **どの経路でも代入するか**を見ます（A-27。0.18.0）。
+    #   それまでは「init のどこかに self.f = ... と書いてあるか」だけを
+    #   見ていたので、`if` の中にしか代入が無い形がすり抜けていました。
+    #   Ada / SPARK の definite assignment にあたる検査です。
+    #   対になる定義: src/sema.c の definitely_assigns
+    #
+    # ⚠️ ランタイム検査（pl_check_not_none）は**残します**。ここで見られるのは
+    #   init の中だけだからです（代入の**前に**読む形は残ります）。
+
+    # この文（部分木）のどこかに return があるか。
+    #
+    # ⚠️ panic() / exit() は数えません。**戻らない**ので、そこから
+    #   オブジェクトが観測されることがないためです。
+    def contains_return(self, n: rc[ast.Node] | None) -> bool:
+        if n is None:
+            return False
+        node: rc[ast.Node] = n
+        if node.kind == ast.ND_RETURN:
+            return True
+        if self.contains_return(node.lhs):
+            return True
+        if self.contains_return(node.rhs):
+            return True
+        if self.contains_return(node.els):
+            return True
+        if self.contains_return(node.incr):
+            return True
+        st: rc[ast.Node] | None = node.body
+        while st is not None:
+            sn: rc[ast.Node] = st
+            if self.contains_return(sn):
+                return True
+            st = sn.next
+        return False
+
+    # 文の並びが「どの経路でも必ず self.<fname> に代入する」か。
+    #
+    # ⚠️ 途中に return がありうる文を見つけたら打ち切ります
+    #   （代入せずに出ていく経路があるということなので）。
+    def definitely_assigns(self, first: rc[ast.Node] | None, fname: str) -> bool:
+        st: rc[ast.Node] | None = first
+        while st is not None:
+            sn: rc[ast.Node] = st
+            if self.definitely_assigns_stmt(sn, fname):
+                return True
+            if self.contains_return(sn):
+                return False
+            st = sn.next
+        return False
+
+    def definitely_assigns_stmt(self, n: rc[ast.Node] | None, fname: str) -> bool:
         if n is None:
             return False
         node: rc[ast.Node] = n
@@ -3351,20 +3545,34 @@ class Sema:
                 if (obj.kind == ast.ND_VAR and obj.name == "self" and
                         lhs.name == fname):
                     return True
+            return False
 
-        if self.assigns_field(node.lhs, fname):
+        if node.kind == ast.ND_BLOCK:
+            return self.definitely_assigns(node.body, fname)
+
+        # ★ else が無ければ「条件が偽のときに素通りする」経路が残ります
+        if node.kind == ast.ND_IF:
+            if node.els is None:
+                return False
+            if not self.definitely_assigns_stmt(node.body, fname):
+                return False
+            return self.definitely_assigns_stmt(node.els, fname)
+
+        # ⚠️ ループは 0 回かもしれません（保守的に「代入しない」と見ます）
+        if node.kind == ast.ND_WHILE:
+            return False
+
+        if node.kind == ast.ND_TRY:
+            if not self.definitely_assigns_stmt(node.body, fname):
+                return False
+            ex: rc[ast.Node] | None = node.els
+            while ex is not None:
+                exx: rc[ast.Node] = ex
+                if not self.definitely_assigns_stmt(exx.body, fname):
+                    return False
+                ex = exx.next
             return True
-        if self.assigns_field(node.rhs, fname):
-            return True
-        if self.assigns_field(node.els, fname):
-            return True
-        if self.assigns_field(node.incr, fname):
-            return True
-        st: rc[ast.Node] | None = node.body
-        while st is not None:
-            if self.assigns_field(st, fname):
-                return True
-            st = st.next
+
         return False
 
     def find_init(self, c: rc[ast.Class]) -> rc[ast.Node] | None:
@@ -3388,7 +3596,8 @@ class Sema:
             if ft.kind == ast.TY_CLASS:
                 assigned: bool = False
                 if init is not None:
-                    assigned = self.assigns_field(init.body, fld.name)
+                    ini: rc[ast.Node] = init
+                    assigned = self.definitely_assigns_stmt(ini.body, fld.name)
                 if not assigned:
                     rel: rc[token.Token] | None = c.tok
                     rel_label: str = "このクラスには init がありません"
@@ -3843,6 +4052,9 @@ class Sema:
                             ast.type_name(declared) + "' 型として宣言されています",
                             "")
 
+        # ★ グローバルは定数だけなので、ここはコンパイル時の判定になる（A-28）
+        n.rhs = self.range_coerce(n.rhs, declared)
+
         # グローバルの IR 名は @g.<モジュール>.<名前>
         v: rc[types.VarEntry] = rc(types.VarEntry(n.name, n.tok))
         v.ir_name = "@g." + self.cur_mod().name + "." + n.name
@@ -3875,6 +4087,30 @@ class Sema:
             pm = p.next
 
         body: rc[ast.Node] = unwrap_node(n.body)
+
+        # ★ 契約は**本体の先頭**にしか置けない（A-29）。
+        #   requires は入口で、ensures は出口で確かめるので、途中に書けると
+        #   「書いた場所と確かめる場所が違う」ことになり、読む人が誤解する。
+        #   対になる定義: src/sema.c の check_func
+        seen_other: bool = False
+        cs: rc[ast.Node] | None = body.body
+        while cs is not None:
+            cn: rc[ast.Node] = cs
+            is_contract: bool = (cn.kind == ast.ND_REQUIRES or
+                                 cn.kind == ast.ND_ENSURES)
+            if is_contract and seen_other:
+                kw2: str = "ensures"
+                if cn.kind == ast.ND_REQUIRES:
+                    kw2 = "requires"
+                diag.error_full(unwrap_tok(cn.tok),
+                                kw2 + " は関数の本体の先頭に書きます",
+                                "ここには書けません", None, "",
+                                "requires / ensures は def の直後に並べてください" +
+                                "（入口と出口で確かめるものだからです）")
+            if not is_contract:
+                seen_other = True
+            cs = cn.next
+
         self.check_stmt_list(body.body)
         self.scope_pop()
 
@@ -3915,7 +4151,46 @@ class Sema:
                                  "main の中で try で捕まえるか、panic で終わらせてください")
 
     # モジュール 1 つぶんの宣言を登録する（パス 1a / 1b / 1c）
+    # 範囲型を登録する（パス 1 の最初。A-28）
+    #
+    # ★ **クラスより先に**登録する。クラスのフィールドやメソッドの型注釈に
+    #   範囲型を書けるようにするため。
+    #   対になる定義: src/sema.c の declare_range
+    def declare_range(mut self, n: mut rc[ast.Node]) -> None:
+        if self.type_from_name(n.name) is not None:
+            diag.error_at_hint(unwrap_tok(n.tok),
+                               "'" + n.name + "' は組み込みの型名です",
+                               "この名前は使えません")
+        old_r: rc[types.RangeTy] | None = self.lookup_range(n.name)
+        if old_r is not None:
+            oldr: rc[types.RangeTy] = old_r
+            diag.error_full(unwrap_tok(n.tok),
+                            "型 '" + n.name + "' はすでに定義されています",
+                            "同じ名前の範囲型が 2 つあります",
+                            oldr.tok, "最初の定義はここです", "")
+        if self.lookup_class(n.name) is not None:
+            diag.error_at_hint(unwrap_tok(n.tok),
+                               "クラスと同じ名前の範囲型は作れません",
+                               "'" + n.name + "' はクラス名として使われています")
+
+        lo: rc[ast.Node] = unwrap_node(n.lhs)
+        hi: rc[ast.Node] = unwrap_node(n.rhs)
+        ty: rc[ast.Type] = ast.type_range(n.name, lo.ival, hi.ival)
+        r: rc[types.RangeTy] = rc(types.RangeTy(n.name, ty, n.tok))
+        ms: rc[types.ModuleSyms] = self.cur_syms()
+        r.next = ms.ranges
+        ms.ranges = r
+        n.type = ty
+
     def declare_module(mut self, root: mut rc[ast.Node]) -> None:
+        # ★ 範囲型を最初に登録する（クラスのフィールドにも書けるように）
+        dr: rc[ast.Node] | None = root.body
+        while dr is not None:
+            nr: rc[ast.Node] = dr
+            if nr.kind == ast.ND_RANGEDECL:
+                self.declare_range(nr)
+            dr = nr.next
+
         # ★ インタフェースを最初に登録する（クラスが実装を宣言するため）
         di: rc[ast.Node] | None = root.body
         while di is not None:

@@ -1,0 +1,13 @@
+# OUTPUT: 5
+# EXIT: 0
+# A-29: 契約（事前条件・事後条件）。Ada の Pre / Post にあたります。
+#   ★ requires は関数の入口で、ensures は return のたびに確かめます。
+#   ★ 'result' は ensures の中でだけ使える名前で、**戻り値そのもの**です。
+def divide(a: int, b: int) -> int:
+    requires b != 0
+    ensures result >= 0
+    return a // b
+
+def main() -> int:
+    print(str(divide(10, 2)))
+    return 0

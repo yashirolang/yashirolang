@@ -12,7 +12,8 @@
 def first[T](xs: list[T], default: own T) -> T:
     if len(xs) == 0:
         return default
-    return xs[0]
+    # ★ xs は借用なので、要素を**複製して**返します（A-24 で既定がエラーに）
+    return copy(xs[0])
 
 def count_if[T](xs: list[T], pred: fn(T) -> bool) -> int:
     n: int = 0

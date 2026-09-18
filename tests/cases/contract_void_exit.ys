@@ -1,0 +1,15 @@
+# EXIT: 1
+# A-29: **出口は return だけではありません。** 値を返さない関数が
+#   最後まで落ちてきたときにも ensures を確かめます。
+#   ⚠️ ここを忘れると、return を書かない関数だけ事後条件がすり抜けます。
+g: int = 0
+
+def bump(k: int) -> None:
+    requires k > 0
+    ensures g > 100
+    g = g + k
+
+def main() -> int:
+    bump(1)
+    print(str(g))
+    return 0

@@ -1,0 +1,18 @@
+# ERROR: error[E-BORROW-3]: 借用した値 'a.name' をリストに保存できません
+# ERROR: 保存すると、貸してくれた相手より長生きしてしまいます
+# 🔒 A-26: list リテラルの要素は「リストへの移動」です。
+#   ⚠️ append は最初から止めていましたが、**リテラルだけ素通り**でした。
+#     直し方は append と同じで、copy(...) を入れます。
+class Item:
+    name: str
+
+    def init(self, name: own str) -> None:
+        self.name = name
+
+def take(a: Item) -> int:
+    names: list[str] = [a.name]
+    return len(names[0])
+
+def main() -> int:
+    it: Item = Item("pen")
+    return take(it)

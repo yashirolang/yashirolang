@@ -1,0 +1,19 @@
+# OUTPUT: 50
+# OUTPUT: 100
+# OUTPUT: 25
+# EXIT: 0
+# A-28: 範囲型（部分型）。Ada の `range 0 .. 100` にあたります。
+#   ★ 書くのは**宣言の 1 行だけ**です。使うときの注釈は今までと同じ。
+#   ★ 途中の計算は基底型（int）で行います（Ada と同じ）。
+type Percent = int range(0, 100)
+
+def half(p: Percent) -> int:
+    return p // 2
+
+def main() -> int:
+    a: Percent = 50
+    print(str(a))
+    b: int = a * 2          # ★ 計算の結果は int
+    print(str(b))
+    print(str(half(a)))
+    return 0

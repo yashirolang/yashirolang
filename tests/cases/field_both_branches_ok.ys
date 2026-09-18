@@ -1,0 +1,22 @@
+# OUTPUT: 2
+# EXIT: 0
+# A-27: **どちらの経路でも**代入していれば通ります（else が要ります）。
+class Inner:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+class Outer:
+    inner: Inner
+
+    def init(self, ok: bool) -> None:
+        if ok:
+            self.inner = Inner(1)
+        else:
+            self.inner = Inner(2)
+
+def main() -> int:
+    o: Outer = Outer(False)
+    print(o.inner.v)
+    return 0

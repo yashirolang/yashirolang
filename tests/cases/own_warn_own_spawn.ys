@@ -1,0 +1,15 @@
+# FLAGS: --warn-own
+# ERROR: error[E-MOVE-1]: 移動済みの値 'a' を使っています
+# A-24/A-25: **--warn-own でも、spawn を使ったファイルは警告に落としません。**
+#   所有権の指摘を警告にすると「データ競合が無い」という保証も一緒に
+#   警告どまりになるためです（E-SEND-* は借りか・所有か・rc かの判定に
+#   乗っています）。逃げ道は要りますが、並行実行のところだけは通しません。
+def work(xs: list[int]) -> int:
+    return len(xs)
+
+def main() -> int:
+    a: list[int] = [1, 2]
+    b: list[int] = a
+    t: Thread[int] = spawn(work, b)
+    print(len(a))
+    return t.join()

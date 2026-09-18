@@ -1,0 +1,11 @@
+# STDIN: -40
+# OUTPUT: -40
+# EXIT: 0
+# A-28: 下端は負でもかまいません（温度のような値のため）。
+type Celsius = int range(-273, 1000)
+
+def main() -> int:
+    n: int = int(input())
+    t: Celsius = n
+    print(str(t))
+    return 0

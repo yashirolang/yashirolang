@@ -263,6 +263,24 @@ static void dump(Node *n, int depth) {
         case ND_PRAGMA:
             printf("(pragma %s)\n", n->name);
             break;
+        // ★ 範囲型（A-28）。dump は 2 実装で 1 文字も違ってはいけません。
+        case ND_RANGEDECL:
+            printf("(rangedecl %s %lld %lld)\n", n->name, n->lhs->ival,
+                   n->rhs->ival);
+            break;
+        // ★ 契約（A-29）。dump は 2 実装で 1 文字も違ってはいけません。
+        case ND_REQUIRES:
+            printf("(requires\n");
+            dump(n->lhs, depth + 1);
+            for (int i = 0; i < depth; i++) printf("  ");
+            printf(")\n");
+            break;
+        case ND_ENSURES:
+            printf("(ensures\n");
+            dump(n->lhs, depth + 1);
+            for (int i = 0; i < depth; i++) printf("  ");
+            printf(")\n");
+            break;
         case ND_SCOPE:
             printf("(scope\n");
             dump(n->body, depth + 1);

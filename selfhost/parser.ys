@@ -760,6 +760,91 @@ class Parser:
     # ── 文 ──────────────────────────────────────────────────
 
     # var_decl ::= IDENT ":" type "=" expr
+    # 範囲の端（整数のリテラル。先頭の '-' を許す）
+    #
+    # ⚠️ **式ではない。** 端は「コンパイル時に決まっている 2 つの数」で
+    #   なければならないので、足し算も名前も受け取らない。
+    #   対になる定義: src/parser.c の int_literal
+    # `requires` / `ensures` の次に来たら「契約ではない」と決める記号
+    #
+    # ⚠️ C 版 src/parser.c の stmt と**同じ並び**にすること。
+    def contract_stop(self, t: rc[token.Token]) -> bool:
+        if t.kind == token.TK_NEWLINE:
+            return True
+        return (t.is_punct("=") or t.is_punct("+=") or t.is_punct("-=") or
+                t.is_punct("*=") or t.is_punct("//=") or t.is_punct("%=") or
+                t.is_punct(":") or t.is_punct(".") or t.is_punct("(") or
+                t.is_punct("[") or t.is_punct(","))
+
+    def int_literal(mut self, what: str) -> rc[ast.Node]:
+        t: rc[token.Token] = self.peek()
+        neg: bool = False
+        if t.is_punct("-"):
+            self.advance()
+            neg = True
+            t = self.peek()
+        if t.kind != token.TK_INT:
+            self.fail_full(t, "ここには整数のリテラルが必要です", what,
+                           "範囲の端はコンパイル時に決まっている必要があります" +
+                           "（例: type Percent = int range(0, 100)）")
+        self.advance()
+        v: int = t.ival
+        if neg:
+            v = -v
+        return ast.new_int_node(t, v)
+
+    # 範囲型（部分型）の宣言。A-28。
+    #
+    #   type Percent = int range(0, 100)
+    #
+    # ★ 'type' も 'range' も **予約語にしていない**（'fn' と同じ扱い）。
+    #   トップレベルで「IDENT 'type' の次が IDENT で、その次が '='」のときだけ
+    #   この規則に入る。`type: int = 0` のようなグローバル変数や、
+    #   `type` という名前のフィールドは今までどおり書ける
+    #   （この処理系自身の ast.Node.type がまさにそれ）。
+    #   対になる定義: src/parser.c の range_decl
+    def range_decl(mut self) -> rc[ast.Node]:
+        self.advance()                                # "type"
+        name_tok: rc[token.Token] = self.advance()    # 部分型の名前
+        self.advance()                                # "="
+
+        base: rc[token.Token] = self.type_name_token(
+            "範囲型の基底は int です（例: int range(0, 100)）")
+        if base.text != "int":
+            self.fail_hint(base, "いま範囲を付けられるのは int だけです",
+                           "'" + base.text + "' には範囲を付けられません")
+
+        rw: rc[token.Token] = self.peek()
+        if rw.kind != token.TK_IDENT or rw.text != "range":
+            self.fail_full(rw, "範囲型には range(下端, 上端) が必要です",
+                           "ここに range(...) を書いてください",
+                           "書き方は type Percent = int range(0, 100) です" +
+                           "（両端を含みます）")
+        self.advance()                                # "range"
+        open_tok: rc[token.Token] = self.peek()
+        if self.consume("(") is None:
+            self.fail_hint(open_tok, "range の後には '(' が必要です",
+                           "ここに '(' を書いてください")
+
+        lo: rc[ast.Node] = self.int_literal("下端には整数のリテラルを書いてください")
+        if self.consume(",") is None:
+            self.fail_hint(self.peek(),
+                           "下端と上端はカンマで区切ります（例: range(0, 100)）",
+                           "ここに ',' が必要です")
+        hi: rc[ast.Node] = self.int_literal("上端には整数のリテラルを書いてください")
+        self.expect_close(")", open_tok)
+
+        if lo.ival > hi.ival:
+            self.fail_hint(name_tok, "下端は上端以下でなければなりません",
+                           "range(" + str(lo.ival) + ", " + str(hi.ival) +
+                           ") は空の範囲です")
+
+        n: rc[ast.Node] = ast.new_node(ast.ND_RANGEDECL, name_tok)
+        n.name = copy(name_tok.text)
+        n.lhs = lo
+        n.rhs = hi
+        return n
+
     def var_decl(mut self) -> rc[ast.Node]:
         name_tok: rc[token.Token] = self.advance()   # IDENT（呼び出し元が確認済み）
         self.advance()                           # ":"
@@ -1405,6 +1490,28 @@ class Parser:
                 sn: rc[ast.Node] = ast.new_node(ast.ND_SCOPE, t)
                 sn.body = self.block()
                 return sn
+
+        # ── 契約（事前条件・事後条件。A-29）──
+        #
+        #   requires b != 0          ← 関数の入口で確かめる
+        #   ensures result >= 0      ← return のたびに確かめる
+        #
+        # ★ **予約語にはしない**（`scope` と同じ「柔らかい予約語」の扱い）。
+        #   区別は**次のトークン**で付ける：代入・修飾・呼び出し・添字の記号が
+        #   続くなら、今までどおりの文（`requires = 3` など）。
+        #   対になる定義: src/parser.c の stmt
+        if t.kind == token.TK_IDENT:
+            if t.text == "requires" or t.text == "ensures":
+                nx: rc[token.Token] = self.peek_at(1)
+                if not self.contract_stop(nx):
+                    self.advance()
+                    k: int = ast.ND_ENSURES
+                    if t.text == "requires":
+                        k = ast.ND_REQUIRES
+                    cn: rc[ast.Node] = ast.new_node(k, t)
+                    cn.lhs = self.expr()
+                    self.expect_newline()
+                    return cn
 
         # 対応する if が無い elif / else
         if t.is_kw("elif") or t.is_kw("else"):
@@ -2070,6 +2177,19 @@ class Parser:
                 ex: rc[ast.Node] = self.extern_def()
                 cur.next = ex
                 cur = ex
+                continue
+
+            # 範囲型 ::= "type" IDENT "=" int range "(" INT "," INT ")" NEWLINE
+            #
+            # ⚠️ **3 つ先まで見てから決める。** 'type' は予約語ではないので、
+            #    `type: int = 0`（グローバル変数）と区別が要る。
+            if (t.kind == token.TK_IDENT and t.text == "type" and
+                    self.peek_at(1).kind == token.TK_IDENT and
+                    self.peek_at(2).is_punct("=")):
+                rd: rc[ast.Node] = self.range_decl()
+                cur.next = rd
+                cur = rd
+                self.expect_newline()
                 continue
 
             # グローバル変数 ::= IDENT ":" type "=" expr NEWLINE

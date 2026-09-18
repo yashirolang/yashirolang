@@ -1,0 +1,14 @@
+# STDIN: 30
+# OUTPUT: 60
+# EXIT: 0
+# A-28: list の要素も入れ先です（リテラルも append も確かめます）。
+#   ⚠️ ここを外すと `xs: list[Percent] = []` に何でも入れられて、
+#     型で言った意味がなくなります。
+type Percent = int range(0, 100)
+
+def main() -> int:
+    n: int = int(input())
+    xs: list[Percent] = [n]
+    xs.append(n)
+    print(str(xs[0] + xs[1]))
+    return 0

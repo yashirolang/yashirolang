@@ -1,0 +1,15 @@
+# STDIN: 3
+# OUTPUT: 3
+# EXIT: 0
+# IR: icmp slt i64
+# IR: icmp sgt i64
+# IR: call void @pl_range_fail
+# A-28: **構造で**見張ります。出るのは比較 2 つと分岐 1 つだけで、
+#   外れの経路は cold です（速さの番人。時間では測りません）。
+type Digit = int range(0, 9)
+
+def main() -> int:
+    n: int = int(input())
+    d: Digit = n
+    print(str(d))
+    return 0

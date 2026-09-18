@@ -38,7 +38,7 @@ class Options:
     keep_ll: bool
     no_ovf: bool     # --no-overflow-check
     drop: bool       # --drop / --no-drop（解放を挿入する。後勝ち）
-    # ★ 所有権検査の指摘をエラーに上げるか（C 版 src/main.c と対）
+    # ★ 所有権検査の指摘をエラーにするか（既定 True。C 版 src/main.c と対）
     deny_move: bool
     deny_borrow: bool
     deny_mut: bool
@@ -55,10 +55,11 @@ class Options:
         self.no_ovf = False
         # ★ 解放（drop）は**既定で入れる**（A-21 ⑬。逃げ道は --no-drop）
         self.drop = True
-        self.deny_move = False
-        self.deny_borrow = False
-        self.deny_mut = False
-        self.deny_store_borrow = False
+        # ★ 所有権の検査は**既定でエラー**（A-24。逃げ道は --warn-own）
+        self.deny_move = True
+        self.deny_borrow = True
+        self.deny_mut = True
+        self.deny_store_borrow = True
         self.jobs = 0
         self.inc = []
 
@@ -85,6 +86,9 @@ def usage(status: int) -> None:
     print("  --dump-ast      AST を S 式で表示して終了（構文解析のデバッグ用）")
     print("  --keep-ll       実行ファイル生成後も .ll を残す")
     print("  --check         型検査までで止める（エラーが無ければ何も出さない）")
+    print("  --warn-own      所有権の指摘を警告に落とす（既定はエラー）")
+    print("  --deny-move / --deny-borrow / --deny-mut / --deny-store-borrow")
+    print("                  検査ごとにエラーへ戻す（既定。--warn-own の後に書く）")
     print("  --drop          スコープの出口に解放（drop）を挿入する（既定）")
     print("  --no-drop       解放を挿入しない（--drop を打ち消す。後勝ち）")
     print("  --no-overflow-check")
@@ -155,6 +159,13 @@ def parse_args(args: list[str]) -> Options:
         #   いるので、そこに --no-drop を付けます。
         elif a == "--drop":
             o.drop = True
+        # ★ 所有権の検査を警告に落とす逃げ道。**後に書いたほうが勝ち**。
+        #   --warn-own --deny-move なら「移動だけエラー」に戻せます。
+        elif a == "--warn-own":
+            o.deny_move = False
+            o.deny_borrow = False
+            o.deny_mut = False
+            o.deny_store_borrow = False
         elif a == "--deny-move":
             o.deny_move = True
         elif a == "--deny-borrow":
@@ -333,7 +344,7 @@ def main() -> int:
 
     # ── ④ 所有権の検査 ──
     #
-    # ★ 既定は警告です（--deny-* でエラーに上げられます）。ただし解放は
+    # ★ 既定はエラーです（--warn-own で警告に落とせます）。解放も
     #   既定で挿すので、ここで立つ印（binds_borrow / moved_out）に
     #   codegen が従います。
     #   対になる定義: src/main.c の ownck_program 呼び出し

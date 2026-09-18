@@ -104,6 +104,10 @@ class Emitter:
 
     triple: str
 
+    # ── 契約（A-29）──
+    fn_node: rc[ast.Node] | None   # 生成中の関数（ensures の式を引く）
+    ret_val: str                   # いま返そうとしている値（'result'）
+
     # ── エラー処理 ──
     fn_raises: bool          # 生成中の関数が raises を宣言しているか
     fn_ret: rc[ast.Type] | None  # 生成中の関数の戻り型（失敗時の既定値に使う）
@@ -186,6 +190,7 @@ class Emitter:
         self.triple = copy(triple)
         # ──
         self.fn_raises = False
+        self.ret_val = ""
         self.err_slot_done = False
         self.err_type_emitted = False
         self.prop_used = False
@@ -636,6 +641,15 @@ class Emitter:
     #   しました（**呼び出し側は結果を使わないと分かっている**場所だけです）。
 
     def gen_expr(mut self, n: rc[ast.Node]) -> str:
+        # ★ ensures の中の 'result'（A-29）。いま返そうとしている値
+        if n.kind == ast.ND_RESULT:
+            return copy(self.ret_val)
+
+        # ★ 範囲型の検査（A-28）。意味解析が入れたノード
+        if n.kind == ast.ND_RANGECHK:
+            v: str = self.gen_expr(node_of(n.lhs))
+            return self.gen_range_check(type_of(n), v)
+
         if n.kind == ast.ND_INT:
             # 整数リテラルは命令を出す必要すらない（即値をそのまま書ける）
             return str(n.ival)
@@ -1128,7 +1142,11 @@ class Emitter:
         el: rc[ast.Node] | None = n.body
         while el is not None:
             e: rc[ast.Node] = el
-            v: str = self.elem_to_slot(elem, self.gen_expr(e))
+            # ⚠️ **maybe_retain が要ります。** 場所から読んだ rc[T] をリストに
+            #    入れると参照が 1 つ増えます。増やさずに入れると、リストの
+            #    解放だけが効いて早すぎる解放になります（A-26）。
+            #    対になる定義: src/codegen.c の gen_list_lit
+            v: str = self.elem_to_slot(elem, self.maybe_retain(e, self.gen_expr(e)))
             self.emit("  call void @" + push + "(ptr " + l + ", " + sty + " " +
                       v + ")\n")
             el = e.next
@@ -1220,7 +1238,9 @@ class Emitter:
             self.emit_cond_br(c, keep_l, next_l)
             self.emit_label(keep_l)
 
-        val: str = self.elem_to_slot(elem, self.gen_expr(node_of(n.lhs)))
+        # ⚠️ リテラルと同じ理由で retain が要ります（A-26）。
+        val: str = self.elem_to_slot(elem, self.maybe_retain(node_of(n.lhs),
+                                                             self.gen_expr(node_of(n.lhs))))
         lst2: str = self.new_tmp()
         self.emit("  " + lst2 + " = load ptr, ptr " + res.ir_name + "\n")
         self.emit("  call void @" + push + "(ptr " + lst2 + ", " + sty + " " +
@@ -1328,6 +1348,97 @@ class Emitter:
         return val
 
     # 旗を見てその場で分岐する形（添字の外の算術は全部こちら）。
+    # ── 範囲型（部分型。A-28）の検査 ──────────────────────
+    #
+    # ★ 出すのは **比較 2 つと分岐 1 つ**だけ。外れの経路は cold なので、
+    #   インライン化の見積りにもほとんど載らない（規約 R13）。
+    #   対になる定義: src/codegen.c の gen_range_check
+    def gen_range_check(mut self, rt: rc[ast.Type], val: str) -> str:
+        self.declare_rt("void @pl_range_fail(ptr, i64, i64, i64) noreturn cold")
+
+        lo_c: str = self.new_tmp()
+        self.emit("  " + lo_c + " = icmp slt i64 " + val + ", " +
+                  str(rt.lo) + "\n")
+        hi_c: str = self.new_tmp()
+        self.emit("  " + hi_c + " = icmp sgt i64 " + val + ", " +
+                  str(rt.hi) + "\n")
+        bad: str = self.new_tmp()
+        self.emit("  " + bad + " = or i1 " + lo_c + ", " + hi_c + "\n")
+
+        id_: int = self.label_counter    # ★ 番号は最初に 1 回だけ確保する
+        self.label_counter = self.label_counter + 1
+        ok_l: str = "rng.ok." + str(id_)
+        bad_l: str = "rng.bad." + str(id_)
+        self.emit_cond_br(bad, bad_l, ok_l)
+
+        self.emit_label(bad_l)
+        nm: str = self.intern_str(rt.name)
+        self.emit("  call void @pl_range_fail(ptr " + nm + ", i64 " + val +
+                  ", i64 " + str(rt.lo) + ", i64 " + str(rt.hi) + ")\n")
+        self.emit("  unreachable\n")
+        self.terminated = True
+
+        self.emit_label(ok_l)
+        return copy(val)
+
+    # ── 契約（事前条件・事後条件。A-29）の検査 ──────────────
+    #
+    # ★ 出るのは **条件の式と分岐 1 つ**だけ（assert と同じ形）。
+    # ⚠️ メッセージは**コンパイル時に組み立てて**大域定数に置く。
+    #   対になる定義: src/codegen.c の gen_contract_check
+    def gen_contract_check(mut self, c: rc[ast.Node], fname: str) -> None:
+        self.declare_rt("void @pl_contract_fail(ptr) noreturn cold")
+
+        cond: str = self.gen_expr(node_of(c.lhs))
+
+        id_: int = self.label_counter
+        self.label_counter = self.label_counter + 1
+        ok_l: str = "ct.ok." + str(id_)
+        bad_l: str = "ct.bad." + str(id_)
+        self.emit_cond_br(cond, ok_l, bad_l)
+
+        self.emit_label(bad_l)
+        kw: str = "ensures"
+        if c.kind == ast.ND_REQUIRES:
+            kw = "requires"
+        line: int = 0
+        ct: rc[token.Token] | None = c.tok
+        if ct is not None:
+            line = ct.line
+        msg: str = kw + " of " + fname + " (line " + str(line) + ")"
+        lab: str = self.intern_str(msg)
+        self.emit("  call void @pl_contract_fail(ptr " + lab + ")\n")
+        self.emit("  unreachable\n")
+        self.terminated = True
+
+        self.emit_label(ok_l)
+
+    # return のたびに ensures を確かめる（A-29）。
+    #
+    # ★ val は「いま返そうとしている値」（ensures の中の 'result'）。
+    #   値を返さない関数では空文字列。
+    def gen_ensures(mut self, val: str) -> None:
+        fnn: rc[ast.Node] | None = self.fn_node
+        if fnn is None:
+            return
+        f: rc[ast.Node] = fnn
+        if f.body is None:
+            return
+        saved: str = copy(self.ret_val)
+        self.ret_val = copy(val)
+        name: str = copy(f.name)
+        st: rc[ast.Node] | None = node_of(f.body).body
+        while st is not None:
+            sn: rc[ast.Node] = st
+            # ⚠️ 契約は本体の先頭に並んでいる（sema が保証）。
+            if sn.kind != ast.ND_REQUIRES and sn.kind != ast.ND_ENSURES:
+                st = None
+            else:
+                if sn.kind == ast.ND_ENSURES:
+                    self.gen_contract_check(sn, name)
+                st = sn.next
+        self.ret_val = saved
+
     def gen_checked_arith(mut self, intr: str, l: str, r: str, op: int) -> str:
         self.declare_rt("void @pl_overflow_fail(i64) noreturn cold")
         val: str = self.gen_arith_ovf(intr, l, r)
@@ -3147,8 +3258,14 @@ class Emitter:
             self.gen_while(n)
             return ""
 
+        # ★ 契約（A-29）は入口と出口で出す。並びの位置では何も出さない。
+        if n.kind == ast.ND_REQUIRES or n.kind == ast.ND_ENSURES:
+            return ""
+
         if n.kind == ast.ND_RETURN:
             if n.lhs is None:
+                # ★ 値を返さない関数でも ensures は確かめる（A-29）
+                self.gen_ensures("")
                 # ⚠️ 解放は ret の**直前**に出す（抜けるスコープを全部）
                 self.emit_drops_until(None)
                 self.emit("  ret void\n")      # 規約 R9
@@ -3157,6 +3274,9 @@ class Emitter:
                 # ⚠️ rc[T] を返すときは参照を 1 つ増やす（呼び出し側のぶん）。
                 #   （対になる定義: src/codegen.c の ND_RETURN の maybe_retain）
                 v2: str = self.maybe_retain(val, self.gen_expr(val))
+                # ★ 契約（A-29）：**解放の前に**確かめる。
+                #   ⚠️ 順序が逆だと、ensures の式が解放済みの値を読む。
+                self.gen_ensures(v2)
                 # ⚠️ 返す値を**先に**作ってから解放する（解放してから読めない）
                 self.emit_drops_until(None)
                 self.emit("  ret " + self.llvm_type(type_of(val)) + " " + v2 +
@@ -3453,6 +3573,35 @@ class Emitter:
             self.gen_store(type_of(p), "%" + p.name + ".arg", p.ir_name)
             pm = p.next
 
+        # ★ 範囲型の仮引数は、**関数の入口で 1 回だけ**確かめる（A-28）。
+        #
+        # 🤔 なぜ呼び出し側ではないのか
+        #   呼び出しの経路は 5 通り（ふつうの呼び出し・メソッド・生成・
+        #   関数ポインタ越し・spawn）あり、どれか 1 つ書き忘れると
+        #   **そこだけ検査が外れる**。入口なら 1 か所で全部を守れる。
+        #   対になる定義: src/codegen.c の gen_func
+        pr: rc[ast.Node] | None = n.params
+        while pr is not None:
+            pp: rc[ast.Node] = pr
+            if ast.ty_is_range(pp.type):
+                pv: str = self.new_tmp()
+                self.emit("  " + pv + " = load i64, ptr " + pp.ir_name + "\n")
+                self.gen_range_check(type_of(pp), pv)
+            pr = pp.next
+
+        # ★ 契約（A-29）：requires は**関数の入口**で確かめる。
+        #   ⚠️ 範囲型の引数の検査（A-28）より後（まず型、次に契約）。
+        self.fn_node = n
+        cst: rc[ast.Node] | None = node_of(n.body).body
+        while cst is not None:
+            cn2: rc[ast.Node] = cst
+            if cn2.kind != ast.ND_REQUIRES and cn2.kind != ast.ND_ENSURES:
+                cst = None
+            else:
+                if cn2.kind == ast.ND_REQUIRES:
+                    self.gen_contract_check(cn2, n.name)
+                cst = cn2.next
+
         # ② ローカル変数の alloca
         self.collect_allocas(n.body)
 
@@ -3486,6 +3635,11 @@ class Emitter:
 
         # ④ 終端されていなければ終端する（規約 R6）
         if not self.terminated:
+            # ★ 契約（A-29）：**最後まで落ちてくる出口**でも ensures を確かめる。
+            #   ⚠️ 忘れると、return を書かない None の関数だけ事後条件が
+            #     すり抜ける（出口は return だけではない）。
+            if type_of(n).kind == ast.TY_NONE:
+                self.gen_ensures("")
             # ★ 関数の出口。引数のスコープ（own で受け取ったもの）を解放します。
             #   ⚠️ これが無いと `def init(self, s: own str)` の s が漏れます。
             if self.drop:

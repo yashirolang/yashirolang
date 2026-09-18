@@ -38,7 +38,8 @@
 余分な引数は `{{pm}} build` からコンパイラへそのまま渡ります。
 
 ```bash
-{{pm}} build -O2 --deny-move --deny-borrow --deny-mut
+{{pm}} build -O2                 # 所有権の検査は既定でエラーです（0.18.0〜）
+{{pm}} build --warn-own          # 古い依存を通したいときだけ
 ```
 
 `{{pm}} update` に名前を渡すと、**間接の依存でも**上げられます。そのとき

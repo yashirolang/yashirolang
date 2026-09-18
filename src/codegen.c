@@ -75,6 +75,10 @@ typedef struct {
     struct StrLit *decled;
     int str_counter;
 
+    // ── 契約（A-29）──
+    Node *fn_node;          // 生成中の関数（ensures の式を引くのに使う）
+    const char *ret_val;    // いま返そうとしている値（ensures の 'result'）
+
     // ── モジュール ──
     Node *ast;             // 今生成しているモジュールの AST
     struct StrLit *types;  // 型定義を出済みのクラス（重複排除）
@@ -546,6 +550,8 @@ static char *gen_field(Emitter *e, Node *n);
 static char *gen_checked_arith(Emitter *e, const char *intr, const char *l,
                                const char *r, int op);
 static char *gen_checked_fdiv(Emitter *e, const char *l, const char *r);
+static char *gen_range_check(Emitter *e, Type *rt, char *val);
+static void gen_ensures(Emitter *e, const char *val);
 static const char *ovf_intr(OpKind op);
 
 static char *gen_expr(Emitter *e, Node *n) {
@@ -555,6 +561,15 @@ static char *gen_expr(Emitter *e, Node *n) {
             //   double を経由しないので、C 版とセルフホスト版で 1 バイトも
             //   ずれません（tests/selfhost.sh の IR 比較が効きます）。
             return n->sval;
+
+        // ★ ensures の中の 'result'（A-29）。**いま返そうとしている値**です。
+        //   ⚠️ 箱は作りません（所有型の戻り値で解放の釣り合いが崩れるため）。
+        case ND_RESULT:
+            return (char *)e->ret_val;
+
+        // ★ 範囲型の検査（A-28）。意味解析が入れたノードです。
+        case ND_RANGECHK:
+            return gen_range_check(e, n->type, gen_expr(e, n->lhs));
 
         case ND_INT: {
             // 整数リテラルは命令を出す必要すらありません。
@@ -1078,7 +1093,11 @@ static char *gen_list_lit(Emitter *e, Node *n) {
     declare_rt(e, sb_str(&sig));
 
     for (Node *el = n->body; el; el = el->next) {
-        char *v = elem_to_slot(e, elem, gen_expr(e, el));
+        // ⚠️ **maybe_retain が要ります。** 場所（変数・フィールド・添字）から
+        //    読んだ rc[T] をリストに入れると、**参照が 1 つ増えます**。
+        //    増やさずに入れると、リストの解放だけが効いて早すぎる解放に
+        //    なります（A-26。append は最初からこうしていました）。
+        char *v = elem_to_slot(e, elem, maybe_retain(e, el, gen_expr(e, el)));
         sb_printf(&e->fn, "  call void @%s(ptr %s, %s %s)\n", push, l, sty, v);
     }
     return l;
@@ -1177,7 +1196,8 @@ static char *gen_listcomp(Emitter *e, Node *n) {
         emit_label(e, keep_l);
     }
 
-    char *val = elem_to_slot(e, elem, gen_expr(e, n->lhs));
+    // ⚠️ リテラルと同じ理由で retain が要ります（A-26）。
+    char *val = elem_to_slot(e, elem, maybe_retain(e, n->lhs, gen_expr(e, n->lhs)));
     char *lst2 = new_tmp(e);
     sb_printf(&e->fn, "  %s = load ptr, ptr %s\n", lst2, res->ir_name);
     sb_printf(&e->fn, "  call void @%s(ptr %s, %s %s)\n", push, lst2, sty, val);
@@ -1370,6 +1390,97 @@ static char *gen_arith_ovf(Emitter *e, const char *intr, const char *l,
 
 // 旗を見てその場で分岐する形（添字の外の算術は全部こちら）。
 // op は pl_overflow_fail に渡す番号です（0:+ 1:- 2:* 3:単項-）。
+// ── 範囲型（部分型。A-28）の検査 ──────────────────────
+//
+// ★ 出すのは **比較 2 つと分岐 1 つ**だけです。外れの経路は cold なので、
+//   インライン化の見積りにもほとんど載りません（規約 R13。A-6 と同じ形）。
+//
+//   %lo = icmp slt i64 %v, <下端>
+//   %hi = icmp sgt i64 %v, <上端>
+//   %bad = or i1 %lo, %hi
+//   br i1 %bad, label %rng.bad.N, label %rng.ok.N
+//
+// ⚠️ 値はそのまま返します。範囲型の表現は int のままなので、
+//   変換も詰め替えも要りません（Ada の部分型と同じ考え方）。
+static char *gen_range_check(Emitter *e, Type *rt, char *val) {
+    declare_rt(e, "void @pl_range_fail(ptr, i64, i64, i64) noreturn cold");
+
+    char *lo_c = new_tmp(e);
+    sb_printf(&e->fn, "  %s = icmp slt i64 %s, %lld\n", lo_c, val, rt->lo);
+    char *hi_c = new_tmp(e);
+    sb_printf(&e->fn, "  %s = icmp sgt i64 %s, %lld\n", hi_c, val, rt->hi);
+    char *bad = new_tmp(e);
+    sb_printf(&e->fn, "  %s = or i1 %s, %s\n", bad, lo_c, hi_c);
+
+    int id = e->label_counter++;  // ★ 番号は最初に 1 回だけ確保する
+    char ok_l[32], bad_l[32];
+    snprintf(ok_l, sizeof(ok_l), "rng.ok.%d", id);
+    snprintf(bad_l, sizeof(bad_l), "rng.bad.%d", id);
+    emit_cond_br(e, bad, bad_l, ok_l);
+
+    emit_label(e, bad_l);
+    char *nm = intern_str(e, rt->name, (int)strlen(rt->name));
+    sb_printf(&e->fn,
+              "  call void @pl_range_fail(ptr %s, i64 %s, i64 %lld, i64 %lld)\n",
+              nm, val, rt->lo, rt->hi);
+    sb_printf(&e->fn, "  unreachable\n");
+    e->terminated = true;
+
+    emit_label(e, ok_l);
+    return val;
+}
+
+// ── 契約（事前条件・事後条件。A-29）の検査 ──────────────
+//
+// ★ 出るのは **条件の式と分岐 1 つ**だけです（assert と同じ形）。
+//   外れの経路は cold なので、インライン化の見積りにはほとんど載りません。
+//
+// ⚠️ メッセージは**コンパイル時に組み立てて**大域定数に置きます。
+//   実行時に数を文字列にする手間を、外れの経路にも置かないためです。
+static void gen_contract_check(Emitter *e, Node *c, const char *fname) {
+    declare_rt(e, "void @pl_contract_fail(ptr) noreturn cold");
+
+    char *cond = gen_expr(e, c->lhs);
+
+    int id = e->label_counter++;
+    char ok_l[32], bad_l[32];
+    snprintf(ok_l, sizeof(ok_l), "ct.ok.%d", id);
+    snprintf(bad_l, sizeof(bad_l), "ct.bad.%d", id);
+    emit_cond_br(e, cond, ok_l, bad_l);
+
+    emit_label(e, bad_l);
+    StrBuf msg;
+    sb_init(&msg);
+    sb_printf(&msg, "%s of %s (line %d)",
+              c->kind == ND_REQUIRES ? "requires" : "ensures", fname,
+              c->tok ? c->tok->line : 0);
+    const char *m = sb_str(&msg);
+    char *lab = intern_str(e, m, (int)strlen(m));
+    sb_printf(&e->fn, "  call void @pl_contract_fail(ptr %s)\n", lab);
+    sb_printf(&e->fn, "  unreachable\n");
+    e->terminated = true;
+
+    emit_label(e, ok_l);
+}
+
+// return のたびに ensures を確かめる（A-29）。
+//
+// ★ val は「いま返そうとしている値」です（ensures の中の 'result'）。
+//   値を返さない関数では NULL を渡します。
+static void gen_ensures(Emitter *e, const char *val) {
+    if (!e->fn_node || !e->fn_node->body) return;
+    const char *saved = e->ret_val;
+    e->ret_val = val;
+    for (Node *st = e->fn_node->body->body; st; st = st->next) {
+        // ⚠️ 契約は本体の先頭に並んでいます（sema が保証）。
+        //   先頭以外に出てきたら、そこで止めます。
+        if (st->kind != ND_REQUIRES && st->kind != ND_ENSURES) break;
+        if (st->kind == ND_ENSURES)
+            gen_contract_check(e, st, e->fn_node->name);
+    }
+    e->ret_val = saved;
+}
+
 static char *gen_checked_arith(Emitter *e, const char *intr, const char *l,
                                const char *r, int op) {
     declare_rt(e, "void @pl_overflow_fail(i64) noreturn cold");
@@ -3727,6 +3838,8 @@ static char *gen_stmt(Emitter *e, Node *n) {
         }
         case ND_RETURN: {
             if (!n->lhs) {
+                // ★ 値を返さない関数でも ensures は確かめます（A-29）
+                gen_ensures(e, NULL);
                 emit_drops_until(e, NULL);  // 抜けるスコープを全部解放
                 sb_printf(&e->fn, "  ret void\n");  // 規約 R9
             } else {
@@ -3734,6 +3847,9 @@ static char *gen_stmt(Emitter *e, Node *n) {
                 //   なっているので、この後の解放は何もしません（設計 §6.1）。
                 //   ⚠️ rc[T] を返すときは参照を 1 つ増やします（呼び出し側のぶん）。
                 char *v = maybe_retain(e, n->lhs, gen_expr(e, n->lhs));
+                // ★ 契約（A-29）：**解放の前に**確かめます。
+                //   ⚠️ 順序が逆だと、ensures の式が解放済みの値を読みます。
+                gen_ensures(e, v);
                 emit_drops_until(e, NULL);
                 sb_printf(&e->fn, "  ret %s %s\n", llvm_type(n->lhs->type), v);
             }
@@ -3741,6 +3857,11 @@ static char *gen_stmt(Emitter *e, Node *n) {
             return NULL;
         }
         case ND_PASS: return NULL;  // 本当に何も出さない
+
+        // ★ 契約（A-29）は入口と出口で出します。並びの位置では何も出しません。
+        case ND_REQUIRES:
+        case ND_ENSURES:
+            return NULL;
 
         // 飛び先は sema が保証している（ループの外なら検査で弾かれる）
         // ★ ループから抜ける経路でも、抜けるスコープぶんだけ解放します。
@@ -3934,6 +4055,28 @@ static void gen_func(Emitter *e, Node *n) {
         gen_store(e, pm->type, sb_str(&arg), pm->ir_name);
     }
 
+    // ★ 範囲型の仮引数は、**関数の入口で 1 回だけ**確かめます（A-28）。
+    //
+    // 🤔 なぜ呼び出し側ではないのか
+    //   呼び出しの経路は 5 通り（ふつうの呼び出し・メソッド・生成・
+    //   関数ポインタ越し・spawn）あり、どれか 1 つ書き忘れると
+    //   **そこだけ検査が外れます**。入口なら 1 か所で全部を守れます。
+    for (Node *pm = n->params; pm; pm = pm->next)
+        if (ty_is_range(pm->type)) {
+            char *v = new_tmp(e);
+            sb_printf(&e->fn, "  %s = load i64, ptr %s\n", v, pm->ir_name);
+            gen_range_check(e, pm->type, v);
+        }
+
+    // ★ 契約（A-29）：requires は**関数の入口**で確かめます。
+    //   ⚠️ 範囲型の引数の検査（A-28）より後です。引数が範囲型なら、
+    //     まず「その型に入るか」、次に「契約を満たすか」の順になります。
+    e->fn_node = n;
+    for (Node *st = n->body->body; st; st = st->next) {
+        if (st->kind != ND_REQUIRES && st->kind != ND_ENSURES) break;
+        if (st->kind == ND_REQUIRES) gen_contract_check(e, st, n->name);
+    }
+
     // ② ローカル変数の alloca
     collect_allocas(e, n->body);
 
@@ -3961,6 +4104,10 @@ static void gen_func(Emitter *e, Node *n) {
 
     // ④ 終端されていなければ終端する（規約 R6）
     if (!e->terminated) {
+        // ★ 契約（A-29）：**最後まで落ちてくる出口**でも ensures を確かめます。
+        //   ⚠️ ここを忘れると、`return` を書かない None の関数だけ
+        //     事後条件がすり抜けます（出口は return だけではありません）。
+        if (n->type->kind == TY_NONE) gen_ensures(e, NULL);
         if (e->drop) emit_scope_drops(e, &params);
         if (n->type->kind == TY_NONE) {
             sb_printf(&e->fn, "  ret void\n");  // 規約 R9

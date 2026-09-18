@@ -1,0 +1,7 @@
+# ERROR: error: 500 は 'Percent' の範囲（0..100）の外です
+# A-28: リテラルの中の定数も、コンパイル時に断ります。
+type Percent = int range(0, 100)
+
+def main() -> int:
+    xs: list[Percent] = [10, 500, 20]
+    return xs[0]

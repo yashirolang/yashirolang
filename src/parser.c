@@ -1725,6 +1725,31 @@ static Node *stmt(Parser *p) {
         return n;
     }
 
+    // ── 契約（事前条件・事後条件。A-29）──
+    //
+    //   requires b != 0          ← 関数の入口で確かめる
+    //   ensures result >= 0      ← return のたびに確かめる
+    //
+    // ★ **予約語にはしません**（`scope` と同じ「柔らかい予約語」の扱い）。
+    //   `requires` も `ensures` も普通の名前として使えるままにします。
+    //   区別は**次のトークン**で付けます：代入・修飾・呼び出し・添字の記号が
+    //   続くなら、今までどおりの文（`requires = 3` など）です。
+    if (t->kind == TK_IDENT &&
+        (strcmp(t->text, "requires") == 0 || strcmp(t->text, "ensures") == 0) &&
+        !tok_is(peek_at(p, 1), "=") && !tok_is(peek_at(p, 1), "+=") &&
+        !tok_is(peek_at(p, 1), "-=") && !tok_is(peek_at(p, 1), "*=") &&
+        !tok_is(peek_at(p, 1), "//=") && !tok_is(peek_at(p, 1), "%=") &&
+        !tok_is(peek_at(p, 1), ":") && !tok_is(peek_at(p, 1), ".") &&
+        !tok_is(peek_at(p, 1), "(") && !tok_is(peek_at(p, 1), "[") &&
+        !tok_is(peek_at(p, 1), ",") && peek_at(p, 1)->kind != TK_NEWLINE) {
+        Token *kw = advance(p);
+        bool is_req = strcmp(kw->text, "requires") == 0;
+        Node *n = new_node(is_req ? ND_REQUIRES : ND_ENSURES, kw);
+        n->lhs = expr(p);
+        expect_newline(p);
+        return n;
+    }
+
     // ── unsafe: ブロック ──
     //
     // ★ 中でだけ生ポインタを触れます（仕様 §10.1）。
@@ -2389,6 +2414,84 @@ static Node *import_stmt(Parser *p) {
     return n;
 }
 
+// 範囲の端（整数のリテラル。先頭の '-' を許す）。
+//
+// ⚠️ **式ではありません。** 端は「コンパイル時に決まっている 2 つの数」で
+//   なければならないので、ここでは足し算も名前も受け取りません。
+static Node *int_literal(Parser *p, const char *what) {
+    Token *t = peek(p);
+    bool neg = false;
+    if (tok_is(t, "-")) {
+        advance(p);
+        neg = true;
+        t = peek(p);
+    }
+    if (t->kind != TK_INT) {
+        Diag d = {0};
+        d.message = "ここには整数のリテラルが必要です";
+        d.primary.tok = t;
+        d.primary.label = what;
+        d.hint = "範囲の端はコンパイル時に決まっている必要があります"
+                 "（例: type Percent = int range(0, 100)）";
+        diag_fail(&d);
+    }
+    advance(p);
+    return new_int_node(t, neg ? -t->ival : t->ival);
+}
+
+// 範囲型（部分型）の宣言。A-28。
+//
+//   type Percent = int range(0, 100)
+//
+// ★ 'type' も 'range' も **予約語にしていません**（'fn' と同じ扱い）。
+//   トップレベルで「IDENT 'type' の次が IDENT で、その次が '='」のときだけ
+//   この規則に入ります。`type: int = 0` のようなグローバル変数や、
+//   `type` という名前のフィールドは今までどおり書けます
+//   （selfhost/ast{{ext}} の Node.type がまさにそれです）。
+static Node *range_decl(Parser *p) {
+    advance(p);                      // "type"（呼び出し元が確認済み）
+    Token *name_tok = advance(p);    // 部分型の名前
+    advance(p);                      // "="
+
+    // 基底の型。いまは int だけです。
+    Token *base = type_name_token(p, "範囲型の基底は int です（例: int range(0, 100)）");
+    if (strcmp(base->text, "int") != 0)
+        error_at_hint(base, "いま範囲を付けられるのは int だけです",
+                      "'%s' には範囲を付けられません", base->text);
+
+    Token *rw = peek(p);
+    if (rw->kind != TK_IDENT || strcmp(rw->text, "range") != 0) {
+        Diag d = {0};
+        d.message = "範囲型には range(下端, 上端) が必要です";
+        d.primary.tok = rw;
+        d.primary.label = "ここに range(...) を書いてください";
+        d.hint = "書き方は type Percent = int range(0, 100) です（両端を含みます）";
+        diag_fail(&d);
+    }
+    advance(p);                      // "range"
+    Token *open = peek(p);
+    if (!consume(p, "("))
+        error_at_hint(open, "range の後には '(' が必要です",
+                      "ここに '(' を書いてください");
+
+    Node *lo = int_literal(p, "下端には整数のリテラルを書いてください");
+    if (!consume(p, ","))
+        error_at_hint(peek(p), "下端と上端はカンマで区切ります（例: range(0, 100)）",
+                      "ここに ',' が必要です");
+    Node *hi = int_literal(p, "上端には整数のリテラルを書いてください");
+    expect_close(p, ")", open);
+
+    if (lo->ival > hi->ival)
+        error_at_hint(name_tok, "下端は上端以下でなければなりません",
+                      "range(%lld, %lld) は空の範囲です", lo->ival, hi->ival);
+
+    Node *n = new_node(ND_RANGEDECL, name_tok);
+    n->name = name_tok->text;
+    n->lhs = lo;
+    n->rhs = hi;
+    return n;
+}
+
 static Node *program(Parser *p) {
     // ★ 「ダミーの先頭ノード」を使うと、リスト構築が分岐なしで書けます。
     //   head.next が最初の要素になり、「空かどうか」の場合分けが消えます。
@@ -2447,6 +2550,18 @@ static Node *program(Parser *p) {
         // ★ pragma はトップレベルに書く「設定」です（実行文ではない）
         if (tok_is_kw(t, "pragma")) {
             cur->next = stmt(p);
+            cur = cur->next;
+            expect_newline(p);
+            continue;
+        }
+
+        // 範囲型 ::= "type" IDENT "=" int range "(" INT "," INT ")" NEWLINE
+        //
+        // ⚠️ **3 つ先まで見てから決めます。** 'type' は予約語ではないので、
+        //    `type: int = 0`（グローバル変数）と区別が要ります。
+        if (t->kind == TK_IDENT && strcmp(t->text, "type") == 0 &&
+            peek_at(p, 1)->kind == TK_IDENT && tok_is(peek_at(p, 2), "=")) {
+            cur->next = range_decl(p);
             cur = cur->next;
             expect_newline(p);
             continue;

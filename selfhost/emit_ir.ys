@@ -72,7 +72,10 @@ def main() -> int:
             print("; ── module: " + mm.name + " ──")
         name: str = ""
         if mm.name == entry.name:
-            name = main_ir
+            # ★ copy が要ります。代入は移動なので、ループの 2 周目には
+            #   main_ir が空になります（入口は 1 つだけなので実際には
+            #   1 回しか通りませんが、それは検査には分かりません）。
+            name = copy(main_ir)
         io.print_raw(codegen.codegen(mm, name, triple, no_ovf, drop))
         m = mm.next
     return 0

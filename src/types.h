@@ -79,6 +79,15 @@ struct Type {
     struct Class *cls;  // 定義への参照。★ 型の同一性はこのポインタで判定する
     struct Iface *iface;  // TY_IFACE のときの定義への参照
 
+    // ── 範囲型（部分型。A-28）──
+    //
+    // ★ **kind は TY_INT のままです。** 表現も i64 のままで、変わるのは
+    //   「入れるときに範囲を確かめる」ことだけです（Ada の部分型と同じ考え）。
+    //   ⚠️ 別の kind にすると、codegen と型検査にある `kind == TY_INT` の
+    //     判定を全部書き換えることになり、**書き忘れた場所が静かに壊れます**。
+    //     名前が付いているかどうか（name != NULL）で見分けます。
+    long long lo, hi;   // name != NULL のときだけ意味を持つ（両端を含む）
+
     // ──
     // この型の「T | None」版（1 個だけ作ってここに覚えておく）
     Type *opt;
@@ -148,6 +157,14 @@ Type *type_strip_opt(Type *t);
 // ★ ここが type_equal と分かれました。
 //   T → T | None は許し、T | None → T は許しません（一方向）。
 bool type_assignable(Type *from, Type *to);
+
+// 範囲型（部分型）を作る。`type Percent = int range(0, 100)` の Percent。
+//
+// ★ kind は TY_INT です。名前と両端だけを足した int だと思ってください。
+Type *type_range(char *name, long long lo, long long hi);
+
+// 範囲型か（名前の付いた int か）
+bool ty_is_range(Type *t);
 
 // クラスの型を作る。
 // ★ list[T] と違い、クラス定義ごとに 1 個だけ作ります

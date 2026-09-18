@@ -1,0 +1,16 @@
+# STDIN: 120
+# EXIT: 1
+# A-29 + A-28: 範囲型の引数と契約は**両方**効きます。
+#   ★ 順序は「まず型（範囲）、次に契約」です。120 は Percent に入らないので、
+#     requires に届く前に範囲の検査で止まります。
+type Percent = int range(0, 100)
+
+def scale(p: Percent) -> int:
+    requires p > 0
+    ensures result >= 0
+    return p * 2
+
+def main() -> int:
+    n: int = int(input())
+    print(str(scale(n)))
+    return 0

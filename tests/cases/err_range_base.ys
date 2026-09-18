@@ -1,0 +1,7 @@
+# ERROR: error: 'str' には範囲を付けられません
+# ERROR: いま範囲を付けられるのは int だけです
+# A-28: いま範囲を付けられるのは int だけです（float は丸めの話が別に要ります）。
+type Bad = str range(0, 10)
+
+def main() -> int:
+    return 0

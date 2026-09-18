@@ -111,11 +111,16 @@ static void usage(int status) {
             "  --dump-ast      AST を S 式で表示して終了（構文解析のデバッグ用）\n"
             "  --keep-ll       実行ファイル生成後も .ll を残す\n"
             "  --check         型検査までで止める（エラーが無ければ何も出さない）\n"
-            "  --deny-move     移動済みの値の使用を警告ではなくエラーにする\n"
-            "  --deny-borrow   借用した値の保存・返却を警告ではなくエラーにする\n"
-            "  --deny-mut      読み取り専用の借用への書き換えを警告ではなくエラーにする\n"
+            "  --warn-own      所有権の指摘を警告に落とす（既定はエラー）\n"
+            "                  ⚠️ 0.17 以前の既定です。逃げ道であって、\n"
+            "                  これを付けたコードは安全性を保証しません\n"
+            "  --deny-move     移動済みの値の使用をエラーにする（既定）\n"
+            "  --deny-borrow   借用した値の保存・返却をエラーにする（既定）\n"
+            "  --deny-mut      読み取り専用の借用への書き換えをエラーにする（既定）\n"
             "  --deny-store-borrow\n"
-            "                  借りものを所有スロットへ入れる箇所をエラーにする\n"
+            "                  借りものを所有スロットへ入れる箇所をエラーにする（既定）\n"
+            "                  ★ --deny-* は --warn-own の後に書くと、\n"
+            "                  その検査だけエラーに戻せます（後勝ち）\n"
             "  --explain-mut   呼び出しで変更される実引数を一覧表示して終了\n"
             "  --drop          スコープの出口に解放（drop）を挿入する（既定）\n"
             "  --no-drop       解放を挿入しない（--drop を打ち消す。後勝ち）\n"
@@ -152,10 +157,11 @@ typedef struct {
     const char *opt_level;
     Stage stage;
     int keep_ll;
-    int deny_move;    // --deny-move
-    int deny_borrow;  // --deny-borrow
-    int deny_mut;     // --deny-mut
-    int deny_store_borrow;  // --deny-store-borrow（E-BORROW-7）
+    // ★ 所有権の検査は **既定でエラー**です（A-24）。--warn-own で警告に落とせます。
+    int deny_move;    // --deny-move   （既定 1）
+    int deny_borrow;  // --deny-borrow （既定 1）
+    int deny_mut;     // --deny-mut    （既定 1）
+    int deny_store_borrow;  // --deny-store-borrow（E-BORROW-7。既定 1）
     int drop;         // --drop（解放を挿入する）
     int no_ovf;       // --no-overflow-check（桁あふれの検査を出さない）
     const char *target;  // --target=<triple>（ベアメタル向け）
@@ -175,6 +181,13 @@ static Options parse_args(int argc, char **argv) {
     //   逃げ道は --no-drop です。所有権検査（ownck）が「借りもの」「移動済み」に
     //   印を付けているので、それに従って安全な場所にだけ解放を挿します。
     o.drop = 1;
+    // ★ 所有権の検査は**既定でエラー**です（A-24。決定 D12 を改めました）。
+    //   二重解放・解放後の使用が「警告どまり」では、Rust と同じ強さだとは
+    //   言えません。逃げ道は --warn-own です（§0 ③ の折衷はここで畳みました）。
+    o.deny_move = 1;
+    o.deny_borrow = 1;
+    o.deny_mut = 1;
+    o.deny_store_borrow = 1;
 
     for (int i = 1; i < argc; i++) {
         char *a = argv[i];
@@ -209,7 +222,18 @@ static Options parse_args(int argc, char **argv) {
         // ★ 型検査までで止める。stage1（セルフホスト版）と
         //   「エラーが出るか / 出ないか」を突き合わせるために使います。
         if (strcmp(a, "--check") == 0) { o.stage = STAGE_CHECK; continue; }
-        // ★ 所有権の検査（ownck）の結果をエラーに昇格させる。
+        // ★ 所有権の検査（ownck）を警告に落とす逃げ道。
+        //
+        // ⚠️ **後に書いたほうが勝ちます**（--drop / --no-drop と同じ規則）。
+        //   --warn-own --deny-move なら「移動だけエラー」に戻せるので、
+        //   古いコードを検査ごとに直していけます（決定 D12 の意図はこちら側へ）。
+        if (strcmp(a, "--warn-own") == 0) {
+            o.deny_move = 0;
+            o.deny_borrow = 0;
+            o.deny_mut = 0;
+            o.deny_store_borrow = 0;
+            continue;
+        }
         if (strcmp(a, "--deny-move") == 0) { o.deny_move = 1; continue; }
         if (strcmp(a, "--deny-borrow") == 0) { o.deny_borrow = 1; continue; }
         if (strcmp(a, "--deny-mut") == 0) { o.deny_mut = 1; continue; }

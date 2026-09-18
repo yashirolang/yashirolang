@@ -1,0 +1,8 @@
+# ERROR: error: 101 は 'Percent' の範囲（0..100）の外です
+# ERROR: この値はこの型に入りません
+# A-28: 定数は**コンパイル時に**断ります（実行時まで待つ理由がありません）。
+type Percent = int range(0, 100)
+
+def main() -> int:
+    a: Percent = 101
+    return a

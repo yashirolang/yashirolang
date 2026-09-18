@@ -1,0 +1,11 @@
+# STDIN: 300
+# EXIT: 1
+# A-28: append の要素も確かめます。
+type Percent = int range(0, 100)
+
+def main() -> int:
+    n: int = int(input())
+    xs: list[Percent] = []
+    xs.append(n)
+    print(str(xs[0]))
+    return 0

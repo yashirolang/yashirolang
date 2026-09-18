@@ -203,9 +203,20 @@ bool type_equal(Type *a, Type *b) {
     return true;
 }
 
+Type *type_range(char *name, long long lo, long long hi) {
+    Type *t = new_type(TY_INT);
+    t->name = name;
+    t->lo = lo;
+    t->hi = hi;
+    return t;
+}
+
+bool ty_is_range(Type *t) { return t && t->kind == TY_INT && t->name; }
+
 const char *type_name(Type *t) {
     switch (t->kind) {
-        case TY_INT: return "int";
+        // ★ 範囲型は名前で呼びます（'Percent' と出したい）
+        case TY_INT: return t->name ? t->name : "int";
         case TY_BOOL: return "bool";
         case TY_FLOAT: return "float";
         case TY_NONE: return "None";

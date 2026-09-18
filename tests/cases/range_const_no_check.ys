@@ -1,0 +1,11 @@
+# OUTPUT: 7
+# EXIT: 0
+# IR-NOT: pl_range_fail
+# A-28: **定数だけなら実行時の検査は出ません**（コンパイル時に済むため）。
+#   ★ 速さのための逃げ道を作らずに済むのは、こういう場所で払わないからです。
+type Small = int range(0, 9)
+
+def main() -> int:
+    a: Small = 7
+    print(str(a))
+    return 0

@@ -1,0 +1,14 @@
+# STDIN: 500
+# EXIT: 1
+# A-28: 仮引数は**関数の入口で 1 回だけ**確かめます。
+#   ★ 呼び出しの経路は 5 通り（ふつう・メソッド・生成・関数ポインタ・spawn）
+#     あるので、入口に置けば 1 か所で全部を守れます。
+type Percent = int range(0, 100)
+
+def use(p: Percent) -> int:
+    return p + 1
+
+def main() -> int:
+    n: int = int(input())
+    print(str(use(n)))
+    return 0

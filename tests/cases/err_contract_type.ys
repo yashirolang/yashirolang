@@ -1,0 +1,5 @@
+# ERROR: error: requires には bool の式を書きます
+# A-29: 契約は bool の式です（truthiness はありません）。
+def f(a: int) -> int:
+    requires a
+    return a

@@ -256,6 +256,53 @@ v1 の `str` は **C と同じ NUL 終端バイト列**です。
 
 `{ptr, len}` 方式（長さを持つ）への移行は、必要になった時点で改めて検討します。
 
+### 3.4.5 範囲型（部分型。A-28）
+
+`int` に名前と両端を付けた型を宣言できます（Ada の部分型にあたります）。
+
+```python
+type Percent = int range(0, 100)     # 両端を含む
+type Celsius = int range(-273, 1000) # 下端は負でもよい
+```
+
+- **型としては `int` と同じ**です（表現も `i64` のまま）。違うのは
+  「その型の場所に入れるときに両端の中にあるかを確かめる」ことだけです
+- 確かめる場所：変数の宣言・代入、フィールドへの代入、`list` の要素
+  （リテラル・`append`・添字への代入）、仮引数（**関数の入口で 1 回**）、`return`
+- **途中の計算は基底型（`int`）で行います**（`p * 2` は `int`）
+- 定数は**コンパイル時に**断ります。それ以外は実行時に確かめます
+- **検査を外すオプションはありません**
+- 端は整数のリテラルだけです（式は書けません）。空の範囲は書けません
+- いま範囲を付けられるのは `int` だけです
+
+⚠️ `type` も `range` も**予約語ではありません**。トップレベルで
+「`type` の次が名前で、その次が `=`」と並んだときだけこの規則になります。
+
+### 3.4.6 契約（事前条件・事後条件。A-29）
+
+関数の本体の**先頭**に、満たすべき条件を書けます（Ada の `Pre` / `Post`）。
+
+```python
+def divide(a: int, b: int) -> int:
+    requires b != 0          # 入口で確かめる
+    ensures result >= 0      # return のたびに確かめる
+    return a // b
+```
+
+- `requires` は**関数の入口**で、`ensures` は**`return` のたびに**確かめます
+- `ensures` の中では `result` が**戻り値そのもの**を指します
+  （⚠️ 特別なのは `ensures` の式の中だけで、`result` という名前の変数は今までどおり使えます）
+- 値を返さない関数では `result` を書けません
+- 式は `bool` でなければなりません（truthiness はありません）
+- 置けるのは**本体の先頭**だけです（順序は自由）
+- 破ると止まります：`contract violated: requires of divide (line 2)`
+- **検査を外すオプションはありません**
+- ⚠️ 引数が範囲型なら、**範囲の検査が先**です（まず型、次に契約）
+- ⚠️ `ensures` は `return` の**直前**に評価されます（Ada の `'Old` はありません）
+
+⚠️ `requires` も `ensures` も**予約語ではありません**。次のトークンが
+代入・修飾・呼び出し・添字の記号なら、今までどおりの文として読みます。
+
 ### 3.5 暗黙の型変換はしない
 
 `int` と `float` を混ぜた演算は**コンパイルエラー**です。明示的に変換します。
@@ -966,6 +1013,8 @@ print(1.0e-9)       # 1.0e-9
 | リスト添字範囲外 | `runtime error: index out of range: i (len=n)` |
 | `None` のフィールドアクセス | `runtime error: None has no field` |
 | メモリ確保失敗 | `runtime error: out of memory` |
+| 範囲型の範囲外（A-28） | `runtime error: value out of range: Percent accepts 0..100 but got 101` |
+| 契約違反（A-29） | `runtime error: contract violated: requires of divide (line 2)` |
 
 例外機構（`try`/`except`）は v1 では**採用しません**。回復不能エラーは即終了です。
 

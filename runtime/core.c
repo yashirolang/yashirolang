@@ -950,6 +950,48 @@ void pl_overflow_fail(long long op) {
     pl_panic("integer overflow in unary -");
 }
 
+// ── 範囲型（部分型。A-28）──
+//
+// ★ 範囲の外の値を入れようとしたときに呼ばれます。
+//   ⚠️ **戻りません**（IR は直後に unreachable を置きます）。
+//
+// 型の名前は大域定数として IR に 1 つ置かれ、そのポインタが渡ります。
+// 数は 3 つとも i64 です（メッセージの組み立てはこちら側の仕事）。
+void pl_range_fail(const char *name, long long v, long long lo, long long hi) {
+    // ★ snprintf は使いません（ベアメタルでも同じコードが動くように）。
+    char buf[256];
+    long long k = 0;
+    const char *head = "value out of range: ";
+    for (const char *q = head; *q && k < 200; q++) buf[k++] = *q;
+    for (const char *q = name; *q && k < 200; q++) buf[k++] = *q;
+    const char *mid = " accepts ";
+    for (const char *q = mid; *q && k < 220; q++) buf[k++] = *q;
+    k += pl_itoa(lo, buf + k);
+    buf[k++] = '.';
+    buf[k++] = '.';
+    k += pl_itoa(hi, buf + k);
+    const char *mid2 = " but got ";
+    for (const char *q = mid2; *q && k < 240; q++) buf[k++] = *q;
+    k += pl_itoa(v, buf + k);
+    buf[k] = '\0';
+    pl_panic(buf);
+}
+
+// ── 契約（事前条件・事後条件。A-29）──
+//
+// ★ メッセージはコンパイル時に組み立てて大域定数に置いてあります
+//   （"requires of divide (line 12)" のような文字列）。
+//   ⚠️ **戻りません**（IR は直後に unreachable を置きます）。
+void pl_contract_fail(const char *what) {
+    char buf[256];
+    long long k = 0;
+    const char *head = "contract violated: ";
+    for (const char *q = head; *q && k < 200; q++) buf[k++] = *q;
+    for (const char *q = what; *q && k < 250; q++) buf[k++] = *q;
+    buf[k] = '\0';
+    pl_panic(buf);
+}
+
 long long pl_mod(long long a, long long b) {
     if (b == 0) pl_panic("division by zero");
     // ★ こちらの答えは 0 で確定していますが、a % b の計算自体が

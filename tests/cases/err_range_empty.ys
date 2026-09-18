@@ -1,0 +1,7 @@
+# ERROR: error: range(5, 1) は空の範囲です
+# ERROR: 下端は上端以下でなければなりません
+# A-28: 空の範囲は書けません（何も入らない型になってしまいます）。
+type Bad = int range(5, 1)
+
+def main() -> int:
+    return 0

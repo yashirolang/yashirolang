@@ -1,0 +1,12 @@
+# ERROR: error: フィールド 'next' は init で代入されていません
+# 🔒 A-27: 代入の**前に**抜ける経路があっても止めます。
+#   ★ 文の並びを上から見て、代入より先に return がありうるところで打ち切ります。
+class N:
+    v: int
+    next: N
+
+    def init(self, ok: bool) -> None:
+        self.v = 1
+        if not ok:
+            return
+        self.next = N(True)

@@ -1,16 +1,23 @@
 # EXIT: 1
-# 型検査をすり抜けた未初期化フィールド（15.6 節の「ほぼ」の中身）。
-# init に self.next = ... が「書いてある」ので静的検査は通るが、
-# 条件が偽なら代入は実行されない。そこをランタイムが受け止める。
-class N:
+# 静的検査をすり抜けた未初期化フィールド（仕様 15.6 の「ほぼ」の中身）。
+#   ★ A-27 で「どの経路でも代入するか」を見るようになったので、
+#     `if` の中にしか代入が無い形は**コンパイル時に**止まります
+#     （err_field_partial_assign を参照）。
+#   ⚠️ **それでも残る形がこれです** — 代入は必ず実行されますが、
+#     その**前に読んでいます**。ここをランタイムが受け止めます。
+class Inner:
     v: int
-    next: N
 
-    def init(self, ok: bool) -> None:
-        self.v = 1
-        if ok:
-            self.next = self
+    def init(self, v: int) -> None:
+        self.v = v
+
+class Outer:
+    inner: Inner
+
+    def init(self) -> None:
+        print(self.inner.v)      # ★ 代入する前に読む
+        self.inner = Inner(1)
 
 def main() -> int:
-    a: N = N(False)
-    return a.next.v
+    o: Outer = Outer()
+    return o.inner.v

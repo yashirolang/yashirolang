@@ -87,11 +87,25 @@ struct FuncSig {
 // ★ 当初は「表が 1 本ずつ」でした。モジュールが増えると
 //   「モジュールごとに 1 本ずつ」になります。名前空間とはこれのことです。
 //   他のモジュールの中身は、必ず修飾（lexer.Token）を通してしか見えません。
+// 範囲型（部分型。A-28）の表。
+//
+// ★ クラスと同じ「モジュールごとの名前の表」です。型そのものは
+//   名前つきの int（types.c の type_range）なので、ここでは名前と
+//   Type * の対応だけを持ちます。
+typedef struct RangeTy RangeTy;
+struct RangeTy {
+    char *name;
+    Type *type;
+    Token *tok;     // 定義位置（「ここで定義されています」用）
+    RangeTy *next;
+};
+
 struct ModuleSyms {
     Module *mod;
     Iface *ifaces;     // インタフェース
     FuncSig *funcs;    // トップレベル関数とメソッド
     Class *classes;
+    RangeTy *ranges;   // 範囲型（type Percent = int range(0, 100)）
     Scope *globals;    // グローバル変数のスコープ
     ModuleSyms *next;
 };
@@ -118,6 +132,7 @@ typedef struct {
     FuncSig *cur_func; // 今どの関数を検査中か（return の検査に必要）
     Class *classes;    // クラス表（同上、モジュールごと）
     Iface *ifaces;     // インタフェース表（モジュールごと）
+    RangeTy *ranges;   // 範囲型の表（同上、モジュールごと）
     int next_slot;     // 次に振る vtable のスロット番号
 
     // ── モジュール ──
@@ -136,6 +151,13 @@ typedef struct {
     ErrTag *err_tags;   // エラー型 → ID
     int next_err_tag;   // 次に振る番号（1 から）
     struct TryCtx *cur_try;  // 今いる try 文（入れ子になるのでスタック）
+
+    // ── 契約（A-29）──
+    //
+    // ★ 'result' が「戻り値そのもの」を指すのは、**ensures の式の中だけ**です。
+    //   ここが 0 なら、result はただの変数名として扱われます
+    //   （この処理系自身が result という局所変数を何か所も使っています）。
+    int ensures_depth;
 
     // ── 低レベル ──
     int unsafe_depth;  // unsafe: の中にいる深さ（0 なら外）
@@ -233,12 +255,14 @@ static void enter_module(Sema *s, ModuleSyms *ms) {
         s->cur->funcs = s->funcs;
         s->cur->classes = s->classes;
         s->cur->ifaces = s->ifaces;
+        s->cur->ranges = s->ranges;
         s->cur->globals = s->scope;
     }
     s->cur = ms;
     s->funcs = ms->funcs;
     s->classes = ms->classes;
     s->ifaces = ms->ifaces;
+    s->ranges = ms->ranges;
     s->scope = ms->globals;
 }
 
@@ -311,6 +335,18 @@ static FuncSig *lookup_func_by_ir(Sema *s, const char *ir_name) {
 //   名前を "Token.show" にしてしまえば、関数表にそのまま載ります。
 //   '.' を含む名前は利用者が書ける識別子と絶対に衝突しません
 //   （脱糖が作る隠し変数 for.ix.0 と同じ手口）。
+static RangeTy *lookup_range_in(ModuleSyms *ms, const char *name) {
+    for (RangeTy *r = ms->ranges; r; r = r->next)
+        if (strcmp(r->name, name) == 0) return r;
+    return NULL;
+}
+
+static RangeTy *lookup_range(Sema *s, const char *name) {
+    for (RangeTy *r = s->ranges; r; r = r->next)
+        if (strcmp(r->name, name) == 0) return r;
+    return NULL;
+}
+
 static Class *lookup_class(Sema *s, const char *name) {
     for (Class *c = s->classes; c; c = c->next)
         if (strcmp(c->name, name) == 0) return c;
@@ -475,6 +511,44 @@ static Type *check_field(Sema *s, Node *n);
 // ★ 「名前から型への解決は sema の仕事」（判断 #47）が、
 //   複合型になっても同じ形で通用します。
 static Type *resolve_base_type(Sema *s, Node *tr);
+
+// ── 範囲型（部分型）の検査を挿す（A-28）────────────────
+//
+// ★ 「入れるとき」だけ確かめます（Ada と同じ）。途中の計算は基底型（int）で
+//   行うので、`p * 2` のたびに止まることはありません。
+//
+// ★ 定数なら**コンパイル時に**断ります。実行時まで待つ理由がありません。
+//   それ以外は ND_RANGECHK で包み、codegen が比較 2 つを出します。
+//
+// ⚠️ 仮引数は**ここでは包みません**。呼び出し側は 5 通りもあるので、
+//   関数の入口で 1 回だけ確かめます（codegen の gen_func）。そのほうが
+//   関数ポインタ越しの呼び出しや spawn も同じ 1 か所で守れます。
+static Node *range_coerce(Sema *s, Node *val, Type *want) {
+    (void)s;
+    if (!val || !ty_is_range(want)) return val;
+    if (val->type == want) return val;   // 同じ部分型なら確かめ済み
+
+    // ★ 定数はコンパイル時に決まります
+    if (val->kind == ND_INT) {
+        if (val->ival < want->lo || val->ival > want->hi) {
+            Diag d = {0};
+            d.message = diag_fmt("%lld は '%s' の範囲（%lld..%lld）の外です",
+                                 val->ival, want->name, want->lo, want->hi);
+            d.primary.tok = val->tok;
+            d.primary.label = "この値はこの型に入りません";
+            d.hint = diag_fmt("'%s' に入れられるのは %lld から %lld までです",
+                              want->name, want->lo, want->hi);
+            diag_fail(&d);
+        }
+        return val;
+    }
+
+    Node *chk = new_node(ND_RANGECHK, val->tok);
+    chk->lhs = val;
+    chk->type = want;
+    return chk;
+}
+
 
 // ★ T | None を包む層。
 //   nullable にできるのは参照型（str / list / class）だけです。
@@ -726,6 +800,16 @@ static Type *resolve_base_type(Sema *s, Node *tr) {
                               tr->mod_name);
             diag_fail(&d);
         }
+        // ★ 他のモジュールの範囲型（A-28）
+        RangeTy *mr = lookup_range_in(ms, tr->name);
+        if (mr) {
+            if (tr->lhs)
+                error_at_hint(tr->tok, "範囲型は要素型を取りません",
+                              "型 '%s.%s' は要素型を取りません", tr->mod_name,
+                              tr->name);
+            return mr->type;
+        }
+
         // ★ 他のモジュールのインタフェース
         Iface *mi = lookup_iface_in(ms, tr->name);
         if (mi) return type_iface(mi->name, mi);
@@ -839,6 +923,15 @@ static Type *resolve_base_type(Sema *s, Node *tr) {
             error_at_hint(tr->tok, "要素型を取るのは list と rc だけです",
                           "型 '%s' は要素型を取りません", tr->name);
         return t;
+    }
+
+    // ★ 範囲型（部分型。A-28）。クラス名より先に引きます。
+    RangeTy *rt = lookup_range(s, tr->name);
+    if (rt) {
+        if (tr->lhs)
+            error_at_hint(tr->tok, "範囲型は要素型を取りません",
+                          "型 '%s' は要素型を取りません", tr->name);
+        return rt->type;
     }
 
     // ★ タプル型 (A, B)
@@ -1468,6 +1561,26 @@ static Type *fn_type_of(FuncSig *f) {
 static Type *check_var(Sema *s, Node *n) {
     VarEntry *v = lookup(s, n->name);
 
+    // ★ 契約（A-29）：ensures の式の中の 'result' は**戻り値そのもの**です。
+    //
+    // ⚠️ 局所変数のほうが先です。`result` という名前の変数を持っている
+    //   コードを壊さないためです（この処理系自身がそうしています）。
+    if (!v && s->ensures_depth > 0 && strcmp(n->name, "result") == 0) {
+        Type *ret = s->cur_func ? s->cur_func->ret : NULL;
+        if (!ret || ret->kind == TY_NONE) {
+            Diag d = {0};
+            d.message = "戻り値の無い関数では 'result' を書けません";
+            d.primary.tok = n->tok;
+            d.primary.label = "この関数は値を返しません";
+            d.hint = "戻り値を見ない ensures（グローバルの条件など）にするか、"
+                     "戻り型を付けてください";
+            diag_fail(&d);
+        }
+        n->kind = ND_RESULT;   // ★ 箱は作りません（codegen が返す値をそのまま使う）
+        n->type = ret;
+        return ret;
+    }
+
     // ★ 変数に無ければ **関数を探します**。関数の名前を
     //   そのまま値として書けるようにするためです（f を渡す）。
     //   ⚠️ 変数が先です。同名の局所変数があればそちらが勝ちます。
@@ -1634,6 +1747,9 @@ static void check_vardecl(Sema *s, Node *n) {
         diag_fail(&d);
     }
 
+    // ★ 範囲型なら、入れる前に確かめます（A-28）
+    n->rhs = range_coerce(s, n->rhs, declared);
+
     // ④ スコープに登録する。
     //    ★ 順序が重要：初期化式を検査した「後」に登録します。
     //      そうしないと `x: int = x` が自分自身を参照できてしまいます。
@@ -1707,6 +1823,7 @@ static void check_assign(Sema *s, Node *n) {
             d.hint = no_implicit_hint(actual, et);
             diag_fail(&d);
         }
+        n->rhs = range_coerce(s, n->rhs, et);   // A-28
         n->type = et;
         return;
     }
@@ -1732,6 +1849,7 @@ static void check_assign(Sema *s, Node *n) {
             d.hint = no_implicit_hint(actual, ft);
             diag_fail(&d);
         }
+        n->rhs = range_coerce(s, n->rhs, ft);   // A-28
         n->type = ft;
         return;
     }
@@ -1767,6 +1885,8 @@ static void check_assign(Sema *s, Node *n) {
         d.hint = no_implicit_hint(actual, v->declared);
         diag_fail(&d);
     }
+
+    n->rhs = range_coerce(s, n->rhs, v->declared);   // A-28
 
     // ★ 代入したら絞り込みは解除する（15.5 節）。
     //   cur = cur.next のあと、cur はまた None かもしれないからです。
@@ -2125,7 +2245,12 @@ static Type *check_list_lit(Sema *s, Node *n) {
     if (want && want->kind == TY_LIST && type_assignable(first, want->elem))
         et = want->elem;
 
+    // ★ 範囲型なら、要素も入れる前に確かめます（A-28）。
+    //   ⚠️ 並びの途中を差し替えるので、1 つ前を覚えながら進みます。
+    n->body = range_coerce(s, n->body, et);
+
     int i = 2;
+    Node *prev = n->body;
     for (Node *el = n->body->next; el; el = el->next, i++) {
         s->expected = et;
         Type *t = check_expr(s, el);
@@ -2139,6 +2264,14 @@ static Type *check_list_lit(Sema *s, Node *n) {
             d.hint = "リストの要素はすべて同じ型でなければなりません";
             diag_fail(&d);
         }
+        // ★ A-28：差し替えたら、次の周回のために el を進め直します
+        Node *co = range_coerce(s, el, et);
+        if (co != el) {
+            co->next = el->next;
+            prev->next = co;
+            el = co;
+        }
+        prev = el;
     }
     s->expected = NULL;
     return type_list(et);
@@ -2805,6 +2938,8 @@ static Type *check_method(Sema *s, Node *n) {
             d.hint = no_implicit_hint(at, ot->elem);
             diag_fail(&d);
         }
+
+        n->args = range_coerce(s, n->args, ot->elem);   // A-28
         return ty_none;
     }
 
@@ -3343,6 +3478,7 @@ static void check_return(Sema *s, Node *n) {
         d.hint = no_implicit_hint(got, want);
         diag_fail(&d);
     }
+    n->lhs = range_coerce(s, n->lhs, want);   // A-28
 }
 
 // 分解代入 q, r = f()
@@ -3437,6 +3573,27 @@ static void check_stmt(Sema *s, Node *n) {
             if (is_target && !n->sval)
                 error_at_hint(n->tok, "pragma target \"riscv64-unknown-elf\" の形で書きます",
                               "pragma target には文字列が必要です");
+            break;
+        }
+
+        // ── 契約（事前条件・事後条件。A-29）──
+        //
+        // ★ 置ける場所は**関数の本体の先頭**だけです（check_func が確かめます）。
+        //   ここでは「bool か」と、ensures の中の 'result' を見ます。
+        case ND_REQUIRES:
+        case ND_ENSURES: {
+            if (n->kind == ND_ENSURES) s->ensures_depth++;
+            Type *t = check_expr(s, n->lhs);
+            if (n->kind == ND_ENSURES) s->ensures_depth--;
+            if (t->kind != TY_BOOL) {
+                Diag d = {0};
+                d.message = diag_fmt("%s には bool の式を書きます",
+                                     n->kind == ND_REQUIRES ? "requires" : "ensures");
+                d.primary.tok = n->lhs->tok;
+                d.primary.label = diag_fmt("これは '%s' 型です", type_name(t));
+                d.hint = "比べる式を書いてください（例: requires b != 0）";
+                diag_fail(&d);
+            }
             break;
         }
 
@@ -3819,30 +3976,82 @@ static void declare_method(Sema *s, Class *c, Node *fn) {
 }
 
 // 1b：フィールドとメソッドを解決する。
-// ── 未初期化フィールドの検査（宿題） ─────────────
+// ── 未初期化フィールドの検査 ─────────────────────
 //
 // クラス型のフィールドは既定値を作れないので NULL から始まります。
 // 当初はランタイムで検査していましたが、型の側から塞ぎます。
 //
-// ⚠️ この検査は「構文的」です。init のどこかに self.f = ... があるかを見るだけで、
-//    それが実行されるかまでは見ません（条件つきの代入はすり抜ける）。
-//    だからランタイム検査（pl_check_not_none）は残します。
-//    静的検査で多くを早く捕まえ、残りを動的検査で安全に受け止めます。
-static bool assigns_field(Node *n, const char *fname) {
+// ★ **どの経路でも代入するか**を見ます（A-27。0.18.0）。
+//   それまでは「init のどこかに self.f = ... と書いてあるか」を見るだけで、
+//   **`if` の中にしか代入が無い形がすり抜けていました**（仕様 15.6 の
+//   「ほぼ」の中身）。Ada / SPARK の definite assignment にあたる検査です。
+//
+// ⚠️ 保守的に見ます — ループの中の代入は「0 回かもしれない」ので数えません。
+//    ⚠️ ランタイム検査（pl_check_not_none）は**残します**。
+//    ここで見られるのは init の中だけで、`unsafe:` や `T | None` の
+//    絞り込み漏れまでは面倒を見られないためです（多層で受けます）。
+// この文（部分木）のどこかに return があるか。
+//
+// ★ 「代入せずに抜ける経路」を見つけるために使います。
+//   ⚠️ panic() / exit() は数えません。**戻らない**ので、そこから
+//     オブジェクトが観測されることがないためです。
+static bool contains_return(Node *n) {
+    if (!n) return false;
+    if (n->kind == ND_RETURN) return true;
+    if (contains_return(n->lhs) || contains_return(n->rhs) ||
+        contains_return(n->els) || contains_return(n->incr))
+        return true;
+    for (Node *st = n->body; st; st = st->next)
+        if (contains_return(st)) return true;
+    return false;
+}
+
+static bool definitely_assigns_stmt(Node *n, const char *fname);
+
+// 文の並びが「**どの経路でも**必ず self.<fname> に代入する」か。
+//
+// ⚠️ 途中に return がありうる文を見つけたら、そこで打ち切ります
+//   （代入せずに出ていく経路があるということなので）。
+static bool definitely_assigns(Node *first, const char *fname) {
+    for (Node *st = first; st; st = st->next) {
+        if (definitely_assigns_stmt(st, fname)) return true;
+        if (contains_return(st)) return false;
+    }
+    return false;
+}
+
+static bool definitely_assigns_stmt(Node *n, const char *fname) {
     if (!n) return false;
 
-    if (n->kind == ND_ASSIGN && n->lhs->kind == ND_FIELD &&
-        n->lhs->lhs->kind == ND_VAR && strcmp(n->lhs->lhs->name, "self") == 0 &&
-        strcmp(n->lhs->name, fname) == 0)
-        return true;
+    switch (n->kind) {
+        case ND_ASSIGN:
+            return n->lhs && n->lhs->kind == ND_FIELD && n->lhs->lhs &&
+                   n->lhs->lhs->kind == ND_VAR &&
+                   strcmp(n->lhs->lhs->name, "self") == 0 &&
+                   strcmp(n->lhs->name, fname) == 0;
 
-    if (assigns_field(n->lhs, fname)) return true;
-    if (assigns_field(n->rhs, fname)) return true;
-    if (assigns_field(n->els, fname)) return true;
-    if (assigns_field(n->incr, fname)) return true;
-    for (Node *st = n->body; st; st = st->next)
-        if (assigns_field(st, fname)) return true;
-    return false;
+        case ND_BLOCK:
+            return definitely_assigns(n->body, fname);
+
+        // ★ else が無ければ「条件が偽のときに素通りする」経路が残ります。
+        //   always_returns と同じ形の判断です。
+        case ND_IF:
+            return n->els && definitely_assigns_stmt(n->body, fname) &&
+                   definitely_assigns_stmt(n->els, fname);
+
+        // ⚠️ ループは 0 回かもしれません（保守的に「代入しない」と見ます）。
+        case ND_WHILE:
+            return false;
+
+        case ND_TRY:
+            if (!definitely_assigns_stmt(n->body, fname)) return false;
+            for (Node *ex = n->els; ex; ex = ex->next)
+                if (!definitely_assigns_stmt(ex->body, fname)) return false;
+            return true;
+
+        default:
+            return false;
+    }
 }
 
 static Node *find_init(Class *c) {
@@ -3858,7 +4067,7 @@ static void check_fields_initialized(Sema *s, Class *c) {
         // ★ 既定値を作れる型は対象外です（int → 0 / str → "" / list → 空 /
         //   T | None → None。どれも「有効な値」から始まります）。
         if (f->type->kind != TY_CLASS) continue;
-        if (init && assigns_field(init->body, f->name)) continue;
+        if (init && definitely_assigns_stmt(init->body, f->name)) continue;
 
         Diag d = {0};
         d.message = diag_fmt("フィールド '%s' は init で代入されていません", f->name);
@@ -4394,6 +4603,9 @@ static void declare_global(Sema *s, Node *n) {
         diag_fail(&d);
     }
 
+    // ★ グローバルは定数だけなので、ここはコンパイル時の判定になります（A-28）
+    n->rhs = range_coerce(s, n->rhs, declared);
+
     // グローバルの IR 名は @g.<モジュール>.<名前>。
     // ★ モジュール名を挟むことで、別ファイルの同名グローバルと
     //   リンク時に衝突しなくなります（@g. は C のシンボルとの衝突よけ）。
@@ -4430,6 +4642,33 @@ static void check_func(Sema *s, Node *n) {
     for (Node *pm = n->params; pm; pm = pm->next) {
         VarEntry *v = declare(s, pm->name, pm->type, pm->tok);
         pm->ir_name = v->ir_name;
+    }
+
+    // ★ 契約は**本体の先頭**にしか置けません（A-29）。
+    //
+    // 🤔 なぜ場所を縛るのか
+    //   requires は入口で、ensures は出口で確かめます。途中に書けると
+    //   「書いた場所と確かめる場所が違う」ことになり、読む人が誤解します。
+    //   ⚠️ 先頭に並べる限り、順序は自由です（requires と ensures を混ぜても
+    //     かまいません）。
+    {
+        bool seen_other = false;
+        for (Node *st = n->body->body; st; st = st->next) {
+            bool is_contract =
+                st->kind == ND_REQUIRES || st->kind == ND_ENSURES;
+            if (is_contract && seen_other) {
+                Diag d = {0};
+                d.message = diag_fmt("%s は関数の本体の先頭に書きます",
+                                     st->kind == ND_REQUIRES ? "requires"
+                                                             : "ensures");
+                d.primary.tok = st->tok;
+                d.primary.label = "ここには書けません";
+                d.hint = "requires / ensures は def の直後に並べてください"
+                         "（入口と出口で確かめるものだからです）";
+                diag_fail(&d);
+            }
+            if (!is_contract) seen_other = true;
+        }
     }
 
     check_stmt_list(s, n->body->body);
@@ -4479,8 +4718,45 @@ static void check_main(Sema *s, Node *ast) {
     }
 }
 
+// 範囲型を登録する（パス 1 の最初。A-28）
+//
+// ★ **クラスより先に**登録します。クラスのフィールドやメソッドの型注釈に
+//   範囲型を書けるようにするためです（依存の向きは 範囲型 → int だけなので、
+//   互いに参照し合うことはありません）。
+static void declare_range(Sema *s, Node *n) {
+    if (type_from_name(n->name))
+        error_at_hint(n->tok, diag_fmt("'%s' は組み込みの型名です", n->name),
+                      "この名前は使えません");
+    RangeTy *old = lookup_range(s, n->name);
+    if (old) {
+        Diag d = {0};
+        d.message = diag_fmt("型 '%s' はすでに定義されています", n->name);
+        d.primary.tok = n->tok;
+        d.primary.label = "同じ名前の範囲型が 2 つあります";
+        d.related.tok = old->tok;
+        d.related.label = "最初の定義はここです";
+        diag_fail(&d);
+    }
+    if (lookup_class(s, n->name))
+        error_at_hint(n->tok,
+                      "クラスと同じ名前の範囲型は作れません",
+                      "'%s' はクラス名として使われています", n->name);
+
+    RangeTy *r = xmalloc(sizeof(RangeTy));
+    r->name = n->name;
+    r->tok = n->tok;
+    r->type = type_range(n->name, n->lhs->ival, n->rhs->ival);
+    r->next = s->ranges;
+    s->ranges = r;
+    n->type = r->type;
+}
+
 // モジュール 1 つぶんの宣言を登録する（パス 1a / 1b / 1c）
 static void declare_module(Sema *s, Node *ast) {
+    // ★ 範囲型を最初に登録します（クラスのフィールドにも書けるように）
+    for (Node *d = ast->body; d; d = d->next)
+        if (d->kind == ND_RANGEDECL) declare_range(s, d);
+
     // ★ インタフェースを最初に登録します（クラスが実装を宣言するため）
     for (Node *d = ast->body; d; d = d->next)
         if (d->kind == ND_IFACE) declare_iface(s, d);
@@ -4505,6 +4781,7 @@ static void declare_module(Sema *s, Node *ast) {
         else if (d->kind == ND_IMPORT) continue;  // 読み込みは module.c が済ませた
         else if (d->kind == ND_PRAGMA) continue;  // 設定（宣言ではない）
         else if (d->kind == ND_IFACE) continue;   // 上で済んでいる
+        else if (d->kind == ND_RANGEDECL) continue;  // 上で済んでいる
         else UNREACHABLE();  // parser が保証している
     }
 }

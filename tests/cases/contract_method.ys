@@ -1,0 +1,26 @@
+# OUTPUT: 3
+# OUTPUT: ok
+# EXIT: 0
+# A-29: メソッドにも、値を返さない関数にも書けます。
+#   ★ 値を返さない関数では 'result' は書けません（見るものが無いため）。
+class Counter:
+    n: int
+
+    def init(self) -> None:
+        self.n = 0
+
+    def add(mut self, k: int) -> int:
+        requires k > 0
+        ensures result > 0
+        self.n = self.n + k
+        return self.n
+
+def note(msg: str) -> None:
+    requires len(msg) > 0
+    print(msg)
+
+def main() -> int:
+    c: Counter = Counter()
+    print(str(c.add(3)))
+    note("ok")
+    return 0

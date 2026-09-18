@@ -78,11 +78,29 @@ class Scope:
 
 
 # モジュールごとのシンボル表
+# 範囲型（部分型。A-28）の表。
+#
+# ★ クラスと同じ「モジュールごとの名前の表」。型そのものは名前つきの int
+#   （ast.type_range）なので、ここでは名前と型の対応だけを持つ。
+#   対になる定義: src/sema.c の struct RangeTy
+class RangeTy:
+    name: str
+    type: rc[ast.Type] | None
+    tok: rc[token.Token] | None     # 定義位置（「ここで定義されています」用）
+    next: rc[RangeTy] | None
+
+    def init(self, name: str, ty: rc[ast.Type], tok: rc[token.Token] | None) -> None:
+        self.name = copy(name)
+        self.type = ty
+        self.tok = tok
+
+
 class ModuleSyms:
     mod: rc[module.Module] | None
     funcs: rc[FuncSig] | None
     classes: rc[ast.Class] | None
     ifaces: rc[ast.Iface] | None
+    ranges: rc[RangeTy] | None      # 範囲型（A-28）
     globals: rc[Scope] | None
     next: rc[ModuleSyms] | None
 

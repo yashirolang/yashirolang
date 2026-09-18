@@ -1,0 +1,9 @@
+# ERROR: error: requires は関数の本体の先頭に書きます
+# ERROR: ここには書けません
+# A-29: 契約は本体の先頭にしか置けません。
+#   ★ requires は入口、ensures は出口で確かめるので、途中に書けると
+#     「書いた場所と確かめる場所が違う」ことになります。
+def f(a: int) -> int:
+    b: int = a
+    requires a > 0
+    return b

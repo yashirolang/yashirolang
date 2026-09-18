@@ -1,0 +1,13 @@
+# STDIN: -3
+# EXIT: 1
+# A-29: 事後条件は **return のたびに**確かめます。
+#   ★ 10 // -3 は -4 なので、ensures result >= 0 が破れます。
+def divide(a: int, b: int) -> int:
+    requires b != 0
+    ensures result >= 0
+    return a // b
+
+def main() -> int:
+    n: int = int(input())
+    print(str(divide(10, n)))
+    return 0

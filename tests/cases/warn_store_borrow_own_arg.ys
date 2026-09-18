@@ -10,7 +10,9 @@
 #   ownck が借用の保存を MV_FIELD と MV_APPEND でしか見ておらず、
 #   MV_OWN_ARG が漏れていたためです。
 #   正しい書き方: b: Box = Box(copy(xs[0]))
-# FLAGS: --no-drop
+# FLAGS: --no-drop --warn-own
+#   ★ A-24 で所有権の指摘は**既定でエラー**になりました。
+#     この試験は「警告に落とす逃げ道（--warn-own）」のほうを見ています。
 #   ★ 既定が --drop になっても、この試験は解放しません（二重解放するのが正しい）。
 class Box:
     s: str

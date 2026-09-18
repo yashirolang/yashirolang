@@ -3,7 +3,9 @@
 # EXIT: 3
 # 既定は警告。生成される IR は v1 のままなので、実行はできる
 #         （--deny-move を付けるとエラーになる。err_move_assign を参照）
-# FLAGS: --no-drop
+# FLAGS: --no-drop --warn-own
+#   ★ A-24 で所有権の指摘は**既定でエラー**になりました。
+#     この試験は「警告に落とす逃げ道（--warn-own）」のほうを見ています。
 #   ★ 既定が --drop になっても、この試験は解放しません（移動済みを使う例）。
 def main() -> int:
     xs: list[int] = [1, 2, 3]

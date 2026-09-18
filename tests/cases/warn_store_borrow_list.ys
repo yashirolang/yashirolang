@@ -1,5 +1,8 @@
 # STAGE0-ONLY: 所有権検査は C 版だけ
 # WARN: warning[E-BORROW-7]: 借用した値 'a.name' をリストに保存しています
+# FLAGS: --warn-own
+#   ★ A-24 で所有権の指摘は**既定でエラー**になりました。
+#     この試験は「警告に落とす逃げ道（--warn-own）」のほうを見ています。
 # OUTPUT: pen
 # EXIT: 0
 # フィールドから読んだ値を list に溜めるのも、所有者が 2 つになります。

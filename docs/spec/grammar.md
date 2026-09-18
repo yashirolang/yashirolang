@@ -92,9 +92,14 @@ top_level  ::= func_def
              | class_def
              | extern_def
              | import_stmt
+             | range_decl
              | global_var
              | NEWLINE
 ```
+
+⚠️ **`range_decl` は `global_var` より先に試します。** `type` は予約語では
+ないので、`type: int = 0`（`type` という名前のグローバル変数）と区別するには
+3 つ先まで見る必要があります。
 
 ---
 
@@ -116,6 +121,12 @@ class_def  ::= "class" IDENT ":" NEWLINE INDENT class_body DEDENT
 
 class_body ::= { field_decl } { func_def | NEWLINE }
 field_decl ::= IDENT ":" type NEWLINE
+
+(* ── 範囲型（部分型。A-28）── *)
+(* ⚠️ "type" も "range" も予約語ではありません。トップレベルで
+   「IDENT("type") IDENT "="」と並んだときだけこの規則に入ります。 *)
+range_decl ::= "type" IDENT "=" "int" "range" "(" int_lit "," int_lit ")" NEWLINE
+int_lit    ::= [ "-" ] INT
 
 (* ── グローバル変数 ── *)
 global_var ::= IDENT ":" type "=" expr NEWLINE
@@ -142,6 +153,14 @@ stmt       ::= simple_stmt NEWLINE
              | if_stmt
              | while_stmt
              | for_stmt
+             | contract_stmt
+
+(* ── 契約（A-29）──
+   ⚠️ "requires" / "ensures" は予約語ではありません。次のトークンが
+   "=" "+=" "-=" "*=" "//=" "%=" ":" "." "(" "[" "," と改行のどれでもない
+   ときだけ、この規則に入ります（`requires = 3` は今までどおりの代入）。
+   ⚠️ 置ける場所は**関数の本体の先頭**だけです（意味解析が確かめます）。 *)
+contract_stmt ::= ( "requires" | "ensures" ) expr NEWLINE
 
 simple_stmt::= var_decl
              | assign_stmt

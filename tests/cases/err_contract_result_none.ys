@@ -1,0 +1,5 @@
+# ERROR: error: 戻り値の無い関数では 'result' を書けません
+# A-29: 値を返さない関数には見るべき 'result' がありません。
+def f(a: int) -> None:
+    ensures result > 0
+    print(str(a))

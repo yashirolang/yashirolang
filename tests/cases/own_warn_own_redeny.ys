@@ -1,0 +1,10 @@
+# FLAGS: --warn-own --deny-move
+# ERROR: error[E-MOVE-1]: 移動済みの値 'xs' を使っています
+# A-24: --warn-own で 4 つとも警告に落としたあと、--deny-move で
+#   「移動だけエラーに戻す」。**後に書いたほうが勝ち**です
+#   （--drop / --no-drop と同じ規則）。古いコードを検査ごとに直すための順序。
+def main() -> int:
+    xs: list[int] = [1, 2, 3]
+    ys: list[int] = xs
+    print(len(ys))
+    return len(xs)

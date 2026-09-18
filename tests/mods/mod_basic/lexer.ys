@@ -4,12 +4,12 @@ class Token:
     kind: int
     text: str
 
-    def init(self, kind: int, text: str) -> None:
+    def init(self, kind: int, text: own str) -> None:
         self.kind = kind
         self.text = text
 
     def show(self) -> None:
         print(str(self.kind) + ":" + self.text)
 
-def make(kind: int, text: str) -> Token:
+def make(kind: int, text: own str) -> Token:
     return Token(kind, text)

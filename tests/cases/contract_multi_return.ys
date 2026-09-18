@@ -1,0 +1,15 @@
+# STDIN: 99
+# OUTPUT: 10
+# EXIT: 0
+# A-29: return が 2 つあっても、**どちらの出口でも**確かめます。
+def pick(x: int) -> int:
+    requires x >= 0
+    ensures result <= 10
+    if x > 10:
+        return 10
+    return x
+
+def main() -> int:
+    n: int = int(input())
+    print(str(pick(n)))
+    return 0

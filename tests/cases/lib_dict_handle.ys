@@ -10,7 +10,7 @@ class Symbol:
     name: str
     value: int
 
-    def init(self, name: str, value: int) -> None:
+    def init(self, name: own str, value: int) -> None:
         self.name = name
         self.value = value
 

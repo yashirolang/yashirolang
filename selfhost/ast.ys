@@ -43,11 +43,21 @@ class Type:
     opt: rc[Type] | None      # この型の「T | None」版（1 個だけ作る）
     # ★ 関数型の引数の並び（fn 以外では空）
     params: list[rc[Type]]
+    # ── 範囲型（部分型。A-28）──
+    #
+    # ★ **kind は TY_INT のまま**。表現も i64 のままで、変わるのは
+    #   「入れるときに範囲を確かめる」ことだけ（Ada の部分型と同じ）。
+    #   名前が付いているか（len(name) > 0）で見分ける。
+    #   対になる定義: src/types.h の Type.lo / hi
+    lo: int
+    hi: int
 
     def init(self, kind: int) -> None:
         self.kind = kind
         self.name = ""
         self.params = []
+        self.lo = 0
+        self.hi = 0
 
 
 class Field:
@@ -302,6 +312,9 @@ def type_assignable(from_: rc[Type], to: rc[Type]) -> bool:
 
 def type_name(t: rc[Type]) -> str:
     if t.kind == TY_INT:
+        # ★ 範囲型は名前で呼ぶ（'Percent' と出したい。A-28）
+        if len(t.name) > 0:
+            return copy(t.name)
         return "int"
     if t.kind == TY_BOOL:
         return "bool"
@@ -347,6 +360,26 @@ def type_size(t: rc[Type]) -> int:
 
 def type_align(t: rc[Type]) -> int:
     return type_size(t)
+
+# 範囲型（部分型）を作る。`type Percent = int range(0, 100)` の Percent。
+#
+# ★ kind は TY_INT。名前と両端だけを足した int だと思えばよい。
+#   対になる定義: src/types.c の type_range
+def type_range(name: str, lo: int, hi: int) -> rc[Type]:
+    t: rc[Type] = rc(Type(TY_INT))
+    t.name = copy(name)
+    t.lo = lo
+    t.hi = hi
+    return t
+
+
+# 範囲型か（名前の付いた int か）
+def ty_is_range(t: rc[Type] | None) -> bool:
+    if t is None:
+        return False
+    tt: rc[Type] = t
+    return tt.kind == TY_INT and len(tt.name) > 0
+
 
 def type_name_list() -> str:
     return "int, float, bool, str, None, list[T], T | None, fn(...) -> T, (A, B)"
@@ -405,6 +438,20 @@ ND_LISTCOMP: int = 40
 #   だから中の spawn には借りを渡せる（借りはこの呼び出しより長生きしない、
 #   という不変条件が成り立ったままになるため）。
 ND_SCOPE: int = 41
+# ── 範囲型（部分型。A-28）──
+# ★ type Percent = int range(0, 100)
+#   name … 部分型の名前 / lhs … 下端（ND_INT）/ rhs … 上端（ND_INT）
+ND_RANGEDECL: int = 42
+# ★ 範囲の検査。**意味解析が入れる**（書く人は書かない）。
+#   lhs … 検査する式 / type … 入れ先の範囲型（両端はここから読む）
+ND_RANGECHK: int = 43
+# ── 契約（事前条件・事後条件。A-29）──
+# ★ どちらも関数の本体の**先頭**に書く文。lhs … bool の式
+ND_REQUIRES: int = 44   # requires <式> … 関数の入口で確かめる
+ND_ENSURES: int = 45    # ensures  <式> … return のたびに確かめる
+# ★ ensures の中でだけ使える名前 'result'（戻り値そのもの）。
+#   ⚠️ 箱（alloca）は作らない。**いま返そうとしている値**を指すだけ。
+ND_RESULT: int = 46
 
 # ── 仮引数の受け取り方（C 版 ParamMode と同じ順序・同じ値）──
 PM_BORROW: int = 0   # 既定。読むだけ借りる
@@ -585,10 +632,8 @@ class Node:
 
     # ── 所有権検査（ownck）が立てる印 ───────────────────────
     #
-    # ⚠️ **いまのセルフホスト版はまだ ownck を持っていません。** だから
-    #   この 2 つは常に False のままです。解放の挿入（--drop）はこの印に
-    #   依存するので、**ownck を移植するまで --drop は無効**にしてあります
-    #   （docs/roadmap.md A-21 ⑨）。場所だけ先に用意しておきます。
+    # ★ 0.16.0 で ownck を移植したので、この 2 つはセルフホスト版でも
+    #   埋まります（解放の挿入がこの印に従います）。
     #   対になる定義: src/ast.h の binds_borrow / moved_out
     # ★ この実引数は「借用」の仮引数へ渡されると **分かっている** か（A-21e）。
     #   ⚠️ **既定（False）が安全側**です。分からない経路では解放しません。
@@ -945,6 +990,23 @@ def dump(n: rc[Node] | None, depth: int) -> None:
         print(pad + "(scope")
         dump(n.body, depth + 1)
         print(pad + ")")
+    elif n.kind == ND_REQUIRES:
+        # ★ 契約（A-29）。C 版 src/ast.c と 1 文字も違ってはいけない
+        print(pad + "(requires")
+        dump(n.lhs, depth + 1)
+        print(pad + ")")
+    elif n.kind == ND_ENSURES:
+        print(pad + "(ensures")
+        dump(n.lhs, depth + 1)
+        print(pad + ")")
+    elif n.kind == ND_RANGEDECL:
+        # ★ 範囲型（A-28）。C 版 src/ast.c と 1 文字も違ってはいけない
+        lo: rc[Node] | None = n.lhs
+        hi: rc[Node] | None = n.rhs
+        if lo is not None:
+            if hi is not None:
+                print(pad + "(rangedecl " + n.name + " " + str(lo.ival) +
+                      " " + str(hi.ival) + ")")
     else:
         panic("ast.dump: unknown node kind")
 

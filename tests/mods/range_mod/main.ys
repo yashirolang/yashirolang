@@ -1,0 +1,15 @@
+# STDIN: 250
+# OUTPUT: 100
+# OUTPUT: 60
+# EXIT: 0
+# A-28: 範囲型はモジュールをまたいで使えます（units.Percent）。
+#   ★ クラスと同じ「モジュールごとの名前の表」に載せてあります。
+import units
+
+def main() -> int:
+    n: int = int(input())
+    a: units.Percent = units.clamp(n)
+    print(str(a))
+    b: units.Percent = 60
+    print(str(b))
+    return 0

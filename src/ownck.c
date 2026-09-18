@@ -328,7 +328,7 @@ struct Loop {
 };
 
 // 1 回のコンパイルで出す警告の上限。
-// ★ selfhost/ を書き換えるまで、ここは何百件も出ます。
+// ★ 効くのは --warn-own のときだけです（既定はエラーなので 1 件目で止まります）。
 //   全部見たいときは -DOWNCK_MAX_REPORT=100000 でビルドしてください。
 #ifndef OWNCK_MAX_REPORT
 #define OWNCK_MAX_REPORT 20
@@ -1143,10 +1143,14 @@ static void use_expr(Own *o, Flow *f, Node *n) {
         }
 
         case ND_LIST:
-            // ⚠️ リテラルの要素は本来「リストへの移動」です。当初は
-            //    移動として扱いません（設計 ownership.md §4 の 5 か所に限る）。
-            //    積み残した宿題です。
-            for (Node *e = n->body; e; e = e->next) use_expr(o, f, e);
+            // ★ リテラルの要素は **リストへの移動**です（A-26 で直しました）。
+            //
+            // ⚠️ ここを「ただの読み」にしていたのが穴でした。`xs.append(v)` は
+            //    止まるのに `[v]` は素通りし、**既定で解放するようになった
+            //    0.16.0 以降は、借りものを入れると早すぎる解放になります**
+            //    （内包表記は A-12 のときに MV_APPEND へ直してありました。
+            //      リテラルだけが残っていました）。
+            for (Node *e = n->body; e; e = e->next) move_expr(o, f, e, MV_APPEND);
             return;
 
         case ND_CALL:
@@ -1177,6 +1181,13 @@ static void use_expr(Own *o, Flow *f, Node *n) {
             //      mod.C(args)     → C.init(new, args)。self を飛ばす
             use_expr(o, f, n->lhs);
             call_args(o, f, n, n->mod_name ? n->cls != NULL : true);
+            return;
+
+        // ★ 範囲型の検査（A-28）は値を素通しするだけの包みです。
+        //   ⚠️ **ここを書かないと、包んだ中の移動が記録されません**
+        //     （p: Percent = f(xs) の xs が「渡していない」ことになります）。
+        case ND_RANGECHK:
+            use_expr(o, f, n->lhs);
             return;
 
         default: return;  // リテラル・None・型注釈など
@@ -1559,6 +1570,13 @@ static void stmt(Own *o, Flow *f, Node *n) {
             o->depth--;
             return;
 
+        // ★ 契約（A-29）の式も「読み」としてたどります。
+        //   ⚠️ たどらないと、式の中の呼び出しに渡した値の扱いが記録されません。
+        case ND_REQUIRES:
+        case ND_ENSURES:
+            use_expr(o, f, n->lhs);
+            return;
+
         // ★ scope: ブロック（A-18 の scoped spawn）。
         //   この中では spawn に借りを渡せます（出口で必ず join されるため）。
         case ND_SCOPE:
@@ -1827,14 +1845,14 @@ void ownck_program(Module *mods, const OwnckOptions *opt) {
     // ★ 表が揃ってから、「戻り値が借りもの」の印を呼び出しに沿って広げます。
     propagate_binds_borrow(&o);
 
-    // ── spawn を使ったら、所有権の検査を**エラーに上げる** ──
+    // ── spawn を使ったら、--warn-own でも警告に落とさない ──
     //
     // 🤔 なぜここだけ扱いを変えるのか
-    //   所有権検査が既定で警告なのは「既存のコードがそのまま動く」ためです
-    //   （§0 ③ の折衷）。ところが **警告のままだと、データ競合が無いという
-    //   保証も警告どまり**になります。spawn は新機能で既存コードがないので、
-    //   「spawn を使ったファイルでは昇格する」という形なら誰も壊れません
-    //   （設計文書 §5 の宿題）。
+    //   A-24 で既定はエラーになりました。ここが効くのは
+    //   **--warn-own を付けたとき**だけです。所有権の指摘を警告に落とすと、
+    //   「データ競合が無い」という保証も一緒に警告どまりになります
+    //   （E-SEND-* は「借りか・所有か・rc か」の判定に乗っているため）。
+    //   逃げ道は逃げ道として要りますが、**並行実行のところだけは通しません**。
     for (Module *m = mods; m; m = m->next) {
         if (!has_spawn(m->ast)) continue;
         o.opt.deny_move = true;

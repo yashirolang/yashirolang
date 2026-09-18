@@ -1,0 +1,13 @@
+# OUTPUT: 4
+# EXIT: 0
+# IR: call void @pl_contract_fail
+# IR: ct.ok.
+# A-29: **構造で**見張ります（時間では測りません）。
+#   出るのは条件の式と分岐 1 つだけで、外れの経路は cold です。
+def twice(x: int) -> int:
+    requires x >= 0
+    return x * 2
+
+def main() -> int:
+    print(str(twice(2)))
+    return 0

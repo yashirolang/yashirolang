@@ -25,9 +25,8 @@ def main() -> int:
     # ── ④ 所有権の検査 ──
     #
     # ★ C 版の `--check` が ownck まで通すので、ここも通します。
-    #   ⚠️ ここが sema で止まっていたあいだ、tests/selfhost.sh の突き合わせは
-    #   「両方とも所有権の指摘を出さない」ことを確かめているだけでした。
-    #   既定は警告なので、出しても終了コードは 0 のままです。
+    #   ⚠️ **既定はエラーです**（A-24）。指摘があれば終了コードは 1 になり、
+    #   C 版の `--check` と揃います（この入口は --warn-own を取りません）。
     oopt: ownck.Options = ownck.Options()
     ownck.ownck_program(mods, oopt)
     return 0

@@ -1,0 +1,19 @@
+# OUTPUT: pen
+# OUTPUT: pen
+# EXIT: 0
+# A-26 の直し方：借りものは copy(...) してからリテラルに入れる。
+class Item:
+    name: str
+
+    def init(self, name: own str) -> None:
+        self.name = name
+
+def show(a: Item) -> None:
+    names: list[str] = [copy(a.name)]
+    print(names[0])
+
+def main() -> int:
+    it: Item = Item("pen")
+    show(it)
+    print(it.name)
+    return 0

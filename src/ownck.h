@@ -28,24 +28,24 @@
 // ★ 昇格のスイッチは**検査ごとに分けます**（決定 D12）。
 //   既存コードを直すとき、通ったものから順にエラーへ上げるためです。
 typedef struct {
-    bool deny_move;    // --deny-move   （E-MOVE-*   をエラーにする）
-    bool deny_borrow;  // --deny-borrow （E-BORROW-* をエラーにする）
-    bool deny_mut;     // --deny-mut    （E-MUT-*    をエラーにする）
-    // ★ 決定 D12：昇格のスイッチは検査ごとに分けます。
-    //   E-BORROW-7（所有スロットへ借りものを入れた）は selfhost/ に 40 件
-    //   残っているので、既存の --deny-borrow には混ぜません。
-    bool deny_store_borrow;  // --deny-store-borrow（E-BORROW-7 をエラーにする）
+    bool deny_move;    // E-MOVE-*   をエラーにする（既定 true）
+    bool deny_borrow;  // E-BORROW-* をエラーにする（既定 true）
+    bool deny_mut;     // E-MUT-*    をエラーにする（既定 true）
+    // ★ 決定 D12：スイッチは検査ごとに分けたままにします。
+    //   既定が全部 true になった今も（A-24）、--warn-own で落としてから
+    //   検査ごとに戻せる形が、古いコードを直していく唯一の順序だからです。
+    bool deny_store_borrow;  // E-BORROW-7 をエラーにする（既定 true）
     bool explain_mut;  // --explain-mut （診断を出さず、変更される実引数を並べる）
 } OwnckOptions;
 
 // 全モジュールの関数本体を解析する。
 //
-// deny_* が false（既定）なら診断は **警告**、
-// true なら最初の 1 件でエラー終了します。
+// deny_* が true（**既定**）なら最初の 1 件でエラー終了、
+// false（--warn-own）なら警告として出して先へ進みます。
 //
-// ⚠️ 既定を警告にしてあるのは、この章の時点では selfhost/ と lib/ が
-//    まだ v1 の参照セマンティクス前提で書かれているためです。
-//    書き換えは別の仕事で、それまで既存のビルドを止めません。
+// ★ A-24 で既定を入れ替えました。selfhost/ と lib/ が v2 の書き方へ
+//   移り終わり（0.16.0）、コンパイラ自身が 4 つの検査すべてを通るように
+//   なったので、「既定は警告」を続ける理由が無くなりました。
 void ownck_program(Module *mods, const OwnckOptions *opt);
 
 // 所有型か（言語仕様 v2 §2 の分類）。

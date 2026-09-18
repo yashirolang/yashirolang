@@ -11,7 +11,8 @@ class Box[T]:
         self.v = v
 
 def unwrap[T](b: Box[T]) -> T:
-    return b.v
+    # ★ b は借用なので、中身を**複製して**返します（A-24 で既定がエラーに）
+    return copy(b.v)
 
 def pair_len[T](a: Box[T], b: Box[T]) -> int:
     return 2

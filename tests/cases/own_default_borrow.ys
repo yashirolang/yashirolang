@@ -1,0 +1,12 @@
+# ERROR: error[E-BORROW-3]: 借用した値 'name' をフィールドに保存できません
+# ERROR: 引数を 'name: own str' にすると、所有権を受け取れます
+# A-24: 借用の検査も既定でエラーです（--deny-borrow は要りません）。
+class Node:
+    name: str
+
+    def init(self, name: str) -> None:
+        self.name = name
+
+def main() -> int:
+    n: Node = Node("a")
+    return len(n.name)

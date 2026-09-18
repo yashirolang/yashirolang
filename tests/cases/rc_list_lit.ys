@@ -1,0 +1,42 @@
+# OUTPUT: 2
+# OUTPUT: 2
+# OUTPUT: 2
+# OUTPUT: 2
+# OUTPUT: drop 1
+# OUTPUT: drop 2
+# EXIT: 0
+# 🔒 A-26: **list リテラルに入れた rc[T] の参照が増えていませんでした。**
+#   `xs.append(v)` は最初から retain していたのに、`[v]` は素通りで、
+#   0.16.0 で解放が既定になった瞬間から **早すぎる解放**になっていました
+#   （借りた rc をリテラルに入れて 2 回呼ぶと、3 回目には相手が消えます）。
+class Node:
+    v: int
+    lhs: rc[Node] | None
+
+    def init(self, v: int) -> None:
+        self.v = v
+        self.lhs = None
+
+    def drop(self) -> None:
+        print("drop " + str(self.v))
+
+def take(n: rc[Node]) -> int:
+    kids: list[rc[Node] | None] = [n.lhs]
+    k: rc[Node] | None = kids[0]
+    if k is None:
+        return 0
+    kk: rc[Node] = k
+    return kk.v
+
+def main() -> int:
+    a: rc[Node] = rc(Node(1))
+    b: rc[Node] = rc(Node(2))
+    a.lhs = b
+    print(take(a))
+    print(take(a))
+    print(take(a))
+    kk: rc[Node] | None = a.lhs
+    if kk is not None:
+        k2: rc[Node] = kk
+        print(k2.v)
+    return 0

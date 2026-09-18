@@ -1,0 +1,8 @@
+type Percent = int range(0, 100)
+
+def clamp(n: int) -> Percent:
+    if n < 0:
+        return 0
+    if n > 100:
+        return 100
+    return n

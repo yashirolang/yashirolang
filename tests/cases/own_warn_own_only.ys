@@ -1,0 +1,10 @@
+# FLAGS: --warn-own --no-drop
+# WARN: warning[E-MOVE-1]: 移動済みの値 'xs' を使っています
+# EXIT: 3
+# A-24: --warn-own だけなら警告どまりで、実行できます（0.17 以前の既定）。
+#   ★ --no-drop を付けているのは、移動済みの値を使う例だからです。
+def main() -> int:
+    xs: list[int] = [1, 2, 3]
+    ys: list[int] = xs
+    print(len(ys))
+    return len(xs)

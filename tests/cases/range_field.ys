@@ -1,0 +1,17 @@
+# STDIN: 42
+# OUTPUT: 42
+# EXIT: 0
+# A-28: クラスのフィールドにも書けます（代入のたびに確かめます）。
+type Percent = int range(0, 100)
+
+class Gauge:
+    level: Percent
+
+    def init(self, v: Percent) -> None:
+        self.level = v
+
+def main() -> int:
+    n: int = int(input())
+    g: Gauge = Gauge(n)
+    print(str(g.level))
+    return 0

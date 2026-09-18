@@ -1,0 +1,28 @@
+# OUTPUT: 3
+# OUTPUT: 3
+# OUTPUT: 3
+# OUTPUT: 1
+# EXIT: 0
+# 🔒 A-26: 内包表記も同じでした（`[x for x in xs]` で rc[T] を集めると、
+#   参照が増えないまま新しい list が持ち主になり、抜けるときに減らされます）。
+#   ⚠️ **ごく普通の書き方**です。1 回目は通り、2 回目から壊れていました。
+class Node:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+def sum_of(xs: list[rc[Node]]) -> int:
+    ys: list[rc[Node]] = [x for x in xs]
+    t: int = 0
+    for y in ys:
+        t = t + y.v
+    return t
+
+def main() -> int:
+    xs: list[rc[Node]] = [rc(Node(1)), rc(Node(2))]
+    print(sum_of(xs))
+    print(sum_of(xs))
+    print(sum_of(xs))
+    print(xs[0].v)
+    return 0

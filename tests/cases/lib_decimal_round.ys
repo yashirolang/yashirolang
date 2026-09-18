@@ -1,0 +1,32 @@
+# OUTPUT: 1.3
+# OUTPUT: -1.3
+# OUTPUT: 1.2
+# OUTPUT: -1.2
+# OUTPUT: 1.4
+# OUTPUT: 10
+# OUTPUT: 断りました
+# EXIT: 0
+# A-31: 丸め方は**呼ぶ側が毎回選びます**（既定を決めません）。
+#   ⚠️ 「気づかないうちに丸められていた」が、金額のいちばん多い事故です。
+#   ★ 負の数でも向きが対称になるよう、絶対値で丸めて符号を戻します。
+import decimal
+
+def main() -> int:
+    a: decimal.Decimal = decimal.Decimal(125, 2)     # 1.25
+    b: decimal.Decimal = decimal.Decimal(-125, 2)    # -1.25
+    print(a.rescale(1, decimal.HALF_UP).to_str())
+    print(b.rescale(1, decimal.HALF_UP).to_str())
+    print(a.rescale(1, decimal.HALF_EVEN).to_str())   # 偶数側 → 1.2
+    print(b.rescale(1, decimal.HALF_EVEN).to_str())
+    c: decimal.Decimal = decimal.Decimal(135, 2)     # 1.35
+    print(c.rescale(1, decimal.HALF_EVEN).to_str())   # 偶数側 → 1.4
+
+    # 100 円の 10% を 1 円単位に
+    price: decimal.Decimal = decimal.Decimal(100, 0)
+    rate: decimal.Decimal = decimal.Decimal(10, 2)
+    print((price * rate).rescale(0, decimal.HALF_UP).to_str())
+
+    bad: decimal.Decimal | None = decimal.parse("1.2.3")
+    if bad is None:
+        print("断りました")
+    return 0

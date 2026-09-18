@@ -24,7 +24,7 @@ def main() -> int:
 | コンパイラ | `yashirolang`（C 実装 → **セルフホスト済み**） |
 | バックエンド | LLVM IR を直接出力（テキスト） |
 | 型付け | 静的・型注釈必須・実行時型情報なし |
-| 現在地 | v2（安全性・エラー処理・共有所有）実装済み／**所有権の検査は既定でエラー**（Rust と同じ強さ）／**範囲型と契約**（Ada の部分型・Pre/Post）／**RISC-V のベアメタルで動作**・587 テスト |
+| 現在地 | v2（安全性・エラー処理・共有所有）実装済み／**所有権の検査は既定でエラー**（Rust と同じ強さ）／**範囲型と契約**（Ada の部分型・Pre/Post）／**RISC-V のベアメタルで動作**・593 テスト |
 
 ---
 
@@ -71,7 +71,7 @@ printf 'def main() -> int:\n    print("hello")\n    return 0\n' > hello.ys
 ```
 bin/yashirolang
 lib/plc/runtime.a
-lib/plc/lib/*.ys        ← 標準ライブラリ（文字列・入出力・JSON・集合・時刻・数学・線形代数・複素数・FFT・作図・表 ほか）
+lib/plc/lib/*.ys        ← 標準ライブラリ（文字列・入出力・JSON・集合・時刻・数学・線形代数・複素数・FFT・作図・表・十進小数・バイト列 ほか）
 ```
 
 ### B. ソースからビルドする
@@ -92,7 +92,7 @@ sudo make install            # 既定は /usr/local
 make install PREFIX=$HOME/.local   # 自分の環境だけに入れるなら
 
 yashirolang hello.ys -o hello  # どこからでも呼べる
-yashirolang --version          # → yashirolang 0.20.0 (stage0)
+yashirolang --version          # → yashirolang 0.22.0 (stage0)
 ysm --version                 # パッケージマネージャも一緒に入ります
 ```
 
@@ -214,6 +214,17 @@ scope:                                 # 出口で必ず join される
 - ⚠️ **`async` / `await` はありません。** 理由と、あとから
   **利用者のコードを変えずに**非同期を得る道は
   [docs/design/concurrency.md](docs/design/concurrency.md) §6 に書いてあります
+
+### デバッグ
+
+```bash
+yashirolang -g app.ys -o app     # デバッグ情報つきで建てる
+lldb ./app                     # ブレークポイントもバックトレースも行で出ます
+```
+
+- 出るのは**関数の枠と行の対応表**です（変数の中身はまだ見られません）
+- **`-g` を付けないときの出力は 1 バイトも変わりません**
+- macOS では `<出力>.dSYM` も一緒に作ります（`dsymutil` を自動で走らせます）
 
 ### 速さ
 

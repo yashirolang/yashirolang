@@ -1,0 +1,12 @@
+# OUTPUT: 5
+# EXIT: 0
+# IR-NOT: !DILocation
+# IR-NOT: !llvm.dbg.cu
+# A-30: **-g を付けないときの出力は 1 バイトも変わりません。**
+#   ⚠️ ここが崩れると、既存の IR の突き合わせが全部ずれます。
+def add(a: int, b: int) -> int:
+    return a + b
+
+def main() -> int:
+    print(str(add(2, 3)))
+    return 0

@@ -1,0 +1,213 @@
+# bytes — 固定幅の整数をバイト列に並べる／読み出す
+#
+# 🤔 なぜこれが要るのか
+#   この言語の整数は `int`（64 ビット）1 種類です。値の**範囲**は範囲型で
+#   言えますが（`type U8 = int range(0, 255)`）、「メモリやファイルの上で
+#   何バイトを占めるか」は別の話です。通信のフレーム・バイナリ形式・
+#   レジスタの写しを扱うには、**並べ方**を決める道具が要ります。
+#
+# ★ バイト列は `list[int]`（各要素 0..255）で持ちます。
+#   ⚠️ str との違い：str は文字の並び（UTF-8）で、こちらは**生のバイト**です。
+#
+# ★ 幅の合わない値は**入れる時点で止まります**（範囲型が引数を検査します）。
+#   黙って切り詰めません。折り返したいときは wrap_* で自分で丸めてください。
+import strings
+
+# ── 幅ごとの型（範囲は入れるときに確かめられます）──────────
+type U8 = int range(0, 255)
+type U16 = int range(0, 65535)
+type U32 = int range(0, 4294967295)
+type I8 = int range(-128, 127)
+type I16 = int range(-32768, 32767)
+type I32 = int range(-2147483648, 2147483647)
+
+
+# ── 書き込む ──────────────────────────────────────────────
+
+def put_u8(buf: mut list[int], v: U8) -> None:
+    buf.append(v)
+
+
+# ★ リトルエンディアン（小さい桁が先）。x86 / ARM / RISC-V はこちらです。
+def put_u16_le(buf: mut list[int], v: U16) -> None:
+    buf.append(v & 255)
+    buf.append((v >> 8) & 255)
+
+
+# ★ ビッグエンディアン（大きい桁が先）。ネットワークの並びはこちらです。
+def put_u16_be(buf: mut list[int], v: U16) -> None:
+    buf.append((v >> 8) & 255)
+    buf.append(v & 255)
+
+
+def put_u32_le(buf: mut list[int], v: U32) -> None:
+    i: int = 0
+    while i < 4:
+        buf.append((v >> (i * 8)) & 255)
+        i = i + 1
+
+
+def put_u32_be(buf: mut list[int], v: U32) -> None:
+    i: int = 3
+    while i >= 0:
+        buf.append((v >> (i * 8)) & 255)
+        i = i - 1
+
+
+# ⚠️ 64 ビットは**符号つきのまま**扱います（int がそれだからです）。
+#   2^63 以上の値は負の数として渡してください（ビットの並びは同じです）。
+def put_i64_le(buf: mut list[int], v: int) -> None:
+    i: int = 0
+    while i < 8:
+        buf.append((v >> (i * 8)) & 255)
+        i = i + 1
+
+
+def put_i64_be(buf: mut list[int], v: int) -> None:
+    i: int = 7
+    while i >= 0:
+        buf.append((v >> (i * 8)) & 255)
+        i = i - 1
+
+
+# ★ 符号つきは 2 の補数で並べます（読み出しも対称）。
+def put_i8(buf: mut list[int], v: I8) -> None:
+    buf.append(v & 255)
+
+
+def put_i16_le(buf: mut list[int], v: I16) -> None:
+    buf.append(v & 255)
+    buf.append((v >> 8) & 255)
+
+
+def put_i32_le(buf: mut list[int], v: I32) -> None:
+    i: int = 0
+    while i < 4:
+        buf.append((v >> (i * 8)) & 255)
+        i = i + 1
+
+
+# ── 読み出す ──────────────────────────────────────────────
+#
+# ⚠️ 範囲の外を読もうとしたら止めます（黙って 0 を返しません）。
+
+def need(buf: list[int], off: int, n: int) -> None:
+    if off < 0 or off + n > len(buf):
+        panic("bytes: " + str(off) + " から " + str(n) +
+              " バイト読めません（長さ " + str(len(buf)) + "）")
+
+
+def get_u8(buf: list[int], off: int) -> int:
+    need(buf, off, 1)
+    return buf[off] & 255
+
+
+def get_u16_le(buf: list[int], off: int) -> int:
+    need(buf, off, 2)
+    return (buf[off] & 255) | ((buf[off + 1] & 255) << 8)
+
+
+def get_u16_be(buf: list[int], off: int) -> int:
+    need(buf, off, 2)
+    return ((buf[off] & 255) << 8) | (buf[off + 1] & 255)
+
+
+def get_u32_le(buf: list[int], off: int) -> int:
+    need(buf, off, 4)
+    v: int = 0
+    i: int = 3
+    while i >= 0:
+        v = (v << 8) | (buf[off + i] & 255)
+        i = i - 1
+    return v
+
+
+def get_u32_be(buf: list[int], off: int) -> int:
+    need(buf, off, 4)
+    v: int = 0
+    i: int = 0
+    while i < 4:
+        v = (v << 8) | (buf[off + i] & 255)
+        i = i + 1
+    return v
+
+
+def get_i64_le(buf: list[int], off: int) -> int:
+    need(buf, off, 8)
+    v: int = 0
+    i: int = 7
+    while i >= 0:
+        v = (v << 8) | (buf[off + i] & 255)
+        i = i - 1
+    return v
+
+
+def get_i64_be(buf: list[int], off: int) -> int:
+    need(buf, off, 8)
+    v: int = 0
+    i: int = 0
+    while i < 8:
+        v = (v << 8) | (buf[off + i] & 255)
+        i = i + 1
+    return v
+
+
+# 符号を戻す（2 の補数）
+#
+# ★ 「上の桁が立っていたら、その幅ぶんを引く」だけです。
+def get_i8(buf: list[int], off: int) -> int:
+    return sign_extend(get_u8(buf, off), 8)
+
+
+def get_i16_le(buf: list[int], off: int) -> int:
+    return sign_extend(get_u16_le(buf, off), 16)
+
+
+def get_i16_be(buf: list[int], off: int) -> int:
+    return sign_extend(get_u16_be(buf, off), 16)
+
+
+def get_i32_le(buf: list[int], off: int) -> int:
+    return sign_extend(get_u32_le(buf, off), 32)
+
+
+def get_i32_be(buf: list[int], off: int) -> int:
+    return sign_extend(get_u32_be(buf, off), 32)
+
+
+def sign_extend(v: int, bits: int) -> int:
+    if bits <= 0 or bits >= 64:
+        panic("bytes: 幅は 1 から 63 までです")
+    half: int = 1 << (bits - 1)
+    if v < half:
+        return v
+    return v - (half * 2)
+
+
+# ── str との行き来 ────────────────────────────────────────
+#
+# ⚠️ str は UTF-8 の文字列です。ここで渡すのは「バイトとして見た中身」で、
+#   文字として意味を持つとは限りません（読み込んだファイルの中身など）。
+
+def from_str(s: str) -> list[int]:
+    out: list[int] = []
+    i: int = 0
+    while i < len(s):
+        out.append(strings.byte_at(s, i))
+        i = i + 1
+    return out
+
+
+# 16 進で見る（"0a ff 00"）
+def hex(buf: list[int]) -> str:
+    digits: str = "0123456789abcdef"
+    out: list[str] = []
+    i: int = 0
+    while i < len(buf):
+        b: int = buf[i] & 255
+        if i > 0:
+            out.append(" ")
+        out.append(strings.substr(digits, (b >> 4) & 15, 1))
+        out.append(strings.substr(digits, b & 15, 1))
+        i = i + 1
+    return strings.join(out, "")

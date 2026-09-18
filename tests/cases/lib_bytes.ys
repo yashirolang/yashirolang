@@ -1,0 +1,28 @@
+# OUTPUT: 0a 02 01 ff ff ff ff fe ff ff ff
+# OUTPUT: 10
+# OUTPUT: 513
+# OUTPUT: 4294967295
+# OUTPUT: -2
+# OUTPUT: 258
+# OUTPUT: 41 42
+# EXIT: 0
+# A-31: 固定幅のバイト並び（通信フレーム・バイナリ形式・レジスタの写し）。
+#   ★ この言語の整数は int 1 種類なので、**値の範囲は範囲型**（A-28）で、
+#     **並べ方（何バイト・どちら向き）は library** で決めます。
+#   ⚠️ 幅に合わない値は入れる時点で止まります（黙って切り詰めません）。
+import bytes
+
+def main() -> int:
+    buf: list[int] = []
+    bytes.put_u8(buf, 10)
+    bytes.put_u16_be(buf, 513)          # ネットワーク並び
+    bytes.put_u32_le(buf, 4294967295)
+    bytes.put_i32_le(buf, -2)           # 2 の補数
+    print(bytes.hex(buf))
+    print(str(bytes.get_u8(buf, 0)))
+    print(str(bytes.get_u16_be(buf, 1)))
+    print(str(bytes.get_u32_le(buf, 3)))
+    print(str(bytes.get_i32_le(buf, 7)))
+    print(str(bytes.get_i16_le(buf, 1)))
+    print(bytes.hex(bytes.from_str("AB")))
+    return 0

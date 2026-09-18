@@ -1,6 +1,6 @@
 # emit_ir — stage1 のコード生成器を動かす入口
 #
-#   ./build/stage1-codegen [--no-overflow-check] foo<拡張子>
+#   ./build/stage1-codegen [--no-overflow-check] [-g] foo<拡張子>
 #
 # ★ C 版の `-S` と**バイト単位で同じ出力**を目指します。
 #   ⚠️ だから C 版が受け取る「IR の中身を変えるオプション」は、
@@ -23,6 +23,10 @@ def main() -> int:
     # ⚠️ 引数の形は C 版に合わせます（オプションは入力ファイルより前）。
     path: str = ""
     no_ovf: bool = False
+    # ★ -g（A-30）も「IR の中身を変えるオプション」なので、ここでも受け取ります。
+    #   ⚠️ 受け取らないと、tests/selfhost.sh の突き合わせで C 版だけが
+    #     デバッグ情報を出し、毎回食い違います（実際にそうなりました）。
+    debug: bool = False
     # ★ 解放（drop）は**既定で入れる**（A-21 ⑬。C 版 src/main.c と対）
     drop: bool = True
     ai: int = 1
@@ -34,11 +38,14 @@ def main() -> int:
             drop = True
         elif a == "--no-drop":
             drop = False
+        elif a == "-g":
+            debug = True
         else:
             path = a
         ai = ai + 1
     if len(path) == 0:
-        print("使い方: stage1-codegen [--no-overflow-check] [--drop] <入力" + langinfo.ext() + ">")
+        print("使い方: stage1-codegen [--no-overflow-check] [--drop] [-g] <入力" +
+              langinfo.ext() + ">")
         return 1
 
     # ⚠️ target triple はビルド時に埋め込めない（プリプロセッサが無い）ので、
@@ -76,6 +83,6 @@ def main() -> int:
             #   main_ir が空になります（入口は 1 つだけなので実際には
             #   1 回しか通りませんが、それは検査には分かりません）。
             name = copy(main_ir)
-        io.print_raw(codegen.codegen(mm, name, triple, no_ovf, drop))
+        io.print_raw(codegen.codegen(mm, name, triple, no_ovf, drop, debug))
         m = mm.next
     return 0

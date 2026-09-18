@@ -1,0 +1,274 @@
+# decimal — 十進の固定小数点（金額を扱うための型）
+#
+# ★ **float では金額を扱えません。** 0.1 + 0.2 は 0.30000000000000004 です。
+#   二進の浮動小数点は 0.1 を持てないので、足すたびに誤差が積もります。
+#   ここでは「整数の**単位数** units と、小数点以下の**桁数** scale」で持ちます。
+#
+#     123.45  →  units = 12345, scale = 2
+#
+# ⚠️ 単位数は int（64 ビット）です。桁があふれたら**止まります**
+#   （この言語は整数の桁あふれを既定で検査します）。黙って壊れません。
+#
+# ⚠️ **割り算だけは桁を書かせます**（`/` を多重定義していません）。
+#   1 / 3 に「正しい答え」は無く、どこで丸めるかは呼ぶ側が決めることだからです。
+import strings
+
+# 小数点以下に持てる桁数の上限（10^18 が int に収まる限界）
+MAX_SCALE: int = 18
+
+# ── 丸め方 ────────────────────────────────────────────────
+#
+# ★ 既定を決めません。**呼ぶ側が毎回選びます。**
+#   「気づかないうちに丸められていた」が、金額のいちばん多い事故だからです。
+HALF_UP: int = 0     # 0.5 は 0 から遠い側へ（日常の四捨五入）
+HALF_EVEN: int = 1   # 0.5 は偶数側へ（銀行家の丸め。足し合わせても偏らない）
+DOWN: int = 2        # 0 の方向へ落とす（切り捨て）
+UP: int = 3          # 0 から遠い側へ（切り上げ）
+
+
+# 10 の n 乗（桁あふれは言語の検査が止めます）
+def pow10(n: int) -> int:
+    if n < 0 or n > MAX_SCALE:
+        panic("decimal: 桁数は 0 から " + str(MAX_SCALE) + " までです")
+    p: int = 1
+    i: int = 0
+    while i < n:
+        p = p * 10
+        i = i + 1
+    return p
+
+
+class Decimal:
+    units: int     # 単位数（123.45 なら 12345）
+    scale: int     # 小数点以下の桁数（123.45 なら 2）
+
+    def init(self, units: int, scale: int) -> None:
+        if scale < 0 or scale > MAX_SCALE:
+            panic("decimal: 桁数は 0 から " + str(MAX_SCALE) + " までです")
+        self.units = units
+        self.scale = scale
+
+    # 桁数を揃える（増やすのは正確、減らすのは丸めが要る）
+    def rescale(self, scale: int, mode: int) -> Decimal:
+        if scale < 0 or scale > MAX_SCALE:
+            panic("decimal: 桁数は 0 から " + str(MAX_SCALE) + " までです")
+        if scale == self.scale:
+            return Decimal(self.units, self.scale)
+        if scale > self.scale:
+            # 増やす：正確（0 を足すだけ）
+            return Decimal(self.units * pow10(scale - self.scale), scale)
+        # 減らす：丸める
+        d: int = pow10(self.scale - scale)
+        return Decimal(divide_rounded(self.units, d, mode), scale)
+
+    def is_zero(self) -> bool:
+        return self.units == 0
+
+    def sign(self) -> int:
+        if self.units > 0:
+            return 1
+        if self.units < 0:
+            return -1
+        return 0
+
+    def abs_of(self) -> Decimal:
+        if self.units < 0:
+            return Decimal(-self.units, self.scale)
+        return Decimal(self.units, self.scale)
+
+    # ── 演算 ──────────────────────────────────────────────
+    #
+    # ★ 足し算と引き算は**桁数の大きいほうに揃えて**から行います（正確）。
+    def __add__(self, other: Decimal) -> Decimal:
+        s: int = max(self.scale, other.scale)
+        a: Decimal = self.rescale(s, DOWN)
+        b: Decimal = other.rescale(s, DOWN)
+        return Decimal(a.units + b.units, s)
+
+    def __sub__(self, other: Decimal) -> Decimal:
+        s: int = max(self.scale, other.scale)
+        a: Decimal = self.rescale(s, DOWN)
+        b: Decimal = other.rescale(s, DOWN)
+        return Decimal(a.units - b.units, s)
+
+    # ★ 掛け算の桁数は**足し算**になります（正確）。
+    #   ⚠️ 上限を超えるときは止めます（黙って丸めません）。
+    def __mul__(self, other: Decimal) -> Decimal:
+        s: int = self.scale + other.scale
+        if s > MAX_SCALE:
+            panic("decimal: 掛け算の桁数が " + str(MAX_SCALE) +
+                  " を超えます（先に rescale してください）")
+        return Decimal(self.units * other.units, s)
+
+    def __neg__(self) -> Decimal:
+        return Decimal(-self.units, self.scale)
+
+    # ★ 割り算は**桁と丸め方を書かせます**（`/` は多重定義しません）。
+    def div_to(self, other: Decimal, scale: int, mode: int) -> Decimal:
+        if other.units == 0:
+            panic("decimal: 0 では割れません")
+        # (self / other) を scale 桁で表す：
+        #   units = self.units * 10^(scale + other.scale - self.scale) / other.units
+        shift: int = scale + other.scale - self.scale
+        n: int = self.units
+        d: int = other.units
+        if shift >= 0:
+            n = n * pow10(shift)
+        else:
+            d = d * pow10(-shift)
+        return Decimal(divide_rounded(n, d, mode), scale)
+
+    # ── 比べる ────────────────────────────────────────────
+    #
+    # ⚠️ 桁数が違っても同じ値なら等しい（1.5 == 1.50）。
+    def cmp(self, other: Decimal) -> int:
+        s: int = max(self.scale, other.scale)
+        a: Decimal = self.rescale(s, DOWN)
+        b: Decimal = other.rescale(s, DOWN)
+        if a.units < b.units:
+            return -1
+        if a.units > b.units:
+            return 1
+        return 0
+
+    def __eq__(self, other: Decimal) -> bool:
+        return self.cmp(other) == 0
+
+    def __ne__(self, other: Decimal) -> bool:
+        return self.cmp(other) != 0
+
+    def __lt__(self, other: Decimal) -> bool:
+        return self.cmp(other) < 0
+
+    def __le__(self, other: Decimal) -> bool:
+        return self.cmp(other) <= 0
+
+    def __gt__(self, other: Decimal) -> bool:
+        return self.cmp(other) > 0
+
+    def __ge__(self, other: Decimal) -> bool:
+        return self.cmp(other) >= 0
+
+    # ── 文字にする ────────────────────────────────────────
+    def to_str(self) -> str:
+        neg: bool = self.units < 0
+        u: int = self.units
+        if neg:
+            u = -u
+        digits: str = str(u)
+        if self.scale == 0:
+            if neg:
+                return "-" + digits
+            return digits
+        # 小数点以下の桁数だけ 0 を補う
+        while len(digits) <= self.scale:
+            digits = "0" + digits
+        cut: int = len(digits) - self.scale
+        head: str = strings.substr(digits, 0, cut)
+        tail: str = strings.substr(digits, cut, self.scale)
+        out: str = head + "." + tail
+        if neg:
+            return "-" + out
+        return out
+
+    # ⚠️ **float への変換は最後の手段です**（ここで誤差が入ります）。
+    #   図を描くときなど、表示のためだけに使ってください。
+    def to_float(self) -> float:
+        return float(self.units) / float(pow10(self.scale))
+
+
+# n / d を丸めて整数にする（d > 0 を仮定しない）
+#
+# ★ 丸めは**絶対値で考えて、最後に符号を戻します**。
+#   そうしないと、負の数のときに「切り捨て」の向きが変わります。
+def divide_rounded(n: int, d: int, mode: int) -> int:
+    if d == 0:
+        panic("decimal: 0 では割れません")
+    neg: bool = (n < 0) != (d < 0)
+    a: int = n
+    b: int = d
+    if a < 0:
+        a = -a
+    if b < 0:
+        b = -b
+
+    q: int = a // b
+    r: int = a % b
+    if r != 0:
+        if mode == UP:
+            q = q + 1
+        elif mode == HALF_UP:
+            if r * 2 >= b:
+                q = q + 1
+        elif mode == HALF_EVEN:
+            twice: int = r * 2
+            if twice > b:
+                q = q + 1
+            elif twice == b:
+                if q % 2 == 1:
+                    q = q + 1
+        # DOWN は何もしない（0 の方向へ落とす）
+    if neg:
+        return -q
+    return q
+
+
+# ── 作る ──────────────────────────────────────────────────
+
+def zero(scale: int) -> Decimal:
+    return Decimal(0, scale)
+
+
+def from_int(n: int, scale: int) -> Decimal:
+    return Decimal(n * pow10(scale), scale)
+
+
+# 文字列から作る（"123.45" / "-0.07" / "42"）
+#
+# ⚠️ **読めない文字列では None を返します**（黙って 0 にしません）。
+#   ★ float は経由しません（経由した時点で誤差が入ります）。
+def parse(s: str) -> Decimal | None:
+    if len(s) == 0:
+        return None
+    neg: bool = False
+    i: int = 0
+    c0: str = strings.substr(s, 0, 1)
+    if c0 == "-" or c0 == "+":
+        neg = c0 == "-"
+        i = 1
+    units: int = 0
+    scale: int = 0
+    seen_digit: bool = False
+    seen_dot: bool = False
+    while i < len(s):
+        ch: str = strings.substr(s, i, 1)
+        if ch == ".":
+            if seen_dot:
+                return None
+            seen_dot = True
+            i = i + 1
+        else:
+            d: int = digit_of(ch)
+            if d < 0:
+                return None
+            if scale >= MAX_SCALE and seen_dot:
+                return None          # 桁が多すぎる（黙って丸めない）
+            units = units * 10 + d
+            if seen_dot:
+                scale = scale + 1
+            seen_digit = True
+            i = i + 1
+    if not seen_digit:
+        return None
+    if neg:
+        units = -units
+    return Decimal(units, scale)
+
+
+def digit_of(ch: str) -> int:
+    if len(ch) != 1:
+        return -1
+    n: int = ord(ch)
+    if n < 48 or n > 57:
+        return -1
+    return n - 48

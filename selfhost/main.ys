@@ -37,6 +37,7 @@ class Options:
     stage: int
     keep_ll: bool
     no_ovf: bool     # --no-overflow-check
+    debug: bool      # -g（デバッグ情報を出す。A-30）
     drop: bool       # --drop / --no-drop（解放を挿入する。後勝ち）
     # ★ 所有権検査の指摘をエラーにするか（既定 True。C 版 src/main.c と対）
     deny_move: bool
@@ -53,6 +54,7 @@ class Options:
         self.stage = STAGE_ALL
         self.keep_ll = False
         self.no_ovf = False
+        self.debug = False
         # ★ 解放（drop）は**既定で入れる**（A-21 ⑬。逃げ道は --no-drop）
         self.drop = True
         # ★ 所有権の検査は**既定でエラー**（A-24。逃げ道は --warn-own）
@@ -91,6 +93,7 @@ def usage(status: int) -> None:
     print("                  検査ごとにエラーへ戻す（既定。--warn-own の後に書く）")
     print("  --drop          スコープの出口に解放（drop）を挿入する（既定）")
     print("  --no-drop       解放を挿入しない（--drop を打ち消す。後勝ち）")
+    print("  -g              デバッグ情報を出す（デバッガ・perf が行を出せます）")
     print("  --no-overflow-check")
     print("                  数の実行時検査を外す（既定は検査する）:")
     print("                  整数の + - * の桁あふれ／float の 0 除算")
@@ -179,6 +182,9 @@ def parse_args(args: list[str]) -> Options:
         # ★ 既定は検査あり。速さのために外したいときだけ付ける。
         elif a == "--no-overflow-check":
             o.no_ovf = True
+        # ★ デバッグ情報（A-30）。デバッガ・perf が行を出せる。
+        elif a == "-g":
+            o.debug = True
         # ★ -j2 のように数をくっつけて書く（C 版 src/main.c と対）
         elif len(a) > 2 and strings.startswith(a, "-j"):
             o.jobs = int(strings.substr(a, 2, len(a) - 2))
@@ -376,7 +382,7 @@ def main() -> int:
         name: str = ""
         if mm.name == entry.name:
             name = copy(main_ir)
-        ir: str = codegen.codegen(mm, name, triple, opt.no_ovf, opt.drop)
+        ir: str = codegen.codegen(mm, name, triple, opt.no_ovf, opt.drop, opt.debug)
 
         if opt.stage == STAGE_EMIT_IR:
             # -S : IR を出して終了。複数モジュールなら区切りを入れて並べる
@@ -417,7 +423,11 @@ def main() -> int:
         obj: str = opt.output + "." + mm2.name + ".o"
         # ⚠️ append は所有を持っていくので、**先にコマンドを組み立てます**
         #   （逆にすると E-MOVE-1「移動済みの値 'obj' を使っています」）。
-        cmds.append(clang_cmd() + " " + opt.opt_level + " -c \"" +
+        # ★ -g のときは clang にも渡す（DWARF を実際に作らせるため。A-30）
+        gflag: str = ""
+        if opt.debug:
+            gflag = " -g"
+        cmds.append(clang_cmd() + " " + opt.opt_level + gflag + " -c \"" +
                     mm2.ll_path + "\" -o \"" + obj + "\"")
         objs.append(obj)
         m2 = mm2.next
@@ -427,7 +437,10 @@ def main() -> int:
     if rc == 0:
         # ── リンク ──
         parts: list[str] = []
-        parts.append(clang_cmd() + " " + opt.opt_level)
+        gflag2: str = ""
+        if opt.debug:
+            gflag2 = " -g"
+        parts.append(clang_cmd() + " " + opt.opt_level + gflag2)
         for ob in objs:
             parts.append(" \"" + ob + "\"")
         parts.append(" \"" + runtime_o() + "\"")
@@ -442,6 +455,15 @@ def main() -> int:
             parts.append(" -lws2_32")
         parts.append(" -o \"" + out_path + "\"")
         rc = sys.run(strings.join(parts, ""))
+
+        # ★ macOS では DWARF が **.o の中に残り**、実行ファイルには
+        #   「どの .o にあるか」の地図だけが入る（デバッグマップ）。
+        #   こちらは .o を片付けるので、dsymutil で <出力>.dSYM にまとめる。
+        #   ⚠️ Linux / Windows は実行ファイルに直接入るので何もしない。
+        #   対になる定義: src/main.c の dsymutil
+        if rc == 0 and opt.debug and strings.contains(triple, "apple"):
+            # ⚠️ 失敗しても止めない（dsymutil が無くても実行ファイルはできている）
+            sys.run("dsymutil \"" + out_path + "\" 2>/dev/null")
 
     # ⚠️ .o は成否によらず片付けます（.ll は失敗時だけ残します。下記）。
     for ob2 in objs:

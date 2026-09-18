@@ -104,6 +104,23 @@ class Emitter:
 
     triple: str
 
+    # ── デバッグ情報（A-30）──
+    #
+    # ★ -g のときだけ LLVM の debug metadata を出す。出すのは「行の対応表」と
+    #   「関数の枠」だけで、これだけでブレークポイント・バックトレース・
+    #   perf の行表示が効く。対になる定義: src/codegen.c の Emitter
+    dbg: bool               # -g
+    dbgmeta: list[str]      # metadata の定義（モジュール末尾に出す）
+    dbg_next: int           # 次に振る metadata の番号
+    dbg_file: int           # !DIFile の番号
+    dbg_cu: int             # !DICompileUnit の番号
+    dbg_empty: int          # !{} の番号
+    dbg_subty: int          # !DISubroutineType の番号
+    dbg_fn: int             # 生成中の関数の !DISubprogram（0 なら関数の外）
+    dbg_line: int           # いま生成している文の行
+    dbg_loc: int            # その行の !DILocation（0 なら未作成）
+    dbg_loc_line: int       # dbg_loc が指している行
+
     # ── 契約（A-29）──
     fn_node: rc[ast.Node] | None   # 生成中の関数（ensures の式を引く）
     ret_val: str                   # いま返そうとしている値（'result'）
@@ -191,6 +208,17 @@ class Emitter:
         # ──
         self.fn_raises = False
         self.ret_val = ""
+        self.dbg = False
+        self.dbgmeta = []
+        self.dbg_next = 10      # ★ 0〜8 は TBAA が使っている（9 は空け）
+        self.dbg_file = 0
+        self.dbg_cu = 0
+        self.dbg_empty = 0
+        self.dbg_subty = 0
+        self.dbg_fn = 0
+        self.dbg_line = 0
+        self.dbg_loc = 0
+        self.dbg_loc_line = 0
         self.err_slot_done = False
         self.err_type_emitted = False
         self.prop_used = False
@@ -1386,6 +1414,73 @@ class Emitter:
     # ★ 出るのは **条件の式と分岐 1 つ**だけ（assert と同じ形）。
     # ⚠️ メッセージは**コンパイル時に組み立てて**大域定数に置く。
     #   対になる定義: src/codegen.c の gen_contract_check
+    # ── デバッグ情報（A-30）──────────────────────────────
+    #
+    # ★ metadata の番号は 10 から振る（0〜8 は TBAA）。
+    #   対になる定義: src/codegen.c の dbg_id / dbg_location / dbg_annotate
+    def dbg_id(mut self) -> int:
+        n: int = self.dbg_next
+        self.dbg_next = n + 1
+        return n
+
+    # いま生成している行の !DILocation を引く（無ければ作る）
+    #
+    # ★ 行ごとに 1 つだけ作る（文ごとに作ると metadata が膨らむ）。
+    def dbg_location(mut self) -> int:
+        if not self.dbg or self.dbg_fn == 0:
+            return 0
+        if self.dbg_loc != 0 and self.dbg_loc_line == self.dbg_line:
+            return self.dbg_loc
+        id_: int = self.dbg_id()
+        self.dbgmeta.append("!" + str(id_) + " = !DILocation(line: " +
+                            str(self.dbg_line) + ", column: 1, scope: !" +
+                            str(self.dbg_fn) + ")\n")
+        self.dbg_loc = id_
+        self.dbg_loc_line = self.dbg_line
+        return id_
+
+    # fn の start 以降に出した**命令の行**へ `!dbg` を付けて回る
+    #
+    # 🤔 なぜ後から付けるのか
+    #   命令を出す場所は数百か所ある。そのすべてに行の印を渡して回ると、
+    #   本筋（何を出すか）が印の受け渡しで埋まる。
+    #
+    # ⚠️ 付けないもの：ラベル行（行頭が空白でない）・空行・すでに `!dbg` がある行
+    def dbg_annotate(mut self, start: int) -> None:
+        if not self.dbg or self.dbg_fn == 0:
+            return
+        loc: int = self.dbg_location()
+        if loc == 0:
+            return
+        if len(self.fn) <= start:
+            return
+
+        # 追記されたぶんを 1 本につないでから、行ごとに見る
+        tail: list[str] = []
+        i: int = start
+        while i < len(self.fn):
+            tail.append(copy(self.fn[i]))
+            i = i + 1
+        text: str = strings.join(tail, "")
+        while len(self.fn) > start:
+            self.fn.pop()
+
+        ref: str = ", !dbg !" + str(loc)
+        lines: list[str] = strings.split(text, "\n")
+        k: int = 0
+        while k < len(lines):
+            ln: str = copy(lines[k])
+            last: bool = k == len(lines) - 1
+            is_insn: bool = (len(ln) > 2 and strings.startswith(ln, "  ") and
+                             strings.find(ln, "!dbg") < 0)
+            if is_insn:
+                ln = ln + ref
+            if last:
+                self.fn.append(ln)
+            else:
+                self.fn.append(ln + "\n")
+            k = k + 1
+
     def gen_contract_check(mut self, c: rc[ast.Node], fname: str) -> None:
         self.declare_rt("void @pl_contract_fail(ptr) noreturn cold")
 
@@ -3202,7 +3297,22 @@ class Emitter:
 
     # ── 文の生成 ────────────────────────────────────────────
 
+    # 文 1 つを出す（デバッグ情報を付ける入口。実体は gen_stmt_inner）
+    #   対になる定義: src/codegen.c の gen_stmt
     def gen_stmt(mut self, n: rc[ast.Node]) -> str:
+        if not self.dbg or self.dbg_fn == 0 or n.tok is None:
+            return self.gen_stmt_inner(n)
+
+        # ★ 文の行を覚えてから出し、出し終わった範囲に !dbg を付ける（A-30）
+        saved_line: int = self.dbg_line
+        self.dbg_line = tok_of(n).line
+        start: int = len(self.fn)
+        r: str = self.gen_stmt_inner(n)
+        self.dbg_annotate(start)
+        self.dbg_line = saved_line
+        return r
+
+    def gen_stmt_inner(mut self, n: rc[ast.Node]) -> str:
         # 終端済みブロックの後ろに来たら、到達不能ブロックを開く（規約 R7）
         self.ensure_block()
 
@@ -3552,6 +3662,27 @@ class Emitter:
         self.allocas = []
         self.fn = []
 
+        # ── デバッグ情報（A-30）：この関数の枠を 1 つ作る ──
+        #
+        # ★ 型（引数と戻り値）は入れない。行の対応表とバックトレースには
+        #   要らず、入れると 2 実装で型の並べ方まで揃える必要が出る。
+        self.dbg_fn = 0
+        self.dbg_loc = 0
+        self.dbg_line = 1
+        if n.tok is not None:
+            self.dbg_line = tok_of(n).line
+        if self.dbg:
+            fid: int = self.dbg_id()
+            self.dbgmeta.append(
+                "!" + str(fid) + " = distinct !DISubprogram(name: \"" + n.name +
+                "\", linkageName: \"" + n.ir_name + "\", scope: !" +
+                str(self.dbg_file) + ", file: !" + str(self.dbg_file) +
+                ", line: " + str(self.dbg_line) + ", type: !" +
+                str(self.dbg_subty) + ", scopeLine: " + str(self.dbg_line) +
+                ", spFlags: DISPFlagDefinition, unit: !" + str(self.dbg_cu) +
+                ")\n")
+            self.dbg_fn = fid
+
         # ── エラー処理の状態 ──
         self.fn_raises = n.err_types is not None
         self.fn_ret = n.type
@@ -3671,11 +3802,17 @@ class Emitter:
             if first:
                 sep2 = ""
             out.append(sep2 + "ptr %err.out")
-        out.append(") {\nentry:\n")
+        # ★ デバッグ情報（A-30）：この関数の枠を metadata に結ぶ
+        if self.dbg and self.dbg_fn != 0:
+            out.append(") !dbg !" + str(self.dbg_fn) + " {\nentry:\n")
+        else:
+            out.append(") {\nentry:\n")
         out.append(strings.join(self.allocas, ""))
         out.append(strings.join(self.fn, ""))
         out.append("}\n")
         self.body.append(strings.join(out, ""))
+        self.dbg_fn = 0
+        self.dbg_loc = 0
 
     # グローバル変数を出力する（言語仕様 6.2）
     def gen_global(mut self, n: rc[ast.Node]) -> None:
@@ -3732,11 +3869,12 @@ class Emitter:
 #
 # モジュール 1 つぶんの IR を作る（★ 1 ファイル = 1 モジュール = 1 つの .ll）
 def codegen(mod: rc[module.Module], main_ir_name: str, triple: str,
-            no_ovf: bool, drop: bool) -> str:
+            no_ovf: bool, drop: bool, debug: bool) -> str:
     root: rc[ast.Node] = node_of(mod.ast)
     e: Emitter = Emitter(triple)
     e.no_ovf = no_ovf
     e.drop = drop
+    e.dbg = debug
     e.ast_body = root.body
     # ① ヘッダ
     e.header.append("; Generated by " + langinfo.cc() + "\n")
@@ -3745,6 +3883,24 @@ def codegen(mod: rc[module.Module], main_ir_name: str, triple: str,
     # ⚠️ 規約 R11：target triple は必ず出力する
     if len(triple) > 0:
         e.header.append("target triple = \"" + triple + "\"\n")
+
+    # ★ デバッグ情報（A-30）：モジュールに 1 組だけ要るものを先に作る。
+    #   ⚠️ 関数より**先**に作る（番号の振り方が 2 実装で同じになるため）。
+    if e.dbg:
+        e.dbg_file = e.dbg_id()
+        e.dbg_cu = e.dbg_id()
+        e.dbg_empty = e.dbg_id()
+        e.dbg_subty = e.dbg_id()
+        e.dbgmeta.append("!" + str(e.dbg_file) + " = !DIFile(filename: \"" +
+                         mod.path + "\", directory: \".\")\n")
+        e.dbgmeta.append("!" + str(e.dbg_cu) +
+                         " = distinct !DICompileUnit(language: DW_LANG_C99, file: !" +
+                         str(e.dbg_file) + ", producer: \"" + langinfo.cc() + " " +
+                         langinfo.version() + "\", isOptimized: false, " +
+                         "runtimeVersion: 0, emissionKind: FullDebug)\n")
+        e.dbgmeta.append("!" + str(e.dbg_empty) + " = !{}\n")
+        e.dbgmeta.append("!" + str(e.dbg_subty) + " = !DISubroutineType(types: !" +
+                         str(e.dbg_empty) + ")\n")
 
     # ② クラスの型定義（★ 使う側より先に、モジュールの先頭に出す）
     d: rc[ast.Node] | None = root.body
@@ -3823,6 +3979,19 @@ def codegen(mod: rc[module.Module], main_ir_name: str, triple: str,
     out.append("!6 = !{!3, !3, i64 0}\n")
     out.append("!7 = !{!\"global\", !0}\n")
     out.append("!8 = !{!7, !7, i64 0}\n")
+
+    # ★ デバッグ情報（A-30）。-g のときだけ出る。
+    #   ⚠️ 「Debug Info Version」を書かないと clang が metadata を丸ごと捨てる。
+    if e.dbg:
+        flags1: int = e.dbg_id()
+        flags2: int = e.dbg_id()
+        out.append("!" + str(flags1) + " = !{i32 7, !\"Dwarf Version\", i32 4}\n")
+        out.append("!" + str(flags2) +
+                   " = !{i32 2, !\"Debug Info Version\", i32 3}\n")
+        out.append("!llvm.module.flags = !{!" + str(flags1) + ", !" +
+                   str(flags2) + "}\n")
+        out.append("!llvm.dbg.cu = !{!" + str(e.dbg_cu) + "}\n")
+        out.append(strings.join(e.dbgmeta, ""))
     return strings.join(out, "")
 
 
@@ -3831,6 +4000,16 @@ def codegen(mod: rc[module.Module], main_ir_name: str, triple: str,
 def hex2(v: int) -> str:
     digits: str = "0123456789ABCDEF"
     return digits[(v // 16) % 16] + digits[v % 16]
+
+# 位置情報（デバッグ情報を出すのに要る。A-30）
+#
+# ⚠️ ownck / sema の後なので、式にも文にも必ずトークンが付いています。
+def tok_of(n: rc[ast.Node]) -> rc[token.Token]:
+    t: rc[token.Token] | None = n.tok
+    if t is None:
+        panic("codegen: 位置情報の無いノードです")
+    return t
+
 
 def node_of(n: rc[ast.Node] | None) -> rc[ast.Node]:
     if n is None:

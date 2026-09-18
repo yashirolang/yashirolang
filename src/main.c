@@ -127,6 +127,7 @@ static void usage(int status) {
             "  --no-overflow-check\n"
             "                  数の実行時検査を外す（既定は検査する）:\n"
             "                  整数の + - * の桁あふれ／float の 0 除算\n"
+            "  -g              デバッグ情報を出す（デバッガ・perf が行を出せます）\n"
             "  -I <dir>        import を探す場所を足す（何度でも書ける）\n"
             "                  パッケージマネージャ " PLC_LANG_PM " が使います\n"
             "  -c              リンクせずオブジェクト（.o）を出す\n"
@@ -164,6 +165,7 @@ typedef struct {
     int deny_store_borrow;  // --deny-store-borrow（E-BORROW-7。既定 1）
     int drop;         // --drop（解放を挿入する）
     int no_ovf;       // --no-overflow-check（桁あふれの検査を出さない）
+    int debug;        // -g（デバッグ情報を出す。A-30）
     const char *target;  // --target=<triple>（ベアメタル向け）
     int emit_obj;        // -c（リンクせずオブジェクトを出す）
     int jobs;            // -j N（clang を同時に何本走らせるか。0 = コア数）
@@ -248,6 +250,8 @@ static Options parse_args(int argc, char **argv) {
         if (strcmp(a, "--no-drop") == 0) { o.drop = 0; continue; }
         // ★ 既定は検査あり。速さのために外したいときだけ付ける。
         if (strcmp(a, "--no-overflow-check") == 0) { o.no_ovf = 1; continue; }
+        // ★ デバッグ情報（A-30）。デバッガ・perf・バックトレースが行を出せます。
+        if (strcmp(a, "-g") == 0) { o.debug = 1; continue; }
         // ★ ベアメタル向け。リンクは自分でやるので -c で止める。
         if (strcmp(a, "-c") == 0) { o.emit_obj = 1; continue; }
         // ★ モジュールごとの clang を何本同時に走らせるか。
@@ -540,7 +544,8 @@ int main(int argc, char **argv) {
     // ── ④ コード生成（モジュールごとに 1 本の .ll）──
     for (Module *m = mods; m; m = m->next) {
         const char *entry_main = (m == entry && !no_runtime) ? sb_str(&main_ir) : NULL;
-        char *ir = codegen(m, entry_main, opt.drop != 0, opt.no_ovf != 0, triple);
+        char *ir = codegen(m, entry_main, opt.drop != 0, opt.no_ovf != 0, triple,
+                           opt.debug != 0);
 
         if (opt.stage == STAGE_EMIT_IR) {
             // -S : IR を出して終了。複数モジュールなら区切りを入れて並べる。
@@ -625,8 +630,9 @@ int main(int argc, char **argv) {
 
         StrBuf c;
         sb_init(&c);
-        sb_printf(&c, "%s %s -c \"%s\" -o \"%s\"", clang_cmd(), opt.opt_level,
-                  m->ll_path, objs[k]);
+        // ★ -g のときは clang にも渡します（DWARF を実際に作らせるため。A-30）
+        sb_printf(&c, "%s %s%s -c \"%s\" -o \"%s\"", clang_cmd(), opt.opt_level,
+                  opt.debug ? " -g" : "", m->ll_path, objs[k]);
         jobs[k].cmd = sb_str(&c);
         jobs[k].rc = 0;
     }
@@ -636,7 +642,8 @@ int main(int argc, char **argv) {
         // ── リンク ──
         StrBuf cmd;
         sb_init(&cmd);
-        sb_printf(&cmd, "%s %s", clang_cmd(), opt.opt_level);
+        sb_printf(&cmd, "%s %s%s", clang_cmd(), opt.opt_level,
+                  opt.debug ? " -g" : "");
         for (int i = 0; i < nmods; i++) sb_printf(&cmd, " \"%s\"", objs[i]);
         // ★ ランタイム（runtime/runtime.c をコンパイルしたもの）をリンクする。
         sb_printf(&cmd, " \"%s\"", runtime_o());
@@ -653,6 +660,23 @@ int main(int argc, char **argv) {
 #endif
         sb_printf(&cmd, " -o \"%s\"", out_path);
         rc = system(sb_str(&cmd));
+
+        // ★ macOS では DWARF が **.o の中に残り**、実行ファイルには
+        //   「どの .o にあるか」の地図だけが入ります（デバッグマップ）。
+        //   こちらは .o を片付けてしまうので、そのままではデバッガが
+        //   行を出せません。dsymutil で <出力>.dSYM にまとめてから消します。
+        //   ⚠️ Linux / Windows は実行ファイルに直接入るので、何もしません。
+        // ⚠️ triple は「指定が無ければ NULL」です。ここで既定を補わないと、
+        //   ふつうに使ったとき（指定なし）に dsymutil が走りません。
+        const char *eff_triple = triple ? triple : PLC_TARGET_TRIPLE;
+        if (rc == 0 && opt.debug && strstr(eff_triple, "apple")) {
+            StrBuf dsym;
+            sb_init(&dsym);
+            sb_printf(&dsym, "dsymutil \"%s\" 2>/dev/null", out_path);
+            // ⚠️ 失敗しても止めません（dsymutil が無い環境でも実行ファイルは
+            //   できています。デバッグ情報が無いだけです）。
+            (void)system(sb_str(&dsym));
+        }
     }
 
     // ⚠️ .o は成否によらず片付けます（.ll は失敗時だけ残します。下記）。

@@ -103,6 +103,9 @@ for f in "${FILES[@]}"; do
     #     ④⑤ の比較が**そのときのゴミの中身しだい**で通ったり落ちたりします
     #     （0.16.0 で解放が既定になってから紛れ込みました）。
     #
+    #   ★ `-g`（A-30）は混ぜます。**出す IR が変わる**ためです
+    #     （デバッグ情報が付くかどうかで別物になります）。
+    #
     #   ⚠️ **`--deny-*` は混ぜません。** あれは診断を出すか出さないかだけの
     #     指定で IR を変えず、付けるとケースによっては検査で止まってしまい、
     #     ④⑤ が「両方エラーで空出力どうしが一致」と数えてしまいます。
@@ -111,7 +114,7 @@ for f in "${FILES[@]}"; do
     deny_case=0
     for fl in $(sed -n 's/^# *FLAGS: *//p' "$f" | tr -d '\r'); do
         case "$fl" in
-            --drop|--no-drop|--no-overflow-check) case_flags="$case_flags $fl" ;;
+            --drop|--no-drop|--no-overflow-check|-g) case_flags="$case_flags $fl" ;;
             --deny-*) deny_case=1 ;;
         esac
     done

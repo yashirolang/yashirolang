@@ -1,0 +1,14 @@
+# STDIN: 300
+# EXIT: 1
+# A-31: 幅に合わない値は**入れる時点で**止まります。
+#   ★ 検査しているのは範囲型（A-28）です — library 側に検査を書いていません。
+#     `def put_u8(buf: mut list[int], v: U8)` と書くだけで、
+#     呼び出し側の値が 0..255 の外なら関数の入口で止まります。
+import bytes
+
+def main() -> int:
+    buf: list[int] = []
+    n: int = int(input())
+    bytes.put_u8(buf, n)
+    print(bytes.hex(buf))
+    return 0

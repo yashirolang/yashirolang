@@ -21,7 +21,10 @@
 //    既存コード（selfhost/ / lib/）はまだ v1 の参照セマンティクス前提なので、
 //    移行を終えるまで、解放は **opt-in** にしてあります（決定 D16）。
 //   triple       : 生成する IR の target triple（--target / pragma target）
+//   debug        : デバッグ情報（DWARF のもとになる metadata）を出すか（-g）
+//
+// ★ debug = false のときの出力は 1 バイトも変わりません（A-30）。
 char *codegen(Module *mod, const char *main_ir_name, bool drop, bool no_ovf,
-              const char *triple);
+              const char *triple, bool debug);
 
 #endif  // PLC_CODEGEN_H

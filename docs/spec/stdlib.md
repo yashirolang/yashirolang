@@ -34,6 +34,8 @@ def main() -> int:
 | [`fft`](#fft) | **高速フーリエ変換** |
 | [`plot`](#plot) | **作図** — SVG を書き出す（matplotlib 相当） |
 | [`frame`](#frame) | **表形式のデータ** — CSV・絞り込み・並べ替え・集計（pandas 相当） |
+| [`decimal`](#decimal) | **十進の固定小数点** — 金額のための正確な数 |
+| [`bytes`](#bytes) | **固定幅のバイト並び** — 通信フレーム・バイナリ形式 |
 
 > **numpy / scipy / matplotlib / pandas との対応表**は
 > [数値計算の手引き](../reference/numerics.md)にあります。
@@ -1158,3 +1160,83 @@ def main() -> int:
 
 **組み合わせた例**は [examples/sales_report{{ext}}](../../examples/sales_report{{ext}})
 にあります（CSV → 集計 → 図）。
+
+---
+
+## decimal
+
+**金額を `float` で持ってはいけません。** 二進の浮動小数点は `0.1` を
+持てないので、足すたびに誤差が積もります（`0.1` を 10 回足すと
+`0.9999999999999999`）。`decimal` は「整数の**単位数**と小数点以下の
+**桁数**」で持つので**正確**です。
+
+```python
+import decimal
+
+a: decimal.Decimal = decimal.Decimal(1045, 2)      # 10.45
+b: decimal.Decimal = decimal.Decimal(299, 2)       # 2.99
+print((a + b).to_str())                             # 13.44
+print((a * b).to_str())                             # 31.2455（桁は足し算）
+print(a.div_to(b, 4, decimal.HALF_EVEN).to_str())   # 3.4950
+```
+
+| 呼び方 | 意味 |
+|---|---|
+| `decimal.Decimal(units, scale)` | `units × 10^-scale`（`Decimal(1045, 2)` は `10.45`） |
+| `decimal.from_int(n, scale)` / `decimal.zero(scale)` | 整数から / 0 |
+| `decimal.parse(s)` | 文字列から（**読めなければ `None`**。float を経由しません） |
+| `d.to_str()` | 文字にする |
+| `d.rescale(scale, mode)` | 桁数を変える（減らすときは丸める） |
+| `d.div_to(other, scale, mode)` | **割り算**（桁と丸め方を必ず書きます） |
+| `d.cmp(other)` / `==` `!=` `<` `<=` `>` `>=` | 比べる（⚠️ `1.5 == 1.50`） |
+| `+` `-` `*` `-`（単項） | 足す・引く・掛ける・符号を変える |
+| `d.sign()` / `d.is_zero()` / `d.abs_of()` | 符号・0 か・絶対値 |
+| `d.to_float()` | ⚠️ **誤差が入ります**（図を描くなど表示のためだけに） |
+
+**丸め方**：`decimal.HALF_UP`（日常の四捨五入）/ `HALF_EVEN`（銀行家の丸め。
+足し合わせても偏りません）/ `DOWN`（0 の方向へ）/ `UP`（0 から遠い方へ）。
+
+⚠️ **既定の丸め方はありません。** 毎回選びます
+（「気づかないうちに丸められていた」が金額のいちばん多い事故だからです）。
+
+⚠️ 単位数は `int`（64 ビット）です。桁があふれたら**止まります**。
+小数点以下は 18 桁までです。
+
+---
+
+## bytes
+
+通信のフレーム・バイナリ形式・レジスタの写しのための、**固定幅の並べ方**です。
+バイト列は `list[int]`（各要素 0..255）で持ちます。
+
+```python
+import bytes
+
+buf: list[int] = []
+bytes.put_u16_be(buf, 513)          # ネットワーク並び → 02 01
+bytes.put_i32_le(buf, -2)           # 2 の補数 → fe ff ff ff
+print(bytes.hex(buf))               # "02 01 fe ff ff ff"
+print(str(bytes.get_i32_le(buf, 2)))  # -2
+```
+
+| 呼び方 | 意味 |
+|---|---|
+| `bytes.put_u8` / `put_u16_le` / `put_u16_be` / `put_u32_le` / `put_u32_be` | 符号なしを書く |
+| `bytes.put_i8` / `put_i16_le` / `put_i32_le` / `put_i64_le` / `put_i64_be` | 符号つきを書く（2 の補数） |
+| `bytes.get_u8` / `get_u16_le` / `get_u16_be` / `get_u32_le` / `get_u32_be` | 符号なしを読む |
+| `bytes.get_i8` / `get_i16_le` / `get_i16_be` / `get_i32_le` / `get_i32_be` / `get_i64_le` / `get_i64_be` | 符号つきを読む |
+| `bytes.from_str(s)` / `bytes.hex(buf)` | 文字列の中身をバイトに / 16 進で見る |
+
+**幅の型**：`bytes.U8` / `U16` / `U32` / `I8` / `I16` / `I32` は
+[範囲型](type-system.md#45-範囲型部分型a-28)です。
+
+⚠️ **幅に合わない値は、入れる時点で止まります**（黙って切り詰めません）。
+検査は library に 1 行も書いていません——引数の型が範囲型なので、
+関数の入口で確かめられます。
+
+```
+runtime error: value out of range: U8 accepts 0..255 but got 300
+```
+
+⚠️ 64 ビットだけは符号つきのまま扱います（`int` がそれだからです）。
+2^63 以上は、ビットの並びが同じ**負の数**として渡してください。

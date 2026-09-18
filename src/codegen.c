@@ -75,6 +75,23 @@ typedef struct {
     struct StrLit *decled;
     int str_counter;
 
+    // ── デバッグ情報（A-30）──
+    //
+    // ★ -g のときだけ、LLVM の debug metadata を出します。
+    //   出すのは「行の対応表」と「関数の枠」だけで、これだけで
+    //   ブレークポイント・バックトレース・perf の行表示が効きます。
+    bool dbg;               // -g
+    StrBuf dbgmeta;         // metadata の定義（モジュール末尾に出す）
+    int dbg_next;           // 次に振る metadata の番号
+    int dbg_file;           // !DIFile の番号
+    int dbg_cu;             // !DICompileUnit の番号
+    int dbg_empty;          // !{} の番号
+    int dbg_subty;          // !DISubroutineType の番号
+    int dbg_fn;             // 生成中の関数の !DISubprogram の番号（0 なら関数の外）
+    int dbg_line;           // いま生成している文の行
+    int dbg_loc;            // その行の !DILocation の番号（0 なら未作成）
+    int dbg_loc_line;       // dbg_loc が指している行
+
     // ── 契約（A-29）──
     Node *fn_node;          // 生成中の関数（ensures の式を引くのに使う）
     const char *ret_val;    // いま返そうとしている値（ensures の 'result'）
@@ -453,6 +470,59 @@ static void emit_ir_byte(StrBuf *sb, unsigned char c) {
 static void drop_temp(Emitter *e, Node *n, const char *val);
 static bool is_owned_temp(Node *n);
 static void emit_drop_value(Emitter *e, Type *t, const char *val);
+
+// ── デバッグ情報（A-30）──────────────────────────────────
+//
+// ★ metadata の番号は **0〜8 を TBAA が使っている**ので 10 から振ります
+//   （9 は空けておきます。番号は 2 実装で必ず同じになります）。
+static int dbg_id(Emitter *e) { return e->dbg_next++; }
+
+// いま生成している行の !DILocation を引く（無ければ作る）。
+//
+// ★ 行ごとに 1 つだけ作ります。文ごとに作ると metadata が何倍にも膨らみます。
+static int dbg_location(Emitter *e) {
+    if (!e->dbg || !e->dbg_fn) return 0;
+    if (e->dbg_loc && e->dbg_loc_line == e->dbg_line) return e->dbg_loc;
+    int id = dbg_id(e);
+    sb_printf(&e->dbgmeta, "!%d = !DILocation(line: %d, column: 1, scope: !%d)\n",
+              id, e->dbg_line, e->dbg_fn);
+    e->dbg_loc = id;
+    e->dbg_loc_line = e->dbg_line;
+    return id;
+}
+
+// e->fn の start から後ろに出した**命令の行**へ、`!dbg` を付けて回る。
+//
+// 🤔 なぜ後から付けるのか
+//   命令を出す場所は数百か所あります。そのすべてに「行の印」を渡して回ると、
+//   本筋（何を出すか）が印の受け渡しで埋まります。**出し終えてから、
+//   その範囲の行に付ける**ほうが、読む場所が 1 つで済みます。
+//
+// ⚠️ 付けないもの：ラベル行（行頭が空白でない）・空行・すでに `!dbg` がある行
+//   （内側の文が先に付けているので、外側は上書きしません）。
+static void dbg_annotate(Emitter *e, size_t start) {
+    if (!e->dbg || !e->dbg_fn) return;
+    int loc = dbg_location(e);
+    if (!loc) return;
+    if (e->fn.len <= start) return;
+
+    char *tail = xstrndup(e->fn.data + start, e->fn.len - start);
+    e->fn.len = start;          // いったん切り詰めて、付け直したものを足す
+    e->fn.data[start] = '\0';
+
+    for (char *p = tail; *p;) {
+        char *nl = strchr(p, '\n');
+        size_t n = nl ? (size_t)(nl - p) : strlen(p);
+        bool is_insn = n > 2 && p[0] == ' ' && p[1] == ' ';
+        // ⚠️ 1 行に 2 つ付けないこと（内側の文がすでに付けている）
+        for (size_t i = 0; is_insn && i + 4 <= n; i++)
+            if (memcmp(p + i, "!dbg", 4) == 0) is_insn = false;
+        sb_printf(&e->fn, "%.*s", (int)n, p);
+        if (is_insn) sb_printf(&e->fn, ", !dbg !%d", loc);
+        if (nl) sb_printf(&e->fn, "\n");
+        p = nl ? nl + 1 : p + n;
+    }
+}
 
 static char *intern_str(Emitter *e, const char *bytes, int len) {
     for (StrLit *sl = e->strs; sl; sl = sl->next)
@@ -3704,7 +3774,23 @@ static const char *thunk_for(Emitter *e, Type *fnty) {
 // 文は「値を返さない」ので、gen_expr とは別の関数にします。
 // ただし式文だけは値を持つので、その値を返します
 // （プログラムの値＝最後の式文の値、という暫定仕様のため）。
+// 文 1 つを出す（デバッグ情報を付ける入口。実体は gen_stmt_inner）
+static char *gen_stmt_inner(Emitter *e, Node *n);
+
 static char *gen_stmt(Emitter *e, Node *n) {
+    if (!e->dbg || !e->dbg_fn || !n->tok) return gen_stmt_inner(e, n);
+
+    // ★ 文の行を覚えてから出し、出し終わった範囲に !dbg を付けます（A-30）
+    int saved_line = e->dbg_line;
+    e->dbg_line = n->tok->line;
+    size_t start = e->fn.len;
+    char *r = gen_stmt_inner(e, n);
+    dbg_annotate(e, start);
+    e->dbg_line = saved_line;
+    return r;
+}
+
+static char *gen_stmt_inner(Emitter *e, Node *n) {
     // 終端済みブロックの後ろに来たら、到達不能ブロックを開く（規約 R7）
     ensure_block(e);
 
@@ -4023,6 +4109,24 @@ static void gen_func(Emitter *e, Node *n) {
     e->terminated = false;
     e->loop = NULL;
 
+    // ── デバッグ情報（A-30）：この関数の枠を 1 つ作る ──
+    //
+    // ★ 型（引数と戻り値）は入れていません。行の対応表とバックトレースには
+    //   要らず、入れると 2 実装で型の並べ方まで揃える必要が出ます。
+    e->dbg_fn = 0;
+    e->dbg_loc = 0;
+    e->dbg_line = n->tok ? n->tok->line : 1;
+    if (e->dbg) {
+        int id = dbg_id(e);
+        sb_printf(&e->dbgmeta,
+                  "!%d = distinct !DISubprogram(name: \"%s\", linkageName: \"%s\", "
+                  "scope: !%d, file: !%d, line: %d, type: !%d, scopeLine: %d, "
+                  "spFlags: DISPFlagDefinition, unit: !%d)\n",
+                  id, n->name, n->ir_name, e->dbg_file, e->dbg_file, e->dbg_line,
+                  e->dbg_subty, e->dbg_line, e->dbg_cu);
+        e->dbg_fn = id;
+    }
+
     // ── エラー処理の状態 ──
     e->fn_raises = n->raises != NULL;
     e->fn_ret = n->type;
@@ -4129,10 +4233,16 @@ static void gen_func(Emitter *e, Node *n) {
     }
     // ★ 失敗しうる関数は、エラー出力ポインタを 1 本余分に取ります
     if (e->fn_raises) sb_printf(&e->body, "%sptr %%err.out", first ? "" : ", ");
-    sb_printf(&e->body, ") {\nentry:\n");
+    // ★ デバッグ情報（A-30）：この関数の枠を metadata に結びます
+    if (e->dbg && e->dbg_fn)
+        sb_printf(&e->body, ") !dbg !%d {\nentry:\n", e->dbg_fn);
+    else
+        sb_printf(&e->body, ") {\nentry:\n");
     sb_printf(&e->body, "%s", sb_str(&e->allocas));
     sb_printf(&e->body, "%s", sb_str(&e->fn));
     sb_printf(&e->body, "}\n");
+    e->dbg_fn = 0;
+    e->dbg_loc = 0;
 }
 
 // グローバル変数を出力する（言語仕様 6.2）
@@ -4208,13 +4318,16 @@ static void gen_c_main(Emitter *e, const char *main_ir_name) {
 //   import したモジュールのものは、使ったぶんだけ declare / 型定義の複製が
 //   自動で付いてきます（class_type / declare_extern が「出済みか」を見るため）。
 char *codegen(Module *mod, const char *main_ir_name, bool drop, bool no_ovf,
-              const char *triple) {
+              const char *triple, bool debug) {
     Node *ast = mod->ast;
 
     Emitter e = {0};
     e.ast = ast;
     e.drop = drop;      // 解放を挿入するか
     e.no_ovf = no_ovf;  // 桁あふれの検査を出さないか
+    e.dbg = debug;      // -g（デバッグ情報を出すか）
+    e.dbg_next = 10;    // ★ 0〜8 は TBAA が使っています（9 は空け）
+    sb_init(&e.dbgmeta);
     sb_init(&e.header);
     sb_init(&e.globals);
     sb_init(&e.decls);
@@ -4231,6 +4344,25 @@ char *codegen(Module *mod, const char *main_ir_name, bool drop, bool no_ovf,
     //   NULL ならビルド時に埋め込んだ既定値（＝この機械のもの）。
     if (!triple) triple = PLC_TARGET_TRIPLE;
     if (triple[0]) sb_printf(&e.header, "target triple = \"%s\"\n", triple);
+
+    // ★ デバッグ情報（A-30）：モジュールに 1 組だけ要るものを先に作ります。
+    //   ⚠️ 関数より**先**に作ります。番号の振り方が 2 実装で同じになるためです。
+    if (e.dbg) {
+        e.dbg_file = dbg_id(&e);
+        e.dbg_cu = dbg_id(&e);
+        e.dbg_empty = dbg_id(&e);
+        e.dbg_subty = dbg_id(&e);
+        sb_printf(&e.dbgmeta, "!%d = !DIFile(filename: \"%s\", directory: \".\")\n",
+                  e.dbg_file, mod->path);
+        sb_printf(&e.dbgmeta,
+                  "!%d = distinct !DICompileUnit(language: DW_LANG_C99, file: !%d, "
+                  "producer: \"" PLC_LANG_CC " " PLC_LANG_VERSION "\", isOptimized: false, "
+                  "runtimeVersion: 0, emissionKind: FullDebug)\n",
+                  e.dbg_cu, e.dbg_file);
+        sb_printf(&e.dbgmeta, "!%d = !{}\n", e.dbg_empty);
+        sb_printf(&e.dbgmeta, "!%d = !DISubroutineType(types: !%d)\n", e.dbg_subty,
+                  e.dbg_empty);
+    }
 
     // ② クラスの型定義（★ 使う側より先に、モジュールの先頭に出す）
     for (Node *d = ast->body; d; d = d->next) {
@@ -4293,5 +4425,18 @@ char *codegen(Module *mod, const char *main_ir_name, bool drop, bool no_ovf,
     sb_printf(&out, "!6 = !{!3, !3, i64 0}\n");
     sb_printf(&out, "!7 = !{!\"global\", !0}\n");
     sb_printf(&out, "!8 = !{!7, !7, i64 0}\n");
+
+    // ★ デバッグ情報（A-30）。-g のときだけ出ます。
+    //   ⚠️ 「Debug Info Version」を書かないと、clang が metadata を丸ごと
+    //     捨てます（黙って消えるので、気づくのに時間がかかります）。
+    if (e.dbg) {
+        int flags1 = dbg_id(&e);
+        int flags2 = dbg_id(&e);
+        sb_printf(&out, "!%d = !{i32 7, !\"Dwarf Version\", i32 4}\n", flags1);
+        sb_printf(&out, "!%d = !{i32 2, !\"Debug Info Version\", i32 3}\n", flags2);
+        sb_printf(&out, "!llvm.module.flags = !{!%d, !%d}\n", flags1, flags2);
+        sb_printf(&out, "!llvm.dbg.cu = !{!%d}\n", e.dbg_cu);
+        sb_printf(&out, "%s", sb_str(&e.dbgmeta));
+    }
     return sb_str(&out);
 }

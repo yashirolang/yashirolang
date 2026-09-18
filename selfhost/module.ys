@@ -131,15 +131,25 @@ def join_path(dir_: str, name: str) -> str:
 
 # 探す場所を順に並べる（① 入口のディレクトリ ② -I ③ lib/）。
 # ★ 並びは「表示する順」であって「優先順位」ではありません。
+# モジュール名をファイルの相対パスにする（"pkg.mod" → "pkg/mod"）。
+#
+# ★ パッケージ（A-32）。名前のドットが、そのままディレクトリの区切り。
+#   対になる定義: src/module.c の name_to_relpath
+def name_to_relpath(name: str) -> str:
+    # ⚠️ replace は own で受け取るので、借りものは写してから渡します
+    return strings.replace(copy(name), ".", "/")
+
+
 def candidates(ld: Loader, name: str) -> list[str]:
     out: list[str] = []
-    out.append(join_path(ld.dir, name))
+    rel: str = name_to_relpath(name)     # A-32
+    out.append(join_path(ld.dir, rel))
     extra: list[str] = search_paths()
     i: int = 0
     while i < len(extra):
-        out.append(join_path(extra[i], name))
+        out.append(join_path(extra[i], rel))
         i = i + 1
-    out.append(join_path(lib_dir(), name))
+    out.append(join_path(lib_dir(), rel))
     return out
 
 # 見つからなかったときに「どこを探したか」を並べる
@@ -196,12 +206,13 @@ def path_for(ld: Loader, name: str, from_: rc[token.Token] | None) -> str:
 # dir か -I の探索場所に <name> があるか
 #（「import を書き忘れていませんか」の診断用。★ lib/ は見ません）
 def file_exists(dir_: str, name: str) -> bool:
-    if io.exists(join_path(dir_, name)):
+    rel2: str = name_to_relpath(name)    # A-32
+    if io.exists(join_path(dir_, rel2)):
         return True
     extra: list[str] = search_paths()
     i: int = 0
     while i < len(extra):
-        if io.exists(join_path(extra[i], name)):
+        if io.exists(join_path(extra[i], rel2)):
             return True
         i = i + 1
     return False
@@ -251,7 +262,9 @@ def load(ld: mut Loader, name: str, path: str, from_: rc[token.Token] | None) ->
                         "この import を解決できません", None, "",
                         "次のパスを探しました:\n             " + searched_list(ld, name) +
                         "\n             モジュール名はファイル名（" + langinfo.ext() +
-                        " を除いたもの）です")
+                        " を除いたもの）です" +
+                        "\n             （'pkg.mod' は 'pkg/mod" + langinfo.ext() +
+                        "' を指します）")
 
     m: rc[Module] = rc(Module(name, path, ld.dir))
     m.src = lexer.read_source(path)

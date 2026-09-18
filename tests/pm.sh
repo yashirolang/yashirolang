@@ -89,7 +89,8 @@ commit() { git -C "$1" add -A && git -C "$1" commit -qm "$2"; }
 mkdir -p "$WORK/cfg"
 git -C "$WORK/cfg" init -q
 printf 'name    cfg\nversion 1.0.0\n' > "$WORK/cfg/package.pkg"
-printf 'import cfg_lex\ndef hello() -> str:\n    return "cfg " + cfg_lex.tag()\n' \
+# ★ A-32：パッケージの中でも名前は**完全に**書きます（相対 import はありません）
+printf 'import cfg.cfg_lex\ndef hello() -> str:\n    return "cfg " + cfg.cfg_lex.tag()\n' \
     > "$WORK/cfg/cfg$EXT"
 printf 'def tag() -> str:\n    return "1.0.0"\n' > "$WORK/cfg/cfg_lex$EXT"
 # ★ ソース拡張子のシンボリックリンク。展開されないことを後で確かめます
@@ -108,7 +109,7 @@ mkdir -p "$WORK/httpx"
 git -C "$WORK/httpx" init -q
 printf 'name    httpx\nversion 0.3.0\ndep     cfg %s 1.1.0\n' "$WORK/cfg" \
     > "$WORK/httpx/package.pkg"
-printf 'import cfg\ndef get() -> str:\n    return "httpx uses " + cfg.hello()\n' \
+printf 'import cfg.cfg\ndef get() -> str:\n    return "httpx uses " + cfg.cfg.hello()\n' \
     > "$WORK/httpx/httpx$EXT"
 commit "$WORK/httpx" v0.3.0 > /dev/null
 git -C "$WORK/httpx" tag v0.3.0
@@ -124,7 +125,7 @@ git -C "$WORK/evil" tag v1.0.0
 # ── 利用者側 ────────────────────────────────────────────────
 APP="$WORK/app"
 mkdir -p "$APP"
-printf 'import httpx\ndef main() -> int:\n    print(httpx.get())\n    return 0\n' \
+printf 'import httpx.httpx\ndef main() -> int:\n    print(httpx.httpx.get())\n    return 0\n' \
     > "$APP/main$EXT"
 cd "$APP" || exit 1
 
@@ -152,8 +153,8 @@ fi
 mode="$(git -C "$WORK/cfg" ls-tree v1.1.0 secrets$EXT | awk '{print $1}')"
 if [ "$mode" != "120000" ]; then
     echo "  skip  シンボリックリンクを展開しない（この環境では作れません）"
-elif [ -e "$APP/deps/secrets$EXT" ]; then
-    ng "シンボリックリンクを展開しない" "deps/secrets$EXT ができています"
+elif [ -e "$APP/deps/cfg/secrets$EXT" ]; then
+    ng "シンボリックリンクを展開しない" "deps/cfg/secrets$EXT ができています"
 elif grep -q secrets "$APP/package.lock"; then
     ng "シンボリックリンクを展開しない" "ロックに secrets が載っています"
 else
@@ -165,23 +166,29 @@ expect "verify"        0 "$PO" verify
 has    "3 モジュール一致" "3 モジュール"
 
 # ⑤ 改ざんを見つける
-echo "# tampered" >> "$APP/deps/cfg$EXT"
+echo "# tampered" >> "$APP/deps/cfg/cfg$EXT"
 expect "改ざんを検出"   1 "$PO" verify
-has    "どのファイルか言う" "deps/cfg$EXT"
+has    "どのファイルか言う" "deps/cfg/cfg$EXT"
 expect "sync で直る"    0 "$PO" sync
 expect "直った"        0 "$PO" verify
 
-# ⑥ モジュール名の衝突を止める。**宣言とロックは変わらない**
+# ⑥ 同じモジュール名を出すパッケージが**共存できる**（A-32）
+#
+# ★ evil は cfg$EXT を出しますが、deps/evil/cfg$EXT に入るので
+#   deps/cfg/cfg$EXT とぶつかりません。名前も evil.cfg と cfg.cfg で別ものです。
+#   ⚠️ 0.22 まではここで断っていました（フラットに置いていたため）。
 cp "$APP/package.pkg" "$WORK/pkg.before"
 cp "$APP/package.lock" "$WORK/lock.before"
-expect "衝突する依存を断る" 1 "$PO" add evil "$WORK/evil"
-has    "衝突と言う" "2 つのパッケージが出しています"
-if diff -q "$WORK/pkg.before" "$APP/package.pkg" > /dev/null &&
-   diff -q "$WORK/lock.before" "$APP/package.lock" > /dev/null; then
-    ok "断ったときは宣言もロックも書き換えない"
+expect "同名モジュールのパッケージを入れられる" 0 "$PO" add evil "$WORK/evil"
+if [ -f "$APP/deps/evil/cfg$EXT" ] && [ -f "$APP/deps/cfg/cfg$EXT" ]; then
+    ok "パッケージごとに分かれて入る"
 else
-    ng "断ったときは宣言もロックも書き換えない" "書き換わっています"
+    ng "パッケージごとに分かれて入る" "$(ls -R "$APP/deps" 2>&1 | head -20)"
 fi
+# ★ 元に戻す（宣言とロックを戻して sync し直す。remove は無いので手で戻します）
+cp "$WORK/pkg.before" "$APP/package.pkg"
+cp "$WORK/lock.before" "$APP/package.lock"
+expect "元に戻す"      0 "$PO" sync
 
 # ⑦ 間接の依存を上げる（宣言に足されて 1.2.0 になる）
 expect "update cfg"   0 "$PO" update cfg
@@ -202,8 +209,19 @@ printf 'def f() -> int:\n    return 1\n' > "$WORK/shadow/shadow$EXT"
 printf 'def g() -> int:\n    return 2\n' > "$WORK/shadow/json$EXT"
 commit "$WORK/shadow" v1.0.0 > /dev/null
 git -C "$WORK/shadow" tag v1.0.0
-expect "標準ライブラリと衝突する依存を断る" 1 "$PO" add shadow "$WORK/shadow"
-has    "標準ライブラリと言う" "標準ライブラリにもあります"
+# ★ A-32：標準ライブラリと同じ名前のモジュールを出すパッケージも入ります。
+#   shadow.json（パッケージ）と json（標準ライブラリ）は別の名前です。
+cp "$APP/package.pkg" "$WORK/pkg.before2"
+cp "$APP/package.lock" "$WORK/lock.before2"
+expect "標準ライブラリと同名でも入る" 0 "$PO" add shadow "$WORK/shadow"
+if [ -f "$APP/deps/shadow/json$EXT" ]; then
+    ok "パッケージの json は deps/shadow/ に入る"
+else
+    ng "パッケージの json は deps/shadow/ に入る" "$(ls -R "$APP/deps" 2>&1 | head -20)"
+fi
+cp "$WORK/pkg.before2" "$APP/package.pkg"
+cp "$WORK/lock.before2" "$APP/package.lock"
+expect "shadow を戻す"  0 "$PO" sync
 
 # ⑧ 宣言から依存を消したら、ロックも作り直される
 #    cfg は httpx が要求するので残りますが、直接の要求（1.2.0）が消えるので
@@ -219,10 +237,10 @@ has    "1.1.0 に戻る"        "cfg 1.1.0"
 git -C "$WORK/cfg" tag -f v1.1.0 v1.0.0 > /dev/null 2>&1
 rm -rf "$PLC_CACHE"
 expect "タグ張り替え後も sync できる" 0 "$PO" sync
-if grep -q '"1.1.0"' "$APP/deps/cfg_lex$EXT"; then
+if grep -q '"1.1.0"' "$APP/deps/cfg/cfg_lex$EXT"; then
     ok "張り替えではなくロックの中身が入る"
 else
-    ng "張り替えではなくロックの中身が入る" "$(cat "$APP/deps/cfg_lex$EXT")"
+    ng "張り替えではなくロックの中身が入る" "$(cat "$APP/deps/cfg/cfg_lex$EXT")"
 fi
 
 # ⑩ ロックが指す commit ごと消されたら止まる

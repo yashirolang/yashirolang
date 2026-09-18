@@ -2443,9 +2443,35 @@ static Type *check_index_expr(Sema *s, Node *n) {
 //   宣言できない（declare_* で弾く）ので、実際には競合しません。
 //   それでも順序を実装の順序としてそのまま書いておきます。
 static ModuleSyms *dot_module(Sema *s, Node *n) {
-    if (n->lhs->kind != ND_VAR) return NULL;
-    if (lookup(s, n->lhs->name)) return NULL;
-    return lookup_import(s, n->lhs->name);
+    if (n->lhs->kind == ND_VAR) {
+        if (lookup(s, n->lhs->name)) return NULL;
+        return lookup_import(s, n->lhs->name);
+    }
+
+    // ★ パッケージ（A-32）：`pkg.mod.f()` の左側は `pkg.mod` という
+    //   **ドットを含む 1 つのモジュール名**です。
+    //
+    // ⚠️ 変数のフィールド（`obj.field.f()`）と見分けが要ります。見分け方は
+    //   「いちばん左が変数として宣言されていないこと」＋「繋げた名前が
+    //   import されていること」の 2 つです。import は明示的に書くものなので、
+    //   両方を満たす形は 1 つしかありません。
+    if (n->lhs->kind != ND_FIELD) return NULL;
+    StrBuf sb;
+    sb_init(&sb);
+    Node *segs[8];
+    int nseg = 0;
+    for (Node *q = n->lhs; q; q = q->lhs) {
+        if (nseg >= 8) return NULL;   // 深すぎる修飾は扱いません
+        segs[nseg++] = q;
+        if (q->kind == ND_VAR) break;
+        if (q->kind != ND_FIELD) return NULL;
+    }
+    Node *root = segs[nseg - 1];
+    if (root->kind != ND_VAR) return NULL;
+    if (lookup(s, root->name)) return NULL;   // 変数が先（13.5 節）
+    for (int i = nseg - 1; i >= 0; i--)
+        sb_printf(&sb, i == nseg - 1 ? "%s" : ".%s", segs[i]->name);
+    return lookup_import(s, sb_str(&sb));
 }
 
 // lexer.MAX_KIND — 他のモジュールのグローバル変数

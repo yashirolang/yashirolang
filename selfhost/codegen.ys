@@ -286,6 +286,8 @@ class Emitter:
             return "ptr"          # Thread[R]
         if t.kind == ast.TY_MUTEX:
             return "ptr"          # mutex[T]
+        if t.kind == ast.TY_PTR:
+            return "ptr"          # ptr[T]（A-33：C のライブラリへ渡す）
         if t.kind == ast.TY_NULL:
             return "ptr"
         panic("codegen: 未知の型です")
@@ -319,6 +321,8 @@ class Emitter:
         if t.kind == ast.TY_THREAD:
             return "ptr"
         if t.kind == ast.TY_MUTEX:
+            return "ptr"
+        if t.kind == ast.TY_PTR:
             return "ptr"
         panic("codegen: メモリ上の表現を持たない型です")
         return "i64"

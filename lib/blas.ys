@@ -1,0 +1,95 @@
+# blas — BLAS（数値線形代数の標準的な C ライブラリ）を呼ぶ
+#
+# 🤔 なぜ要るのか
+#   行列積のような計算は、**手で書いた版が敵う相手ではありません**。
+#   BLAS の実装（Accelerate / OpenBLAS / MKL）は、キャッシュの段数まで
+#   合わせて何十年も磨かれています。自前で速くするより、繋ぐほうが賢い。
+#
+# ★ **写しません。** `list[float]` の中身は 8 バイトの値が連続して並んで
+#   いるので、C から見ればそのまま `double*` です。先頭の番地だけ渡します。
+#
+# ⚠️ **リンクの指定が要ります**（標準ライブラリには入っていません）。
+#
+#     macOS : {{cc}} app{{ext}} -framework Accelerate -o app
+#     Linux : {{cc}} app{{ext}} -lopenblas -o app        （または -lblas）
+#
+# ⚠️ 渡しているあいだ、その list を**変えないでください**。`append` で伸びると
+#   別の場所へ移ることがあり、C 側が見ている番地が古くなります。
+import linalg
+
+# list の中身の先頭（ランタイムが教えてくれます）
+extern def pl_list_data(xs: list[float]) -> ptr[int]
+
+# ── BLAS の関数（C の名前そのまま）────────────────────────
+#
+# ⚠️ 名前修飾をしないので、C 側の名前と 1 対 1 です。
+extern def cblas_ddot(n: int, x: ptr[int], incx: int, y: ptr[int], incy: int) -> float
+extern def cblas_dnrm2(n: int, x: ptr[int], incx: int) -> float
+extern def cblas_daxpy(n: int, a: float, x: ptr[int], incx: int,
+                       y: ptr[int], incy: int) -> None
+extern def cblas_dscal(n: int, a: float, x: ptr[int], incx: int) -> None
+extern def cblas_dgemm(order: int, transa: int, transb: int,
+                       m: int, n: int, k: int, alpha: float,
+                       a: ptr[int], lda: int, b: ptr[int], ldb: int,
+                       beta: float, c: ptr[int], ldc: int) -> None
+
+# CBLAS の定数（cblas.h と同じ値）
+ROW_MAJOR: int = 101
+NO_TRANS: int = 111
+
+
+# ── 使いやすい包み ────────────────────────────────────────
+
+# 内積（x・y）
+def dot(x: list[float], y: list[float]) -> float:
+    if len(x) != len(y):
+        panic("blas.dot: 長さが違います（" + str(len(x)) + " と " + str(len(y)) + "）")
+    if len(x) == 0:
+        return 0.0
+    return cblas_ddot(len(x), pl_list_data(x), 1, pl_list_data(y), 1)
+
+
+# ノルム（‖x‖₂）
+def norm(x: list[float]) -> float:
+    if len(x) == 0:
+        return 0.0
+    return cblas_dnrm2(len(x), pl_list_data(x), 1)
+
+
+# y ← a·x + y（y を書き換えます）
+def axpy(a: float, x: list[float], y: mut list[float]) -> None:
+    if len(x) != len(y):
+        panic("blas.axpy: 長さが違います（" + str(len(x)) + " と " + str(len(y)) + "）")
+    if len(x) == 0:
+        return
+    cblas_daxpy(len(x), a, pl_list_data(x), 1, pl_list_data(y), 1)
+
+
+# x ← a·x（x を書き換えます）
+def scal(a: float, x: mut list[float]) -> None:
+    if len(x) == 0:
+        return
+    cblas_dscal(len(x), a, pl_list_data(x), 1)
+
+
+# 行列積 C ← A·B（平たい list[float]。行優先）
+#
+# ★ 大きさは呼ぶ側が渡します（list は「何行何列か」を知らないため）。
+#   ⚠️ c は**呼ぶ側が用意します**（長さ m×n）。
+def matmul(a: list[float], b: list[float], c: mut list[float],
+           m: int, n: int, k: int) -> None:
+    if len(a) != m * k or len(b) != k * n or len(c) != m * n:
+        panic("blas.matmul: 大きさが合いません")
+    if m * n == 0:
+        return
+    cblas_dgemm(ROW_MAJOR, NO_TRANS, NO_TRANS, m, n, k, 1.0,
+                pl_list_data(a), k, pl_list_data(b), n, 0.0,
+                pl_list_data(c), n)
+
+
+# 掛け算の結果を新しく作って返す（自分で用意しなくてよい形）
+def matmul_new(a: list[float], b: list[float], m: int, n: int,
+               k: int) -> list[float]:
+    c: list[float] = linalg.zeros(m * n)
+    matmul(a, b, c, m, n, k)
+    return c

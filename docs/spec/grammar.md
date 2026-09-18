@@ -132,7 +132,9 @@ int_lit    ::= [ "-" ] INT
 global_var ::= IDENT ":" type "=" expr NEWLINE
 
 (* ── import ── *)
-import_stmt::= "import" IDENT NEWLINE
+(* ★ パッケージ（A-32）：ドットで区切ると `pkg/mod` を探します。
+   使うときも `pkg.mod.f()` と全部書きます（短い名前で束ねません）。 *)
+import_stmt::= "import" IDENT { "." IDENT } NEWLINE
 
 (* ⚠️ "from X import Y" は採用しません。名前の出どころが
    ソースから読み取れなくなるためです。 *)

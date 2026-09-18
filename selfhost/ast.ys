@@ -19,7 +19,10 @@ TY_CLASS: int = 5
 TY_OPT: int = 6      # T | None
 TY_NULL: int = 7     # None リテラルの型（変数の型にはならない）
 TY_RC: int = 8       # rc[T]（共有所有）
-# ⚠️ 9 は TY_PTR（C 版だけが持つ低レベル型）。値をずらさないよう空けます。
+# ★ 生ポインタ（A-33 で受け渡しだけ移植）。
+#   ⚠️ 中身を触る操作（unsafe: の中の読み書き）は C 版だけが持ちます。
+#     こちらは「C のライブラリへ渡す・受け取る」ためだけに扱います。
+TY_PTR: int = 9      # ptr[T] → ptr
 TY_FLOAT: int = 10   # float → double
 TY_FN: int = 11      # fn(A, B) -> C → ptr（関数へのポインタ）
 TY_IFACE: int = 12   # interface → ptr（実体へのポインタ）
@@ -179,6 +182,13 @@ def type_thread(ret: rc[Type] | None) -> rc[Type]:
     t.elem = ret
     return t
 
+# 生ポインタの型（A-33）。対になる定義: src/types.c の type_ptr
+def type_ptr(elem: rc[Type] | None) -> rc[Type]:
+    t: rc[Type] = rc(Type(TY_PTR))
+    t.elem = elem
+    return t
+
+
 def type_mutex(elem: rc[Type] | None) -> rc[Type]:
     t: rc[Type] = rc(Type(TY_MUTEX))
     t.elem = elem
@@ -244,8 +254,8 @@ def type_equal(a: rc[Type], b: rc[Type]) -> bool:
         return type_equal(elem_of(a), elem_of(b))
     if a.kind == TY_RC:
         return type_equal(elem_of(a), elem_of(b))
-    # ★ Thread[R] / mutex[T] も中身まで見る
-    if a.kind == TY_THREAD or a.kind == TY_MUTEX:
+    # ★ Thread[R] / mutex[T] / ptr[T] も中身まで見る
+    if a.kind == TY_THREAD or a.kind == TY_MUTEX or a.kind == TY_PTR:
         return type_equal(elem_of(a), elem_of(b))
     if a.kind == TY_CLASS:
         return same_class(a, b)
@@ -346,6 +356,8 @@ def type_name(t: rc[Type]) -> str:
         return "Thread[" + type_name(elem_of(t)) + "]"
     if t.kind == TY_MUTEX:
         return "mutex[" + type_name(elem_of(t)) + "]"
+    if t.kind == TY_PTR:
+        return "ptr[" + type_name(elem_of(t)) + "]"
     if t.kind == TY_OPT:
         return type_name(elem_of(t)) + " | None"
     if t.kind == TY_NULL:

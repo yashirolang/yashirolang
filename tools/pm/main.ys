@@ -79,30 +79,13 @@ def path_in(src: str, name: str) -> str:
         return name + langinfo.ext()
     return src + "/" + name + langinfo.ext()
 
-# 標準ライブラリが持っているモジュール名。
+# 入れ先のパス（A-32：deps/<パッケージ>/<モジュール>）
 #
-# ★ コンパイラの `--print-lib-dir` に訊きます。これが無いと、
-#   標準ライブラリと同じ名前のモジュールを入れてしまい、**コンパイルの
-#   ときに**初めて気づくことになります（実際 lib/ の json を足したときに
-#   起きました）。入れる前に、名前を出しているパッケージごと断ります。
-#
-# ⚠️ 訊けなかったときは空を返します（検査を飛ばすだけで、止めません）。
-#   コンパイラがまだ入っていない環境でも `sync` は動くべきだからです。
-def stdlib_mods() -> list[str]:
-    cc: str = sys.getenv("PLC_CC")
-    if len(cc) == 0:
-        cc = langinfo.cc()
-    r: sys.Output = shell.capture(shell.q(cc) + " --print-lib-dir")
-    out: list[str] = []
-    if r.code != 0:
-        return out
-    dir_: str = r.line()
-    if len(dir_) == 0 or not io.is_dir(dir_):
-        return out
-    for f in io.listdir(dir_):
-        if strings.endswith(f, langinfo.ext()):
-            out.append(strings.substr(f, 0, len(f) - langinfo.ext_len()))
-    return out
+# ★ ディレクトリで分けるので、`import <パッケージ>.<モジュール>` と書けば
+#   標準ライブラリとも他のパッケージとも名前がぶつかりません。
+def dep_path(pkg: str, mod: str) -> str:
+    return DEPS_DIR + "/" + pkg + "/" + mod + langinfo.ext()
+
 
 # ロックの 1 行分を取ってきて中身を確かめる（rev と tree が一致するか）
 def check_out(e: lockfile.Entry) -> None:
@@ -121,32 +104,29 @@ def check_out(e: lockfile.Entry) -> None:
 # ★ 順番が大事です。**確かめ終わってから消します。**
 #   先に消してから落ちると、断ったつもりが deps/ を壊すことになります。
 def install(lk: lockfile.Lock) -> None:
-    # モジュール名の衝突は**ここで**止めます（コンパイラも止めますが、
-    # 原因の分かる場所で早く落ちたほうが直しやすいので）。
+    # ★ A-32 から、モジュールは**パッケージのディレクトリの中**に入ります
+    #   （deps/<パッケージ>/<モジュール>）。名前は `pkg.mod` になるので、
+    #   標準ライブラリとも、他のパッケージとも**衝突しません**。
+    #
+    # ⚠️ それでも「同じパッケージが 2 回」は止めます（ロックの作り方の誤り）。
     owner_mod: list[str] = []
     owner_pkg: list[str] = []
-    std: list[str] = stdlib_mods()
 
     for e in lk.entries:
         check_out(e)
         for m in e.mods:
-            for sm in std:
-                if sm == m:
-                    die("モジュール '" + m + "' は標準ライブラリにもあります（" +
-                        e.name + " が出しています）\n" +
-                        "    どちらを指すか決められないので、入れられません\n" +
-                        "    作者に名前を変えてもらってください")
+            full: str = e.name + "." + m
             i: int = 0
             while i < len(owner_mod):
-                if owner_mod[i] == m:
-                    die("モジュール '" + m + "' を 2 つのパッケージが出しています\n    " +
+                if owner_mod[i] == full:
+                    die("モジュール '" + full + "' を 2 回入れようとしています\n    " +
                         owner_pkg[i] + " と " + e.name +
-                        "\n    どちらかの作者に名前を変えてもらってください")
+                        "\n    ロックが壊れている可能性があります")
                 i = i + 1
             if io.exists(m + langinfo.ext()):
                 die("モジュール '" + m + "' が自分のファイル " + m +
                     langinfo.ext() + " と衝突します（" + e.name + " が出しています）")
-            owner_mod.append(copy(m))
+            owner_mod.append(copy(full))
             owner_pkg.append(copy(e.name))
 
     # ここまで来たら全部揃っています。作り直します。
@@ -155,11 +135,13 @@ def install(lk: lockfile.Lock) -> None:
 
     for e in lk.entries:
         src: str = src_dir(e)      # ★ 1 パッケージにつき 1 回だけ引く
+        # ★ パッケージごとのディレクトリを作ります（A-32）
+        shell.mkdir_p(DEPS_DIR + "/" + e.name)
         for m in e.mods:
             blob: vcs.Blob = vcs.show(e.url, e.rev, path_in(src, m))
             if not blob.ok:
                 die("'" + e.name + "' から " + m + langinfo.ext() + " を読めませんでした")
-            io.write_file(DEPS_DIR + "/" + m + langinfo.ext(), blob.text)
+            io.write_file(dep_path(e.name, m), blob.text)
 
     print(langinfo.pm() + ": " + str(len(lk.entries)) + " 個のパッケージを " + DEPS_DIR +
           "/ に入れました")
@@ -331,7 +313,7 @@ def cmd_verify() -> None:
         src: str = src_dir(e)
         for m in e.mods:
             nmod = nmod + 1
-            path: str = DEPS_DIR + "/" + m + langinfo.ext()
+            path: str = dep_path(e.name, m)
             if not io.exists(path):
                 io.eprint(langinfo.pm() + ": 足りません: " + path + "\n")
                 bad = bad + 1

@@ -1166,6 +1166,16 @@ PlList *pl_list_new(void) {
 
 long long pl_list_len(PlList *l) { return l->len; }
 
+// 要素の並びの先頭を返す（A-33）。
+//
+// ★ **C のライブラリに配列をそのまま渡すための口**です。要素は 8 バイトずつ
+//   連続して並んでいるので、`list[float]` の中身は C から見れば `double*`、
+//   `list[int]` は `long long*` です。写す必要はありません。
+//
+// ⚠️ 返すのは**借りもの**です。`append` で伸びると別の場所へ移ることがあるので、
+//   **渡したあいだは list を変えないでください**（設計 ffi.md）。
+void *pl_list_data(PlList *l) { return l->data; }
+
 // ⚠️ realloc を使わないのは「一度渡したポインタは永久に有効」という
 //    方針（メモリモデル 3 節）と噛み合わないためです。
 //    memcpy して古い領域を捨てるほうが、方針と一貫します。

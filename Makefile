@@ -72,7 +72,7 @@ LANG_NAME := yashirolang
 LANG_EXT  := .ys
 LANG_CC   := yashirolang
 LANG_PM   := ysm
-LANG_VERSION := 0.22.0
+LANG_VERSION := 0.24.0
 LANG_REPO := https://github.com/yashirolang/yashirolang
 CFLAGS  += -DPLC_LANG_NAME='"$(LANG_NAME)"' \
            -DPLC_LANG_EXT='"$(LANG_EXT)"' \
@@ -380,6 +380,29 @@ RV_TRIPLE  := riscv64-unknown-elf
 RV_ARCH    := -march=rv64g -mabi=lp64 -mcmodel=medany -mno-relax
 RV_CFLAGS  := --target=$(RV_TRIPLE) $(RV_ARCH) -ffreestanding -O2
 KDIR       := build/kernel
+
+# ── BLAS 連携の確認（A-33）────────────────────────────────
+#
+# ★ `make test` には入れません。BLAS はどの環境にもあるとは限らないためです
+#   （無い環境で「落ちた」と言われるより、走らせないほうが正直です）。
+#
+#   macOS      : Accelerate（OS に入っています）
+#   Linux ほか : -lopenblas か -lblas
+.PHONY: blas-test
+blas-test: $(TARGET) $(RUNTIME_OBJ)
+	@mkdir -p build
+	@if [ "$$(uname -s)" = "Darwin" ]; then \
+	    LINK="-framework Accelerate"; \
+	else \
+	    LINK="-lopenblas"; \
+	fi; \
+	if ! ./$(TARGET) -O2 examples/blas_matmul$(LANG_EXT) $$LINK \
+	        -o build/blas_matmul 2> build/blas.err; then \
+	    echo "（BLAS が見つからないので飛ばします）"; \
+	    head -3 build/blas.err | sed 's/^/    /'; \
+	    exit 0; \
+	fi; \
+	./build/blas_matmul
 
 .PHONY: kernel qemu qemu-test
 

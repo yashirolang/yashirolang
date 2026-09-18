@@ -100,6 +100,17 @@ static bool file_exists(const char *path) {
     return true;
 }
 
+// モジュール名をファイルの相対パスにする（"pkg.mod" → "pkg/mod"）。
+//
+// ★ パッケージ（A-32）。名前のドットが、そのままディレクトリの区切りです。
+//   ⚠️ `..` のような名前は字句解析が作れません（識別子とドットの並びだけ）。
+static char *name_to_relpath(const char *name) {
+    char *out = xstrndup(name, strlen(name));
+    for (char *p = out; *p; p++)
+        if (*p == '.') *p = '/';
+    return out;
+}
+
 static char *join_path(const char *dir, const char *name) {
     StrBuf sb;
     sb_init(&sb);
@@ -142,10 +153,12 @@ static const char *lib_dir(void) {
 // 探す場所を順に並べる（① 入口のディレクトリ ② -I ③ lib/）。
 // ★ 並びは「表示する順」であって「優先順位」ではありません。
 static int candidates(Loader *ld, const char *name, char **out) {
+    // ★ パッケージ（A-32）：`pkg.mod` は `pkg/mod` を探します
+    const char *rel = name_to_relpath(name);
     int n = 0;
-    out[n++] = join_path(ld->dir, name);
-    for (int i = 0; i < g_nsearch; i++) out[n++] = join_path(g_search[i], name);
-    out[n++] = join_path(lib_dir(), name);
+    out[n++] = join_path(ld->dir, rel);
+    for (int i = 0; i < g_nsearch; i++) out[n++] = join_path(g_search[i], rel);
+    out[n++] = join_path(lib_dir(), rel);
     return n;
 }
 
@@ -238,12 +251,13 @@ static void add_dep(Module *m, Module *dep) {
 }
 
 bool module_file_exists(const char *dir, const char *name) {
-    if (file_exists(join_path(dir, name))) return true;
+    const char *rel = name_to_relpath(name);   // A-32
+    if (file_exists(join_path(dir, rel))) return true;
     // ★ 依存を置いた場所（-I）も見ます。lib/ は見ません
     //   （標準ライブラリまで「import を書き忘れていませんか」と言い出すと、
     //     既存の診断の意味が変わってしまうため）。
     for (int i = 0; i < g_nsearch; i++)
-        if (file_exists(join_path(g_search[i], name))) return true;
+        if (file_exists(join_path(g_search[i], rel))) return true;
     return false;
 }
 
@@ -272,7 +286,8 @@ static Module *load(Loader *ld, const char *name, const char *path, Token *from)
         d.primary.tok = from;
         d.primary.label = "この import を解決できません";
         d.hint = diag_fmt("次のパスを探しました:\n             %s\n"
-                          "             モジュール名はファイル名（" PLC_LANG_EXT " を除いたもの）です",
+                          "             モジュール名はファイル名（" PLC_LANG_EXT " を除いたもの）です"
+                          "\n             （'pkg.mod' は 'pkg/mod" PLC_LANG_EXT "' を指します）",
                           searched_list(ld, name));
         diag_fail(&d);
     }

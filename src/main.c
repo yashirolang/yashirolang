@@ -128,6 +128,9 @@ static void usage(int status) {
             "                  数の実行時検査を外す（既定は検査する）:\n"
             "                  整数の + - * の桁あふれ／float の 0 除算\n"
             "  -g              デバッグ情報を出す（デバッガ・perf が行を出せます）\n"
+            "  -l<名前> / -L<dir> / -framework <名前>\n"
+            "                  リンクのときに clang へそのまま渡す\n"
+            "                  （C のライブラリを extern で呼ぶときに使います）\n"
             "  -I <dir>        import を探す場所を足す（何度でも書ける）\n"
             "                  パッケージマネージャ " PLC_LANG_PM " が使います\n"
             "  -c              リンクせずオブジェクト（.o）を出す\n"
@@ -166,6 +169,9 @@ typedef struct {
     int drop;         // --drop（解放を挿入する）
     int no_ovf;       // --no-overflow-check（桁あふれの検査を出さない）
     int debug;        // -g（デバッグ情報を出す。A-30）
+    // ★ リンクするときに clang へそのまま渡すもの（-l / -L / -framework。A-33）
+    const char **link;
+    int nlink;
     const char *target;  // --target=<triple>（ベアメタル向け）
     int emit_obj;        // -c（リンクせずオブジェクトを出す）
     int jobs;            // -j N（clang を同時に何本走らせるか。0 = コア数）
@@ -173,6 +179,13 @@ typedef struct {
     const char **inc;
     int ninc;
 } Options;
+
+// 文字列の配列を 1 つ伸ばす（数えるのは呼び出し側）
+static const char **xrealloc_ptrs(const char **p, int n) {
+    const char **q = xmalloc(sizeof(char *) * (size_t)(n + 1));
+    for (int i = 0; i < n; i++) q[i] = p[i];
+    return q;
+}
 
 static Options parse_args(int argc, char **argv) {
     Options o = {0};
@@ -252,6 +265,29 @@ static Options parse_args(int argc, char **argv) {
         if (strcmp(a, "--no-overflow-check") == 0) { o.no_ovf = 1; continue; }
         // ★ デバッグ情報（A-30）。デバッガ・perf・バックトレースが行を出せます。
         if (strcmp(a, "-g") == 0) { o.debug = 1; continue; }
+
+        // ── C のライブラリを繋ぐ（A-33）──
+        //
+        // ★ `-l` / `-L` / `-framework` を **リンクのときだけ** clang へ
+        //   そのまま渡します。extern で宣言した関数の実体が、標準ライブラリの
+        //   外（BLAS や自前の .o）にあるときに要ります。
+        //
+        // 🔒 シェル経由で渡るので、`-o` と同じように**入口で 1 回**確かめます。
+        if ((strncmp(a, "-l", 2) == 0 || strncmp(a, "-L", 2) == 0) && a[2]) {
+            check_shell_safe(a, "リンクの指定");
+            o.link = xrealloc_ptrs(o.link, o.nlink);
+            o.link[o.nlink++] = a;
+            continue;
+        }
+        if (strcmp(a, "-framework") == 0) {
+            if (i + 1 >= argc) error("-framework の後に名前が必要です");
+            check_shell_safe(argv[i + 1], "framework の名前");
+            o.link = xrealloc_ptrs(o.link, o.nlink);
+            o.link[o.nlink++] = "-framework";
+            o.link = xrealloc_ptrs(o.link, o.nlink);
+            o.link[o.nlink++] = argv[++i];
+            continue;
+        }
         // ★ ベアメタル向け。リンクは自分でやるので -c で止める。
         if (strcmp(a, "-c") == 0) { o.emit_obj = 1; continue; }
         // ★ モジュールごとの clang を何本同時に走らせるか。
@@ -658,6 +694,10 @@ int main(int argc, char **argv) {
         //   （POSIX では libc に入っているので何も足しません）。
         sb_printf(&cmd, " -lws2_32");
 #endif
+        // ★ 利用者が指定したリンクの指定（A-33）。ランタイムの後に置きます
+        //   （後から来たものが先のものの未解決を埋める、という並びのため）。
+        for (int i = 0; i < opt.nlink; i++)
+            sb_printf(&cmd, " \"%s\"", opt.link[i]);
         sb_printf(&cmd, " -o \"%s\"", out_path);
         rc = system(sb_str(&cmd));
 

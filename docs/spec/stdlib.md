@@ -36,6 +36,7 @@ def main() -> int:
 | [`frame`](#frame) | **表形式のデータ** — CSV・絞り込み・並べ替え・集計（pandas 相当） |
 | [`decimal`](#decimal) | **十進の固定小数点** — 金額のための正確な数 |
 | [`bytes`](#bytes) | **固定幅のバイト並び** — 通信フレーム・バイナリ形式 |
+| [`blas`](#blas) | **BLAS を呼ぶ** — 行列積・内積（⚠️ リンクの指定が要ります） |
 
 > **numpy / scipy / matplotlib / pandas との対応表**は
 > [数値計算の手引き](../reference/numerics.md)にあります。
@@ -1240,3 +1241,49 @@ runtime error: value out of range: U8 accepts 0..255 but got 300
 
 ⚠️ 64 ビットだけは符号つきのまま扱います（`int` がそれだからです）。
 2^63 以上は、ビットの並びが同じ**負の数**として渡してください。
+
+---
+
+## blas
+
+**BLAS**（数値線形代数の標準的な C ライブラリ）を呼びます。行列積のような
+計算は、手で書いた版が敵う相手ではありません（512³ で **36 ms → 3 ms**）。
+
+⚠️ **リンクの指定が要ります**（標準ライブラリには入っていません）。
+
+```bash
+{{cc}} -O2 app{{ext}} -framework Accelerate -o app   # macOS
+{{cc}} -O2 app{{ext}} -lopenblas -o app              # Linux（または -lblas）
+```
+
+```python
+import blas
+
+def main() -> int:
+    x: list[float] = [1.0, 2.0, 3.0]
+    y: list[float] = [4.0, 5.0, 6.0]
+    print(str(blas.dot(x, y)))                  # 32.0
+
+    a: list[float] = [1.0, 2.0, 3.0, 4.0]       # 2x2（行優先の平たい list）
+    b: list[float] = [5.0, 6.0, 7.0, 8.0]
+    c: list[float] = blas.matmul_new(a, b, 2, 2, 2)
+    return 0
+```
+
+| 呼び方 | 意味 |
+|---|---|
+| `blas.dot(x, y)` | 内積 |
+| `blas.norm(x)` | ノルム（‖x‖₂） |
+| `blas.axpy(a, x, y)` | `y ← a·x + y`（y を書き換えます） |
+| `blas.scal(a, x)` | `x ← a·x`（x を書き換えます） |
+| `blas.matmul(a, b, c, m, n, k)` | `C ← A·B`（c は呼ぶ側が用意します） |
+| `blas.matmul_new(a, b, m, n, k)` | 同上。結果を新しく作って返します |
+
+**★ 写しは 1 回も起きません。** `list[float]` の中身は 8 バイトの値が連続して
+並んでいるので、C から見ればそのまま `double*` です。先頭の番地だけ渡します。
+
+⚠️ **渡しているあいだ、その list を変えないでください。** `append` で伸びると
+別の場所へ移ることがあり、C 側が見ている番地が古くなります。
+
+⚠️ 行列は**行優先の平たい `list[float]`** です（`linalg.Matrix` からは
+中身を取り出してから渡します）。列優先（Fortran 並び）は扱いません。

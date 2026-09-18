@@ -1,0 +1,12 @@
+# ★ パッケージの中のモジュール（A-32）。
+#   ファイルの場所が `acme/json/reader{{ext}}` で、名前は `acme.json.reader` です。
+class Doc:
+    n: int
+
+    def init(self, n: int) -> None:
+        self.n = n
+
+def make(n: int) -> Doc:
+    return Doc(n)
+
+VERSION: int = 7

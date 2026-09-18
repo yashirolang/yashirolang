@@ -786,6 +786,24 @@ class Sema:
 
         # ★ mutex に入れられるのはクラスとリストだけ（取り出して書き換える
         #   ものだから。int を包んでも lock に渡した関数から書き戻せません）
+        # ── ptr[T]（生ポインタ。A-33）──
+        #
+        # ★ 中身に取れるのは int だけ（C 版 src/sema.c と同じ）。
+        #   ⚠️ こちらは**受け渡しだけ**を扱います（unsafe: の中の読み書きは
+        #     C 版だけが持ちます）。C のライブラリへ配列の先頭を渡すために要ります。
+        if tr.name == "ptr":
+            if tr.lhs is None:
+                diag.error_at_hint(unwrap_tok(tr.tok),
+                                   "中身の型を書いてください（例: ptr[int]）",
+                                   "ptr には中身の型が必要です")
+                return self.ty_int()
+            pel: rc[ast.Type] = self.resolve_type(unwrap_node(tr.lhs))
+            if pel.kind != ast.TY_INT:
+                diag.error_at_hint(unwrap_tok(tr.tok),
+                                   "いま ptr に書けるのは int だけです（例: ptr[int]）",
+                                   "'" + ast.type_name(pel) + "' は ptr に入れられません")
+            return ast.type_ptr(pel)
+
         if tr.name == "mutex":
             if tr.lhs is None:
                 diag.error_at_hint(unwrap_tok(tr.tok),
@@ -2442,11 +2460,48 @@ class Sema:
     # 「'.' の左がモジュールか」を判定する
     def dot_module(self, n: rc[ast.Node]) -> rc[types.ModuleSyms] | None:
         lhs: rc[ast.Node] = unwrap_node(n.lhs)
-        if lhs.kind != ast.ND_VAR:
+        if lhs.kind == ast.ND_VAR:
+            if self.lookup(lhs.name) is not None:
+                return None
+            return self.lookup_import(lhs.name)
+
+        # ★ パッケージ（A-32）：`pkg.mod.f()` の左側は `pkg.mod` という
+        #   **ドットを含む 1 つのモジュール名**。
+        #
+        # ⚠️ 変数のフィールド（`obj.field.f()`）と見分けが要る。見分け方は
+        #   「いちばん左が変数として宣言されていないこと」＋「繋げた名前が
+        #   import されていること」の 2 つ。import は明示的に書くものなので、
+        #   両方を満たす形は 1 つしかない。
+        #   対になる定義: src/sema.c の dot_module
+        if lhs.kind != ast.ND_FIELD:
             return None
-        if self.lookup(lhs.name) is not None:
+        segs: list[str] = []
+        cur: rc[ast.Node] = lhs
+        root_ok: bool = False
+        while len(segs) < 8:
+            segs.append(copy(cur.name))
+            if cur.kind == ast.ND_VAR:
+                root_ok = True
+                break
+            if cur.kind != ast.ND_FIELD:
+                return None
+            nxt: rc[ast.Node] | None = cur.lhs
+            if nxt is None:
+                return None
+            cur = unwrap_node(nxt)
+        if not root_ok:
             return None
-        return self.lookup_import(lhs.name)
+        # ⚠️ 集めた順は右からなので、繋ぐときに逆に並べ直す
+        if self.lookup(segs[len(segs) - 1]) is not None:
+            return None            # 変数が先（13.5 節）
+        parts: list[str] = []
+        i: int = len(segs) - 1
+        while i >= 0:
+            if len(parts) > 0:
+                parts.append(".")
+            parts.append(copy(segs[i]))
+            i = i - 1
+        return self.lookup_import(strings.join(parts, ""))
 
     # lexer.MAX_KIND — 他のモジュールのグローバル変数
     def check_module_global(self, n: mut rc[ast.Node],

@@ -1,0 +1,21 @@
+# OUTPUT: 3
+# OUTPUT: 7
+# OUTPUT: True
+# EXIT: 0
+# A-32: モジュールの名前空間（パッケージ）。
+#   ★ `import acme.json.reader` は acme/json/reader（拡張子つき）を読みます。
+#   ★ 使うときも `acme.json.reader.f()` と**全部書きます**。短い名前で
+#     束ねると、標準ライブラリと同じ名前のパッケージがまた使えなくなります。
+#   ⚠️ ここがまさにその例です — **標準ライブラリの `json` と、パッケージの
+#     `acme.json` が同じファイルの中に共存しています**。
+import acme.json.reader
+import json
+
+def main() -> int:
+    d: acme.json.reader.Doc = acme.json.reader.make(3)
+    print(str(d.n))
+    print(str(acme.json.reader.VERSION))
+
+    r: json.Result = json.parse("[1,2]")
+    print(str(r.ok))
+    return 0

@@ -38,6 +38,8 @@ class Options:
     keep_ll: bool
     no_ovf: bool     # --no-overflow-check
     debug: bool      # -g（デバッグ情報を出す。A-30）
+    # ★ リンクのときに clang へそのまま渡すもの（-l / -L / -framework。A-33）
+    link: list[str]
     drop: bool       # --drop / --no-drop（解放を挿入する。後勝ち）
     # ★ 所有権検査の指摘をエラーにするか（既定 True。C 版 src/main.c と対）
     deny_move: bool
@@ -55,6 +57,7 @@ class Options:
         self.keep_ll = False
         self.no_ovf = False
         self.debug = False
+        self.link = []
         # ★ 解放（drop）は**既定で入れる**（A-21 ⑬。逃げ道は --no-drop）
         self.drop = True
         # ★ 所有権の検査は**既定でエラー**（A-24。逃げ道は --warn-own）
@@ -94,6 +97,8 @@ def usage(status: int) -> None:
     print("  --drop          スコープの出口に解放（drop）を挿入する（既定）")
     print("  --no-drop       解放を挿入しない（--drop を打ち消す。後勝ち）")
     print("  -g              デバッグ情報を出す（デバッガ・perf が行を出せます）")
+    print("  -l<名前> / -L<dir> / -framework <名前>")
+    print("                  リンクのときに clang へそのまま渡す")
     print("  --no-overflow-check")
     print("                  数の実行時検査を外す（既定は検査する）:")
     print("                  整数の + - * の桁あふれ／float の 0 除算")
@@ -185,6 +190,22 @@ def parse_args(args: list[str]) -> Options:
         # ★ デバッグ情報（A-30）。デバッガ・perf が行を出せる。
         elif a == "-g":
             o.debug = True
+        # ── C のライブラリを繋ぐ（A-33）──
+        #
+        # ★ -l / -L / -framework を**リンクのときだけ** clang へそのまま渡す。
+        # 🔒 シェル経由なので、-o と同じように入口で 1 回確かめる。
+        #   対になる定義: src/main.c の parse_args
+        elif len(a) > 2 and (strings.startswith(a, "-l") or
+                             strings.startswith(a, "-L")):
+            check_shell_safe(a, "リンクの指定")
+            o.link.append(copy(a))
+        elif a == "-framework":
+            if i + 1 >= len(args):
+                panic("-framework の後に名前が必要です")
+            i = i + 1
+            check_shell_safe(args[i], "framework の名前")
+            o.link.append("-framework")
+            o.link.append(copy(args[i]))
         # ★ -j2 のように数をくっつけて書く（C 版 src/main.c と対）
         elif len(a) > 2 and strings.startswith(a, "-j"):
             o.jobs = int(strings.substr(a, 2, len(a) - 2))
@@ -453,6 +474,9 @@ def main() -> int:
             # ★ ソケット（A-22）。Windows の socket は ws2_32.dll にある
             #   （POSIX では libc に入っているので何も足さない）。
             parts.append(" -lws2_32")
+        # ★ 利用者が指定したリンクの指定（A-33）。ランタイムの後に置く。
+        for lf in opt.link:
+            parts.append(" \"" + lf + "\"")
         parts.append(" -o \"" + out_path + "\"")
         rc = sys.run(strings.join(parts, ""))
 

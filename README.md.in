@@ -24,7 +24,7 @@ def main() -> int:
 | コンパイラ | `{{cc}}`（C 実装 → **セルフホスト済み**） |
 | バックエンド | LLVM IR を直接出力（テキスト） |
 | 型付け | 静的・型注釈必須・実行時型情報なし |
-| 現在地 | v2（安全性・エラー処理・共有所有）実装済み／**所有権の検査は既定でエラー**（Rust と同じ強さ）／**範囲型と契約**（Ada の部分型・Pre/Post）／**RISC-V のベアメタルで動作**・593 テスト |
+| 現在地 | v2（安全性・エラー処理・共有所有）実装済み／**所有権の検査は既定でエラー**（Rust と同じ強さ）／**範囲型と契約**（Ada の部分型・Pre/Post）／**RISC-V のベアメタルで動作**・595 テスト |
 
 ---
 
@@ -102,8 +102,13 @@ make install PREFIX=$HOME/.local   # 自分の環境だけに入れるなら
 
 ```bash
 {{pm}} init myapp
-{{pm}} add json https://github.com/user/json-pkg 1.2.0
+{{pm}} add toml https://github.com/user/toml-pkg 1.2.0
 {{pm}} build                     # {{cc}} -I deps main{{ext}} -o myapp
+```
+
+```python
+import toml.parser               # deps/toml/parser{{ext}}
+import json                      # 標準ライブラリ。**名前はぶつかりません**
 ```
 
 `package.lock` が commit と tree の SHA で中身を固定するので、タグを
@@ -214,6 +219,18 @@ scope:                                 # 出口で必ず join される
 - ⚠️ **`async` / `await` はありません。** 理由と、あとから
   **利用者のコードを変えずに**非同期を得る道は
   [docs/design/concurrency.md](docs/design/concurrency.md) §6 に書いてあります
+
+### C のライブラリを繋ぐ
+
+```bash
+{{cc}} -O2 app{{ext}} -framework Accelerate -o app   # macOS
+{{cc}} -O2 app{{ext}} -lopenblas -o app              # Linux
+```
+
+- `list[float]` の中身は**連続した double の並び**なので、C からはそのまま
+  `double*` に見えます（**写しは 1 回も起きません**）
+- 512³ の行列積で、手書き（ベクトル化つき）**36 ms** → BLAS **3 ms**
+- `import blas` で `dot` / `norm` / `axpy` / `matmul` が使えます
 
 ### デバッグ
 

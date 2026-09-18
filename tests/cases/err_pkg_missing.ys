@@ -1,0 +1,8 @@
+# ERROR: error: モジュール 'acme.nope.gone' が見つかりません
+# ERROR: acme/nope/gone
+# A-32: パッケージが見つからないときは、**探したパス**を並べます。
+#   ★ `pkg.mod` は `pkg/mod` を探します（ドットがディレクトリの区切りです）。
+import acme.nope.gone
+
+def main() -> int:
+    return 0

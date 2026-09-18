@@ -85,6 +85,23 @@
 なお、スレッドに渡せるかどうかの検査（`E-SEND-1`〜`4`）は**常にエラー**で、
 外すオプションはありません。**2 つの実装のどちらでも同じです**（A-25）。
 
+## C のライブラリを繋ぐ
+
+| オプション | 説明 |
+|---|---|
+| `-l<名前>` / `-L<dir>` | リンクのときに clang へそのまま渡す（`-lopenblas` など） |
+| `-framework <名前>` | 同上（macOS の framework。`-framework Accelerate`） |
+
+```bash
+{{cc}} -O2 app{{ext}} -framework Accelerate -o app   # macOS
+{{cc}} -O2 app{{ext}} -lopenblas -o app              # Linux
+```
+
+**★ `extern def` で宣言した関数の実体が標準ライブラリの外にあるとき**に要ります
+（[`blas`](../spec/stdlib.md#blas) がその例です）。
+
+🔒 シェル経由で渡るので、`-o` と同じように**入口で 1 回**確かめます。
+
 ## デバッグ
 
 | オプション | 説明 |

@@ -1877,11 +1877,19 @@ static Node *type_ref(Parser *p, const char *what) {
         n->mod_name = n->name;
         n->name = m->text;
         n->tok = m;
-        if (tok_is(peek(p), "."))
-            error_at_hint(peek(p),
-                          "モジュールの修飾は 1 段だけです（パッケージはありません）",
-                          "'%s.%s' の後にさらに '.' は書けません", n->mod_name,
-                          n->name);
+        // ★ パッケージ（A-32）：`pkg.mod.Token` のように何段でも書けます。
+        //   最後の 1 つが型名で、その手前までがモジュール名です。
+        while (tok_is(peek(p), ".")) {
+            advance(p);
+            Token *seg = type_name_token(p, "モジュール修飾の後には型名を書きます"
+                                            "（例: pkg.mod.Token）");
+            StrBuf mn;
+            sb_init(&mn);
+            sb_printf(&mn, "%s.%s", n->mod_name, n->name);
+            n->mod_name = sb_str(&mn);
+            n->name = seg->text;
+            n->tok = seg;
+        }
     }
 
     Token *open = peek(p);
@@ -2403,13 +2411,28 @@ static Node *import_stmt(Parser *p) {
                       "モジュール名が必要です");
     advance(p);
 
-    if (tok_is(peek(p), "."))
-        error_at_hint(peek(p),
-                      "モジュール名にドットは使えません（パッケージはありません）",
-                      "'%s' の後に '.' は書けません", name_tok->text);
+    // ★ パッケージ（A-32）：`import pkg.mod` と書けます。
+    //
+    //   名前は**ドットのまま**持ちます（"pkg.mod"）。使うときも
+    //   `pkg.mod.f()` と**全部書きます**。短い名前で束ねると、
+    //   標準ライブラリと同じ名前のパッケージがまた使えなくなるためです。
+    //   ファイルは `pkg/mod` を探します（module.c が変換します）。
+    StrBuf full;
+    sb_init(&full);
+    sb_printf(&full, "%s", name_tok->text);
+    while (tok_is(peek(p), ".")) {
+        advance(p);
+        Token *seg = peek(p);
+        if (seg->kind != TK_IDENT)
+            error_at_hint(seg, "ドットの後にはモジュール名を書きます"
+                               "（例: import pkg.mod）",
+                          "モジュール名が必要です");
+        advance(p);
+        sb_printf(&full, ".%s", seg->text);
+    }
 
     Node *n = new_node(ND_IMPORT, kw);
-    n->name = name_tok->text;
+    n->name = sb_str(&full);
     expect_newline(p);
     return n;
 }

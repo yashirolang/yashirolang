@@ -1,0 +1,1097 @@
+# prove — 区間解析で実行時検査を消す（A-34 段 1・2）
+#
+# ★ 対になる定義: src/prove.c
+#   ⚠️ **1 つでも判断が食い違うと、2 実装の IR がずれて make test が落ちます。**
+#     式の形まで C 版と揃えてあります（特に桁あふれの判定）。
+#
+# 🤔 道具は 1 つだけ：**区間**（この値は lo 以上 hi 以下）。
+#   SMT ソルバもループ不変条件も使いません。証明したい性質のほとんどは、
+#   型（範囲型 A-28）と契約（A-29）と所有権（A-24）が先に言っています。
+import ast
+import module
+import strings
+
+# ── 区間 ───────────────────────────────────────────────────
+
+def iv_max() -> int:
+    return 9223372036854775807
+
+def iv_min() -> int:
+    # ⚠️ -9223372036854775808 とは書けません（先に正の数として読まれるため）
+    return -9223372036854775807 - 1
+
+
+class Iv:
+    lo: int
+    hi: int
+
+    def init(self, lo: int, hi: int) -> None:
+        self.lo = lo
+        self.hi = hi
+
+
+def iv_top() -> Iv:
+    return Iv(iv_min(), iv_max())
+
+def iv_const(v: int) -> Iv:
+    return Iv(v, v)
+
+def iv_is_top(a: Iv) -> bool:
+    return a.lo == iv_min() and a.hi == iv_max()
+
+def iv_fits(a: Iv, lo: int, hi: int) -> bool:
+    return a.lo >= lo and a.hi <= hi
+
+
+# 折り返すか（C 版 add_ovf / sub_ovf / mul_ovf と**同じ式**）
+def add_ovf(a: int, b: int) -> bool:
+    if b > 0 and a > iv_max() - b:
+        return True
+    if b < 0 and a < iv_min() - b:
+        return True
+    return False
+
+def sub_ovf(a: int, b: int) -> bool:
+    if b < 0 and a > iv_max() + b:
+        return True
+    if b > 0 and a < iv_min() + b:
+        return True
+    return False
+
+def mul_ovf(a: int, b: int) -> bool:
+    if a == 0 or b == 0:
+        return False
+    if a == iv_min() or b == iv_min():
+        return True
+    ua: int = a
+    if ua < 0:
+        ua = -ua
+    ub: int = b
+    if ub < 0:
+        ub = -ub
+    return ua > iv_max() // ub
+
+
+def iv_add(a: Iv, b: Iv) -> Iv:
+    if iv_is_top(a) or iv_is_top(b):
+        return iv_top()
+    if add_ovf(a.lo, b.lo) or add_ovf(a.hi, b.hi):
+        return iv_top()
+    return Iv(a.lo + b.lo, a.hi + b.hi)
+
+def iv_sub(a: Iv, b: Iv) -> Iv:
+    if iv_is_top(a) or iv_is_top(b):
+        return iv_top()
+    if sub_ovf(a.lo, b.hi) or sub_ovf(a.hi, b.lo):
+        return iv_top()
+    return Iv(a.lo - b.hi, a.hi - b.lo)
+
+def iv_mul(a: Iv, b: Iv) -> Iv:
+    if iv_is_top(a) or iv_is_top(b):
+        return iv_top()
+    if (mul_ovf(a.lo, b.lo) or mul_ovf(a.lo, b.hi) or
+            mul_ovf(a.hi, b.lo) or mul_ovf(a.hi, b.hi)):
+        return iv_top()
+    c: list[int] = [a.lo * b.lo, a.lo * b.hi, a.hi * b.lo, a.hi * b.hi]
+    lo: int = c[0]
+    hi: int = c[0]
+    i: int = 1
+    while i < 4:
+        if c[i] < lo:
+            lo = c[i]
+        if c[i] > hi:
+            hi = c[i]
+        i = i + 1
+    return Iv(lo, hi)
+
+def iv_join(a: Iv, b: Iv) -> Iv:
+    lo: int = a.lo
+    if b.lo < lo:
+        lo = b.lo
+    hi: int = a.hi
+    if b.hi > hi:
+        hi = b.hi
+    return Iv(lo, hi)
+
+
+# ── 環境 ───────────────────────────────────────────────────
+#
+# ★ 変数ごとの区間と、1 つだけの関係（「この変数は、この list の長さより
+#   小さい」）。⚠️ 表は**出現順の並び**です（2 実装で同じ結果になるように）。
+class Env:
+    names: list[str]
+    lo: list[int]
+    hi: list[int]
+    lt: list[str]       # 関係。"" なら無し
+
+    def init(self) -> None:
+        self.names = []
+        self.lo = []
+        self.hi = []
+        self.lt = []
+
+    def find(self, name: str) -> int:
+        i: int = 0
+        while i < len(self.names):
+            if self.names[i] == name:
+                return i
+            i = i + 1
+        return -1
+
+    # ⚠️ グローバル（@ で始まる）は追いません。他の関数が書き換えられるためです。
+    def is_global(self, name: str) -> bool:
+        return strings.startswith(name, "@")
+
+    def ensure(mut self, name: str) -> int:
+        k: int = self.find(name)
+        if k >= 0:
+            return k
+        self.names.append(copy(name))
+        self.lo.append(iv_min())
+        self.hi.append(iv_max())
+        self.lt.append("")
+        return len(self.names) - 1
+
+    def set_iv(mut self, name: str, v: Iv) -> None:
+        if len(name) == 0 or self.is_global(name):
+            return
+        k: int = self.ensure(name)
+        self.lo[k] = v.lo
+        self.hi[k] = v.hi
+        self.lt[k] = ""          # 値が変わったら関係は消える
+
+    def get_iv(self, name: str) -> Iv:
+        if len(name) == 0 or self.is_global(name):
+            return iv_top()
+        k: int = self.find(name)
+        if k < 0:
+            return iv_top()
+        return Iv(self.lo[k], self.hi[k])
+
+    def copy_of(self) -> Env:
+        e: Env = Env()
+        i: int = 0
+        while i < len(self.names):
+            e.names.append(copy(self.names[i]))
+            e.lo.append(self.lo[i])
+            e.hi.append(self.hi[i])
+            e.lt.append(copy(self.lt[i]))
+            i = i + 1
+        return e
+
+    # 合流（if の後・ループの入口）。区間は和、関係は両方にあるものだけ。
+    def join(mut self, other: Env) -> None:
+        i: int = 0
+        while i < len(self.names):
+            k: int = other.find(self.names[i])
+            if k < 0:
+                self.lo[i] = iv_min()
+                self.hi[i] = iv_max()
+                self.lt[i] = ""
+            else:
+                if other.lo[k] < self.lo[i]:
+                    self.lo[i] = other.lo[k]
+                if other.hi[k] > self.hi[i]:
+                    self.hi[i] = other.hi[k]
+                if self.lt[i] != other.lt[k]:
+                    self.lt[i] = ""
+            i = i + 1
+
+    def same_as(self, other: Env) -> bool:
+        if len(self.names) != len(other.names):
+            return False
+        i: int = 0
+        while i < len(self.names):
+            k: int = other.find(self.names[i])
+            if k < 0:
+                return False
+            if self.lo[i] != other.lo[k] or self.hi[i] != other.hi[k]:
+                return False
+            if self.lt[i] != other.lt[k]:
+                return False
+            i = i + 1
+        return True
+
+    # 広げる（widening）。動いた端を ±∞ に飛ばして、反復を必ず止める。
+    def widen(mut self, old: Env) -> None:
+        i: int = 0
+        while i < len(self.names):
+            k: int = old.find(self.names[i])
+            if k >= 0:
+                if self.lo[i] < old.lo[k]:
+                    self.lo[i] = iv_min()
+                if self.hi[i] > old.hi[k]:
+                    self.hi[i] = iv_max()
+            i = i + 1
+
+    # 中身を丸ごと入れ替える（C 版の `*env = other;` にあたる）
+    #
+    # ⚠️ list そのものは copy できないので、1 つずつ写します。
+    def assign_from(mut self, other: Env) -> None:
+        self.names = []
+        self.lo = []
+        self.hi = []
+        self.lt = []
+        i: int = 0
+        while i < len(other.names):
+            self.names.append(copy(other.names[i]))
+            self.lo.append(other.lo[i])
+            self.hi.append(other.hi[i])
+            self.lt.append(copy(other.lt[i]))
+            i = i + 1
+
+    # その場所について分かっていたことを落とす（呼び出しの後など）
+    def kill(mut self, key: str) -> None:
+        if len(key) == 0:
+            return
+        i: int = 0
+        while i < len(self.names):
+            if self.names[i] == key:
+                self.lo[i] = iv_min()
+                self.hi[i] = iv_max()
+                self.lt[i] = ""
+            # ★ その list を指していた関係も落とす（短くなったかもしれない）
+            if self.lt[i] == key:
+                self.lt[i] = ""
+            i = i + 1
+
+
+# 消せた検査の数（--prove-report が出す）
+class Stats:
+    ovf: int
+    range_: int
+    bounds: int
+    contract: int
+    ovf_left: int
+    range_left: int
+    bounds_left: int
+    contract_left: int
+
+    def init(self) -> None:
+        self.ovf = 0
+        self.range_ = 0
+        self.bounds = 0
+        self.contract = 0
+        self.ovf_left = 0
+        self.range_left = 0
+        self.bounds_left = 0
+        self.contract_left = 0
+
+
+# 事後条件 1 つぶんの記録（**すべての return で示せたときだけ**消す）
+class EnsRec:
+    node: rc[ast.Node]
+    all_ok: bool
+    seen: bool
+
+    def init(self, node: rc[ast.Node]) -> None:
+        self.node = node
+        self.all_ok = True
+        self.seen = False
+
+
+class Prove:
+    st: Stats
+    ens: list[rc[EnsRec]]      # いま検査している関数の ensures
+
+    def init(self, st: own Stats) -> None:
+        self.st = st
+        self.ens = []
+
+
+# ── 小道具 ─────────────────────────────────────────────────
+
+def node_of(n: rc[ast.Node] | None) -> rc[ast.Node]:
+    if n is None:
+        panic("prove: ノードがありません")
+    return n
+
+def type_of_opt(n: rc[ast.Node]) -> rc[ast.Type] | None:
+    return n.type
+
+def is_int_node(n: rc[ast.Node]) -> bool:
+    t: rc[ast.Type] | None = n.type
+    if t is None:
+        return False
+    tt: rc[ast.Type] = t
+    return tt.kind == ast.TY_INT
+
+
+# 場所の鍵。**同じ場所なら同じ文字列**になる（変数と 1 段のフィールドまで）。
+#   対になる定義: src/prove.c の place_key
+def place_key(n: rc[ast.Node] | None) -> str:
+    if n is None:
+        return ""
+    nn: rc[ast.Node] = n
+    if nn.kind == ast.ND_VAR and len(nn.ir_name) > 0:
+        return copy(nn.ir_name)
+    if nn.kind == ast.ND_FIELD and len(nn.name) > 0 and nn.lhs is not None:
+        b: rc[ast.Node] = node_of(nn.lhs)
+        if b.kind == ast.ND_VAR and len(b.ir_name) > 0:
+            return b.ir_name + "." + nn.name
+    return ""
+
+
+# `len(xs)` なら xs の鍵を返す（添字の関係を作るため）
+def len_target(n: rc[ast.Node] | None) -> str:
+    if n is None:
+        return ""
+    nn: rc[ast.Node] = n
+    if nn.kind != ast.ND_CALL:
+        return ""
+    if nn.builtin != "pl_list_len" and nn.builtin != "pl_str_len":
+        return ""
+    return place_key(nn.args)
+
+
+# 型そのものが言っている範囲（範囲型 A-28 / bool）
+def iv_of_type(t: rc[ast.Type] | None) -> Iv:
+    if t is None:
+        return iv_top()
+    tt: rc[ast.Type] = t
+    if ast.ty_is_range(tt):
+        return Iv(tt.lo, tt.hi)
+    if tt.kind == ast.TY_BOOL:
+        return Iv(0, 1)
+    return iv_top()
+
+
+# ── 式の区間を求める ───────────────────────────────────────
+#
+# ★ 対になる定義: src/prove.c の eval
+def eval_iv(env: mut Env, n: rc[ast.Node] | None) -> Iv:
+    if n is None:
+        return iv_top()
+    nn: rc[ast.Node] = n
+
+    if nn.kind == ast.ND_INT:
+        return iv_const(nn.ival)
+
+    if nn.kind == ast.ND_BOOL:
+        if nn.ival != 0:
+            return iv_const(1)
+        return iv_const(0)
+
+    if nn.kind == ast.ND_VAR:
+        t: Iv = iv_of_type(nn.type)
+        if len(nn.ir_name) == 0:
+            return t
+        v: Iv = env.get_iv(nn.ir_name)
+        lo: int = v.lo
+        if t.lo > lo:
+            lo = t.lo
+        hi: int = v.hi
+        if t.hi < hi:
+            hi = t.hi
+        if lo > hi:
+            return v
+        return Iv(lo, hi)
+
+    if nn.kind == ast.ND_RANGECHK:
+        return iv_of_type(nn.type)
+
+    if nn.kind == ast.ND_RESULT:
+        return env.get_iv("%prove.result")
+
+    if nn.kind == ast.ND_BINOP:
+        a: Iv = eval_iv(env, nn.lhs)
+        b: Iv = eval_iv(env, nn.rhs)
+        if nn.op == ast.OP_ADD:
+            return iv_add(a, b)
+        if nn.op == ast.OP_SUB:
+            return iv_sub(a, b)
+        if nn.op == ast.OP_MUL:
+            return iv_mul(a, b)
+        if nn.op == ast.OP_BITAND:
+            # ★ 定数マスクは範囲をきっちり決める（bytes の並べ方で効く）
+            if b.lo == b.hi and b.lo >= 0:
+                return Iv(0, b.lo)
+            if a.lo == a.hi and a.lo >= 0:
+                return Iv(0, a.lo)
+            if a.lo >= 0 or b.lo >= 0:
+                return Iv(0, iv_max())
+            return iv_top()
+        if nn.op == ast.OP_SHR:
+            if a.lo >= 0 and b.lo >= 0 and b.lo == b.hi and b.lo < 63:
+                return Iv(a.lo >> b.lo, a.hi >> b.lo)
+            return iv_top()
+        if nn.op == ast.OP_MOD:
+            # ⚠️ Python と同じ切り下げなので、b > 0 なら結果は [0, b-1]
+            if b.lo > 0:
+                return Iv(0, b.hi - 1)
+            return iv_top()
+        if nn.op == ast.OP_FLOORDIV:
+            if a.lo >= 0 and b.lo > 0:
+                return Iv(a.lo // b.hi, a.hi // b.lo)
+            return iv_top()
+        if ast.is_compare(nn.op):
+            return Iv(0, 1)
+        return iv_top()
+
+    if nn.kind == ast.ND_UNARY:
+        if nn.op == ast.OP_NEG:
+            a2: Iv = eval_iv(env, nn.lhs)
+            if iv_is_top(a2) or a2.lo == iv_min():
+                return iv_top()
+            return Iv(-a2.hi, -a2.lo)
+        if nn.op == ast.OP_NOT:
+            return Iv(0, 1)
+        return iv_top()
+
+    if nn.kind == ast.ND_CALL or nn.kind == ast.ND_METHOD:
+        # ★ len(...) は 0 以上（長さは負にならない）
+        if nn.builtin == "pl_list_len" or nn.builtin == "pl_str_len":
+            return Iv(0, iv_max())
+        # ★ 戻り型が範囲型なら、その範囲から始められる（A-28 の効き目）
+        return iv_of_type(nn.type)
+
+    return iv_of_type(nn.type)
+
+
+# ── 条件で絞る ─────────────────────────────────────────────
+#
+# ★ `if i < len(xs):` の then 側では i < len(xs) が成り立つ。
+#   区間（i の上限）と関係（i < len(xs)）の**両方**を更新する。
+#   対になる定義: src/prove.c の narrow / narrow_cmp
+def narrow_cmp(env: mut Env, n: rc[ast.Node], truth: bool) -> None:
+    op: int = n.op
+    if not truth:
+        if op == ast.OP_LT:
+            op = ast.OP_GE
+        elif op == ast.OP_LE:
+            op = ast.OP_GT
+        elif op == ast.OP_GT:
+            op = ast.OP_LE
+        elif op == ast.OP_GE:
+            op = ast.OP_LT
+        elif op == ast.OP_EQ:
+            return
+        elif op == ast.OP_NE:
+            op = ast.OP_EQ
+        else:
+            return
+
+    if n.lhs is None or n.rhs is None:
+        return
+    l: rc[ast.Node] = node_of(n.lhs)
+    r: rc[ast.Node] = node_of(n.rhs)
+
+    # ① 関係（i < len(xs)）
+    if op == ast.OP_LT and l.kind == ast.ND_VAR and len(l.ir_name) > 0:
+        lt: str = len_target(r)
+        if len(lt) > 0 and not env.is_global(l.ir_name):
+            k0: int = env.ensure(l.ir_name)
+            env.lt[k0] = lt
+
+    # ② 区間
+    li: Iv = eval_iv(env, l)
+    ri: Iv = eval_iv(env, r)
+    if l.kind == ast.ND_VAR and len(l.ir_name) > 0 and is_int_node(l):
+        if not env.is_global(l.ir_name):
+            k: int = env.ensure(l.ir_name)
+            lo: int = env.lo[k]
+            hi: int = env.hi[k]
+            if li.lo > lo:
+                lo = li.lo
+            if li.hi < hi:
+                hi = li.hi
+            if op == ast.OP_LT:
+                if ri.hi != iv_min() and ri.hi - 1 < hi:
+                    hi = ri.hi - 1
+            elif op == ast.OP_LE:
+                if ri.hi < hi:
+                    hi = ri.hi
+            elif op == ast.OP_GT:
+                if ri.lo != iv_max() and ri.lo + 1 > lo:
+                    lo = ri.lo + 1
+            elif op == ast.OP_GE:
+                if ri.lo > lo:
+                    lo = ri.lo
+            elif op == ast.OP_EQ:
+                if ri.lo > lo:
+                    lo = ri.lo
+                if ri.hi < hi:
+                    hi = ri.hi
+            if lo <= hi:
+                env.lo[k] = lo
+                env.hi[k] = hi
+
+    # ③ 右辺が変数のときは向きを入れ替えて同じことをする
+    if r.kind == ast.ND_VAR and len(r.ir_name) > 0 and is_int_node(r):
+        if not env.is_global(r.ir_name):
+            k2: int = env.ensure(r.ir_name)
+            lo2: int = env.lo[k2]
+            hi2: int = env.hi[k2]
+            if op == ast.OP_LT:
+                if li.lo != iv_max() and li.lo + 1 > lo2:
+                    lo2 = li.lo + 1
+            elif op == ast.OP_LE:
+                if li.lo > lo2:
+                    lo2 = li.lo
+            elif op == ast.OP_GT:
+                if li.hi != iv_min() and li.hi - 1 < hi2:
+                    hi2 = li.hi - 1
+            elif op == ast.OP_GE:
+                if li.hi < hi2:
+                    hi2 = li.hi
+            elif op == ast.OP_EQ:
+                if li.lo > lo2:
+                    lo2 = li.lo
+                if li.hi < hi2:
+                    hi2 = li.hi
+            if lo2 <= hi2:
+                env.lo[k2] = lo2
+                env.hi[k2] = hi2
+
+
+def narrow(env: mut Env, cond: rc[ast.Node] | None, truth: bool) -> None:
+    if cond is None:
+        return
+    c: rc[ast.Node] = cond
+    if c.kind == ast.ND_BINOP and ast.is_compare(c.op):
+        narrow_cmp(env, c, truth)
+        return
+    if c.kind == ast.ND_LOGICAL and truth and c.op == ast.OP_AND:
+        narrow(env, c.lhs, True)
+        narrow(env, c.rhs, True)
+        return
+    if c.kind == ast.ND_LOGICAL and not truth and c.op == ast.OP_OR:
+        narrow(env, c.lhs, False)
+        narrow(env, c.rhs, False)
+        return
+    if c.kind == ast.ND_UNARY and c.op == ast.OP_NOT:
+        narrow(env, c.lhs, not truth)
+        return
+
+
+# 条件が「必ず真」と言えるか（契約の検査を消すため。段 2）
+TRI_UNKNOWN: int = 0
+TRI_TRUE: int = 1
+TRI_FALSE: int = 2
+
+def prove_cond(env: mut Env, n: rc[ast.Node] | None) -> int:
+    if n is None:
+        return TRI_UNKNOWN
+    nn: rc[ast.Node] = n
+
+    if nn.kind == ast.ND_BOOL:
+        if nn.ival != 0:
+            return TRI_TRUE
+        return TRI_FALSE
+
+    if nn.kind == ast.ND_UNARY and nn.op == ast.OP_NOT:
+        t: int = prove_cond(env, nn.lhs)
+        if t == TRI_TRUE:
+            return TRI_FALSE
+        if t == TRI_FALSE:
+            return TRI_TRUE
+        return TRI_UNKNOWN
+
+    if nn.kind == ast.ND_LOGICAL:
+        a: int = prove_cond(env, nn.lhs)
+        b: int = prove_cond(env, nn.rhs)
+        if nn.op == ast.OP_AND:
+            if a == TRI_FALSE or b == TRI_FALSE:
+                return TRI_FALSE
+            if a == TRI_TRUE and b == TRI_TRUE:
+                return TRI_TRUE
+            return TRI_UNKNOWN
+        if a == TRI_TRUE or b == TRI_TRUE:
+            return TRI_TRUE
+        if a == TRI_FALSE and b == TRI_FALSE:
+            return TRI_FALSE
+        return TRI_UNKNOWN
+
+    if nn.kind != ast.ND_BINOP or not ast.is_compare(nn.op):
+        return TRI_UNKNOWN
+
+    x: Iv = eval_iv(env, nn.lhs)
+    y: Iv = eval_iv(env, nn.rhs)
+    if iv_is_top(x) or iv_is_top(y):
+        return TRI_UNKNOWN
+
+    if nn.op == ast.OP_LT:
+        if x.hi < y.lo:
+            return TRI_TRUE
+        if x.lo >= y.hi:
+            return TRI_FALSE
+        return TRI_UNKNOWN
+    if nn.op == ast.OP_LE:
+        if x.hi <= y.lo:
+            return TRI_TRUE
+        if x.lo > y.hi:
+            return TRI_FALSE
+        return TRI_UNKNOWN
+    if nn.op == ast.OP_GT:
+        if x.lo > y.hi:
+            return TRI_TRUE
+        if x.hi <= y.lo:
+            return TRI_FALSE
+        return TRI_UNKNOWN
+    if nn.op == ast.OP_GE:
+        if x.lo >= y.hi:
+            return TRI_TRUE
+        if x.hi < y.lo:
+            return TRI_FALSE
+        return TRI_UNKNOWN
+    if nn.op == ast.OP_EQ:
+        if x.lo == x.hi and y.lo == y.hi and x.lo == y.lo:
+            return TRI_TRUE
+        if x.hi < y.lo or y.hi < x.lo:
+            return TRI_FALSE
+        return TRI_UNKNOWN
+    if nn.op == ast.OP_NE:
+        if x.hi < y.lo or y.hi < x.lo:
+            return TRI_TRUE
+        if x.lo == x.hi and y.lo == y.hi and x.lo == y.lo:
+            return TRI_FALSE
+        return TRI_UNKNOWN
+    return TRI_UNKNOWN
+
+
+# ── 式をたどって印を立てる ─────────────────────────────────
+#
+# ★ 「消す」判断はここだけ。**分からなければ何もしない**（印が立たなければ
+#   今までどおり実行時に確かめる）。対になる定義: src/prove.c の walk_expr
+def kill_mut_args(env: mut Env, n: rc[ast.Node]) -> None:
+    a: rc[ast.Node] | None = n.args
+    while a is not None:
+        an: rc[ast.Node] = a
+        env.kill(place_key(an))
+        if an.kind == ast.ND_INDEX:
+            env.kill(place_key(an.lhs))
+        a = an.next
+    if n.kind == ast.ND_METHOD:
+        env.kill(place_key(n.lhs))
+
+
+def walk_expr(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
+    if n is None:
+        return
+    nn: rc[ast.Node] = n
+
+    if nn.kind == ast.ND_BINOP:
+        walk_expr(pr, env, nn.lhs)
+        walk_expr(pr, env, nn.rhs)
+        if is_int_node(nn) and (nn.op == ast.OP_ADD or nn.op == ast.OP_SUB or
+                                nn.op == ast.OP_MUL):
+            a: Iv = eval_iv(env, nn.lhs)
+            b: Iv = eval_iv(env, nn.rhs)
+            r: Iv = iv_top()
+            if nn.op == ast.OP_ADD:
+                r = iv_add(a, b)
+            elif nn.op == ast.OP_SUB:
+                r = iv_sub(a, b)
+            else:
+                r = iv_mul(a, b)
+            if not iv_is_top(r) and not iv_is_top(a) and not iv_is_top(b):
+                if not nn.no_ovf_check:
+                    pr.st.ovf = pr.st.ovf + 1
+                nn.no_ovf_check = True
+            elif not nn.no_ovf_check:
+                pr.st.ovf_left = pr.st.ovf_left + 1
+        return
+
+    if nn.kind == ast.ND_UNARY:
+        walk_expr(pr, env, nn.lhs)
+        return
+
+    if nn.kind == ast.ND_LOGICAL:
+        walk_expr(pr, env, nn.lhs)
+        # ⚠️ 右側は評価されないことがあるので、区間は触らない
+        walk_expr(pr, env, nn.rhs)
+        return
+
+    if nn.kind == ast.ND_RANGECHK:
+        walk_expr(pr, env, nn.lhs)
+        v: Iv = eval_iv(env, nn.lhs)
+        t: rc[ast.Type] | None = nn.type
+        ok: bool = False
+        if t is not None:
+            tt: rc[ast.Type] = t
+            if ast.ty_is_range(tt) and iv_fits(v, tt.lo, tt.hi):
+                ok = True
+        if ok:
+            if not nn.no_range_check:
+                pr.st.range_ = pr.st.range_ + 1
+            nn.no_range_check = True
+        elif not nn.no_range_check:
+            pr.st.range_left = pr.st.range_left + 1
+        return
+
+    if nn.kind == ast.ND_INDEX:
+        walk_expr(pr, env, nn.lhs)
+        walk_expr(pr, env, nn.rhs)
+        i: Iv = eval_iv(env, nn.rhs)
+        nonneg: bool = i.lo >= 0
+        inb: bool = False
+        lk: str = place_key(nn.lhs)
+        if nn.rhs is not None and len(lk) > 0:
+            rr: rc[ast.Node] = node_of(nn.rhs)
+            if rr.kind == ast.ND_VAR and len(rr.ir_name) > 0:
+                k: int = env.find(rr.ir_name)
+                if k >= 0 and env.lt[k] == lk:
+                    inb = True
+        # ⚠️ list のときだけ消す（str の添字は取り出し方が違う）
+        is_list: bool = False
+        if nn.lhs is not None:
+            lt2: rc[ast.Type] | None = node_of(nn.lhs).type
+            if lt2 is not None:
+                ltt: rc[ast.Type] = lt2
+                is_list = ltt.kind == ast.TY_LIST
+        if is_list and nonneg and inb:
+            if not nn.no_bounds_check:
+                pr.st.bounds = pr.st.bounds + 1
+            nn.no_bounds_check = True
+        elif is_list and not nn.no_bounds_check:
+            pr.st.bounds_left = pr.st.bounds_left + 1
+        return
+
+    if nn.kind == ast.ND_CALL or nn.kind == ast.ND_METHOD:
+        walk_expr(pr, env, nn.lhs)
+        a2: rc[ast.Node] | None = nn.args
+        while a2 is not None:
+            an2: rc[ast.Node] = a2
+            walk_expr(pr, env, an2)
+            a2 = an2.next
+        # ⚠️ 呼び出しの後は、渡したものについて分かっていたことを落とす
+        kill_mut_args(env, nn)
+        return
+
+    # それ以外は子をたどるだけ（印は立てない）
+    walk_expr(pr, env, nn.lhs)
+    walk_expr(pr, env, nn.rhs)
+    walk_expr(pr, env, nn.els)
+    a3: rc[ast.Node] | None = nn.args
+    while a3 is not None:
+        an3: rc[ast.Node] = a3
+        walk_expr(pr, env, an3)
+        a3 = an3.next
+
+
+# ── 文をたどる ─────────────────────────────────────────────
+
+# 本体に break / continue があるか（ループの道が増えるかどうか）
+#
+# ⚠️ 内側のループの break は、そのループのものなので数えない。
+def has_jump(n: rc[ast.Node] | None) -> bool:
+    cur: rc[ast.Node] | None = n
+    while cur is not None:
+        c: rc[ast.Node] = cur
+        if c.kind == ast.ND_BREAK or c.kind == ast.ND_CONTINUE:
+            return True
+        if c.kind != ast.ND_WHILE:
+            if has_jump(c.lhs) or has_jump(c.rhs) or has_jump(c.els):
+                return True
+            if has_jump(c.body) or has_jump(c.incr):
+                return True
+        cur = c.next
+    return False
+
+
+# この文の並びで書き換わる場所を、全部「分からない」に戻す
+def kill_assigned(env: mut Env, n: rc[ast.Node] | None) -> None:
+    cur: rc[ast.Node] | None = n
+    while cur is not None:
+        c: rc[ast.Node] = cur
+        if c.kind == ast.ND_ASSIGN:
+            env.kill(place_key(c.lhs))
+        if c.kind == ast.ND_VARDECL:
+            env.kill(c.ir_name)
+        if c.kind == ast.ND_UNPACK:
+            v: rc[ast.Node] | None = c.params
+            while v is not None:
+                vn: rc[ast.Node] = v
+                env.kill(vn.ir_name)
+                v = vn.next
+        if c.kind == ast.ND_CALL or c.kind == ast.ND_METHOD:
+            kill_mut_args(env, c)
+        kill_assigned(env, c.lhs)
+        kill_assigned(env, c.rhs)
+        kill_assigned(env, c.els)
+        kill_assigned(env, c.body)
+        kill_assigned(env, c.incr)
+        a: rc[ast.Node] | None = c.args
+        while a is not None:
+            an: rc[ast.Node] = a
+            kill_assigned(env, an)
+            a = an.next
+        cur = c.next
+
+
+def walk_list(pr: mut Prove, env: mut Env, first: rc[ast.Node] | None) -> None:
+    s: rc[ast.Node] | None = first
+    while s is not None:
+        sn: rc[ast.Node] = s
+        walk_stmt(pr, env, sn)
+        s = sn.next
+
+
+def walk_stmt(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
+    if n is None:
+        return
+    nn: rc[ast.Node] = n
+
+    if nn.kind == ast.ND_BLOCK:
+        walk_list(pr, env, nn.body)
+        return
+
+    if nn.kind == ast.ND_VARDECL:
+        walk_expr(pr, env, nn.rhs)
+        if nn.rhs is not None:
+            r0: rc[ast.Node] = node_of(nn.rhs)
+            if r0.kind == ast.ND_CALL or r0.kind == ast.ND_METHOD:
+                kill_mut_args(env, r0)
+        if is_int_node(nn) and len(nn.ir_name) > 0:
+            v: Iv = eval_iv(env, nn.rhs)
+            t: Iv = iv_of_type(nn.type)
+            lo: int = v.lo
+            if t.lo > lo:
+                lo = t.lo
+            hi: int = v.hi
+            if t.hi < hi:
+                hi = t.hi
+            if lo <= hi:
+                env.set_iv(nn.ir_name, Iv(lo, hi))
+            else:
+                env.set_iv(nn.ir_name, v)
+        return
+
+    if nn.kind == ast.ND_ASSIGN:
+        walk_expr(pr, env, nn.rhs)
+        if nn.rhs is not None:
+            r1: rc[ast.Node] = node_of(nn.rhs)
+            if r1.kind == ast.ND_CALL or r1.kind == ast.ND_METHOD:
+                kill_mut_args(env, r1)
+        tgt: rc[ast.Node] | None = nn.lhs
+        if tgt is not None:
+            t2: rc[ast.Node] = node_of(tgt)
+            if t2.kind == ast.ND_VAR and len(t2.ir_name) > 0:
+                if is_int_node(t2):
+                    env.set_iv(t2.ir_name, eval_iv(env, nn.rhs))
+                else:
+                    env.set_iv(t2.ir_name, iv_top())
+            else:
+                walk_expr(pr, env, t2)
+                env.kill(place_key(t2))
+        return
+
+    if nn.kind == ast.ND_IF:
+        walk_expr(pr, env, nn.lhs)
+        then_e: Env = env.copy_of()
+        narrow(then_e, nn.lhs, True)
+        walk_stmt(pr, then_e, nn.body)
+
+        else_e: Env = env.copy_of()
+        narrow(else_e, nn.lhs, False)
+        if nn.els is not None:
+            walk_stmt(pr, else_e, nn.els)
+
+        then_e.join(else_e)
+        env.assign_from(then_e)
+        return
+
+    if nn.kind == ast.ND_WHILE:
+        # ★ ループの入口で成り立つことを求める。
+        #   ⚠️ break / continue があると本体が 1 本道でなくなるので、
+        #     そのときは保守的な入口（本体で書き換わるものを全部忘れる）を使う。
+        #     さらに、不動点も「本当に動かないか」を最後に確かめる。
+        jump: bool = has_jump(nn.body)
+        in_: Env = env.copy_of()
+        ok: bool = False
+        if not jump:
+            round_: int = 0
+            while round_ < 8:
+                body: Env = in_.copy_of()
+                narrow(body, nn.lhs, True)
+                walk_stmt(pr, body, nn.body)
+                if nn.incr is not None:
+                    walk_stmt(pr, body, nn.incr)
+                next_: Env = in_.copy_of()
+                next_.join(body)
+                if round_ >= 1:
+                    next_.widen(in_)
+                if next_.same_as(in_):
+                    ok = True
+                    round_ = 8
+                else:
+                    in_ = next_
+                    round_ = round_ + 1
+            if ok:
+                chk: Env = in_.copy_of()
+                narrow(chk, nn.lhs, True)
+                walk_stmt(pr, chk, nn.body)
+                if nn.incr is not None:
+                    walk_stmt(pr, chk, nn.incr)
+                joined: Env = in_.copy_of()
+                joined.join(chk)
+                ok = joined.same_as(in_)
+        if not ok:
+            in_ = env.copy_of()
+            kill_assigned(in_, nn.body)
+            if nn.incr is not None:
+                kill_assigned(in_, nn.incr)
+
+        body2: Env = in_.copy_of()
+        narrow(body2, nn.lhs, True)
+        walk_expr(pr, body2, nn.lhs)
+        walk_stmt(pr, body2, nn.body)
+        if nn.incr is not None:
+            walk_stmt(pr, body2, nn.incr)
+
+        # ⚠️ break で抜けたなら条件は偽とは限らない
+        if not jump:
+            narrow(in_, nn.lhs, False)
+        env.assign_from(in_)
+        return
+
+    if nn.kind == ast.ND_RETURN:
+        walk_expr(pr, env, nn.lhs)
+        # ★ 事後条件は**出口ごと**に確かめる（すべての出口で示せたら消す）
+        if len(pr.ens) > 0:
+            tmp: Env = env.copy_of()
+            if nn.lhs is not None:
+                tmp.set_iv("%prove.result", eval_iv(env, nn.lhs))
+            i: int = 0
+            while i < len(pr.ens):
+                r: rc[EnsRec] = pr.ens[i]
+                r.seen = True
+                if prove_cond(tmp, node_of(r.node).lhs) != TRI_TRUE:
+                    r.all_ok = False
+                i = i + 1
+        return
+
+    if nn.kind == ast.ND_REQUIRES:
+        walk_expr(pr, env, nn.lhs)
+        if prove_cond(env, nn.lhs) == TRI_TRUE:
+            if not nn.no_contract:
+                pr.st.contract = pr.st.contract + 1
+            nn.no_contract = True
+        elif not nn.no_contract:
+            pr.st.contract_left = pr.st.contract_left + 1
+        # ★ **通った後は、その条件が成り立っている**
+        narrow(env, nn.lhs, True)
+        return
+
+    if nn.kind == ast.ND_ENSURES:
+        # ⚠️ ここ（関数の先頭）では確かめない。**return の場所**で確かめる。
+        walk_expr(pr, env, nn.lhs)
+        return
+
+    if nn.kind == ast.ND_TRY:
+        walk_stmt(pr, env, nn.body)
+        ex: rc[ast.Node] | None = nn.els
+        while ex is not None:
+            exn: rc[ast.Node] = ex
+            walk_stmt(pr, env, exn.body)
+            ex = exn.next
+        # ⚠️ try の後は「どこで抜けたか」が分からないので全部忘れる
+        env.names = []
+        env.lo = []
+        env.hi = []
+        env.lt = []
+        return
+
+    if nn.kind == ast.ND_SCOPE:
+        # ⚠️ unsafe: はセルフホスト版に無いので、ここでは scope: だけ見ます
+        #   （C 版 src/prove.c は両方）。
+        walk_stmt(pr, env, nn.body)
+        return
+
+    walk_expr(pr, env, nn.lhs)
+    walk_expr(pr, env, nn.rhs)
+    a: rc[ast.Node] | None = nn.args
+    while a is not None:
+        an: rc[ast.Node] = a
+        walk_expr(pr, env, an)
+        a = an.next
+    if nn.body is not None:
+        walk_list(pr, env, nn.body)
+
+
+def prove_func(pr: mut Prove, fn: rc[ast.Node]) -> None:
+    if fn.body is None:
+        return
+    body: rc[ast.Node] = node_of(fn.body)
+
+    # ① この関数の ensures を集める（本体の先頭に並んでいる）
+    pr.ens = []
+    st: rc[ast.Node] | None = body.body
+    while st is not None:
+        sn: rc[ast.Node] = st
+        if sn.kind != ast.ND_REQUIRES and sn.kind != ast.ND_ENSURES:
+            st = None
+        else:
+            if sn.kind == ast.ND_ENSURES:
+                pr.ens.append(rc(EnsRec(sn)))
+            st = sn.next
+
+    env: Env = Env()
+    # ★ 引数の型が言っていることから始める（範囲型はここで効く）
+    pm: rc[ast.Node] | None = fn.params
+    while pm is not None:
+        p: rc[ast.Node] = pm
+        if len(p.ir_name) > 0 and is_int_node(p):
+            env.set_iv(p.ir_name, iv_of_type(p.type))
+        pm = p.next
+
+    walk_list(pr, env, body.body)
+
+    # ② すべての出口で示せた事後条件だけ消す
+    ret_is_none: bool = True
+    ft: rc[ast.Type] | None = fn.type
+    if ft is not None:
+        ret_is_none = node_type_is_none(ft)
+    i: int = 0
+    while i < len(pr.ens):
+        r: rc[EnsRec] = pr.ens[i]
+        rn: rc[ast.Node] = node_of(r.node)
+        if r.seen and r.all_ok and not ret_is_none:
+            if not rn.no_contract:
+                pr.st.contract = pr.st.contract + 1
+            rn.no_contract = True
+        elif not rn.no_contract:
+            pr.st.contract_left = pr.st.contract_left + 1
+        i = i + 1
+    pr.ens = []
+
+
+def node_type_is_none(t: rc[ast.Type]) -> bool:
+    return t.kind == ast.TY_NONE
+
+
+# 全モジュールを解析して、AST に「検査を出さなくてよい」印を立てる
+#
+# ⚠️ 2 つの実装で**同じ印**が立たなければならない（IR が食い違うため）。
+def prove_program(mods: rc[module.Module] | None) -> Stats:
+    # ⚠️ 数え上げは**このスコープで持ちます**。Prove の中の Stats を返すと
+    #   借りものを返すことになります（E-BORROW-8）。
+    pr: Prove = Prove(Stats())
+    m: rc[module.Module] | None = mods
+    while m is not None:
+        mm: rc[module.Module] = m
+        if mm.ast is not None:
+            d: rc[ast.Node] | None = node_of(mm.ast).body
+            while d is not None:
+                dn: rc[ast.Node] = d
+                if dn.kind == ast.ND_FUNC and dn.targs is None:
+                    prove_func(pr, dn)
+                if dn.kind == ast.ND_CLASS and dn.targs is None:
+                    mth: rc[ast.Node] | None = dn.body
+                    while mth is not None:
+                        mn: rc[ast.Node] = mth
+                        if mn.kind == ast.ND_FUNC:
+                            prove_func(pr, mn)
+                        mth = mn.next
+                d = dn.next
+        m = mm.next
+    out: Stats = Stats()
+    out.ovf = pr.st.ovf
+    out.range_ = pr.st.range_
+    out.bounds = pr.st.bounds
+    out.contract = pr.st.contract
+    out.ovf_left = pr.st.ovf_left
+    out.range_left = pr.st.range_left
+    out.bounds_left = pr.st.bounds_left
+    out.contract_left = pr.st.contract_left
+    return out

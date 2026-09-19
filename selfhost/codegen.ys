@@ -104,6 +104,13 @@ class Emitter:
 
     triple: str
 
+    # ── 証明（A-34）──
+    #
+    # ⚠️ verify_prove なら「消せる」と判断した検査を**残す**。外れたら
+    #   証明器の誤りとして報告する（解析の誤りを CI で捕まえるため）。
+    verify_prove: bool
+    verify_kind: str        # "" なら普通の検査
+
     # ── デバッグ情報（A-30）──
     #
     # ★ -g のときだけ LLVM の debug metadata を出す。出すのは「行の対応表」と
@@ -208,6 +215,8 @@ class Emitter:
         # ──
         self.fn_raises = False
         self.ret_val = ""
+        self.verify_prove = False
+        self.verify_kind = ""
         self.dbg = False
         self.dbgmeta = []
         self.dbg_next = 10      # ★ 0〜8 は TBAA が使っている（9 は空け）
@@ -680,7 +689,15 @@ class Emitter:
         # ★ 範囲型の検査（A-28）。意味解析が入れたノード
         if n.kind == ast.ND_RANGECHK:
             v: str = self.gen_expr(node_of(n.lhs))
-            return self.gen_range_check(type_of(n), v)
+            # ★ 証明（A-34）が「範囲に入る」と示したら検査を出さない
+            if n.no_range_check and not self.verify_prove:
+                return v
+            saved_vk: str = copy(self.verify_kind)
+            if n.no_range_check:
+                self.verify_kind = "range"
+            rv: str = self.gen_range_check(type_of(n), v)
+            self.verify_kind = saved_vk
+            return rv
 
         if n.kind == ast.ND_INT:
             # 整数リテラルは命令を出す必要すらない（即値をそのまま書ける）
@@ -1037,7 +1054,9 @@ class Emitter:
             #   ⚠️ 意図的に折り返したいときは wrap_add / wrap_sub / wrap_mul
             #     を使う（そちらは gen_call で出す）。
             intr: str = ""
-            if ot.kind == ast.TY_INT and not self.no_ovf:
+            # ★ 証明（A-34）が「折り返さない」と示した計算は検査を出さない
+            proven: bool = n.no_ovf_check and not self.verify_prove
+            if ot.kind == ast.TY_INT and not self.no_ovf and not proven:
                 intr = self.ovf_intr(n.op)
             if intr != "":
                 code: int = 2
@@ -1045,7 +1064,12 @@ class Emitter:
                     code = 0
                 elif n.op == ast.OP_SUB:
                     code = 1
-                return self.gen_checked_arith(intr, l, r, code)
+                saved_vk4: str = copy(self.verify_kind)
+                if n.no_ovf_check:
+                    self.verify_kind = "overflow"
+                rv4: str = self.gen_checked_arith(intr, l, r, code)
+                self.verify_kind = saved_vk4
+                return rv4
             self.emit("  " + t + " = " + self.llvm_binop(n.op) + " " +
                       self.llvm_type(ot) + " " + l + ", " + r + "\n")
         return t
@@ -1404,9 +1428,12 @@ class Emitter:
         self.emit_cond_br(bad, bad_l, ok_l)
 
         self.emit_label(bad_l)
-        nm: str = self.intern_str(rt.name)
-        self.emit("  call void @pl_range_fail(ptr " + nm + ", i64 " + val +
-                  ", i64 " + str(rt.lo) + ", i64 " + str(rt.hi) + ")\n")
+        if self.prove_verify_here():
+            self.gen_prove_fail()
+        else:
+            nm: str = self.intern_str(rt.name)
+            self.emit("  call void @pl_range_fail(ptr " + nm + ", i64 " + val +
+                      ", i64 " + str(rt.lo) + ", i64 " + str(rt.hi) + ")\n")
         self.emit("  unreachable\n")
         self.terminated = True
 
@@ -1485,7 +1512,26 @@ class Emitter:
                 self.fn.append(ln + "\n")
             k = k + 1
 
+    # 検査が外れたときの呼び先（--verify-prove のとき証明器の誤りとして報告）
+    #   対になる定義: src/codegen.c の prove_verify_here / gen_prove_fail
+    def prove_verify_here(self) -> bool:
+        return self.verify_prove and len(self.verify_kind) > 0
+
+    def gen_prove_fail(mut self) -> None:
+        self.declare_rt("void @pl_prove_fail(ptr) noreturn cold")
+        # ⚠️ intern_str は self を可変で借りるので、先に写しておきます
+        #   （同じ式の中で self.verify_kind を共有借用すると E-BORROW-5）。
+        kind: str = copy(self.verify_kind)
+        lab: str = self.intern_str(kind)
+        self.emit("  call void @pl_prove_fail(ptr " + lab + ")\n")
+
     def gen_contract_check(mut self, c: rc[ast.Node], fname: str) -> None:
+        # ★ 証明（A-34 段 2）が「常に真」と示した契約は検査を出さない
+        if c.no_contract and not self.verify_prove:
+            return
+        saved_vk: str = copy(self.verify_kind)
+        if c.no_contract:
+            self.verify_kind = "contract"
         self.declare_rt("void @pl_contract_fail(ptr) noreturn cold")
 
         cond: str = self.gen_expr(node_of(c.lhs))
@@ -1497,20 +1543,24 @@ class Emitter:
         self.emit_cond_br(cond, ok_l, bad_l)
 
         self.emit_label(bad_l)
-        kw: str = "ensures"
-        if c.kind == ast.ND_REQUIRES:
-            kw = "requires"
-        line: int = 0
-        ct: rc[token.Token] | None = c.tok
-        if ct is not None:
-            line = ct.line
-        msg: str = kw + " of " + fname + " (line " + str(line) + ")"
-        lab: str = self.intern_str(msg)
-        self.emit("  call void @pl_contract_fail(ptr " + lab + ")\n")
+        if self.prove_verify_here():
+            self.gen_prove_fail()
+        else:
+            kw: str = "ensures"
+            if c.kind == ast.ND_REQUIRES:
+                kw = "requires"
+            line: int = 0
+            ct: rc[token.Token] | None = c.tok
+            if ct is not None:
+                line = ct.line
+            msg: str = kw + " of " + fname + " (line " + str(line) + ")"
+            lab: str = self.intern_str(msg)
+            self.emit("  call void @pl_contract_fail(ptr " + lab + ")\n")
         self.emit("  unreachable\n")
         self.terminated = True
 
         self.emit_label(ok_l)
+        self.verify_kind = saved_vk
 
     # return のたびに ensures を確かめる（A-29）。
     #
@@ -1550,7 +1600,10 @@ class Emitter:
         self.emit_cond_br(bad, bad_l, ok_l)
 
         self.emit_label(bad_l)
-        self.emit("  call void @pl_overflow_fail(i64 " + str(op) + ")\n")
+        if self.prove_verify_here():
+            self.gen_prove_fail()
+        else:
+            self.emit("  call void @pl_overflow_fail(i64 " + str(op) + ")\n")
         self.emit("  unreachable\n")
         self.terminated = True
 
@@ -1678,8 +1731,11 @@ class Emitter:
         self.emit_cond_br(inb, ok_l, bad_l)
 
         self.emit_label(bad_l)
-        self.emit("  call void @pl_index_fail(i64 " + idx + ", i64 " + ln +
-                  ", i64 " + ovf_arg + ")\n")
+        if self.prove_verify_here():
+            self.gen_prove_fail()
+        else:
+            self.emit("  call void @pl_index_fail(i64 " + idx + ", i64 " + ln +
+                      ", i64 " + ovf_arg + ")\n")
         # ⚠️ pl_index_fail は戻ってこない。unreachable を置かないと
         #   LLVM は「戻るかも」と見て、検査をループ外へ出せなくなる。
         self.emit("  unreachable\n")
@@ -1795,7 +1851,18 @@ class Emitter:
 
         elem: rc[ast.Type] = ast.elem_of(ot)
         sty: str = self.slot_ty(elem)
+        # ★ 証明（A-34）が「0 以上・長さ未満」と示した添字は、検査も
+        #   負の添字の正規化も出さない（A-15c の速い側と同じ道）。
+        saved_nobc: bool = self.nobc
+        saved_vk2: str = copy(self.verify_kind)
+        if n.no_bounds_check:
+            if self.verify_prove:
+                self.verify_kind = "index"
+            else:
+                self.nobc = True
         ep: str = self.gen_index_addr(obj, idx0, sty, True, ovf)
+        self.nobc = saved_nobc
+        self.verify_kind = saved_vk2
         t: str = self.new_tmp()
         self.emit("  " + t + " = load " + sty + ", ptr " + ep + TBAA_LISTELEM +
                   "\n")
@@ -1818,7 +1885,16 @@ class Emitter:
         # ⚠️ 代入側は負の添字を正規化しない。
         #   pl_list_set_* を呼んでいたころからそうだった（xs[-1] = v は panic）。
         #   ここで変えると意味が変わるので、振る舞いはそのままにする。
+        saved_nobc3: bool = self.nobc
+        saved_vk3: str = copy(self.verify_kind)
+        if target.no_bounds_check:
+            if self.verify_prove:
+                self.verify_kind = "index"
+            else:
+                self.nobc = True
         ep: str = self.gen_index_addr(obj, idx, sty, False, ovf)
+        self.nobc = saved_nobc3
+        self.verify_kind = saved_vk3
         v: str = self.elem_to_slot(elem, val)
         self.emit("  store " + sty + " " + v + ", ptr " + ep + TBAA_LISTELEM +
                   "\n")
@@ -3873,12 +3949,13 @@ class Emitter:
 #
 # モジュール 1 つぶんの IR を作る（★ 1 ファイル = 1 モジュール = 1 つの .ll）
 def codegen(mod: rc[module.Module], main_ir_name: str, triple: str,
-            no_ovf: bool, drop: bool, debug: bool) -> str:
+            no_ovf: bool, drop: bool, debug: bool, verify_prove: bool) -> str:
     root: rc[ast.Node] = node_of(mod.ast)
     e: Emitter = Emitter(triple)
     e.no_ovf = no_ovf
     e.drop = drop
     e.dbg = debug
+    e.verify_prove = verify_prove   # --verify-prove（消さずに残す。A-34）
     e.ast_body = root.body
     # ① ヘッダ
     e.header.append("; Generated by " + langinfo.cc() + "\n")

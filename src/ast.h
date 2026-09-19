@@ -436,6 +436,18 @@ struct Node {
     //     （bootstrap で stage1 が自分自身をコンパイル中に落ちました。）
     bool arg_own_rc;
 
+    // ── 証明（A-34 段 1・2）が立てる印 ─────────────────────
+    //
+    // ★ **消す方向にしか使いません。** 解析が「分からない」と言えば印は
+    //   立たず、今までどおり実行時に確かめます（保守的な既定）。
+    //   ⚠️ 印を 1 つ誤って立てると、そこはメモリ安全でなくなります。
+    //     だから `--verify-prove` で「検査を残したまま、外れたら専用の
+    //     診断で止める」形を用意してあります。
+    bool no_ovf_check;    // ND_BINOP / ND_UNARY : 桁あふれしないと示せた
+    bool no_range_check;  // ND_RANGECHK : 範囲に入ると示せた（A-28）
+    bool no_bounds_check; // ND_INDEX : 添字が 0 以上・長さ未満と示せた
+    bool no_contract;     // ND_REQUIRES / ND_ENSURES : 常に真と示せた（A-29）
+
     // ★ この class が実装するインタフェースの並び（ND_TYPEREF）
     Node *ifaces;
 

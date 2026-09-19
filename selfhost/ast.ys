@@ -657,6 +657,16 @@ class Node:
     #   だけが残って二重解放になります。
     #   対になる定義: src/ast.h の arg_own_rc
     arg_own_rc: bool
+
+    # ── 証明（A-34 段 1・2）が立てる印 ─────────────────────
+    #
+    # ★ **消す方向にしか使わない。** 解析が「分からない」と言えば印は立たず、
+    #   今までどおり実行時に確かめる。
+    #   対になる定義: src/ast.h の no_ovf_check / no_range_check ほか
+    no_ovf_check: bool      # ND_BINOP : 桁あふれしないと示せた
+    no_range_check: bool    # ND_RANGECHK : 範囲に入ると示せた（A-28）
+    no_bounds_check: bool   # ND_INDEX : 添字が 0 以上・長さ未満と示せた
+    no_contract: bool       # ND_REQUIRES / ND_ENSURES : 常に真と示せた（A-29）
     binds_borrow: bool   # 借りものを束縛している（解放してはいけない）
     moved_out: bool      # 移動済み（解放してはいけない）
     # ★ ジェネリクス。
@@ -704,6 +714,10 @@ class Node:
         self.is_move_out = False
         self.arg_is_borrowed = False
         self.arg_own_rc = False
+        self.no_ovf_check = False
+        self.no_range_check = False
+        self.no_bounds_check = False
+        self.no_contract = False
         self.binds_borrow = False
         self.moved_out = False
         self.is_wrap = False

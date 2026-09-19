@@ -72,7 +72,7 @@ LANG_NAME := yashirolang
 LANG_EXT  := .ys
 LANG_CC   := yashirolang
 LANG_PM   := ysm
-LANG_VERSION := 0.24.0
+LANG_VERSION := 0.25.0
 LANG_REPO := https://github.com/yashirolang/yashirolang
 CFLAGS  += -DPLC_LANG_NAME='"$(LANG_NAME)"' \
            -DPLC_LANG_EXT='"$(LANG_EXT)"' \
@@ -380,6 +380,22 @@ RV_TRIPLE  := riscv64-unknown-elf
 RV_ARCH    := -march=rv64g -mabi=lp64 -mcmodel=medany -mno-relax
 RV_CFLAGS  := --target=$(RV_TRIPLE) $(RV_ARCH) -ffreestanding -O2
 KDIR       := build/kernel
+
+# ── 証明の確かめ（A-34）──────────────────────────────────
+#
+# ★ 「消せる」と判断した検査を**残したまま**全ケースを走らせます。
+#   外れたら `prover was wrong (this is a compiler bug)` で止まるので、
+#   **解析の誤りが利用者ではなく私たちに返ってきます**。
+#
+# ⚠️ IR の形そのものを見るケース（# EXACT-IR:）は飛ばします。
+#   「検査が消えたこと」を見る試験は、この設定と必ずぶつかるためです。
+.PHONY: prove-verify prove-report
+prove-verify: $(TARGET) $(RUNTIME_OBJ)
+	@PLC_EXTRA_FLAGS=--verify-prove tests/run_tests.sh
+
+# 消えた検査の数（コンパイラ自身を材料にします）
+prove-report: $(TARGET) $(RUNTIME_OBJ)
+	@./$(TARGET) --prove-report -S selfhost/main$(LANG_EXT) > /dev/null
 
 # ── BLAS 連携の確認（A-33）────────────────────────────────
 #

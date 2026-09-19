@@ -25,6 +25,7 @@ extern char **environ;
 #include "lexer.h"
 #include "module.h"
 #include "ownck.h"
+#include "prove.h"
 #include "parser.h"
 #include "langinfo.h"
 #include "sema.h"
@@ -128,6 +129,9 @@ static void usage(int status) {
             "                  数の実行時検査を外す（既定は検査する）:\n"
             "                  整数の + - * の桁あふれ／float の 0 除算\n"
             "  -g              デバッグ情報を出す（デバッガ・perf が行を出せます）\n"
+            "  --no-prove      証明で実行時検査を消さない（A-34）\n"
+            "  --verify-prove  消せると判断した検査を**残す**（解析の誤りを捕まえる）\n"
+            "  --prove-report  消えた検査の数を出す\n"
             "  -l<名前> / -L<dir> / -framework <名前>\n"
             "                  リンクのときに clang へそのまま渡す\n"
             "                  （C のライブラリを extern で呼ぶときに使います）\n"
@@ -169,6 +173,10 @@ typedef struct {
     int drop;         // --drop（解放を挿入する）
     int no_ovf;       // --no-overflow-check（桁あふれの検査を出さない）
     int debug;        // -g（デバッグ情報を出す。A-30）
+    // ── 証明（A-34）──
+    int no_prove;      // --no-prove（検査を 1 つも消さない）
+    int verify_prove;  // --verify-prove（消さずに残し、外れたら専用の診断で止める）
+    int prove_report;  // --prove-report（消えた検査の数を出す）
     // ★ リンクするときに clang へそのまま渡すもの（-l / -L / -framework。A-33）
     const char **link;
     int nlink;
@@ -265,6 +273,15 @@ static Options parse_args(int argc, char **argv) {
         if (strcmp(a, "--no-overflow-check") == 0) { o.no_ovf = 1; continue; }
         // ★ デバッグ情報（A-30）。デバッガ・perf・バックトレースが行を出せます。
         if (strcmp(a, "-g") == 0) { o.debug = 1; continue; }
+
+        // ── 証明（A-34）──
+        //
+        // ⚠️ --verify-prove は「消せる」と判断した検査を**残したまま**、
+        //   外れたら専用の診断で止めます。CI でこちらを回せば、解析の誤りが
+        //   利用者ではなく私たちに返ってきます。
+        if (strcmp(a, "--no-prove") == 0) { o.no_prove = 1; continue; }
+        if (strcmp(a, "--verify-prove") == 0) { o.verify_prove = 1; continue; }
+        if (strcmp(a, "--prove-report") == 0) { o.prove_report = 1; continue; }
 
         // ── C のライブラリを繋ぐ（A-33）──
         //
@@ -572,6 +589,28 @@ int main(int argc, char **argv) {
     //     ここで所有権の指摘が落ちると、その先で全部落ちます。
     if (opt.stage == STAGE_CHECK) return 0;
 
+    // ── ⑤ 証明（A-34）──
+    //
+    // ★ 区間解析で「必ず成り立つ」と示せた実行時検査に印を立てます。
+    //   codegen はその印を見て検査を出しません。
+    //   ⚠️ --no-prove なら 1 つも消しません（比べるための逃げ道）。
+    //   ⚠️ --verify-prove なら印は立てたまま検査を**残し**、外れたら
+    //     専用の診断で止めます（解析の誤りを私たち側に返すため）。
+    if (!opt.no_prove) {
+        ProveStats ps = {0};
+        prove_program(mods, &ps);
+        if (opt.prove_report) {
+            fprintf(stderr, "証明で消した実行時検査:\n");
+            fprintf(stderr, "  桁あふれ  %6d 消 / %6d 残\n", ps.ovf, ps.ovf_left);
+            fprintf(stderr, "  添字      %6d 消 / %6d 残\n", ps.bounds,
+                    ps.bounds_left);
+            fprintf(stderr, "  範囲型    %6d 消 / %6d 残\n", ps.range,
+                    ps.range_left);
+            fprintf(stderr, "  契約      %6d 消 / %6d 残\n", ps.contract,
+                    ps.contract_left);
+        }
+    }
+
     // 入口モジュールの main の IR 名（@main のラッパが呼ぶ相手）
     StrBuf main_ir;
     sb_init(&main_ir);
@@ -581,7 +620,7 @@ int main(int argc, char **argv) {
     for (Module *m = mods; m; m = m->next) {
         const char *entry_main = (m == entry && !no_runtime) ? sb_str(&main_ir) : NULL;
         char *ir = codegen(m, entry_main, opt.drop != 0, opt.no_ovf != 0, triple,
-                           opt.debug != 0);
+                           opt.debug != 0, opt.verify_prove != 0);
 
         if (opt.stage == STAGE_EMIT_IR) {
             // -S : IR を出して終了。複数モジュールなら区切りを入れて並べる。

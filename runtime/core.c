@@ -992,6 +992,21 @@ void pl_contract_fail(const char *what) {
     pl_panic(buf);
 }
 
+// ── 証明の誤りを捕まえる（A-34 の --verify-prove）──
+//
+// ★ 「消せる」と判断した検査を**残したまま**建てたときに、その検査が
+//   外れたら呼ばれます。つまり **証明器が間違えた**ということです。
+//   ⚠️ 利用者のコードの誤りではないので、ふつうの診断と分けます。
+void pl_prove_fail(const char *what) {
+    char buf[256];
+    long long k = 0;
+    const char *head = "prover was wrong (this is a compiler bug): ";
+    for (const char *q = head; *q && k < 200; q++) buf[k++] = *q;
+    for (const char *q = what; *q && k < 250; q++) buf[k++] = *q;
+    buf[k] = '\0';
+    pl_panic(buf);
+}
+
 long long pl_mod(long long a, long long b) {
     if (b == 0) pl_panic("division by zero");
     // ★ こちらの答えは 0 で確定していますが、a % b の計算自体が

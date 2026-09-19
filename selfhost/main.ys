@@ -21,6 +21,7 @@ import sema
 import token
 import codegen
 import ownck
+import prove
 
 # 実行するステージ（C 版の Stage と同じ）
 STAGE_ALL: int = 0          # 実行ファイルまで作る
@@ -38,6 +39,10 @@ class Options:
     keep_ll: bool
     no_ovf: bool     # --no-overflow-check
     debug: bool      # -g（デバッグ情報を出す。A-30）
+    # ── 証明（A-34）──
+    no_prove: bool      # --no-prove（検査を 1 つも消さない）
+    verify_prove: bool  # --verify-prove（消さずに残し、外れたら専用の診断）
+    prove_report: bool  # --prove-report（消えた検査の数を出す）
     # ★ リンクのときに clang へそのまま渡すもの（-l / -L / -framework。A-33）
     link: list[str]
     drop: bool       # --drop / --no-drop（解放を挿入する。後勝ち）
@@ -57,6 +62,9 @@ class Options:
         self.keep_ll = False
         self.no_ovf = False
         self.debug = False
+        self.no_prove = False
+        self.verify_prove = False
+        self.prove_report = False
         self.link = []
         # ★ 解放（drop）は**既定で入れる**（A-21 ⑬。逃げ道は --no-drop）
         self.drop = True
@@ -97,6 +105,9 @@ def usage(status: int) -> None:
     print("  --drop          スコープの出口に解放（drop）を挿入する（既定）")
     print("  --no-drop       解放を挿入しない（--drop を打ち消す。後勝ち）")
     print("  -g              デバッグ情報を出す（デバッガ・perf が行を出せます）")
+    print("  --no-prove      証明で実行時検査を消さない（A-34）")
+    print("  --verify-prove  消せると判断した検査を残す（解析の誤りを捕まえる）")
+    print("  --prove-report  消えた検査の数を出す")
     print("  -l<名前> / -L<dir> / -framework <名前>")
     print("                  リンクのときに clang へそのまま渡す")
     print("  --no-overflow-check")
@@ -190,6 +201,13 @@ def parse_args(args: list[str]) -> Options:
         # ★ デバッグ情報（A-30）。デバッガ・perf が行を出せる。
         elif a == "-g":
             o.debug = True
+        # ── 証明（A-34）──
+        elif a == "--no-prove":
+            o.no_prove = True
+        elif a == "--verify-prove":
+            o.verify_prove = True
+        elif a == "--prove-report":
+            o.prove_report = True
         # ── C のライブラリを繋ぐ（A-33）──
         #
         # ★ -l / -L / -framework を**リンクのときだけ** clang へそのまま渡す。
@@ -240,6 +258,14 @@ def ll_path_for(output: str, mod_name: str) -> str:
 #   両者は同じ規則で動きます（PLC_LIB_DIR と同じ手）。
 def target_triple() -> str:
     return sys.getenv("PLC_TARGET_TRIPLE")
+
+# 右詰めの数（--prove-report の見出しを C 版と揃えるため）
+def pad6(n: int) -> str:
+    s: str = str(n)
+    while len(s) < 6:
+        s = " " + s
+    return s
+
 
 def clang_cmd() -> str:
     # ★ C 版（src/main.c）と同じく、環境変数を先に見ます。
@@ -386,6 +412,24 @@ def main() -> int:
     if opt.stage == STAGE_CHECK:
         return 0
 
+    # ── ⑤ 証明（A-34）──
+    #
+    # ★ 区間解析で「必ず成り立つ」と示せた実行時検査に印を立てます。
+    #   codegen はその印を見て検査を出しません。
+    #   対になる定義: src/main.c の prove_program 呼び出し
+    if not opt.no_prove:
+        ps: prove.Stats = prove.prove_program(mods)
+        if opt.prove_report:
+            io.eprint("証明で消した実行時検査:\n")
+            io.eprint("  桁あふれ  " + pad6(ps.ovf) + " 消 / " +
+                      pad6(ps.ovf_left) + " 残\n")
+            io.eprint("  添字      " + pad6(ps.bounds) + " 消 / " +
+                      pad6(ps.bounds_left) + " 残\n")
+            io.eprint("  範囲型    " + pad6(ps.range_) + " 消 / " +
+                      pad6(ps.range_left) + " 残\n")
+            io.eprint("  契約      " + pad6(ps.contract) + " 消 / " +
+                      pad6(ps.contract_left) + " 残\n")
+
     # 入口モジュールの main の IR 名（@main のラッパが呼ぶ相手）
     main_ir: str = entry.name + ".main"
 
@@ -403,7 +447,8 @@ def main() -> int:
         name: str = ""
         if mm.name == entry.name:
             name = copy(main_ir)
-        ir: str = codegen.codegen(mm, name, triple, opt.no_ovf, opt.drop, opt.debug)
+        ir: str = codegen.codegen(mm, name, triple, opt.no_ovf, opt.drop,
+                                  opt.debug, opt.verify_prove)
 
         if opt.stage == STAGE_EMIT_IR:
             # -S : IR を出して終了。複数モジュールなら区切りを入れて並べる

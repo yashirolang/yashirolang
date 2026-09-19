@@ -24,6 +24,10 @@
 #                       @ROOT@ はリポジトリの場所に置き換わる（-I のテスト用）
 #   # EXPLAIN-MUT: 12:5: 'c' が変更されます
 #                     → --explain-mut の出力にその文字列を含むこと
+#   # EXACT-IR: 理由
+#                     → **IR の形そのもの**を見るケース。PLC_EXTRA_FLAGS が
+#                       付いているときは飛ばす（検査が消えたことを見る試験は
+#                       --verify-prove と必ずぶつかるため）。
 #   # STAGE0-ONLY: 理由
 #                     → C 版（build/<LANG_CC>）でだけ実行する。
 #                       ★ 所有権検査は C 版にしかありません。
@@ -161,6 +165,15 @@ for case_file in "${CASES[@]}"; do
     #     （--drop と --no-drop）は後に書いたほうが勝つので、この順なら
     #     ケース側の指定が勝ちます。診断を見せるためのテストが
     #     「--no-drop」と書いて自衛できるのは、この順のおかげです。
+    # ★ `# EXACT-IR: 理由` … **IR の形そのもの**を見るケース。
+    #   PLC_EXTRA_FLAGS が付いているときは飛ばします。
+    #   ⚠️ 「検査が消えたこと」を見る試験は、--verify-prove（検査を残す）と
+    #     必ずぶつかります。ぶつけたまま赤にすると、本当の失敗が埋もれます。
+    if [ -n "${PLC_EXTRA_FLAGS:-}" ] && grep -q "^# *EXACT-IR:" "$case_file"; then
+        skip=$((skip + 1))
+        continue
+    fi
+
     extra_flags="${PLC_EXTRA_FLAGS:-} $extra_flags"
     stage0_only="$(sed -n 's/^# *STAGE0-ONLY: *//p' "$case_file" | head -1)"
 

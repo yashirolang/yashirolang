@@ -1,0 +1,19 @@
+# OUTPUT: 10
+# EXIT: 0
+# IR-NOT: idx.bad
+# EXACT-IR: 検査が消えたことを見る試験なので、--verify-prove とはぶつかります
+# A-34 段 1: `while i < len(xs)` の中の `xs[i]` は、**必ず範囲内**と示せます。
+#   ★ 区間（i >= 0）と関係（i < len(xs)）の 2 つで決めます。
+#   ⚠️ 利用者が書くものは 1 行も増えません。
+def total(xs: list[int]) -> int:
+    s: int = 0
+    i: int = 0
+    while i < len(xs):
+        s = s + xs[i]
+        i = i + 1
+    return s
+
+def main() -> int:
+    xs: list[int] = [1, 2, 3, 4]
+    print(str(total(xs)))
+    return 0

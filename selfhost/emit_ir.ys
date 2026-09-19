@@ -12,6 +12,7 @@ import module
 import sema
 import codegen
 import ownck
+import prove
 import langinfo
 
 def main() -> int:
@@ -27,6 +28,10 @@ def main() -> int:
     #   ⚠️ 受け取らないと、tests/selfhost.sh の突き合わせで C 版だけが
     #     デバッグ情報を出し、毎回食い違います（実際にそうなりました）。
     debug: bool = False
+    # ★ 証明（A-34）も IR を変えるので、ここでも受け取ります。
+    #   ⚠️ 受け取らないと tests/selfhost.sh の突き合わせで毎回食い違います。
+    no_prove: bool = False
+    verify_prove: bool = False
     # ★ 解放（drop）は**既定で入れる**（A-21 ⑬。C 版 src/main.c と対）
     drop: bool = True
     ai: int = 1
@@ -40,6 +45,10 @@ def main() -> int:
             drop = False
         elif a == "-g":
             debug = True
+        elif a == "--no-prove":
+            no_prove = True
+        elif a == "--verify-prove":
+            verify_prove = True
         else:
             path = a
         ai = ai + 1
@@ -58,6 +67,10 @@ def main() -> int:
     # ★ 所有権検査。解放（--drop）は binds_borrow / moved_out の印に
     #   依存するので、IR を出す前に必ず通します（C 版 src/main.c と同じ順序）。
     ownck.ownck_program(mods, ownck.Options())
+
+    # ★ ⑤ 証明（A-34）。IR が変わるので、C 版と同じ場所で同じことをします。
+    if not no_prove:
+        prove.prove_program(mods)
 
     if entry is None:
         panic("emit_ir: 入口モジュールがありません")
@@ -83,6 +96,7 @@ def main() -> int:
             #   main_ir が空になります（入口は 1 つだけなので実際には
             #   1 回しか通りませんが、それは検査には分かりません）。
             name = copy(main_ir)
-        io.print_raw(codegen.codegen(mm, name, triple, no_ovf, drop, debug))
+        io.print_raw(codegen.codegen(mm, name, triple, no_ovf, drop, debug,
+                                     verify_prove))
         m = mm.next
     return 0

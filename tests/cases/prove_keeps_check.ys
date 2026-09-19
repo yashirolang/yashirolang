@@ -1,0 +1,13 @@
+# STDIN: 5
+# EXIT: 1
+# IR: idx.bad
+# A-34 段 1: **示せないものは消しません。** 外から来た添字は検査が残ります。
+#   ⚠️ ここが崩れると、証明器はメモリ安全性を壊す道具になります。
+def read_at(xs: list[int], i: int) -> int:
+    return xs[i]
+
+def main() -> int:
+    xs: list[int] = [7]
+    n: int = int(input())
+    print(str(read_at(xs, n)))
+    return 0

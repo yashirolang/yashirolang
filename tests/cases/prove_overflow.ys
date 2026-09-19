@@ -1,0 +1,13 @@
+# OUTPUT: 30
+# EXIT: 0
+# IR-NOT: llvm.sadd.with.overflow
+# EXACT-IR: 検査が消えたことを見る試験なので、--verify-prove とはぶつかります
+# A-34 段 1: 両辺の範囲が分かっていれば、桁あふれの検査は要りません。
+type Small = int range(0, 10)
+
+def add3(a: Small, b: Small, c: Small) -> int:
+    return a + b + c
+
+def main() -> int:
+    print(str(add3(10, 10, 10)))
+    return 0

@@ -80,6 +80,15 @@ typedef struct {
     // ★ -g のときだけ、LLVM の debug metadata を出します。
     //   出すのは「行の対応表」と「関数の枠」だけで、これだけで
     //   ブレークポイント・バックトレース・perf の行表示が効きます。
+    // ── 証明（A-34）──
+    //
+    // ⚠️ true なら、証明で「消せる」と判断した検査を**残します**。
+    //   外れたときに専用の診断で止めるので、解析の誤りが CI で捕まります。
+    bool verify_prove;
+    // ★ いま出している検査が「証明では消せるはず」のものか（--verify-prove）。
+    //   立っていれば、失敗したときに **証明器の誤り**として報告します。
+    const char *verify_kind;
+
     bool dbg;               // -g
     StrBuf dbgmeta;         // metadata の定義（モジュール末尾に出す）
     int dbg_next;           // 次に振る metadata の番号
@@ -622,6 +631,8 @@ static char *gen_checked_arith(Emitter *e, const char *intr, const char *l,
 static char *gen_checked_fdiv(Emitter *e, const char *l, const char *r);
 static char *gen_range_check(Emitter *e, Type *rt, char *val);
 static void gen_ensures(Emitter *e, const char *val);
+static bool prove_verify_here(Emitter *e);
+static void gen_prove_fail(Emitter *e);
 static const char *ovf_intr(OpKind op);
 
 static char *gen_expr(Emitter *e, Node *n) {
@@ -638,8 +649,16 @@ static char *gen_expr(Emitter *e, Node *n) {
             return (char *)e->ret_val;
 
         // ★ 範囲型の検査（A-28）。意味解析が入れたノードです。
-        case ND_RANGECHK:
-            return gen_range_check(e, n->type, gen_expr(e, n->lhs));
+        case ND_RANGECHK: {
+            char *v = gen_expr(e, n->lhs);
+            // ★ 証明（A-34）が「範囲に入る」と示したら検査を出しません
+            if (n->no_range_check && !e->verify_prove) return v;
+            const char *saved_vk = e->verify_kind;
+            if (n->no_range_check) e->verify_kind = "range";
+            char *rv = gen_range_check(e, n->type, v);
+            e->verify_kind = saved_vk;
+            return rv;
+        }
 
         case ND_INT: {
             // 整数リテラルは命令を出す必要すらありません。
@@ -772,11 +791,21 @@ static char *gen_expr(Emitter *e, Node *n) {
                 // ★ int の + - * は桁あふれを検査します。
                 //   ⚠️ 意図的に折り返したいときは wrap_add / wrap_sub /
                 //     wrap_mul を使ってください（そちらは gen_call で出します）。
+                // ★ 証明（A-34）が「折り返さない」と示した計算は検査を出しません
+                bool proven = n->no_ovf_check && !e->verify_prove;
                 const char *intr =
-                    ot->kind == TY_INT && !e->no_ovf ? ovf_intr(n->op) : NULL;
-                if (intr) return gen_checked_arith(e, intr, l, r, n->op == OP_ADD   ? 0
-                                                                 : n->op == OP_SUB ? 1
-                                                                                   : 2);
+                    ot->kind == TY_INT && !e->no_ovf && !proven ? ovf_intr(n->op)
+                                                                : NULL;
+                if (intr) {
+                    const char *saved_vk = e->verify_kind;
+                    if (n->no_ovf_check) e->verify_kind = "overflow";
+                    char *rv = gen_checked_arith(e, intr, l, r,
+                                                 n->op == OP_ADD   ? 0
+                                                 : n->op == OP_SUB ? 1
+                                                                   : 2);
+                    e->verify_kind = saved_vk;
+                    return rv;
+                }
                 sb_printf(&e->fn, "  %s = %s %s %s, %s\n", t, llvm_binop(n),
                           llvm_type(ot), l, r);
             }
@@ -1408,8 +1437,11 @@ static char *gen_index_addr(Emitter *e, char *obj, char *idx, const char *sty,
     emit_cond_br(e, inb, ok_l, bad_l);
 
     emit_label(e, bad_l);
-    sb_printf(&e->fn, "  call void @pl_index_fail(i64 %s, i64 %s, i64 %s)\n", idx,
-              len, ovf_arg);
+    if (prove_verify_here(e))
+        gen_prove_fail(e);
+    else
+        sb_printf(&e->fn, "  call void @pl_index_fail(i64 %s, i64 %s, i64 %s)\n",
+                  idx, len, ovf_arg);
     // ⚠️ pl_index_fail は戻ってきません。unreachable を置かないと
     //   LLVM は「戻るかも」と見て、検査をループ外へ出せなくなります。
     sb_printf(&e->fn, "  unreachable\n");
@@ -1472,6 +1504,19 @@ static char *gen_arith_ovf(Emitter *e, const char *intr, const char *l,
 //
 // ⚠️ 値はそのまま返します。範囲型の表現は int のままなので、
 //   変換も詰め替えも要りません（Ada の部分型と同じ考え方）。
+// 検査が外れたときの呼び先。--verify-prove で「消せるはず」と判断した
+// 場所だけ、証明器の誤りとして報告します。
+static bool prove_verify_here(Emitter *e) {
+    return e->verify_prove && e->verify_kind != NULL;
+}
+
+static void gen_prove_fail(Emitter *e) {
+    declare_rt(e, "void @pl_prove_fail(ptr) noreturn cold");
+    const char *w = e->verify_kind;
+    char *lab = intern_str(e, w, (int)strlen(w));
+    sb_printf(&e->fn, "  call void @pl_prove_fail(ptr %s)\n", lab);
+}
+
 static char *gen_range_check(Emitter *e, Type *rt, char *val) {
     declare_rt(e, "void @pl_range_fail(ptr, i64, i64, i64) noreturn cold");
 
@@ -1489,10 +1534,14 @@ static char *gen_range_check(Emitter *e, Type *rt, char *val) {
     emit_cond_br(e, bad, bad_l, ok_l);
 
     emit_label(e, bad_l);
-    char *nm = intern_str(e, rt->name, (int)strlen(rt->name));
-    sb_printf(&e->fn,
-              "  call void @pl_range_fail(ptr %s, i64 %s, i64 %lld, i64 %lld)\n",
-              nm, val, rt->lo, rt->hi);
+    if (prove_verify_here(e)) {
+        gen_prove_fail(e);
+    } else {
+        char *nm = intern_str(e, rt->name, (int)strlen(rt->name));
+        sb_printf(&e->fn,
+                  "  call void @pl_range_fail(ptr %s, i64 %s, i64 %lld, i64 %lld)\n",
+                  nm, val, rt->lo, rt->hi);
+    }
     sb_printf(&e->fn, "  unreachable\n");
     e->terminated = true;
 
@@ -1508,6 +1557,11 @@ static char *gen_range_check(Emitter *e, Type *rt, char *val) {
 // ⚠️ メッセージは**コンパイル時に組み立てて**大域定数に置きます。
 //   実行時に数を文字列にする手間を、外れの経路にも置かないためです。
 static void gen_contract_check(Emitter *e, Node *c, const char *fname) {
+    // ★ 証明（A-34 段 2）が「常に真」と示した契約は検査を出しません
+    if (c->no_contract && !e->verify_prove) return;
+    // ⚠️ --verify-prove では残して、外れたら証明器の誤りとして報告します
+    const char *saved_vk = e->verify_kind;
+    if (c->no_contract) e->verify_kind = "contract";
     declare_rt(e, "void @pl_contract_fail(ptr) noreturn cold");
 
     char *cond = gen_expr(e, c->lhs);
@@ -1519,18 +1573,23 @@ static void gen_contract_check(Emitter *e, Node *c, const char *fname) {
     emit_cond_br(e, cond, ok_l, bad_l);
 
     emit_label(e, bad_l);
-    StrBuf msg;
-    sb_init(&msg);
-    sb_printf(&msg, "%s of %s (line %d)",
-              c->kind == ND_REQUIRES ? "requires" : "ensures", fname,
-              c->tok ? c->tok->line : 0);
-    const char *m = sb_str(&msg);
-    char *lab = intern_str(e, m, (int)strlen(m));
-    sb_printf(&e->fn, "  call void @pl_contract_fail(ptr %s)\n", lab);
+    if (prove_verify_here(e)) {
+        gen_prove_fail(e);
+    } else {
+        StrBuf msg;
+        sb_init(&msg);
+        sb_printf(&msg, "%s of %s (line %d)",
+                  c->kind == ND_REQUIRES ? "requires" : "ensures", fname,
+                  c->tok ? c->tok->line : 0);
+        const char *m = sb_str(&msg);
+        char *lab = intern_str(e, m, (int)strlen(m));
+        sb_printf(&e->fn, "  call void @pl_contract_fail(ptr %s)\n", lab);
+    }
     sb_printf(&e->fn, "  unreachable\n");
     e->terminated = true;
 
     emit_label(e, ok_l);
+    e->verify_kind = saved_vk;
 }
 
 // return のたびに ensures を確かめる（A-29）。
@@ -1564,7 +1623,10 @@ static char *gen_checked_arith(Emitter *e, const char *intr, const char *l,
     emit_cond_br(e, bad, bad_l, ok_l);
 
     emit_label(e, bad_l);
-    sb_printf(&e->fn, "  call void @pl_overflow_fail(i64 %d)\n", op);
+    if (prove_verify_here(e))
+        gen_prove_fail(e);
+    else
+        sb_printf(&e->fn, "  call void @pl_overflow_fail(i64 %d)\n", op);
     sb_printf(&e->fn, "  unreachable\n");
     e->terminated = true;
 
@@ -1729,7 +1791,17 @@ static char *gen_index(Emitter *e, Node *n) {
 
     Type *elem = ot->elem;
     const char *sty = slot_ty(elem);
+    // ★ 証明（A-34）が「0 以上・長さ未満」と示した添字は、検査も
+    //   負の添字の正規化も出しません（A-15c の速い側と同じ道です）。
+    bool saved_nobc = e->nobc;
+    const char *saved_vk = e->verify_kind;
+    if (n->no_bounds_check) {
+        if (e->verify_prove) e->verify_kind = "index";
+        else e->nobc = true;
+    }
     char *ep = gen_index_addr(e, obj, idx, sty, true, ovf);
+    e->nobc = saved_nobc;
+    e->verify_kind = saved_vk;
     char *t = new_tmp(e);
     sb_printf(&e->fn, "  %s = load %s, ptr %s" TBAA_LISTELEM "\n", t, sty, ep);
     return slot_to_elem(e, elem, t);
@@ -1745,7 +1817,15 @@ static void gen_index_store(Emitter *e, Node *target, char *val) {
     // ⚠️ 代入側は負の添字を正規化しません。
     //   pl_list_set_* を呼んでいたころからそうでした（xs[-1] = v は panic）。
     //   ここで変えると意味が変わるので、振る舞いはそのままにします。
+    bool saved_nobc2 = e->nobc;
+    const char *saved_vk2 = e->verify_kind;
+    if (target->no_bounds_check) {
+        if (e->verify_prove) e->verify_kind = "index";
+        else e->nobc = true;
+    }
     char *ep = gen_index_addr(e, obj, idx, sty, false, ovf);
+    e->nobc = saved_nobc2;
+    e->verify_kind = saved_vk2;
     char *v = elem_to_slot(e, elem, val);
     sb_printf(&e->fn, "  store %s %s, ptr %s" TBAA_LISTELEM "\n", sty, v, ep);
 }
@@ -4318,7 +4398,7 @@ static void gen_c_main(Emitter *e, const char *main_ir_name) {
 //   import したモジュールのものは、使ったぶんだけ declare / 型定義の複製が
 //   自動で付いてきます（class_type / declare_extern が「出済みか」を見るため）。
 char *codegen(Module *mod, const char *main_ir_name, bool drop, bool no_ovf,
-              const char *triple, bool debug) {
+              const char *triple, bool debug, bool verify_prove) {
     Node *ast = mod->ast;
 
     Emitter e = {0};
@@ -4326,6 +4406,7 @@ char *codegen(Module *mod, const char *main_ir_name, bool drop, bool no_ovf,
     e.drop = drop;      // 解放を挿入するか
     e.no_ovf = no_ovf;  // 桁あふれの検査を出さないか
     e.dbg = debug;      // -g（デバッグ情報を出すか）
+    e.verify_prove = verify_prove;   // --verify-prove（消さずに残す。A-34）
     e.dbg_next = 10;    // ★ 0〜8 は TBAA が使っています（9 は空け）
     sb_init(&e.dbgmeta);
     sb_init(&e.header);

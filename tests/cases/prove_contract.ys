@@ -1,0 +1,14 @@
+# OUTPUT: 5
+# EXIT: 0
+# IR-NOT: ensures of half
+# A-34 段 2: `requires` は**通った後の事実**になります。
+#   ★ x >= 0 が分かるので、`ensures result >= 0` はコンパイル時に片付きます。
+#   ⚠️ 示せなかった契約は今までどおり実行時に確かめます（赤にはしません）。
+def half(x: int) -> int:
+    requires x >= 0
+    ensures result >= 0
+    return x // 2
+
+def main() -> int:
+    print(str(half(10)))
+    return 0

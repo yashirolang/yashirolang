@@ -24,7 +24,8 @@
 //   debug        : デバッグ情報（DWARF のもとになる metadata）を出すか（-g）
 //
 // ★ debug = false のときの出力は 1 バイトも変わりません（A-30）。
+//   verify_prove : 証明で消せる検査を**残す**（A-34。解析の誤りを捕まえる）
 char *codegen(Module *mod, const char *main_ir_name, bool drop, bool no_ovf,
-              const char *triple, bool debug);
+              const char *triple, bool debug, bool verify_prove);
 
 #endif  // PLC_CODEGEN_H

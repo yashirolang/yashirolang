@@ -1,0 +1,15 @@
+# OUTPUT: 40
+# EXIT: 0
+# IR-NOT: pl_range_fail
+# EXACT-IR: 検査が消えたことを見る試験なので、--verify-prove とはぶつかります
+# A-34 段 1: `n & 63` は [0, 63] と示せるので、範囲型への代入の検査が消えます。
+#   ★ 定数マスクは区間をきっちり決めます（bytes の並べ方で効きます）。
+type Small = int range(0, 63)
+
+def mask(n: int) -> int:
+    v: Small = n & 63
+    return v
+
+def main() -> int:
+    print(str(mask(1000)))
+    return 0

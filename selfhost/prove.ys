@@ -72,27 +72,92 @@ def mul_ovf(a: int, b: int) -> bool:
     return ua > iv_max() // ub
 
 
+# ★ **端が溢れたら、そこで止める（飽和）**。⊤ には落とさない。
+#
+# 🔒 **なぜこれが健全なのか。** 桁あふれの検査が残っているから。
+#   `i + 1` が本当に溢れるなら、そこで**実行が止まる**（折り返さない）。
+#   つまり「この先へ進んだ」のなら結果は必ず表せる範囲に収まっている。
+#   溢れる側の端を最大値／最小値で止めるのは、**進めた場合の値の集合**を
+#   正しく覆う。
+#
+#   ⚠️ **だから `--no-overflow-check` のときはこれをしない**（SAT_MODE）。
+#     検査が無ければ本当に折り返し、`i` が負になりうる。そのまま
+#     「0 以上」と信じると、添字の検査を誤って消す。
+#
+#   ⚠️ 堂々巡りにはならない。`i = i + 1` 自身の検査は「端が溢れた」＝
+#     示せなかった側に入るので**消えずに残る**。残った検査が上の理屈を
+#     支える、という順序。
+#   対になる定義: src/prove.c の sat_mode / add_sat / iv_add
+SAT_MODE: bool = True
+
+def add_sat(a: int, b: int) -> int:
+    if not add_ovf(a, b):
+        return a + b
+    if b > 0:
+        return iv_max()
+    return iv_min()
+
+def sub_sat(a: int, b: int) -> int:
+    if not sub_ovf(a, b):
+        return a - b
+    if b < 0:
+        return iv_max()
+    return iv_min()
+
+def mul_sat(a: int, b: int) -> int:
+    if not mul_ovf(a, b):
+        return a * b
+    if (a < 0) == (b < 0):
+        return iv_max()
+    return iv_min()
+
+# 「どの端でも溢れなかったか」＝**桁あふれの検査を消してよいか**
+def iv_add_exact(a: Iv, b: Iv) -> bool:
+    if iv_is_top(a) or iv_is_top(b):
+        return False
+    return not add_ovf(a.lo, b.lo) and not add_ovf(a.hi, b.hi)
+
+def iv_sub_exact(a: Iv, b: Iv) -> bool:
+    if iv_is_top(a) or iv_is_top(b):
+        return False
+    return not sub_ovf(a.lo, b.hi) and not sub_ovf(a.hi, b.lo)
+
+def iv_mul_exact(a: Iv, b: Iv) -> bool:
+    if iv_is_top(a) or iv_is_top(b):
+        return False
+    if mul_ovf(a.lo, b.lo) or mul_ovf(a.lo, b.hi):
+        return False
+    return not mul_ovf(a.hi, b.lo) and not mul_ovf(a.hi, b.hi)
+
 def iv_add(a: Iv, b: Iv) -> Iv:
     if iv_is_top(a) or iv_is_top(b):
         return iv_top()
-    if add_ovf(a.lo, b.lo) or add_ovf(a.hi, b.hi):
+    if not SAT_MODE and not iv_add_exact(a, b):
         return iv_top()
-    return Iv(a.lo + b.lo, a.hi + b.hi)
+    lo: int = add_sat(a.lo, b.lo)
+    hi: int = add_sat(a.hi, b.hi)
+    if lo > hi:
+        return iv_top()
+    return Iv(lo, hi)
 
 def iv_sub(a: Iv, b: Iv) -> Iv:
     if iv_is_top(a) or iv_is_top(b):
         return iv_top()
-    if sub_ovf(a.lo, b.hi) or sub_ovf(a.hi, b.lo):
+    if not SAT_MODE and not iv_sub_exact(a, b):
         return iv_top()
-    return Iv(a.lo - b.hi, a.hi - b.lo)
+    lo2: int = sub_sat(a.lo, b.hi)
+    hi2: int = sub_sat(a.hi, b.lo)
+    if lo2 > hi2:
+        return iv_top()
+    return Iv(lo2, hi2)
 
 def iv_mul(a: Iv, b: Iv) -> Iv:
     if iv_is_top(a) or iv_is_top(b):
         return iv_top()
-    if (mul_ovf(a.lo, b.lo) or mul_ovf(a.lo, b.hi) or
-            mul_ovf(a.hi, b.lo) or mul_ovf(a.hi, b.hi)):
+    if not SAT_MODE and not iv_mul_exact(a, b):
         return iv_top()
-    c: list[int] = [a.lo * b.lo, a.lo * b.hi, a.hi * b.lo, a.hi * b.hi]
+    c: list[int] = [mul_sat(a.lo, b.lo), mul_sat(a.lo, b.hi),
+                    mul_sat(a.hi, b.lo), mul_sat(a.hi, b.hi)]
     lo: int = c[0]
     hi: int = c[0]
     i: int = 1
@@ -134,12 +199,79 @@ class Env:
     lo: list[int]
     hi: list[int]
     lt: list[str]       # 関係。"" なら無し
+    # ★ 「この 2 つの list は長さが同じ」（eq_a[i] と eq_b[i] が 1 組）
+    #
+    #   ⚠️ 区間でも lt でも言えない関係。これが無いと、
+    #   `if len(a) != len(b): return` で守った後の `a[i]` と `b[i]` のうち
+    #   **片方しか**検査を消せない。
+    #   ⚠️ 推移律は取らない（a==b と b==c から a==c は出さない）。
+    #   対になる定義: src/prove.c の LenEq
+    eq_a: list[str]
+    eq_b: list[str]
 
     def init(self) -> None:
         self.names = []
         self.lo = []
         self.hi = []
         self.lt = []
+        self.eq_a = []
+        self.eq_b = []
+
+    # この組をすでに持っているか（⚠️ **向きは問わない**）
+    def leneq_has(self, x: str, y: str) -> bool:
+        if len(x) == 0 or len(y) == 0:
+            return False
+        i: int = 0
+        while i < len(self.eq_a):
+            if self.eq_a[i] == x and self.eq_b[i] == y:
+                return True
+            if self.eq_a[i] == y and self.eq_b[i] == x:
+                return True
+            i = i + 1
+        return False
+
+    # 組を足す（末尾に足す。並びは入れた順なので、2 実装で同じになる）
+    def leneq_add(mut self, x: str, y: str) -> None:
+        if len(x) == 0 or len(y) == 0 or x == y:
+            return
+        if self.leneq_has(x, y):
+            return
+        self.eq_a.append(copy(x))
+        self.eq_b.append(copy(y))
+
+    # その場所が関わる組を落とす（長さが変わったかもしれない）
+    def leneq_kill(mut self, key: str) -> None:
+        ka: list[str] = []
+        kb: list[str] = []
+        i: int = 0
+        while i < len(self.eq_a):
+            drop: bool = (self.eq_a[i] == key or self.eq_b[i] == key or
+                          key_under(self.eq_a[i], key) or
+                          key_under(self.eq_b[i], key))
+            if not drop:
+                ka.append(copy(self.eq_a[i]))
+                kb.append(copy(self.eq_b[i]))
+            i = i + 1
+        self.eq_a = ka
+        self.eq_b = kb
+
+    # グローバルが関わる組を落とす（誰でもいつでも短くできる）
+    def leneq_kill_globals(mut self) -> None:
+        ga: list[str] = []
+        gb: list[str] = []
+        i: int = 0
+        while i < len(self.eq_a):
+            keep: bool = True
+            if strings.startswith(self.eq_a[i], "@"):
+                keep = False
+            if strings.startswith(self.eq_b[i], "@"):
+                keep = False
+            if keep:
+                ga.append(copy(self.eq_a[i]))
+                gb.append(copy(self.eq_b[i]))
+            i = i + 1
+        self.eq_a = ga
+        self.eq_b = gb
 
     def find(self, name: str) -> int:
         i: int = 0
@@ -188,6 +320,11 @@ class Env:
             e.hi.append(self.hi[i])
             e.lt.append(copy(self.lt[i]))
             i = i + 1
+        j: int = 0
+        while j < len(self.eq_a):
+            e.eq_a.append(copy(self.eq_a[j]))
+            e.eq_b.append(copy(self.eq_b[j]))
+            j = j + 1
         return e
 
     # 合流（if の後・ループの入口）。区間は和、関係は両方にあるものだけ。
@@ -207,6 +344,17 @@ class Env:
                 if self.lt[i] != other.lt[k]:
                     self.lt[i] = ""
             i = i + 1
+        # ★ 長さの等しさも、**両方の道で言えたときだけ**残す
+        ja: list[str] = []
+        jb: list[str] = []
+        j: int = 0
+        while j < len(self.eq_a):
+            if other.leneq_has(self.eq_a[j], self.eq_b[j]):
+                ja.append(copy(self.eq_a[j]))
+                jb.append(copy(self.eq_b[j]))
+            j = j + 1
+        self.eq_a = ja
+        self.eq_b = jb
 
     def same_as(self, other: Env) -> bool:
         if len(self.names) != len(other.names):
@@ -221,6 +369,13 @@ class Env:
             if self.lt[i] != other.lt[k]:
                 return False
             i = i + 1
+        if len(self.eq_a) != len(other.eq_a):
+            return False
+        j: int = 0
+        while j < len(self.eq_a):
+            if not other.leneq_has(self.eq_a[j], self.eq_b[j]):
+                return False
+            j = j + 1
         return True
 
     # 広げる（widening）。動いた端を ±∞ に飛ばして、反復を必ず止める。
@@ -243,6 +398,8 @@ class Env:
         self.lo = []
         self.hi = []
         self.lt = []
+        self.eq_a = []
+        self.eq_b = []
         i: int = 0
         while i < len(other.names):
             self.names.append(copy(other.names[i]))
@@ -250,11 +407,17 @@ class Env:
             self.hi.append(other.hi[i])
             self.lt.append(copy(other.lt[i]))
             i = i + 1
+        j: int = 0
+        while j < len(other.eq_a):
+            self.eq_a.append(copy(other.eq_a[j]))
+            self.eq_b.append(copy(other.eq_b[j]))
+            j = j + 1
 
     # その場所について分かっていたことを落とす（呼び出しの後など）
     def kill(mut self, key: str) -> None:
         if len(key) == 0:
             return
+        self.leneq_kill(key)
         i: int = 0
         while i < len(self.names):
             if self.names[i] == key or key_under(self.names[i], key):
@@ -273,6 +436,7 @@ class Env:
             if strings.startswith(self.lt[i], "@"):
                 self.lt[i] = ""
             i = i + 1
+        self.leneq_kill_globals()
 
 
 # 消せた検査の数（--prove-report が出す）
@@ -316,10 +480,22 @@ class EnsRec:
 class Prove:
     st: Stats
     ens: list[rc[EnsRec]]      # いま検査している関数の ensures
+    # ★ **印を立ててよい回か。**
+    #
+    # 🔒 ここが安全の要。ループの不動点は、入口を**少しずつ広げながら**
+    #   何周も本体を歩く。途中の回の入口は**まだ狭い**（＝楽観的）ので、
+    #   その環境で印を立てると、**消してはいけない検査を消す**。
+    #   例: `while i < n: s = s + i * 1000000000000`
+    #     1 周目の入口は i ∈ [0, 0] なので「桁あふれしない」と見えるが、
+    #     広げ切った入口は i ∈ [0, ∞) で、実際には折り返す。
+    #   ⚠️ 印は**入口が決まってからの最後の 1 周だけ**で立てる。
+    #   対になる定義: src/prove.c の Prove.mark
+    mark: bool
 
     def init(self, st: own Stats) -> None:
         self.st = st
         self.ens = []
+        self.mark = True
 
 
 # ── 小道具 ─────────────────────────────────────────────────
@@ -506,6 +682,16 @@ def narrow_cmp(env: mut Env, n: rc[ast.Node], truth: bool) -> None:
             k0: int = env.ensure(l.ir_name)
             env.lt[k0] = lt
 
+    # ①' 長さの等しさ（len(a) == len(b)）
+    #
+    # ★ `if len(a) != len(b): return` の**通り抜けた側**がここに来る
+    #   （否定は上で OP_NE → OP_EQ に読み替えてある）。
+    if op == ast.OP_EQ:
+        ea: str = len_target(l)
+        eb: str = len_target(r)
+        if len(ea) > 0 and len(eb) > 0:
+            env.leneq_add(ea, eb)
+
     # ② 区間
     li: Iv = eval_iv(env, l)
     ri: Iv = eval_iv(env, r)
@@ -677,6 +863,11 @@ def prove_cond(env: mut Env, n: rc[ast.Node] | None) -> int:
 # ★ 「消す」判断はここだけ。**分からなければ何もしない**（印が立たなければ
 #   今までどおり実行時に確かめる）。対になる定義: src/prove.c の walk_expr
 def kill_mut_args(env: mut Env, n: rc[ast.Node]) -> None:
+    # ★ **`len(x)` は長さを変えない。** ここを落としていたせいで、
+    #   `while i < len(xs)` の条件を歩いた瞬間に `i < len(xs)` の関係が
+    #   消えていた（＝添字の検査がほぼ 1 つも消えていなかった）。
+    if len(len_target(n)) > 0:
+        return
     a: rc[ast.Node] | None = n.args
     while a is not None:
         an: rc[ast.Node] = a
@@ -718,7 +909,9 @@ def walk_expr(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
                                 nn.op == ast.OP_MOD):
             da: Iv = eval_iv(env, nn.lhs)
             db: Iv = eval_iv(env, nn.rhs)
-            if da.lo >= 0 and db.lo > 0 and db.lo == db.hi:
+            if not pr.mark:
+                pass          # 不動点の途中。まだ印は立てない
+            elif da.lo >= 0 and db.lo > 0 and db.lo == db.hi:
                 if not nn.no_div_check:
                     pr.st.div = pr.st.div + 1
                 nn.no_div_check = True
@@ -728,14 +921,19 @@ def walk_expr(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
                                 nn.op == ast.OP_MUL):
             a: Iv = eval_iv(env, nn.lhs)
             b: Iv = eval_iv(env, nn.rhs)
-            r: Iv = iv_top()
+            # ★ **どの端でも溢れなかった**ときだけ消す。
+            #   ⚠️ 飽和した区間（端が止まっただけ）では消せない。
+            #     消さずに残すからこそ、飽和が健全でいられる。
+            exact: bool = False
             if nn.op == ast.OP_ADD:
-                r = iv_add(a, b)
+                exact = iv_add_exact(a, b)
             elif nn.op == ast.OP_SUB:
-                r = iv_sub(a, b)
+                exact = iv_sub_exact(a, b)
             else:
-                r = iv_mul(a, b)
-            if not iv_is_top(r) and not iv_is_top(a) and not iv_is_top(b):
+                exact = iv_mul_exact(a, b)
+            if not pr.mark:
+                pass          # 不動点の途中。まだ印は立てない
+            elif exact and not iv_is_top(a) and not iv_is_top(b):
                 if not nn.no_ovf_check:
                     pr.st.ovf = pr.st.ovf + 1
                 nn.no_ovf_check = True
@@ -762,7 +960,9 @@ def walk_expr(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
             tt: rc[ast.Type] = t
             if ast.ty_is_range(tt) and iv_fits(v, tt.lo, tt.hi):
                 ok = True
-        if ok:
+        if not pr.mark:
+            pass              # 不動点の途中。まだ印は立てない
+        elif ok:
             if not nn.no_range_check:
                 pr.st.range_ = pr.st.range_ + 1
             nn.no_range_check = True
@@ -781,8 +981,9 @@ def walk_expr(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
             rr: rc[ast.Node] = node_of(nn.rhs)
             if rr.kind == ast.ND_VAR and len(rr.ir_name) > 0:
                 k: int = env.find(rr.ir_name)
-                if k >= 0 and env.lt[k] == lk:
-                    inb = True
+                if k >= 0 and len(env.lt[k]) > 0:
+                    if env.lt[k] == lk or env.leneq_has(env.lt[k], lk):
+                        inb = True
         # ⚠️ list のときだけ消す（str の添字は取り出し方が違う）
         is_list: bool = False
         if nn.lhs is not None:
@@ -790,7 +991,9 @@ def walk_expr(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
             if lt2 is not None:
                 ltt: rc[ast.Type] = lt2
                 is_list = ltt.kind == ast.TY_LIST
-        if is_list and nonneg and inb:
+        if not pr.mark:
+            pass              # 不動点の途中。まだ印は立てない
+        elif is_list and nonneg and inb:
             if not nn.no_bounds_check:
                 pr.st.bounds = pr.st.bounds + 1
             nn.no_bounds_check = True
@@ -870,6 +1073,31 @@ def kill_assigned(env: mut Env, n: rc[ast.Node] | None) -> None:
         cur = c.next
 
 
+# この文の並びは、**必ず**この先へ進まずに抜けるか。
+#
+# ★ これが分かると `if len(a) != len(b): return` の**後ろ**で
+#   「長さは同じ」と言える（then 側は合流に混ぜない）。
+#   ⚠️ 分からないときは False を返す（混ぜる＝安全側）。
+#   対になる定義: src/prove.c の always_exits
+def always_exits(first: rc[ast.Node] | None) -> bool:
+    s: rc[ast.Node] | None = first
+    while s is not None:
+        sn: rc[ast.Node] = s
+        if (sn.kind == ast.ND_RETURN or sn.kind == ast.ND_RAISE or
+                sn.kind == ast.ND_BREAK or sn.kind == ast.ND_CONTINUE):
+            return True
+        if sn.kind == ast.ND_BLOCK or sn.kind == ast.ND_SCOPE:
+            if always_exits(sn.body):
+                return True
+        if sn.kind == ast.ND_IF:
+            # 両側とも抜けるなら、この if から先へは進まない
+            if sn.els is not None and always_exits(sn.body):
+                if always_exits(sn.els):
+                    return True
+        s = sn.next
+    return False
+
+
 def walk_list(pr: mut Prove, env: mut Env, first: rc[ast.Node] | None) -> None:
     s: rc[ast.Node] | None = first
     while s is not None:
@@ -938,8 +1166,21 @@ def walk_stmt(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
         if nn.els is not None:
             walk_stmt(pr, else_e, nn.els)
 
-        then_e.join(else_e)
-        env.assign_from(then_e)
+        # ★ 片側が**必ず抜ける**なら、その側は合流に混ぜない。
+        #   これで `if 〜: return` の後ろに、絞り込んだ事実が残る。
+        then_out: bool = always_exits(nn.body)
+        else_out: bool = False
+        if nn.els is not None:
+            else_out = always_exits(nn.els)
+        if then_out and not else_out:
+            env.assign_from(else_e)
+        elif else_out and not then_out:
+            env.assign_from(then_e)
+        else:
+            # ⚠️ 両方抜けるときもここに来る（この先は届かないのでどちらでも
+            #   構わない）。合流は「両方で言えること」だけ。
+            then_e.join(else_e)
+            env.assign_from(then_e)
         return
 
     if nn.kind == ast.ND_WHILE:
@@ -950,6 +1191,11 @@ def walk_stmt(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
         jump: bool = has_jump(nn.body)
         in_: Env = env.copy_of()
         ok: bool = False
+        # 🔒 **不動点を探している間は印を立てない**（入口がまだ狭い＝楽観的
+        #   なので、ここで消すと消しすぎる）。⚠️ 内側のループも自分の探索中
+        #   だけ止めるので、元の値に戻す。
+        mark_save: bool = pr.mark
+        pr.mark = False
         if not jump:
             round_: int = 0
             while round_ < 8:
@@ -983,6 +1229,8 @@ def walk_stmt(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
             if nn.incr is not None:
                 kill_assigned(in_, nn.incr)
 
+        # 入口が決まったので、本体をもう一度（★ 印を立てるのはこの回だけ）
+        pr.mark = mark_save
         body2: Env = in_.copy_of()
         narrow(body2, nn.lhs, True)
         walk_expr(pr, body2, nn.lhs)
@@ -1014,7 +1262,9 @@ def walk_stmt(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
 
     if nn.kind == ast.ND_REQUIRES:
         walk_expr(pr, env, nn.lhs)
-        if prove_cond(env, nn.lhs) == TRI_TRUE:
+        if not pr.mark:
+            pass              # 不動点の途中。まだ印は立てない
+        elif prove_cond(env, nn.lhs) == TRI_TRUE:
             if not nn.no_contract:
                 pr.st.contract = pr.st.contract + 1
             nn.no_contract = True
@@ -1114,7 +1364,11 @@ def node_type_is_none(t: rc[ast.Type]) -> bool:
 # 全モジュールを解析して、AST に「検査を出さなくてよい」印を立てる
 #
 # ⚠️ 2 つの実装で**同じ印**が立たなければならない（IR が食い違うため）。
-def prove_program(mods: rc[module.Module] | None) -> Stats:
+# ⚠️ no_ovf_mode … `--no-overflow-check` が付いているか。付いていると整数が
+#   **折り返す**ので、区間を飽和させる理屈が崩れる（SAT_MODE を見ること）。
+#   示せる量は減るが、**消しすぎるよりはるかにまし**。
+def prove_program(mods: rc[module.Module] | None, no_ovf_mode: bool) -> Stats:
+    SAT_MODE = not no_ovf_mode
     # ⚠️ 数え上げは**このスコープで持ちます**。Prove の中の Stats を返すと
     #   借りものを返すことになります（E-BORROW-8）。
     pr: Prove = Prove(Stats())

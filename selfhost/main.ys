@@ -418,7 +418,7 @@ def main() -> int:
     #   codegen はその印を見て検査を出しません。
     #   対になる定義: src/main.c の prove_program 呼び出し
     if not opt.no_prove:
-        ps: prove.Stats = prove.prove_program(mods)
+        ps: prove.Stats = prove.prove_program(mods, opt.no_ovf)
         if opt.prove_report:
             io.eprint("証明で消した実行時検査:\n")
             io.eprint("  桁あふれ  " + pad6(ps.ovf) + " 消 / " +

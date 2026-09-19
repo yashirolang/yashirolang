@@ -74,34 +74,85 @@ static bool mul_ovf(long long a, long long b, long long *out) {
     return false;
 }
 
-static Iv iv_add(Iv a, Iv b) {
-    long long lo, hi;
-    if (iv_is_top(a) || iv_is_top(b)) return IV_TOP;
-    if (add_ovf(a.lo, b.lo, &lo) || add_ovf(a.hi, b.hi, &hi)) return IV_TOP;
+// ★ **端が溢れたら、そこで止める（飽和）**。⊤ には落としません。
+//
+// 🔒 **なぜこれが健全なのか。** 桁あふれの検査が残っているからです。
+//   `i + 1` が本当に溢れるなら、そこで**実行が止まります**（折り返しません）。
+//   つまり「この先へ進んだ」のなら結果は必ず表せる範囲に収まっています。
+//   溢れる側の端を LLONG_MAX / LLONG_MIN で止めるのは、**進めた場合の値の
+//   集合**を正しく覆います。
+//
+//   ⚠️ **だから `--no-overflow-check` のときは、これをしません。**
+//     検査が無ければ本当に折り返し、`i` が負になりえます。そのまま
+//     「0 以上」と信じると、添字の検査を誤って消します（下の no_ovf_mode）。
+//
+//   ⚠️ 堂々巡りにはなりません。`i = i + 1` 自身の検査は「端が溢れた」＝
+//     示せなかった側に入るので、**消えずに残ります**。残った検査が上の
+//     理屈を支える、という順序です。
+static bool sat_mode = true;   // false … --no-overflow-check（折り返しうる）
+
+static long long add_sat(long long a, long long b, bool *ok) {
+    long long r;
+    if (!add_ovf(a, b, &r)) return r;
+    *ok = false;
+    return b > 0 ? LLONG_MAX : LLONG_MIN;
+}
+
+static long long sub_sat(long long a, long long b, bool *ok) {
+    long long r;
+    if (!sub_ovf(a, b, &r)) return r;
+    *ok = false;
+    return b < 0 ? LLONG_MAX : LLONG_MIN;
+}
+
+static long long mul_sat(long long a, long long b, bool *ok) {
+    long long r;
+    if (!mul_ovf(a, b, &r)) return r;
+    *ok = false;
+    return (a < 0) == (b < 0) ? LLONG_MAX : LLONG_MIN;
+}
+
+// exact … どの端でも溢れなかったか（**桁あふれの検査を消してよいか**）
+static Iv iv_add(Iv a, Iv b, bool *exact) {
+    bool ok = true;
+    if (iv_is_top(a) || iv_is_top(b)) { *exact = false; return IV_TOP; }
+    long long lo = add_sat(a.lo, b.lo, &ok);
+    long long hi = add_sat(a.hi, b.hi, &ok);
+    *exact = ok;
+    if (!sat_mode && !ok) return IV_TOP;
+    if (lo > hi) return IV_TOP;
     Iv r = {lo, hi};
     return r;
 }
 
-static Iv iv_sub(Iv a, Iv b) {
-    long long lo, hi;
-    if (iv_is_top(a) || iv_is_top(b)) return IV_TOP;
-    if (sub_ovf(a.lo, b.hi, &lo) || sub_ovf(a.hi, b.lo, &hi)) return IV_TOP;
+static Iv iv_sub(Iv a, Iv b, bool *exact) {
+    bool ok = true;
+    if (iv_is_top(a) || iv_is_top(b)) { *exact = false; return IV_TOP; }
+    long long lo = sub_sat(a.lo, b.hi, &ok);
+    long long hi = sub_sat(a.hi, b.lo, &ok);
+    *exact = ok;
+    if (!sat_mode && !ok) return IV_TOP;
+    if (lo > hi) return IV_TOP;
     Iv r = {lo, hi};
     return r;
 }
 
-static Iv iv_mul(Iv a, Iv b) {
-    if (iv_is_top(a) || iv_is_top(b)) return IV_TOP;
+static Iv iv_mul(Iv a, Iv b, bool *exact) {
+    bool ok = true;
+    if (iv_is_top(a) || iv_is_top(b)) { *exact = false; return IV_TOP; }
     // ★ 4 つの組み合わせの最小と最大（符号をまたぐときのため）
     long long c[4];
-    if (mul_ovf(a.lo, b.lo, &c[0]) || mul_ovf(a.lo, b.hi, &c[1]) ||
-        mul_ovf(a.hi, b.lo, &c[2]) || mul_ovf(a.hi, b.hi, &c[3]))
-        return IV_TOP;
+    c[0] = mul_sat(a.lo, b.lo, &ok);
+    c[1] = mul_sat(a.lo, b.hi, &ok);
+    c[2] = mul_sat(a.hi, b.lo, &ok);
+    c[3] = mul_sat(a.hi, b.hi, &ok);
     long long lo = c[0], hi = c[0];
     for (int i = 1; i < 4; i++) {
         if (c[i] < lo) lo = c[i];
         if (c[i] > hi) hi = c[i];
     }
+    *exact = ok;
+    if (!sat_mode && !ok) return IV_TOP;
     Iv r = {lo, hi};
     return r;
 }
@@ -125,8 +176,23 @@ struct Ent {
     Ent *next;
 };
 
+// ★ 「この 2 つの list は長さが同じ」（A-34 段 1 の続き）
+//
+//   ⚠️ 区間でも lt_len でも言えない関係です。これが無いと、
+//   `if len(a) != len(b): return` で守った後の `a[i]` と `b[i]` のうち
+//   **片方しか**検査を消せません（いちばん多く残っていた型です）。
+//   ⚠️ 推移律は取りません（a==b と b==c から a==c は出しません）。
+//     2 実装で同じ結果にするため、持ち方を単純に保ちます。
+typedef struct LenEq LenEq;
+struct LenEq {
+    const char *a;
+    const char *b;
+    LenEq *next;
+};
+
 typedef struct {
     Ent *head;
+    LenEq *eq;
 } Env;
 
 // 事後条件 1 つぶんの記録（**すべての return で示せたときだけ**消せます）
@@ -141,6 +207,16 @@ struct EnsRec {
 typedef struct {
     ProveStats *st;
     EnsRec *ens;    // いま検査している関数の ensures
+    // ★ **印を立ててよい回か。**
+    //
+    // 🔒 ここが安全の要です。ループの不動点は、入口を**少しずつ広げながら**
+    //   何周も本体を歩きます。途中の回の入口は**まだ狭い**（＝楽観的）ので、
+    //   その環境で印を立てると、**消してはいけない検査を消します**。
+    //   例: `while i < n: s = s + i * 1000000000000`
+    //     1 周目の入口は i ∈ [0, 0] なので「桁あふれしない」と見えますが、
+    //     広げ切った入口は i ∈ [0, ∞) で、実際には折り返します。
+    //   ⚠️ 印は**入口が決まってからの最後の 1 周だけ**で立てます。
+    bool mark;
 } Prove;
 
 // グローバルか（IR 名が @ で始まる）。
@@ -148,6 +224,57 @@ typedef struct {
 // ⚠️ **グローバルは追いません。** 他の関数がいつでも書き換えられるので、
 //   ここで覚えた値を信じると、消してはいけない検査を消します。
 static bool is_global_name(const char *name) { return name && name[0] == '@'; }
+
+// この組をすでに持っているか（⚠️ **向きは問いません**）
+static bool leneq_has(Env *e, const char *x, const char *y) {
+    if (!x || !y) return false;
+    for (LenEq *q = e->eq; q; q = q->next) {
+        if (strcmp(q->a, x) == 0 && strcmp(q->b, y) == 0) return true;
+        if (strcmp(q->a, y) == 0 && strcmp(q->b, x) == 0) return true;
+    }
+    return false;
+}
+
+// 組を足す（末尾に足します。並びは入れた順なので、2 実装で同じになります）
+static void leneq_add(Env *e, const char *x, const char *y) {
+    if (!x || !y || strcmp(x, y) == 0) return;
+    if (leneq_has(e, x, y)) return;
+    LenEq *q = xmalloc(sizeof(LenEq));
+    q->a = x;
+    q->b = y;
+    q->next = NULL;
+    LenEq **tail = &e->eq;
+    while (*tail) tail = &(*tail)->next;
+    *tail = q;
+}
+
+static bool key_under(const char *name, const char *key);
+
+// その場所が関わる組を落とす（長さが変わったかもしれないため）
+static void leneq_kill(Env *e, const char *key) {
+    if (!key || !key[0]) return;
+    LenEq **pp = &e->eq;
+    while (*pp) {
+        LenEq *q = *pp;
+        if (strcmp(q->a, key) == 0 || strcmp(q->b, key) == 0 ||
+            key_under(q->a, key) || key_under(q->b, key))
+            *pp = q->next;
+        else
+            pp = &q->next;
+    }
+}
+
+// グローバルが関わる組を落とす（誰でもいつでも短くできるため）
+static void leneq_kill_globals(Env *e) {
+    LenEq **pp = &e->eq;
+    while (*pp) {
+        LenEq *q = *pp;
+        if (q->a[0] == '@' || q->b[0] == '@')
+            *pp = q->next;
+        else
+            pp = &q->next;
+    }
+}
 
 static Ent *env_find(Env *e, const char *name) {
     if (!name || is_global_name(name)) return NULL;
@@ -190,7 +317,7 @@ static Iv env_iv(Env *e, const char *name) {
 }
 
 static Env env_copy(Env *e) {
-    Env out = {NULL};
+    Env out = {NULL, NULL};
     Ent **tail = &out.head;
     for (Ent *p = e->head; p; p = p->next) {
         Ent *q = xmalloc(sizeof(Ent));
@@ -198,6 +325,14 @@ static Env env_copy(Env *e) {
         q->next = NULL;
         *tail = q;
         tail = &q->next;
+    }
+    LenEq **etail = &out.eq;
+    for (LenEq *q = e->eq; q; q = q->next) {
+        LenEq *r = xmalloc(sizeof(LenEq));
+        *r = *q;
+        r->next = NULL;
+        *etail = r;
+        etail = &r->next;
     }
     return out;
 }
@@ -212,6 +347,15 @@ static void env_join(Env *dst, Env *src) {
             p->lt_len = NULL;
     }
     // src にしか無い変数は dst では「未知」なので、何もしません（⊤ 扱い）。
+    // ★ 長さの等しさも、**両方の道で言えたときだけ**残します。
+    LenEq **pp = &dst->eq;
+    while (*pp) {
+        LenEq *q = *pp;
+        if (!leneq_has(src, q->a, q->b))
+            *pp = q->next;
+        else
+            pp = &q->next;
+    }
 }
 
 static bool env_same(Env *a, Env *b) {
@@ -225,6 +369,10 @@ static bool env_same(Env *a, Env *b) {
     }
     for (Ent *q = b->head; q; q = q->next)
         if (!env_find(a, q->name)) return false;
+    for (LenEq *q = a->eq; q; q = q->next)
+        if (!leneq_has(b, q->a, q->b)) return false;
+    for (LenEq *q = b->eq; q; q = q->next)
+        if (!leneq_has(a, q->a, q->b)) return false;
     return true;
 }
 
@@ -315,10 +463,11 @@ static Iv eval(Prove *pr, Env *env, Node *n) {
         case ND_BINOP: {
             Iv a = eval(pr, env, n->lhs);
             Iv b = eval(pr, env, n->rhs);
+            bool ex;
             switch (n->op) {
-                case OP_ADD: return iv_add(a, b);
-                case OP_SUB: return iv_sub(a, b);
-                case OP_MUL: return iv_mul(a, b);
+                case OP_ADD: return iv_add(a, b, &ex);
+                case OP_SUB: return iv_sub(a, b, &ex);
+                case OP_MUL: return iv_mul(a, b, &ex);
                 case OP_BITAND: {
                     // ★ 定数マスクは範囲をきっちり決めます（bytes で効きます）
                     if (b.lo == b.hi && b.lo >= 0) {
@@ -427,6 +576,15 @@ static void narrow_cmp(Prove *pr, Env *env, Node *n, bool truth) {
     if (op == OP_LT && l->kind == ND_VAR && l->ir_name) {
         const char *lt = len_target(r);
         if (lt) env_get(env, l->ir_name)->lt_len = lt;
+    }
+
+    // ①' 長さの等しさ（len(a) == len(b)）
+    //
+    // ★ `if len(a) != len(b): return` の**通り抜けた側**がここに来ます
+    //   （否定は上で OP_NE → OP_EQ に読み替えてあります）。
+    if (op == OP_EQ) {
+        const char *ea = len_target(l), *eb = len_target(r);
+        if (ea && eb) leneq_add(env, ea, eb);
     }
 
     // ② 区間
@@ -571,7 +729,9 @@ static void walk_expr(Prove *pr, Env *env, Node *n) {
             if (n->type && n->type->kind == TY_INT &&
                 (n->op == OP_FLOORDIV || n->op == OP_MOD)) {
                 Iv a = eval(pr, env, n->lhs), b = eval(pr, env, n->rhs);
-                if (a.lo >= 0 && b.lo > 0 && b.lo == b.hi) {
+                if (!pr->mark) {
+                    // 不動点の途中。まだ印は立てません
+                } else if (a.lo >= 0 && b.lo > 0 && b.lo == b.hi) {
                     if (!n->no_div_check) pr->st->div++;
                     n->no_div_check = true;
                 } else if (!n->no_div_check) {
@@ -581,12 +741,17 @@ static void walk_expr(Prove *pr, Env *env, Node *n) {
             if (n->type && n->type->kind == TY_INT &&
                 (n->op == OP_ADD || n->op == OP_SUB || n->op == OP_MUL)) {
                 Iv a = eval(pr, env, n->lhs), b = eval(pr, env, n->rhs);
-                Iv r = n->op == OP_ADD ? iv_add(a, b)
-                     : n->op == OP_SUB ? iv_sub(a, b)
-                                       : iv_mul(a, b);
-                // ★ 区間が ⊤ でなければ、その計算は絶対に折り返しません
-                //   （iv_* は折り返しうるときに ⊤ を返す作りです）。
-                if (!iv_is_top(r) && !iv_is_top(a) && !iv_is_top(b)) {
+                bool exact = false;
+                Iv r = n->op == OP_ADD ? iv_add(a, b, &exact)
+                     : n->op == OP_SUB ? iv_sub(a, b, &exact)
+                                       : iv_mul(a, b, &exact);
+                (void)r;
+                // ★ **どの端でも溢れなかった**ときだけ消します。
+                //   ⚠️ 飽和した区間（端が止まっただけ）では消せません。
+                //     消さずに残すからこそ、飽和が健全でいられます。
+                if (!pr->mark) {
+                    // 不動点の途中。まだ印は立てません
+                } else if (exact && !iv_is_top(a) && !iv_is_top(b)) {
                     if (!n->no_ovf_check) pr->st->ovf++;
                     n->no_ovf_check = true;
                 } else if (!n->no_ovf_check) {
@@ -609,8 +774,10 @@ static void walk_expr(Prove *pr, Env *env, Node *n) {
         case ND_RANGECHK: {
             walk_expr(pr, env, n->lhs);
             Iv v = eval(pr, env, n->lhs);
-            if (n->type && ty_is_range(n->type) &&
-                iv_fits(v, n->type->lo, n->type->hi)) {
+            if (!pr->mark) {
+                // 不動点の途中。まだ印は立てません
+            } else if (n->type && ty_is_range(n->type) &&
+                       iv_fits(v, n->type->lo, n->type->hi)) {
                 if (!n->no_range_check) pr->st->range++;
                 n->no_range_check = true;
             } else if (!n->no_range_check) {
@@ -630,12 +797,17 @@ static void walk_expr(Prove *pr, Env *env, Node *n) {
             const char *lk = place_key(n->lhs);
             if (n->rhs && n->rhs->kind == ND_VAR && n->rhs->ir_name && lk) {
                 Ent *p = env_find(env, n->rhs->ir_name);
-                if (p && p->lt_len && strcmp(p->lt_len, lk) == 0) inb = true;
+                if (p && p->lt_len &&
+                    (strcmp(p->lt_len, lk) == 0 ||
+                     leneq_has(env, p->lt_len, lk)))
+                    inb = true;
             }
             // ⚠️ str の添字も同じ形ですが、こちらは要素の取り出し方が
             //   違うので触りません（list のときだけ消します）。
             bool is_list = n->lhs && n->lhs->type && n->lhs->type->kind == TY_LIST;
-            if (is_list && nonneg && inb) {
+            if (!pr->mark) {
+                // 不動点の途中。まだ印は立てません
+            } else if (is_list && nonneg && inb) {
                 if (!n->no_bounds_check) pr->st->bounds++;
                 n->no_bounds_check = true;
             } else if (is_list && !n->no_bounds_check) {
@@ -680,6 +852,7 @@ static bool key_under(const char *name, const char *key) {
 
 static void kill_place(Env *env, const char *key) {
     if (!key || !key[0]) return;
+    leneq_kill(env, key);
     for (Ent *p = env->head; p; p = p->next) {
         if (strcmp(p->name, key) == 0 || key_under(p->name, key)) {
             p->iv = IV_TOP;
@@ -696,6 +869,7 @@ static void kill_place(Env *env, const char *key) {
 static void kill_global_rels(Env *env) {
     for (Ent *p = env->head; p; p = p->next)
         if (p->lt_len && p->lt_len[0] == '@') p->lt_len = NULL;
+    leneq_kill_globals(env);
 }
 
 // 呼び出しで壊れうるものを落とす。
@@ -705,6 +879,10 @@ static void kill_global_rels(Env *env) {
 //   ⚠️ 借りだけを渡したなら本当は縮みませんが、仮引数の受け取り方をここで
 //     引く仕掛けがないので、**渡したものは落とす**（安全側）にします。
 static void kill_mut_args(Env *env, Node *n) {
+    // ★ **`len(x)` は長さを変えません。** ここを落としていたせいで、
+    //   `while i < len(xs)` の条件を歩いた瞬間に `i < len(xs)` の関係が
+    //   消えていました（＝添字の検査がほぼ 1 つも消えていませんでした）。
+    if (len_target(n)) return;
     for (Node *a = n->args; a; a = a->next) kill_place(env, place_key(a));
     // メソッドの受け手（xs.append(v) の xs）も落とします
     if (n->kind == ND_METHOD) kill_place(env, place_key(n->lhs));
@@ -750,6 +928,35 @@ static void kill_assigned(Env *env, Node *n) {
 }
 
 static void walk_stmt(Prove *pr, Env *env, Node *n);
+
+// この文の並びは、**必ず**この先へ進まずに抜けるか。
+//
+// ★ これが分かると `if len(a) != len(b): return` の**後ろ**で
+//   「長さは同じ」と言えます（then 側は合流に混ぜません）。
+//   ⚠️ 分からないときは false を返します（混ぜる＝安全側）。
+static bool always_exits(Node *first) {
+    for (Node *s = first; s; s = s->next) {
+        switch (s->kind) {
+            case ND_RETURN:
+            case ND_RAISE:
+            case ND_BREAK:
+            case ND_CONTINUE:
+                return true;
+            case ND_BLOCK:
+            case ND_SCOPE:
+                if (always_exits(s->body)) return true;
+                break;
+            case ND_IF:
+                // 両側とも抜けるなら、この if から先へは進みません
+                if (s->els && always_exits(s->body) && always_exits(s->els))
+                    return true;
+                break;
+            default:
+                break;
+        }
+    }
+    return false;
+}
 
 static void walk_list(Prove *pr, Env *env, Node *first) {
     for (Node *s = first; s; s = s->next) walk_stmt(pr, env, s);
@@ -801,9 +1008,20 @@ static void walk_stmt(Prove *pr, Env *env, Node *n) {
             narrow(pr, &else_e, n->lhs, false);
             if (n->els) walk_stmt(pr, &else_e, n->els);
 
-            // ⚠️ 合流は「両方で言えること」だけ残します
-            env_join(&then_e, &else_e);
-            *env = then_e;
+            // ★ 片側が**必ず抜ける**なら、その側は合流に混ぜません。
+            //   これで `if 〜: return` の後ろに、絞り込んだ事実が残ります。
+            bool then_out = always_exits(n->body);
+            bool else_out = n->els && always_exits(n->els);
+            if (then_out && !else_out) {
+                *env = else_e;
+            } else if (else_out && !then_out) {
+                *env = then_e;
+            } else {
+                // ⚠️ 両方抜けるときもここに来ます（この先は届かないので
+                //   どちらでも構いません）。合流は「両方で言えること」だけ。
+                env_join(&then_e, &else_e);
+                *env = then_e;
+            }
             return;
         }
 
@@ -819,6 +1037,11 @@ static void walk_stmt(Prove *pr, Env *env, Node *n) {
             //   最後に確かめます。
             Env in;
             bool ok = false;
+            // 🔒 **不動点を探している間は印を立てません**（入口がまだ狭い＝
+            //   楽観的なので、ここで消すと消しすぎます）。⚠️ 内側のループも
+            //   自分の探索中だけ消すので、元の値に戻します。
+            bool mark_save = pr->mark;
+            pr->mark = false;
             if (!has_jump(n->body)) {
                 in = env_copy(env);
                 for (int round = 0; round < 8; round++) {
@@ -851,7 +1074,8 @@ static void walk_stmt(Prove *pr, Env *env, Node *n) {
                 if (n->incr) kill_assigned(&in, n->incr);
             }
 
-            // 入口が決まったので、本体をもう一度（印を立てるのはこの回）
+            // 入口が決まったので、本体をもう一度（★ 印を立てるのはこの回だけ）
+            pr->mark = mark_save;
             Env body = env_copy(&in);
             narrow(pr, &body, n->lhs, true);
             walk_expr(pr, &body, n->lhs);
@@ -885,7 +1109,9 @@ static void walk_stmt(Prove *pr, Env *env, Node *n) {
         //   ⚠️ 言えなくても**赤にはしません**（今までどおり実行時に確かめる）。
         case ND_REQUIRES: {
             walk_expr(pr, env, n->lhs);
-            if (prove_cond(pr, env, n->lhs) == TRI_TRUE) {
+            if (!pr->mark) {
+                // 不動点の途中。まだ印は立てません
+            } else if (prove_cond(pr, env, n->lhs) == TRI_TRUE) {
                 if (!n->no_contract) pr->st->contract++;
                 n->no_contract = true;
             } else if (!n->no_contract) {
@@ -908,7 +1134,7 @@ static void walk_stmt(Prove *pr, Env *env, Node *n) {
             walk_stmt(pr, env, n->body);
             for (Node *ex = n->els; ex; ex = ex->next) walk_stmt(pr, env, ex->body);
             // ⚠️ try の後は「どこで抜けたか」が分からないので、全部忘れます
-            *env = (Env){NULL};
+            *env = (Env){NULL, NULL};
             return;
 
         case ND_SCOPE:
@@ -943,7 +1169,7 @@ static void prove_func(Prove *pr, Node *fn) {
     }
     pr->ens = ens;
 
-    Env env = {NULL};
+    Env env = {NULL, NULL};
     // ★ 引数の型が言っていることから始めます（範囲型はここで効きます）
     for (Node *pm = fn->params; pm; pm = pm->next)
         if (pm->ir_name && pm->type && pm->type->kind == TY_INT)
@@ -965,9 +1191,10 @@ static void prove_func(Prove *pr, Node *fn) {
     pr->ens = NULL;
 }
 
-void prove_program(Module *mods, ProveStats *out) {
+void prove_program(Module *mods, ProveStats *out, bool no_ovf_mode) {
+    sat_mode = !no_ovf_mode;
     ProveStats st = {0};
-    Prove pr = {&st, NULL};
+    Prove pr = {&st, NULL, true};
 
     for (Module *m = mods; m; m = m->next) {
         for (Node *d = m->ast->body; d; d = d->next) {

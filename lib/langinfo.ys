@@ -16,7 +16,7 @@ NAME: str = "yashirolang"   # 人が読む言語名
 EXT: str = ".ys"            # ソースファイルの拡張子（ドット込み）
 CC: str = "yashirolang"         # コンパイラのコマンド名
 PM: str = "ysm"             # パッケージマネージャのコマンド名
-VERSION: str = "0.26.0"      # 版番号（--version で出す）
+VERSION: str = "0.27.0"      # 版番号（--version で出す）
 
 def name() -> str:
     return NAME

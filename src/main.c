@@ -598,7 +598,7 @@ int main(int argc, char **argv) {
     //     専用の診断で止めます（解析の誤りを私たち側に返すため）。
     if (!opt.no_prove) {
         ProveStats ps = {0};
-        prove_program(mods, &ps);
+        prove_program(mods, &ps, opt.no_ovf != 0);
         if (opt.prove_report) {
             fprintf(stderr, "証明で消した実行時検査:\n");
             fprintf(stderr, "  桁あふれ  %6d 消 / %6d 残\n", ps.ovf, ps.ovf_left);

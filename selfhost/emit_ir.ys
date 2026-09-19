@@ -70,7 +70,7 @@ def main() -> int:
 
     # ★ ⑤ 証明（A-34）。IR が変わるので、C 版と同じ場所で同じことをします。
     if not no_prove:
-        prove.prove_program(mods)
+        prove.prove_program(mods, no_ovf)
 
     if entry is None:
         panic("emit_ir: 入口モジュールがありません")

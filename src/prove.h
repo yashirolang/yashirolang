@@ -43,6 +43,10 @@ typedef struct {
 //
 // ⚠️ 2 つの実装で**同じ印**が立たなければなりません（IR が食い違うため）。
 //    だから解析は決定的です（表はすべて出現順のリストで、名前で引きます）。
-void prove_program(Module *mods, ProveStats *out);
+// ⚠️ no_ovf_mode … `--no-overflow-check` が付いているか。
+//   付いていると整数が**折り返す**ので、区間を飽和させる理屈が崩れます
+//   （prove.c の sat_mode を見てください）。示せる量は減りますが、
+//   **消しすぎるよりはるかにましです**。
+void prove_program(Module *mods, ProveStats *out, bool no_ovf_mode);
 
 #endif  // PLC_PROVE_H

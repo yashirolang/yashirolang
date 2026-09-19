@@ -126,33 +126,28 @@ for case_file in "${CASES[@]}"; do
     exe="$TMP/$base"
 
     # ── 期待値をヘッダコメントから読み取る ──
-    # ⚠️ 期待値から \r を落とします（Windows のチェックアウトで混ざることがある）。
-    #    .gitattributes で変換は止めていますが、既存の作業コピーでも動くように。
+    #
+    # ★ **awk 1 回で全部読みます**（tests/markers.awk）。
+    #   以前はここで sed を 11 回・tr を 4 回・grep を 1 回起動していました。
+    #   ケースは 600 件近くあるので、**1 万プロセス近く**を毎回作っていた
+    #   ことになります。⚠️ Windows（MSYS2）は fork をエミュレートするため
+    #   1 プロセスが Linux より 1 桁高く、CI の Windows ジョブが目に見えて
+    #   遅くなっていました。⚠️ 読み取る中身は 1 バイトも変えていません。
+    #
+    #   ここで入る変数: want_exit / want_error / want_output / want_tokens
+    #                   want_ir / want_ir_not / want_warn / want_explain
+    #                   extra_flags / has_exact_ir / stage0_only
+    #
+    # ⚠️ \r は awk の中で落とします（Windows のチェックアウトで混ざることが
+    #    あります。.gitattributes で変換は止めていますが、既存の作業コピー
+    #    でも動くように）。
     strip_cr() { tr -d '\r'; }
 
-    want_exit="$(sed -n 's/^# *EXIT: *//p'   "$case_file" | head -1 | strip_cr)"
-    # ERROR は複数行書ける。すべてが stderr に含まれることを要求する。
-    # 診断メッセージの note: / ヒント: 行まで検証できるようにするため。
-    want_error="$(sed -n 's/^# *ERROR: *//p' "$case_file" | strip_cr)"
-    # OUTPUT は複数行を許す
-    want_output="$(sed -n 's/^# *OUTPUT: *//p' "$case_file" | strip_cr)"
     # ★ 標準入力を与えるケース。
-    #   ⚠️ 与えないケースでも **必ず /dev/null に繋ぎます**。繋がないと
+    #   ⚠️ 与えないケースでも **必ず空のファイルに繋ぎます**。繋がないと
     #     端末や CI の標準入力をそのまま読んでしまい、結果が環境で変わります。
     stdin_file="$TMP/$(basename "$case_file" "$EXT").stdin"
-    sed -n 's/^# *STDIN: *//p' "$case_file" > "$stdin_file"
-    if [ ! -s "$stdin_file" ]; then
-        : > "$stdin_file"
-    fi
-    # TOKENS は複数行書けるので、空白 1 個で連結して 1 行にする
-    want_tokens="$(sed -n 's/^# *TOKENS: *//p' "$case_file" \
-                   | tr '\n' ' ' | tr -s ' ' | sed 's/ *$//')"
-    # 警告の検証（コンパイルは成功する）と、追加のオプション
-    want_ir="$(sed -n 's/^# *IR: *//p' "$case_file" | strip_cr)"
-    want_ir_not="$(sed -n 's/^# *IR-NOT: *//p' "$case_file" | strip_cr)"
-    want_warn="$(sed -n 's/^# *WARN: *//p' "$case_file" | strip_cr)"
-    want_explain="$(sed -n 's/^# *EXPLAIN-MUT: *//p' "$case_file" | strip_cr)"
-    extra_flags="$(sed -n 's/^# *FLAGS: *//p' "$case_file" | tr '\n' ' ' | strip_cr)"
+    eval "$(awk -v stdin_file="$stdin_file" -f "$ROOT/tests/markers.awk" "$case_file")"
     # ★ -I のテストのために @ROOT@ をリポジトリの場所に置き換えます。
     #   FLAGS のパスは「実行したディレクトリ」からの相対になってしまうので、
     #   どこから走らせても同じ結果になるようにするためです。
@@ -169,13 +164,12 @@ for case_file in "${CASES[@]}"; do
     #   PLC_EXTRA_FLAGS が付いているときは飛ばします。
     #   ⚠️ 「検査が消えたこと」を見る試験は、--verify-prove（検査を残す）と
     #     必ずぶつかります。ぶつけたまま赤にすると、本当の失敗が埋もれます。
-    if [ -n "${PLC_EXTRA_FLAGS:-}" ] && grep -q "^# *EXACT-IR:" "$case_file"; then
+    if [ -n "${PLC_EXTRA_FLAGS:-}" ] && [ -n "$has_exact_ir" ]; then
         skip=$((skip + 1))
         continue
     fi
 
     extra_flags="${PLC_EXTRA_FLAGS:-} $extra_flags"
-    stage0_only="$(sed -n 's/^# *STAGE0-ONLY: *//p' "$case_file" | head -1)"
 
     # ★ C 版でしか動かないケースは、セルフホスト版で回すときに飛ばす
     #   ⚠️ 計装ビルド（build/cov/<LANG_CC>）のように場所が違う C 版もあるので、

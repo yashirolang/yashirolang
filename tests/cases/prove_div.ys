@@ -10,7 +10,7 @@
 #     ① 割られる数が 0 以上（Python の切り下げと LLVM の切り捨てが一致する）
 #     ② 割る数が**コンパイル時に決まる正の数**（LLVM が掛け算に置き換える）
 #   ⚠️ 割る数が実行時に決まるときは、命令にしても速くならなかったので
-#     今までどおり呼び出しのままです（prove_keeps_check.ys も見てください）。
+#     今までどおり呼び出しのままです（prove_keeps_check も見てください）。
 type Percent = int range(0, 100)
 
 def half(p: Percent) -> int:

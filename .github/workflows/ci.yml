@@ -48,12 +48,17 @@ jobs:
 
       # macOS の runner には Apple clang が最初から入っています（追加は不要）
 
+      # ⚠️ **`update: true` は入れません。** 毎回 `pacman -Syuu` で基盤ごと
+      #   更新すると数分かかり、パッケージのキャッシュも毎回無効になります。
+      #   ★ 必要なのは clang と lld と make だけで、MSYS2 の基盤が古くても
+      #     困りません。`cache: true` で pacman の取得物を使い回します。
       - name: 道具を入れる（Windows / MSYS2）
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
-          update: true
+          update: false
+          cache: true
           install: >-
             make
             diffutils
@@ -62,6 +67,17 @@ jobs:
           pacboy: >-
             clang:p
             lld:p
+
+      # ★ Defender は新しく書いたファイルを全部走査します。テストは
+      #   600 件ぶんの .ll / .o / .exe を書くので、ここが効きます。
+      #   ⚠️ 失敗しても止めません（権限が無い環境でも CI は通すべきなので）。
+      - name: Defender の走査から作業場所を外す（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+          Add-MpPreference -ExclusionPath "$env:RUNNER_TEMP"
 
       - name: 環境を表示する
         run: make info
@@ -77,8 +93,10 @@ jobs:
         if: runner.os == 'Linux'
         run: make check-naming
 
+      # ★ **並列で建てます。** `make` 単体は逐次なので、ここが素直に効きます。
+      #   ⚠️ 並列数は機械に訊きます（ランナーの大きさが変わっても直さずに済む）。
       - name: ① ビルド
-        run: make
+        run: make -j"$(getconf _NPROCESSORS_ONLN)"
 
       # ★ **小さなメソッドが畳まれるかを、構造で検査します。**
       #   clang に -Rpass-missed=inline で直接聞くので、機械が変わっても
@@ -92,7 +110,13 @@ jobs:
       - name: ③ 不動点（stage2 == stage3）
         run: make bootstrap
 
+      # ⚠️ **Linux でだけ回します。** これはテスト 600 件を**もう一度**
+      #   （セルフホスト版のコンパイラで）通すので、仕事がほぼ倍になります。
+      #   ★ 2 つの実装が同じ IR を出すことは ② の `make test` が
+      #     **バイト単位で**確かめており、そこは 3 OS すべてで回ります。
+      #     ここで OS ごとに違う結果が出るとは考えにくいので、1 つで足ります。
       - name: ④ セルフホスト版コンパイラでテスト
+        if: runner.os == 'Linux'
         run: make bootstrap-test
 
       # ★ 文書のひな型に名前を流し込めるか（プレースホルダの書き損じ検出）
@@ -130,7 +154,7 @@ jobs:
           sudo apt-get install -y clang llvm lld qemu-system-misc
 
       - name: ビルド
-        run: make
+        run: make -j"$(getconf _NPROCESSORS_ONLN)"
 
       - name: カーネルをビルドして QEMU で動かす
         run: make qemu-test

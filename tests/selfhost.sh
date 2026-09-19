@@ -110,9 +110,21 @@ for f in "${FILES[@]}"; do
     #     指定で IR を変えず、付けるとケースによっては検査で止まってしまい、
     #     ④⑤ が「両方エラーで空出力どうしが一致」と数えてしまいます。
     #     `-O2` も IR（`-S` の出力）は変えないので混ぜません。
+    #
+    # ★ FLAGS と STAGE1-SKIP を **awk 1 回**で読みます（run_tests.sh と同じ
+    #   理由です。ここも 700 件近く回るので、`sed` と `head|grep` で
+    #   2,000 プロセス以上を毎回作っていました）。
     case_flags=""
     deny_case=0
-    for fl in $(sed -n 's/^# *FLAGS: *//p' "$f" | tr -d '\r'); do
+    #   ⚠️ `eval` は使わず 2 行読みます（FLAGS の中身を引用符として
+    #     解釈させないため）。1 行目が FLAGS、2 行目が STAGE1-SKIP の有無です。
+    { IFS= read -r raw_flags; IFS= read -r stage1_skip; } < <(awk '
+        { line = $0; gsub(/\r/, "", line) }
+        NR <= 8 && line ~ /^# *STAGE1-SKIP:/ { s = 1 }
+        match(line, /^# *FLAGS: */) { f = f " " substr(line, RLENGTH + 1) }
+        END { print f; print (s ? "1" : "") }
+    ' "$f")
+    for fl in $raw_flags; do
         case "$fl" in
             --drop|--no-drop|--no-overflow-check|-g) case_flags="$case_flags $fl" ;;
             --deny-*) deny_case=1 ;;
@@ -125,7 +137,7 @@ for f in "${FILES[@]}"; do
     #
     # ⚠️ `# STAGE0-ONLY:`（run_tests.sh 用）とは別の印です。所有権のテストは
     #    構文が v1 のままなので、**比較はできます**（既定の IR は変わらないため）。
-    if head -8 "$f" | grep -q "^# *STAGE1-SKIP:"; then
+    if [ -n "$stage1_skip" ]; then
         skipped=$((skipped + 1))
         continue
     fi

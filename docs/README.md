@@ -48,6 +48,7 @@ def main() -> int:
 | [design/os-support.md](design/os-support.md) | freestanding・`unsafe`・ベアメタル |
 | [design/self-hosting.md](design/self-hosting.md) | ブートストラップと不動点の検証 |
 | [design/naming.md](design/naming.md) | 名前づけの規約 |
+| [design/ci.md](design/ci.md) | CI の作りと、速くするために入れた工夫（測定値つき） |
 | [design/package-manager.md](design/package-manager.md) | パッケージマネージャ（レジストリを持たない設計・MVS・安全性） |
 
 ## これから

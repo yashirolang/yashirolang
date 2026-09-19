@@ -667,6 +667,7 @@ class Node:
     no_range_check: bool    # ND_RANGECHK : 範囲に入ると示せた（A-28）
     no_bounds_check: bool   # ND_INDEX : 添字が 0 以上・長さ未満と示せた
     no_contract: bool       # ND_REQUIRES / ND_ENSURES : 常に真と示せた（A-29）
+    no_div_check: bool      # ND_BINOP : // と % が 0 除算しないと示せた
     binds_borrow: bool   # 借りものを束縛している（解放してはいけない）
     moved_out: bool      # 移動済み（解放してはいけない）
     # ★ ジェネリクス。
@@ -718,6 +719,7 @@ class Node:
         self.no_range_check = False
         self.no_bounds_check = False
         self.no_contract = False
+        self.no_div_check = False
         self.binds_borrow = False
         self.moved_out = False
         self.is_wrap = False

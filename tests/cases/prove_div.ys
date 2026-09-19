@@ -1,0 +1,30 @@
+# OUTPUT: 3
+# OUTPUT: 1
+# EXIT: 0
+# IR: srem i64
+# IR: sdiv i64
+# IR-NOT: call i64 @pl_mod
+# EXACT-IR: 検査が消えたことを見る試験なので、--verify-prove とはぶつかります
+# A-34 段 1: 0 で割らないと示せた `//` と `%` は、呼び出しが 1 命令になります。
+#   ★ 条件は 2 つ:
+#     ① 割られる数が 0 以上（Python の切り下げと LLVM の切り捨てが一致する）
+#     ② 割る数が**コンパイル時に決まる正の数**（LLVM が掛け算に置き換える）
+#   ⚠️ 割る数が実行時に決まるときは、命令にしても速くならなかったので
+#     今までどおり呼び出しのままです（prove_keeps_check.ys も見てください）。
+type Percent = int range(0, 100)
+
+def half(p: Percent) -> int:
+    return p // 2
+
+def main() -> int:
+    s: int = 0
+    i: int = 0
+    while i < 10:
+        s = s + i % 4
+        i = i + 1
+    print(str(half(7)))
+    # ⚠️ ここは `pl_floordiv` の呼び出しのままです。ループを回ったあとの
+    #   `s` は「0 以上」と言い切れない（広げたので端が ±∞）ためです。
+    #   **分からなければ消さない**、が証明の決まりです。
+    print(str(s // 13))
+    return 0

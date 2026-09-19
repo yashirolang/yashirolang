@@ -429,6 +429,8 @@ def main() -> int:
                       pad6(ps.range_left) + " 残\n")
             io.eprint("  契約      " + pad6(ps.contract) + " 消 / " +
                       pad6(ps.contract_left) + " 残\n")
+            io.eprint("  0 除算    " + pad6(ps.div) + " 消 / " +
+                      pad6(ps.div_left) + " 残\n")
 
     # 入口モジュールの main の IR 名（@main のラッパが呼ぶ相手）
     main_ir: str = entry.name + ".main"

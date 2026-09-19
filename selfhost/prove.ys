@@ -118,6 +118,17 @@ def iv_join(a: Iv, b: Iv) -> Iv:
 #
 # ★ 変数ごとの区間と、1 つだけの関係（「この変数は、この list の長さより
 #   小さい」）。⚠️ 表は**出現順の並び**です（2 実装で同じ結果になるように）。
+#
+# その鍵の**下のフィールド**かどうか（"%self" に対する "%self.toks"）。
+#
+# ⚠️ **ここが要点です。** `self` を渡した先で `self.toks.append(...)` を
+#   されると `i < len(self.toks)` は崩れます。`%self` を落とすときに
+#   `%self.toks` も落とさないと、**消してはいけない検査を消します**。
+#   対になる定義: src/prove.c の key_under
+def key_under(name: str, key: str) -> bool:
+    return strings.startswith(name, key + ".")
+
+
 class Env:
     names: list[str]
     lo: list[int]
@@ -246,12 +257,20 @@ class Env:
             return
         i: int = 0
         while i < len(self.names):
-            if self.names[i] == key:
+            if self.names[i] == key or key_under(self.names[i], key):
                 self.lo[i] = iv_min()
                 self.hi[i] = iv_max()
                 self.lt[i] = ""
             # ★ その list を指していた関係も落とす（短くなったかもしれない）
-            if self.lt[i] == key:
+            if self.lt[i] == key or key_under(self.lt[i], key):
+                self.lt[i] = ""
+            i = i + 1
+
+    # グローバルの list を指す関係を落とす（呼び先がいつでも短くできるため）
+    def kill_global_rels(mut self) -> None:
+        i: int = 0
+        while i < len(self.names):
+            if strings.startswith(self.lt[i], "@"):
                 self.lt[i] = ""
             i = i + 1
 
@@ -262,20 +281,24 @@ class Stats:
     range_: int
     bounds: int
     contract: int
+    div: int
     ovf_left: int
     range_left: int
     bounds_left: int
     contract_left: int
+    div_left: int
 
     def init(self) -> None:
         self.ovf = 0
         self.range_ = 0
         self.bounds = 0
         self.contract = 0
+        self.div = 0
         self.ovf_left = 0
         self.range_left = 0
         self.bounds_left = 0
         self.contract_left = 0
+        self.div_left = 0
 
 
 # 事後条件 1 つぶんの記録（**すべての return で示せたときだけ**消す）
@@ -658,11 +681,18 @@ def kill_mut_args(env: mut Env, n: rc[ast.Node]) -> None:
     while a is not None:
         an: rc[ast.Node] = a
         env.kill(place_key(an))
-        if an.kind == ast.ND_INDEX:
-            env.kill(place_key(an.lhs))
         a = an.next
     if n.kind == ast.ND_METHOD:
         env.kill(place_key(n.lhs))
+    # ⚠️ グローバルは誰でも触れるので、指していた関係を落とします
+    env.kill_global_rels()
+
+
+# ⚠️ **要素を渡すこと（f(xs[i])）では list を落としません。**
+#   渡っているのは要素で、list そのものではありません。長さを変えるには
+#   list を `mut` で渡すか、list のメソッドを呼ぶ必要があります（所有権検査
+#   がそれを保証しています）。⚠️ ここを落としていたせいで、**関係が消えない
+#   はずの場所で 499 件消えていました**（計測して分かりました）。
 
 
 def walk_expr(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
@@ -673,6 +703,27 @@ def walk_expr(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
     if nn.kind == ast.ND_BINOP:
         walk_expr(pr, env, nn.lhs)
         walk_expr(pr, env, nn.rhs)
+        # ★ `//` と `%` を、呼び出しではなく命令 1 つにする条件。
+        #
+        #   ① 両方 0 以上（切り下げ＝切り捨てになる。Python と LLVM の差）
+        #   ② 除数が **コンパイル時に決まっている正の数**
+        #
+        # 🤔 なぜ ② が要るのか（測って決めました）
+        #   除数が定数なら、LLVM が掛け算とシフトに置き換えます
+        #   （20,000,000 回の `i % 7` が **93 ms → 26 ms**）。
+        #   ⚠️ **定数でないときは、命令にすると逆に遅くなりました**
+        #     （105 ms 対 66 ms）。64 ビットの除算命令が重く、ランタイムの
+        #     呼び出しと変わらないためです。速くならない最適化は入れません。
+        if is_int_node(nn) and (nn.op == ast.OP_FLOORDIV or
+                                nn.op == ast.OP_MOD):
+            da: Iv = eval_iv(env, nn.lhs)
+            db: Iv = eval_iv(env, nn.rhs)
+            if da.lo >= 0 and db.lo > 0 and db.lo == db.hi:
+                if not nn.no_div_check:
+                    pr.st.div = pr.st.div + 1
+                nn.no_div_check = True
+            elif not nn.no_div_check:
+                pr.st.div_left = pr.st.div_left + 1
         if is_int_node(nn) and (nn.op == ast.OP_ADD or nn.op == ast.OP_SUB or
                                 nn.op == ast.OP_MUL):
             a: Iv = eval_iv(env, nn.lhs)
@@ -1090,8 +1141,10 @@ def prove_program(mods: rc[module.Module] | None) -> Stats:
     out.range_ = pr.st.range_
     out.bounds = pr.st.bounds
     out.contract = pr.st.contract
+    out.div = pr.st.div
     out.ovf_left = pr.st.ovf_left
     out.range_left = pr.st.range_left
     out.bounds_left = pr.st.bounds_left
     out.contract_left = pr.st.contract_left
+    out.div_left = pr.st.div_left
     return out

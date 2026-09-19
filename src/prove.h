@@ -30,11 +30,13 @@ typedef struct {
     int range;     // 範囲型（A-28）
     int bounds;    // 添字
     int contract;  // 契約（A-29）
+    int div;       // 0 除算（`//` と `%`。呼び出しが命令になります）
     // 残った数（示せなかったもの）
     int ovf_left;
     int range_left;
     int bounds_left;
     int contract_left;
+    int div_left;
 } ProveStats;
 
 // 全モジュールを解析して、AST に「検査を出さなくてよい」印を立てる。

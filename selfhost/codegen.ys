@@ -1024,6 +1024,16 @@ class Emitter:
                       ", double " + r + ")\n")
             return t
 
+        # ★ 証明（A-34）が「0 で割らない・両方 0 以上」と示したら、
+        #   呼び出しではなく命令 1 つで済みます（切り下げ＝切り捨て）。
+        if ((n.op == ast.OP_FLOORDIV or n.op == ast.OP_MOD) and
+                n.no_div_check and not self.verify_prove):
+            iname: str = "srem"
+            if n.op == ast.OP_FLOORDIV:
+                iname = "sdiv"
+            self.emit("  " + t + " = " + iname + " i64 " + l + ", " + r + "\n")
+            return t
+
         # ── 検査つきの算術（規約 R10）──
         if n.op == ast.OP_FLOORDIV or n.op == ast.OP_MOD or n.op == ast.OP_POW:
             fname: str = "pl_ipow"

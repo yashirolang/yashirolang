@@ -557,6 +557,27 @@ static void walk_expr(Prove *pr, Env *env, Node *n) {
         case ND_BINOP: {
             walk_expr(pr, env, n->lhs);
             walk_expr(pr, env, n->rhs);
+            // ★ `//` と `%` を、呼び出しではなく命令 1 つにする条件。
+            //
+            //   ① 両方 0 以上（切り下げ＝切り捨てになる。Python と LLVM の差）
+            //   ② 除数が **コンパイル時に決まっている正の数**
+            //
+            // 🤔 なぜ ② が要るのか（測って決めました）
+            //   除数が定数なら、LLVM が掛け算とシフトに置き換えます
+            //   （20,000,000 回の `i % 7` が **93 ms → 26 ms**）。
+            //   ⚠️ **定数でないときは、命令にすると逆に遅くなりました**
+            //     （105 ms 対 66 ms）。64 ビットの除算命令が重く、ランタイムの
+            //     呼び出しと変わらないためです。速くならない最適化は入れません。
+            if (n->type && n->type->kind == TY_INT &&
+                (n->op == OP_FLOORDIV || n->op == OP_MOD)) {
+                Iv a = eval(pr, env, n->lhs), b = eval(pr, env, n->rhs);
+                if (a.lo >= 0 && b.lo > 0 && b.lo == b.hi) {
+                    if (!n->no_div_check) pr->st->div++;
+                    n->no_div_check = true;
+                } else if (!n->no_div_check) {
+                    pr->st->div_left++;
+                }
+            }
             if (n->type && n->type->kind == TY_INT &&
                 (n->op == OP_ADD || n->op == OP_SUB || n->op == OP_MUL)) {
                 Iv a = eval(pr, env, n->lhs), b = eval(pr, env, n->rhs);
@@ -646,13 +667,35 @@ static void walk_expr(Prove *pr, Env *env, Node *n) {
 //
 // ★ **所有権検査（A-24）のおかげでここが軽くなります。** 別名が無いので、
 //   呼び先が触れるのは `mut` で渡したものだけです。
+// その鍵（とその下のフィールド）について分かっていたことを落とす。
+//
+// ⚠️ **フィールドまで落とすのが要点です。** `self` を渡した先で
+//   `self.toks.append(...)` をされると、`i < len(self.toks)` は崩れます。
+//   `%self` を落とすときに `%self.toks` も落とさないと、**消してはいけない
+//   検査を消します**。
+static bool key_under(const char *name, const char *key) {
+    size_t n = strlen(key);
+    return strncmp(name, key, n) == 0 && name[n] == '.';
+}
+
 static void kill_place(Env *env, const char *key) {
-    if (!key) return;
+    if (!key || !key[0]) return;
     for (Ent *p = env->head; p; p = p->next) {
-        if (strcmp(p->name, key) == 0) { p->iv = IV_TOP; p->lt_len = NULL; }
+        if (strcmp(p->name, key) == 0 || key_under(p->name, key)) {
+            p->iv = IV_TOP;
+            p->lt_len = NULL;
+        }
         // ★ その list を指していた関係も落とします（短くなったかもしれない）
-        if (p->lt_len && strcmp(p->lt_len, key) == 0) p->lt_len = NULL;
+        if (p->lt_len &&
+            (strcmp(p->lt_len, key) == 0 || key_under(p->lt_len, key)))
+            p->lt_len = NULL;
     }
+}
+
+// グローバルの list を指す関係を落とす（呼び先がいつでも短くできるため）
+static void kill_global_rels(Env *env) {
+    for (Ent *p = env->head; p; p = p->next)
+        if (p->lt_len && p->lt_len[0] == '@') p->lt_len = NULL;
 }
 
 // 呼び出しで壊れうるものを落とす。
@@ -662,13 +705,18 @@ static void kill_place(Env *env, const char *key) {
 //   ⚠️ 借りだけを渡したなら本当は縮みませんが、仮引数の受け取り方をここで
 //     引く仕掛けがないので、**渡したものは落とす**（安全側）にします。
 static void kill_mut_args(Env *env, Node *n) {
-    for (Node *a = n->args; a; a = a->next) {
-        kill_place(env, place_key(a));
-        if (a->kind == ND_INDEX) kill_place(env, place_key(a->lhs));
-    }
+    for (Node *a = n->args; a; a = a->next) kill_place(env, place_key(a));
     // メソッドの受け手（xs.append(v) の xs）も落とします
     if (n->kind == ND_METHOD) kill_place(env, place_key(n->lhs));
+    // ⚠️ グローバルは誰でも触れるので、指していた関係を落とします
+    kill_global_rels(env);
 }
+
+// ⚠️ **要素を渡すこと（f(xs[i])）では list を落としません。**
+//   渡っているのは要素で、list そのものではありません。長さを変えるには
+//   list を `mut` で渡すか、list のメソッドを呼ぶ必要があります（所有権検査
+//   がそれを保証しています）。⚠️ ここを落としていたせいで、**関係が消えない
+//   はずの場所で 499 件消えていました**（計測して分かりました）。
 
 // 本体に break / continue があるか（ループの道が増えるかどうか）
 //

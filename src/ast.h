@@ -447,6 +447,9 @@ struct Node {
     bool no_range_check;  // ND_RANGECHK : 範囲に入ると示せた（A-28）
     bool no_bounds_check; // ND_INDEX : 添字が 0 以上・長さ未満と示せた
     bool no_contract;     // ND_REQUIRES / ND_ENSURES : 常に真と示せた（A-29）
+    // ★ ND_BINOP（// と %）: 0 で割らず、しかも切り下げと切り捨てが
+    //   一致すると示せた（両方とも 0 以上）。呼び出しではなく命令を出せます。
+    bool no_div_check;
 
     // ★ この class が実装するインタフェースの並び（ND_TYPEREF）
     Node *ifaces;

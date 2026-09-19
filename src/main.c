@@ -608,6 +608,7 @@ int main(int argc, char **argv) {
                     ps.range_left);
             fprintf(stderr, "  契約      %6d 消 / %6d 残\n", ps.contract,
                     ps.contract_left);
+            fprintf(stderr, "  0 除算    %6d 消 / %6d 残\n", ps.div, ps.div_left);
         }
     }
 

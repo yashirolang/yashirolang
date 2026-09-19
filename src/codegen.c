@@ -760,6 +760,15 @@ static char *gen_expr(Emitter *e, Node *n) {
                 return t;
             }
 
+            // ★ 証明（A-34）が「0 で割らない・両方 0 以上」と示したら、
+            //   呼び出しではなく命令 1 つで済みます（切り下げ＝切り捨て）。
+            if ((n->op == OP_FLOORDIV || n->op == OP_MOD) && n->no_div_check &&
+                !e->verify_prove) {
+                sb_printf(&e->fn, "  %s = %s i64 %s, %s\n", t,
+                          n->op == OP_FLOORDIV ? "sdiv" : "srem", l, r);
+                return t;
+            }
+
             if (n->op == OP_FLOORDIV || n->op == OP_MOD || n->op == OP_POW) {
                 const char *fn = n->op == OP_FLOORDIV ? "pl_floordiv"
                                  : n->op == OP_MOD    ? "pl_mod"

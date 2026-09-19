@@ -75,11 +75,12 @@ typedef struct {
     struct StrLit *decled;
     int str_counter;
 
-    // ── デバッグ情報（A-30）──
+    // ── デバッグ情報（A-30 / A-35）──
     //
     // ★ -g のときだけ、LLVM の debug metadata を出します。
-    //   出すのは「行の対応表」と「関数の枠」だけで、これだけで
-    //   ブレークポイント・バックトレース・perf の行表示が効きます。
+    //   「行の対応表」と「関数の枠」でブレークポイント・バックトレース・
+    //   perf の行表示が効き（A-30）、そこに「変数の名前と型」を足すと
+    //   デバッガが中身を出せるようになります（A-35。`p x` / 変数一覧）。
     // ── 証明（A-34）──
     //
     // ⚠️ true なら、証明で「消せる」と判断した検査を**残します**。
@@ -91,15 +92,15 @@ typedef struct {
 
     bool dbg;               // -g
     StrBuf dbgmeta;         // metadata の定義（モジュール末尾に出す）
+    StrBuf dbgdecl;         // 変数の宣言（entry ブロックの alloca の直後に置く。A-35）
     int dbg_next;           // 次に振る metadata の番号
     int dbg_file;           // !DIFile の番号
     int dbg_cu;             // !DICompileUnit の番号
-    int dbg_empty;          // !{} の番号
-    int dbg_subty;          // !DISubroutineType の番号
     int dbg_fn;             // 生成中の関数の !DISubprogram の番号（0 なら関数の外）
     int dbg_line;           // いま生成している文の行
     int dbg_loc;            // その行の !DILocation の番号（0 なら未作成）
     int dbg_loc_line;       // dbg_loc が指している行
+    struct DbgTy *dbgtys;   // 型ごとの metadata（同じ型に 2 つ作らないため。A-35）
 
     // ── 契約（A-29）──
     Node *fn_node;          // 生成中の関数（ensures の式を引くのに使う）
@@ -118,6 +119,18 @@ struct StrLit {
     int len;
     char *label;
     StrLit *next;
+};
+
+// 型ごとのデバッグ情報を覚えておくための小さなリスト（A-35）。
+//
+// ★ 同じ型の metadata を 2 つ作ると、デバッガからは **別の型**に見えます
+//   （lldb が型を突き合わせるのは名前ではなく metadata の同一性です）。
+//   型の名前（"list[int]" / "lexer.Token"）で引いて、1 つだけ作ります。
+typedef struct DbgTy DbgTy;
+struct DbgTy {
+    char *key;   // 引くための名前（種類ごとに接頭辞を付ける。下の dbg_type）
+    int id;      // その型の metadata 番号
+    DbgTy *next;
 };
 
 // break / continue の飛び先（規約 6.5）。
@@ -485,6 +498,344 @@ static void emit_drop_value(Emitter *e, Type *t, const char *val);
 // ★ metadata の番号は **0〜8 を TBAA が使っている**ので 10 から振ります
 //   （9 は空けておきます。番号は 2 実装で必ず同じになります）。
 static int dbg_id(Emitter *e) { return e->dbg_next++; }
+
+// ★ 下の 2 つはこの後ろで定義しています（ここでは名前だけ先に知らせます）。
+static int dbg_location(Emitter *e);
+static void declare_rt(Emitter *e, const char *sig);
+
+// ── デバッグ情報：型（A-35）──────────────────────────────
+//
+// ★ 変数の中身を見せるには「その変数が何型か」を DWARF に書きます。
+//   出す形は 3 通りだけです。
+//
+//     int / float / bool  → !DIBasicType（そのまま数として出ます）
+//     str                 → char へのポインタ（デバッガが "..." で出します）
+//     list / クラス / rc  → 構造体へのポインタ（中身を開いて見られます）
+//
+//   ⚠️ **参照型はポインタのまま**にしています。`p xs` は番地を出し、
+//     `p *xs` で中身が出ます。デリファレンスして見せることもできますが、
+//     `T | None` が None のときに「読めません」としか出せなくなります。
+//     番地が出るほうが、共有（別名）を追うときにも役に立ちます。
+//
+//   ★ 名前は typedef で付けます（`!DIDerivedType(tag: DW_TAG_typedef)`）。
+//     ポインタ自体に名前を付けると、lldb が str を文字列として出さなく
+//     なりました。typedef なら `(str) msg = 0x... "hello"` と両方出ます。
+
+static int dbg_ty_cached(Emitter *e, const char *key) {
+    for (DbgTy *d = e->dbgtys; d; d = d->next)
+        if (strcmp(d->key, key) == 0) return d->id;
+    return 0;
+}
+
+static void dbg_ty_put(Emitter *e, const char *key, int id) {
+    DbgTy *d = xmalloc(sizeof(DbgTy));
+    d->key = xstrndup(key, strlen(key));
+    d->id = id;
+    d->next = e->dbgtys;
+    e->dbgtys = d;
+}
+
+// 数そのものの型（int / float / bool）
+static int dbg_basic(Emitter *e, const char *key, const char *name, int bits,
+                     const char *enc) {
+    int hit = dbg_ty_cached(e, key);
+    if (hit) return hit;
+    int id = dbg_id(e);
+    sb_printf(&e->dbgmeta,
+              "!%d = !DIBasicType(name: \"%s\", size: %d, encoding: %s)\n",
+              id, name, bits, enc);
+    dbg_ty_put(e, key, id);
+    return id;
+}
+
+// base へのポインタ（base が 0 なら「何を指すか分からないポインタ」）
+static int dbg_ptr_to(Emitter *e, const char *key, int base) {
+    int hit = dbg_ty_cached(e, key);
+    if (hit) return hit;
+    int id = dbg_id(e);
+    if (base)
+        sb_printf(&e->dbgmeta,
+                  "!%d = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: !%d, "
+                  "size: 64)\n", id, base);
+    else
+        // ⚠️ baseType は省けません（LLVM が missing required field で止まります）。
+        //   「何を指すか分からないポインタ」は baseType: null と書きます。
+        sb_printf(&e->dbgmeta,
+                  "!%d = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: null, "
+                  "size: 64)\n", id);
+    dbg_ty_put(e, key, id);
+    return id;
+}
+
+// 構造体の 1 メンバ（名前・型・先頭からのビット位置）
+static int dbg_member(Emitter *e, const char *name, int line, int base, int bits,
+                      int off_bits) {
+    int id = dbg_id(e);
+    sb_printf(&e->dbgmeta,
+              "!%d = !DIDerivedType(tag: DW_TAG_member, name: \"%s\", file: !%d, "
+              "line: %d, baseType: !%d, size: %d, offset: %d)\n",
+              id, name, e->dbg_file, line, base, bits, off_bits);
+    return id;
+}
+
+// 型に名前を付ける（`(str) msg = ...` の "str"）
+static int dbg_typedef(Emitter *e, const char *name, int base) {
+    int id = dbg_id(e);
+    sb_printf(&e->dbgmeta,
+              "!%d = !DIDerivedType(tag: DW_TAG_typedef, name: \"%s\", "
+              "baseType: !%d)\n", id, name, base);
+    return id;
+}
+
+static int dbg_type(Emitter *e, Type *t);
+
+// list の 1 要素ぶんの型。
+//
+// ⚠️ list の要素は**どの型でも 8 バイト**です（規約。runtime/core.c）。
+//   bool だけは変数の箱の中では 1 バイトなので、そのまま書くと
+//   `xs[1]` がとなりの要素を読みます。8 バイトの int として出します。
+//
+// ★ 8 バイトの bool（`DW_ATE_boolean` の 8 バイト）にはしませんでした。
+//   デバッガが「C にそんな型は無い」と言って添字を断ります
+//   （`error: subscript of pointer to incomplete type`）。
+//   `list[bool]` の要素は **0 / 1 の int** として出ます。
+static int dbg_slot_type(Emitter *e, Type *t) {
+    if (t && t->kind == TY_BOOL) return dbg_type(e, ty_int);
+    return dbg_type(e, t);
+}
+
+// 型 1 つぶんの metadata を作って番号を返す（同じ型なら作り直しません）。
+static int dbg_type(Emitter *e, Type *t) {
+    if (!t || t->kind == TY_NONE) return 0;
+
+    // ★ `T | None` は T と同じ見え方にします（表現はどちらも同じポインタで、
+    //   None は null です）。型の名前だけが違う別の metadata を作ると、
+    //   デバッガの中で `Token` と `Token | None` が別の型になってしまいます。
+    if (t->kind == TY_OPT) return dbg_type(e, t->elem);
+
+    // 引くための名前。⚠️ クラスは**モジュール修飾した名前**で区別します
+    //   （別のモジュールに同じ名前のクラスがあります）。
+    const char *key = (t->kind == TY_CLASS && t->cls) ? t->cls->ir_name
+                                                      : type_name(t);
+    int hit = dbg_ty_cached(e, key);
+    if (hit) return hit;
+
+    switch (t->kind) {
+        // ── 数そのもの ──
+        //
+        // ⚠️ **typedef で名前を付け直します。** デバッガは
+        //   `!DIBasicType` の名前を見ずに、大きさと符号から自分の言葉に
+        //   直してしまうためです（int が `(long)`、float が `(double)` と
+        //   出ていました）。typedef の名前はそのまま出ます。
+        //
+        // ★ 範囲型（A-28）は「名前の付いた int」です。`(Percent) rate = 40`
+        //   と、書いたとおりの名前で出ます。
+        case TY_INT: {
+            int b = dbg_basic(e, "b:i64", "i64", 64, "DW_ATE_signed");
+            int td = dbg_typedef(e, type_name(t), b);
+            dbg_ty_put(e, key, td);
+            return td;
+        }
+        case TY_FLOAT: {
+            int b = dbg_basic(e, "b:f64", "f64", 64, "DW_ATE_float");
+            int td = dbg_typedef(e, "float", b);
+            dbg_ty_put(e, key, td);
+            return td;
+        }
+        case TY_BOOL: {
+            int b = dbg_basic(e, "b:bool", "bool", 8, "DW_ATE_boolean");
+            int td = dbg_typedef(e, "bool", b);
+            dbg_ty_put(e, key, td);
+            return td;
+        }
+
+        // ── str ──
+        // ★ 値が指すのは「バイト列の先頭」で、そこは NUL 終端です
+        //   （長さは 8 バイト手前。runtime/core.c）。char へのポインタだと
+        //   書いておけば、デバッガがそのまま "hello" と出します。
+        //   ⚠️ もとの型の名前は "char" にします。デバッガが「文字列として
+        //     出してよい」と判断する手がかりがここだからです（"u8" と
+        //     名づけたときは番地しか出ませんでした）。
+        case TY_STR: {
+            int ch = dbg_basic(e, "b:char", "char", 8, "DW_ATE_signed_char");
+            int p = dbg_ptr_to(e, "*char", ch);
+            int td = dbg_typedef(e, "str", p);
+            dbg_ty_put(e, key, td);
+            return td;
+        }
+
+        // ── list[T] ──
+        //   PlList { void *data; long long len; long long cap; }（runtime/core.c）
+        case TY_LIST: {
+            // ⚠️ 先に番号を取り、**中身を作る前に**表へ入れます。
+            //   list[Node] のように自分を含む型で無限に回らないためです。
+            int sid = dbg_id(e), pid = dbg_id(e), tid = dbg_id(e);
+            dbg_ty_put(e, key, tid);
+
+            int el = dbg_slot_type(e, t->elem);
+            StrBuf ek;
+            sb_init(&ek);
+            sb_printf(&ek, "*slot:%s", type_name(t->elem));
+            int ep = dbg_ptr_to(e, sb_str(&ek), el);
+            int i64 = dbg_type(e, ty_int);
+
+            int m0 = dbg_member(e, "data", 0, ep, 64, 0);
+            int m1 = dbg_member(e, "len", 0, i64, 64, 64);
+            int m2 = dbg_member(e, "cap", 0, i64, 64, 128);
+            int els = dbg_id(e);
+            sb_printf(&e->dbgmeta, "!%d = !{!%d, !%d, !%d}\n", els, m0, m1, m2);
+            sb_printf(&e->dbgmeta,
+                      "!%d = !DICompositeType(tag: DW_TAG_structure_type, "
+                      "name: \"%s\", file: !%d, size: 192, elements: !%d)\n",
+                      sid, key, e->dbg_file, els);
+            sb_printf(&e->dbgmeta,
+                      "!%d = !DIDerivedType(tag: DW_TAG_pointer_type, "
+                      "baseType: !%d, size: 64)\n", pid, sid);
+            sb_printf(&e->dbgmeta,
+                      "!%d = !DIDerivedType(tag: DW_TAG_typedef, name: \"%s\", "
+                      "baseType: !%d)\n", tid, key, pid);
+            return tid;
+        }
+
+        // ── クラス ──
+        //   ★ 並びは sema の layout_class が決めています（f->offset）。
+        //     インタフェースを実装するクラスは**先頭に隠しフィールド**
+        //     （vtable へのポインタ）があり、offset にはそれが入っています。
+        case TY_CLASS: {
+            Class *c = t->cls;
+            if (!c) return dbg_ptr_to(e, "*void", 0);
+            int sid = dbg_id(e), pid = dbg_id(e), tid = dbg_id(e);
+            dbg_ty_put(e, key, tid);
+
+            StrBuf mem;
+            sb_init(&mem);
+            bool first = true;
+            for (Field *f = c->fields; f; f = f->next) {
+                int ft = dbg_type(e, f->type);
+                if (!ft) continue;
+                int mid = dbg_member(e, f->name, f->tok ? f->tok->line : 0, ft,
+                                     type_size(f->type) * 8, f->offset * 8);
+                sb_printf(&mem, "%s!%d", first ? "" : ", ", mid);
+                first = false;
+            }
+            int els = dbg_id(e);
+            sb_printf(&e->dbgmeta, "!%d = !{%s}\n", els, sb_str(&mem));
+            sb_printf(&e->dbgmeta,
+                      "!%d = !DICompositeType(tag: DW_TAG_structure_type, "
+                      "name: \"%s\", file: !%d, line: %d, size: %d, elements: !%d)\n",
+                      sid, c->name, e->dbg_file, c->tok ? c->tok->line : 0,
+                      c->size * 8, els);
+            sb_printf(&e->dbgmeta,
+                      "!%d = !DIDerivedType(tag: DW_TAG_pointer_type, "
+                      "baseType: !%d, size: 64)\n", pid, sid);
+            sb_printf(&e->dbgmeta,
+                      "!%d = !DIDerivedType(tag: DW_TAG_typedef, name: \"%s\", "
+                      "baseType: !%d)\n", tid, c->name, pid);
+            return tid;
+        }
+
+        // ── rc[T]（共有所有）──
+        //   PlRc { long long strong; long long borrow; void *value; }
+        //   ★ 数え札まで見られるようにします（「なぜ解放されないのか」を
+        //     追うときに、いちばん知りたいのがこの 2 つです）。
+        case TY_RC: {
+            int sid = dbg_id(e), pid = dbg_id(e), tid = dbg_id(e);
+            dbg_ty_put(e, key, tid);
+
+            int inner = dbg_type(e, t->elem);
+            if (!inner) inner = dbg_ptr_to(e, "*void", 0);
+            int i64 = dbg_type(e, ty_int);
+            int m0 = dbg_member(e, "strong", 0, i64, 64, 0);
+            int m1 = dbg_member(e, "borrow", 0, i64, 64, 64);
+            int m2 = dbg_member(e, "value", 0, inner, 64, 128);
+            int els = dbg_id(e);
+            sb_printf(&e->dbgmeta, "!%d = !{!%d, !%d, !%d}\n", els, m0, m1, m2);
+            sb_printf(&e->dbgmeta,
+                      "!%d = !DICompositeType(tag: DW_TAG_structure_type, "
+                      "name: \"%s\", file: !%d, size: 192, elements: !%d)\n",
+                      sid, key, e->dbg_file, els);
+            sb_printf(&e->dbgmeta,
+                      "!%d = !DIDerivedType(tag: DW_TAG_pointer_type, "
+                      "baseType: !%d, size: 64)\n", pid, sid);
+            sb_printf(&e->dbgmeta,
+                      "!%d = !DIDerivedType(tag: DW_TAG_typedef, name: \"%s\", "
+                      "baseType: !%d)\n", tid, key, pid);
+            return tid;
+        }
+
+        // ── ptr[T]（生ポインタ。OS 開発向け）──
+        case TY_PTR: {
+            int tid0 = dbg_id(e);
+            dbg_ty_put(e, key, tid0);
+            int inner = dbg_type(e, t->elem);
+            int p;
+            if (inner) {
+                StrBuf pk;
+                sb_init(&pk);
+                sb_printf(&pk, "*%s", type_name(t->elem));
+                p = dbg_ptr_to(e, sb_str(&pk), inner);
+            } else {
+                p = dbg_ptr_to(e, "*void", 0);
+            }
+            sb_printf(&e->dbgmeta,
+                      "!%d = !DIDerivedType(tag: DW_TAG_typedef, name: \"%s\", "
+                      "baseType: !%d)\n", tid0, key, p);
+            return tid0;
+        }
+
+        // ── 中身をまだ書いていないもの ──
+        //   タプル・関数・インタフェース・Thread[R]・mutex[T]。
+        //   ⚠️ 番地だけが出ます。型の名前は付くので、`p x` が
+        //     「何も知らないポインタ」になることはありません。
+        default: {
+            int p = dbg_ptr_to(e, "*void", 0);
+            int td = dbg_typedef(e, key, p);
+            dbg_ty_put(e, key, td);
+            return td;
+        }
+    }
+}
+
+// ── デバッグ情報：変数（A-35）────────────────────────────
+//
+// 変数 1 つを「名前・型・置いてある場所」の 3 つで書きます。
+//
+//   !N = !DILocalVariable(name: "x", scope: !<関数>, file: !<ファイル>, line: L, type: !T)
+//   call void @llvm.dbg.declare(metadata ptr %x, metadata !N, metadata !DIExpression())
+//
+// ★ 置いてある場所は **alloca した箱**です（規約 R8 で引数も箱に写すので、
+//   引数もローカル変数もまったく同じ扱いで済みます）。最適化を掛けると
+//   LLVM が箱をレジスタに上げ、この印も一緒に付いて回ります。
+//
+// ⚠️ 脱糖が作る隠し変数（for.ix.0 / comp.res.0）は出しません。
+//   利用者が書いていない名前なので、変数一覧に出ると邪魔になります。
+//   見分けは「名前に '.' が入っているか」です（識別子には入りません）。
+static void dbg_local(Emitter *e, const char *name, const char *ir_name, Type *t,
+                      int line, int argno) {
+    if (!e->dbg || !e->dbg_fn || !name || !ir_name) return;
+    if (strchr(name, '.')) return;
+    int ty = dbg_type(e, t);
+    if (!ty) return;
+    int loc = dbg_location(e);
+    if (!loc) return;
+
+    int id = dbg_id(e);
+    if (argno > 0)
+        sb_printf(&e->dbgmeta,
+                  "!%d = !DILocalVariable(name: \"%s\", arg: %d, scope: !%d, "
+                  "file: !%d, line: %d, type: !%d)\n",
+                  id, name, argno, e->dbg_fn, e->dbg_file, line, ty);
+    else
+        sb_printf(&e->dbgmeta,
+                  "!%d = !DILocalVariable(name: \"%s\", scope: !%d, file: !%d, "
+                  "line: %d, type: !%d)\n",
+                  id, name, e->dbg_fn, e->dbg_file, line, ty);
+
+    declare_rt(e, "void @llvm.dbg.declare(metadata, metadata, metadata)");
+    sb_printf(&e->dbgdecl,
+              "  call void @llvm.dbg.declare(metadata ptr %s, metadata !%d, "
+              "metadata !DIExpression()), !dbg !%d\n", ir_name, id, loc);
+}
 
 // いま生成している行の !DILocation を引く（無ければ作る）。
 //
@@ -4152,20 +4503,29 @@ static void collect_allocas(Emitter *e, Node *n) {
     if (!n) return;
 
     // ⚠️ グローバル変数は alloca しない（@g.x をそのまま読み書きする）
-    if (n->kind == ND_VARDECL && !n->is_global)
+    if (n->kind == ND_VARDECL && !n->is_global) {
         sb_printf(&e->allocas, "  %s = alloca %s\n", n->ir_name,
                   llvm_mem_type(n->type));
+        // ★ デバッグ情報（A-35）：箱を作ったついでに「名前と型」を書きます。
+        //   ⚠️ 箱を作る場所と印を付ける場所を分けると、必ずどちらかが
+        //     先に増えて食い違います。**同じ 1 か所**に置きます。
+        dbg_local(e, n->name, n->ir_name, n->type, n->tok ? n->tok->line : 0, 0);
+    }
 
     // ★ 分解代入で受け取る名前も、ふつうの局所変数と同じ箱が要ります
     if (n->kind == ND_UNPACK)
-        for (Node *v = n->params; v; v = v->next)
+        for (Node *v = n->params; v; v = v->next) {
             sb_printf(&e->allocas, "  %s = alloca %s\n", v->ir_name,
                       llvm_mem_type(v->type));
+            dbg_local(e, v->name, v->ir_name, v->type, v->tok ? v->tok->line : 0, 0);
+        }
 
     // ★ except ... as e で束縛する変数も、ふつうの局所変数と同じ箱が要ります。
-    if (n->kind == ND_EXCEPT && n->ir_name)
+    if (n->kind == ND_EXCEPT && n->ir_name) {
         sb_printf(&e->allocas, "  %s = alloca %s\n", n->ir_name,
                   llvm_mem_type(n->type));
+        dbg_local(e, n->name, n->ir_name, n->type, n->tok ? n->tok->line : 0, 0);
+    }
 
     // ⚠️ except の並びは next で繋がっています（if の else と違って複数あります）。
     //    2 番目以降はここでたどります（先頭は下の collect_allocas(n->els) が拾う）。
@@ -4198,21 +4558,42 @@ static void gen_func(Emitter *e, Node *n) {
     e->terminated = false;
     e->loop = NULL;
 
-    // ── デバッグ情報（A-30）：この関数の枠を 1 つ作る ──
+    // ── デバッグ情報（A-30 / A-35）：この関数の枠を 1 つ作る ──
     //
-    // ★ 型（引数と戻り値）は入れていません。行の対応表とバックトレースには
-    //   要らず、入れると 2 実装で型の並べ方まで揃える必要が出ます。
+    // ★ 引数と戻り値の型も書きます（A-35）。バックトレースが
+    //   `add(a=2, b=3)` の形で出るのは、この型と、下で出す
+    //   !DILocalVariable(arg: N) が揃っているからです。
+    //
+    // ⚠️ types の**先頭は戻り値**で、None（void）は `null` と書きます。
+    //   失敗しうる関数が余分に取るエラー出力（%err.out）は書いていません。
+    //   利用者が書いた引数だけを並べます。
     e->dbg_fn = 0;
     e->dbg_loc = 0;
     e->dbg_line = n->tok ? n->tok->line : 1;
     if (e->dbg) {
+        int ret = dbg_type(e, n->type);
+        StrBuf pl;
+        sb_init(&pl);
+        if (ret) sb_printf(&pl, "!%d", ret);
+        else sb_printf(&pl, "null");
+        for (Node *pm = n->params; pm; pm = pm->next) {
+            int pt = dbg_type(e, pm->type);
+            if (pt) sb_printf(&pl, ", !%d", pt);
+            else sb_printf(&pl, ", null");
+        }
+        int types = dbg_id(e);
+        sb_printf(&e->dbgmeta, "!%d = !{%s}\n", types, sb_str(&pl));
+        int subty = dbg_id(e);
+        sb_printf(&e->dbgmeta, "!%d = !DISubroutineType(types: !%d)\n", subty,
+                  types);
+
         int id = dbg_id(e);
         sb_printf(&e->dbgmeta,
                   "!%d = distinct !DISubprogram(name: \"%s\", linkageName: \"%s\", "
                   "scope: !%d, file: !%d, line: %d, type: !%d, scopeLine: %d, "
                   "spFlags: DISPFlagDefinition, unit: !%d)\n",
                   id, n->name, n->ir_name, e->dbg_file, e->dbg_file, e->dbg_line,
-                  e->dbg_subty, e->dbg_line, e->dbg_cu);
+                  subty, e->dbg_line, e->dbg_cu);
         e->dbg_fn = id;
     }
 
@@ -4225,6 +4606,7 @@ static void gen_func(Emitter *e, Node *n) {
     snprintf(e->prop_label, sizeof(e->prop_label), "err.propagate");
     if (e->fn_raises) ensure_err_type(e);
     sb_init(&e->allocas);
+    sb_init(&e->dbgdecl);
     sb_init(&e->fn);
 
     // ★ 関数もメソッドも、sema がモジュール修飾済みの名前を入れています
@@ -4239,6 +4621,7 @@ static void gen_func(Emitter *e, Node *n) {
     //   %n.arg は SSA レジスタなので代入できません。本言語では引数に代入
     //   できる（a = a + 1）ので、ローカル変数と同じ「箱」にしてしまいます。
     //   mem2reg がこの余分なコピーを消してくれます。
+    int argno = 0;
     for (Node *pm = n->params; pm; pm = pm->next) {
         sb_printf(&e->allocas, "  %s = alloca %s\n", pm->ir_name,
                   llvm_mem_type(pm->type));
@@ -4246,6 +4629,11 @@ static void gen_func(Emitter *e, Node *n) {
         sb_init(&arg);
         sb_printf(&arg, "%%%s.arg", pm->name);
         gen_store(e, pm->type, sb_str(&arg), pm->ir_name);
+        // ★ デバッグ情報（A-35）：引数も箱に写してあるので、ローカル変数と
+        //   同じ形で書けます。何番目の引数かだけを足します。
+        argno++;
+        dbg_local(e, pm->name, pm->ir_name, pm->type,
+                  pm->tok ? pm->tok->line : e->dbg_line, argno);
     }
 
     // ★ 範囲型の仮引数は、**関数の入口で 1 回だけ**確かめます（A-28）。
@@ -4328,6 +4716,9 @@ static void gen_func(Emitter *e, Node *n) {
     else
         sb_printf(&e->body, ") {\nentry:\n");
     sb_printf(&e->body, "%s", sb_str(&e->allocas));
+    // ★ 変数の印は alloca の**すべて後ろ**に置きます（A-35）。
+    //   途中に挟むと、後ろの alloca が entry の先頭から離れます（規約 R1）。
+    sb_printf(&e->body, "%s", sb_str(&e->dbgdecl));
     sb_printf(&e->body, "%s", sb_str(&e->fn));
     sb_printf(&e->body, "}\n");
     e->dbg_fn = 0;
@@ -4437,11 +4828,11 @@ char *codegen(Module *mod, const char *main_ir_name, bool drop, bool no_ovf,
 
     // ★ デバッグ情報（A-30）：モジュールに 1 組だけ要るものを先に作ります。
     //   ⚠️ 関数より**先**に作ります。番号の振り方が 2 実装で同じになるためです。
+    //   ⚠️ 共有の !DISubroutineType は A-35 で無くなりました（関数ごとに
+    //     本物の型を出すようになったためです）。
     if (e.dbg) {
         e.dbg_file = dbg_id(&e);
         e.dbg_cu = dbg_id(&e);
-        e.dbg_empty = dbg_id(&e);
-        e.dbg_subty = dbg_id(&e);
         sb_printf(&e.dbgmeta, "!%d = !DIFile(filename: \"%s\", directory: \".\")\n",
                   e.dbg_file, mod->path);
         sb_printf(&e.dbgmeta,
@@ -4449,9 +4840,6 @@ char *codegen(Module *mod, const char *main_ir_name, bool drop, bool no_ovf,
                   "producer: \"" PLC_LANG_CC " " PLC_LANG_VERSION "\", isOptimized: false, "
                   "runtimeVersion: 0, emissionKind: FullDebug)\n",
                   e.dbg_cu, e.dbg_file);
-        sb_printf(&e.dbgmeta, "!%d = !{}\n", e.dbg_empty);
-        sb_printf(&e.dbgmeta, "!%d = !DISubroutineType(types: !%d)\n", e.dbg_subty,
-                  e.dbg_empty);
     }
 
     // ② クラスの型定義（★ 使う側より先に、モジュールの先頭に出す）

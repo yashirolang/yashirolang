@@ -1,0 +1,42 @@
+# FLAGS: -g
+# OUTPUT: 42
+# EXIT: 0
+# IR: !DIDerivedType(tag: DW_TAG_typedef, name: "Percent"
+# IR: !DICompositeType(tag: DW_TAG_structure_type, name: "rc[Node]"
+# IR: !DIDerivedType(tag: DW_TAG_member, name: "strong"
+# IR: !DIDerivedType(tag: DW_TAG_member, name: "borrow"
+# IR: !DILocalVariable(name: "rate"
+# IR: !DILocalVariable(name: "head"
+# IR: !DILocalVariable(name: "flags"
+# A-35: 2 つの実装が**同じ番号で同じ型**を出すかを見ます。
+#   ★ 見るのは「素直でない型」のほうです（dbg_vars は普通の型を見ます）。
+#     範囲型・rc[T]・T | None・list[bool]・タプル・自分を含むクラス。
+#   ⚠️ ここが食い違うと、セルフホスト比較（tests/selfhost.sh）が
+#     IR の突き合わせで止まります。
+type Percent = int range(0, 100)
+
+class Node:
+    label: str
+    next: rc[Node] | None
+
+    def init(mut self, label: own str) -> None:
+        self.label = label
+        self.next = None
+
+def pair() -> (int, str):
+    return (7, "seven")
+
+def main() -> int:
+    rate: Percent = 42
+    head: rc[Node] = rc(Node("first"))
+    second: rc[Node] = rc(Node("second"))
+    head.next = second
+    flags: list[bool] = [True, False]
+    names: list[str] = ["a", "b"]
+    t: (int, str) = pair()
+    n: int = t[0]
+    if flags[0] and len(names) == 2 and len(head.label) > 0 and n == 7:
+        print(str(rate))
+    else:
+        print("no")
+    return 0

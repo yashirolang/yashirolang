@@ -1,0 +1,46 @@
+# FLAGS: -g
+# OUTPUT: 9
+# EXIT: 0
+# IR: !DILocalVariable(name: "a", arg: 1
+# IR: !DILocalVariable(name: "total"
+# IR: !DIDerivedType(tag: DW_TAG_typedef, name: "str"
+# IR: !DIDerivedType(tag: DW_TAG_typedef, name: "int"
+# IR: !DICompositeType(tag: DW_TAG_structure_type, name: "list[int]"
+# IR: !DICompositeType(tag: DW_TAG_structure_type, name: "Point"
+# IR: !DIDerivedType(tag: DW_TAG_member, name: "len"
+# IR: call void @llvm.dbg.declare(metadata ptr %total
+# IR-NOT: !DILocalVariable(name: "for.
+# IR-NOT: !DILocalVariable(name: "comp.
+# A-35: -g で「変数の名前と型」も出します。デバッガが `p x` で中身を出せます。
+#   ★ 見るのは 4 つです。
+#     ① 引数に arg: N が付くこと（バックトレースが add(a=2, b=3) と出る）
+#     ② ローカル変数が名前で出ること
+#     ③ str が char へのポインタになること（デバッガが "..." と出す）
+#     ④ list とクラスが構造体として出ること（中身を開いて見られる）
+#   ⚠️ 脱糖が作る隠し変数（for.ix.0 / comp.res.0）は**出しません**。
+#     利用者が書いていない名前なので、変数一覧に出ると邪魔になります。
+class Point:
+    x: int
+    y: float
+
+    def init(mut self, x: int, y: float) -> None:
+        self.x = x
+        self.y = y
+
+def add(a: int, b: int) -> int:
+    s: int = a + b
+    return s
+
+def main() -> int:
+    total: int = 0
+    ok: bool = True
+    msg: str = "point"
+    xs: list[int] = [1, 2, 3]
+    p: Point = Point(4, 2.5)
+    doubled: list[int] = [v * 2 for v in xs]
+    for v in doubled:
+        total = add(total, v)
+    if ok and p.x > 0:
+        total = total - p.x + 1
+    print(str(total))
+    return 0

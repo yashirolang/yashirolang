@@ -72,7 +72,7 @@ LANG_NAME := yashirolang
 LANG_EXT  := .ys
 LANG_CC   := yashirolang
 LANG_PM   := ysm
-LANG_VERSION := 0.27.0
+LANG_VERSION := 0.28.0
 LANG_REPO := https://github.com/yashirolang/yashirolang
 CFLAGS  += -DPLC_LANG_NAME='"$(LANG_NAME)"' \
            -DPLC_LANG_EXT='"$(LANG_EXT)"' \

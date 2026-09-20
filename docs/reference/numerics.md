@@ -1,10 +1,10 @@
 # 数値計算の手引き — numpy に相当することをどう書くか
 
-**この文書の役目**：numpy / scipy で書いていた計算を本言語でどう書くかを、
-対応表と実例で示します。**本言語の数値計算ライブラリは 100% セルフホスト製**で、
+**この文書の役目**：numpy / scipy で書いていた計算を yashirolang でどう書くかを、
+対応表と実例で示します。**yashirolang の数値計算ライブラリは 100% セルフホスト製**で、
 numpy のコードも API 設計も引き写していません（→ [8. ライセンスと出自](#8-ライセンスと出自)）。
 
-関係する文書：[標準ライブラリ仕様](../spec/stdlib.md) ／
+関係する文書：[標準ライブラリ仕様](stdlib.md) ／
 [チュートリアル](../tutorial.md) ／ [ロードマップ](../roadmap.md)
 
 ---
@@ -38,11 +38,11 @@ def main() -> int:
 
 ---
 
-## 2. numpy → 本言語対応表
+## 2. numpy → yashirolang 対応表
 
 ### 2.1 作る
 
-| numpy | 本言語 | 備考 |
+| numpy | yashirolang | 備考 |
 |---|---|---|
 | `np.zeros(n)` | `linalg.zeros(n)` | |
 | `np.ones(n)` | `linalg.ones(n)` | |
@@ -58,7 +58,7 @@ def main() -> int:
 
 ### 2.2 要素ごとの演算（ベクトル）
 
-| numpy | 本言語 |
+| numpy | yashirolang |
 |---|---|
 | `a + b` | `linalg.add(a, b)` |
 | `a - b` | `linalg.sub(a, b)` |
@@ -80,7 +80,7 @@ def main() -> int:
 
 ### 2.3 線形代数（ベクトル）
 
-| numpy | 本言語 |
+| numpy | yashirolang |
 |---|---|
 | `np.dot(a, b)` | `linalg.dot(a, b)` |
 | `np.linalg.norm(a)` | `linalg.norm(a)` |
@@ -93,7 +93,7 @@ def main() -> int:
 
 ### 2.4 行列
 
-| numpy | 本言語 | 備考 |
+| numpy | yashirolang | 備考 |
 |---|---|---|
 | `A @ B` | `A * B` または `linalg.matmul(A, B)` | **★ `*` は行列の積**（要素ごとではありません） |
 | `A + B` / `A - B` | `A + B` / `A - B` | |
@@ -127,7 +127,7 @@ def main() -> int:
 
 ### 2.5 統計
 
-| numpy / statistics | 本言語 |
+| numpy / statistics | yashirolang |
 |---|---|
 | `np.mean(a)` | `stats.mean(a)` |
 | `np.median(a)` | `stats.median(a)` |
@@ -145,7 +145,7 @@ def main() -> int:
 
 ### 2.6 数値解析（scipy 相当）
 
-| scipy | 本言語 |
+| scipy | yashirolang |
 |---|---|
 | `scipy.integrate.quad(f, a, b)` | `numeric.integrate(f, a, b, tol)`（適応 Simpson） |
 | `scipy.integrate.trapezoid` | `numeric.trapezoid(f, a, b, n)` |
@@ -172,11 +172,11 @@ def main() -> int:
 ```
 
 **関数を渡すのに lambda は要りません** — `fn(float) -> float` 型に `def` で定義した
-関数名をそのまま渡します（クロージャは[意図的に保留](../design/future-features.md)）。
+関数名をそのまま渡します（クロージャは[意図的に保留](../roadmap.md)）。
 
 ### 2.7 複素数と FFT
 
-| numpy | 本言語 |
+| numpy | yashirolang |
 |---|---|
 | `1.0 + 2.0j` | `complex.rect(1.0, 2.0)` |
 | `z1 * z2`, `z1 + z2` … | `z1 * z2`, `z1 + z2`（**演算子を多重定義済み**） |
@@ -192,7 +192,7 @@ def main() -> int:
 
 ### 2.8 乱数
 
-| numpy | 本言語 |
+| numpy | yashirolang |
 |---|---|
 | `np.random.seed(n)` | `random.seed(n)` |
 | `np.random.random()` | `random.random()` |
@@ -217,9 +217,9 @@ def main() -> int:
 
 ### 2.10 作図（matplotlib 相当）
 
-`lib/plot{{ext}}` が **SVG** を書き出します。ブラウザでそのまま開けます。
+`lib/plot.ys` が **SVG** を書き出します。ブラウザでそのまま開けます。
 
-| matplotlib | 本言語 |
+| matplotlib | yashirolang |
 |---|---|
 | `plt.plot(x, y)` | `p.line("名前", xs, ys)` |
 | `plt.scatter(x, y)` | `p.scatter("名前", xs, ys)` |
@@ -254,9 +254,9 @@ def main() -> int:
 
 ### 2.11 表形式のデータ（pandas 相当）
 
-`lib/frame{{ext}}` が CSV の読み書き・絞り込み・並べ替え・グループ集計を持ちます。
+`lib/frame.ys` が CSV の読み書き・絞り込み・並べ替え・グループ集計を持ちます。
 
-| pandas | 本言語 |
+| pandas | yashirolang |
 |---|---|
 | `pd.read_csv(path)` | `frame.read_csv(path)` / `frame.parse_csv(text)` |
 | `df["price"]` | `df.num("price")` / `df.text("name")`（**型を名前で選ぶ**） |
@@ -276,7 +276,7 @@ CSV の列の型は中身から決まります（全部数として読めれば�
 
 ⚠️ 引用符（`"…"`、`""` で 1 個の `"`）とカンマ・改行を含む欄に対応しています。
 
-**組み合わせた例**は [examples/sales_report{{ext}}](../../examples/sales_report{{ext}})
+**組み合わせた例**は [examples/sales_report.ys](../../examples/sales_report.ys)
 にあります（CSV → 集計 → 図）。
 
 ---
@@ -309,7 +309,7 @@ panic** します — C の `atof` と違うところです。
 ### 3.3 ビューが無い（コピーだけ）
 
 numpy の `a[2:5]` はビュー（元と同じメモリ）ですが、
-本言語のスライス `a[2:5]` は**新しいリスト**です。
+yashirolang のスライス `a[2:5]` は**新しいリスト**です。
 `linalg.transpose(A)` も `A.row(i)` も**コピー**を返します。
 
 > **なぜ**：ビューは「知らないうちに書き換わる」原因になります。所有権の
@@ -317,7 +317,7 @@ numpy の `a[2:5]` はビュー（元と同じメモリ）ですが、
 
 ### 3.4 `x / 0.0` は止まります（`inf` になりません）
 
-numpy は `1.0 / 0.0` に警告を出して `inf` を返しますが、本言語は
+numpy は `1.0 / 0.0` に警告を出して `inf` を返しますが、yashirolang は
 **実行時エラー**です（Python の `ZeroDivisionError` と同じ考え方）。
 
 ```python
@@ -339,14 +339,14 @@ IEEE754 のふるまいがどうしても要るときは `--no-overflow-check` �
 | 計測（512×512 の行列積、`-O2`、Apple Silicon） | 時間 |
 |---|---|
 | C（素朴な三重ループ） | **31 ms** |
-| 本言語 `list[list[float]]` | **220 ms** |
-| 本言語 `linalg.Matrix` | 520 ms |
+| yashirolang `list[list[float]]` | **220 ms** |
+| yashirolang `linalg.Matrix` | 520 ms |
 
 - **範囲検査の取り分は約 1/3** です（検査を実験的に外すと 220 → 145 ms）。
 - 残りの差は**自動ベクトル化（SIMD）が効いていない**ことによります
   （検査を全部外しても SIMD 命令は 0 でした）。
 - numpy は BLAS を呼ぶので、大きな行列積では **numpy のほうが速い**です。
-  **正直に書いておきます。** 一方で、本言語は
+  **正直に書いておきます。** 一方で、yashirolang は
   **起動が速く（インタプリタが要らない）**、**依存が無く**、
   **ベアメタルでも同じコードが動きます**。
 
@@ -490,7 +490,7 @@ scope:
         parts.append(th.join())
 ```
 
-**動くもの全体は [examples/parallel_matmul{{ext}}](../../examples/parallel_matmul{{ext}}) にあります。**
+**動くもの全体は [examples/parallel_matmul.ys](../../examples/parallel_matmul.ys) にあります。**
 
 ⚠️ **書き込み先を共有することはできません**（`E-SEND-4`）。上のように
 「各スレッドが自分のぶんを `own` で作って返す」形にしてください。
@@ -512,7 +512,7 @@ scope:
 ★ 1 コアの 45 ms 自体が、0.13.1 の 316 ms から **7 倍**速くなっています。
 借りを共有できるようになって写しが消えたことと、
 **ベクトル化が効くようになった**ことの合わせ技です
-（[優先度 A-15c](../roadmap.md#優先度-a-15c--添字の範囲をループの外で-1-回だけ確かめる実装済み-)）。
+（[版の記録 0.13.2](../changelog.md)）。
 素朴な三重ループなら、いま C と同じくらいの速さです。
 
 ### 7.4 共有して書き換えたいとき — `mutex[T]`
@@ -551,6 +551,6 @@ print(m.lock(bump))       # ロックを取り、bump(中身) を呼び、必ず
   Steele–White / Burger–Dybvig の桁生成）は**教科書に載っている公知の手法**で、
   著作権の対象ではありません。実装は自分で書いています。
 - 外部ライブラリへのリンクはありません。**libm すら呼びません**
-  （`math{{ext}}` の `sin` / `exp` / `log` は級数と引数簡約による自前実装）。
+  （`math.ys` の `sin` / `exp` / `log` は級数と引数簡約による自前実装）。
 
 したがって、この処理系とライブラリの配布に**第三者ライセンスの制約はありません**。

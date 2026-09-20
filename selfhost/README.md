@@ -1,11 +1,7 @@
-# selfhost/ — セルフホスト製の本言語コンパイラ (stage1)
-
-> ⚠️ `<cc>` はコンパイラ、`<pm>` はパッケージマネージャのコマンド名、`<ext>` はソースの拡張子です。
-> 実際の値は `make info` で分かります（言語名をここに書き写さない理由は [docs/design/naming.md](../docs/design/naming.md)）。
-
+# selfhost/ — セルフホスト製の yashirolang コンパイラ (stage1)
 
 **C 版からの移植で完成しました。**
-**本言語コンパイラは自分自身をコンパイルできます**（`make bootstrap`）。
+**yashirolang コンパイラは自分自身をコンパイルできます**（`make bootstrap`）。
 
 `src/` の C 版と **1:1 で対応**させます。この対応を崩さないでください。
 崩すと「C 版のどこを見れば正解がわかるか」が失われます。
@@ -34,23 +30,23 @@ make selfhost-test
 #     IR 一致 174 件 / stage1 の IR で実行して一致 156 件
 #
 # 1 ファイルだけ見るなら
-./build/<cc> --dump-tokens tests/cases/x<ext> > /tmp/c.txt
-./build/stage1-lexer          tests/cases/x<ext> > /tmp/m.txt
+./build/yashirolang --dump-tokens tests/cases/x.ys > /tmp/c.txt
+./build/stage1-lexer          tests/cases/x.ys > /tmp/m.txt
 diff /tmp/c.txt /tmp/m.txt
 
 # AST（S 式）が一致するか
-./build/<cc> --dump-ast tests/cases/x<ext> > /tmp/c.txt
-./build/stage1-ast         tests/cases/x<ext> > /tmp/m.txt
+./build/yashirolang --dump-ast tests/cases/x.ys > /tmp/c.txt
+./build/stage1-ast         tests/cases/x.ys > /tmp/m.txt
 diff /tmp/c.txt /tmp/m.txt
 
 # 型検査の診断が一致するか（メッセージ全文）
-./build/<cc> --check tests/cases/x<ext> 2> /tmp/c.txt
-./build/stage1-check    tests/cases/x<ext> 2> /tmp/m.txt
+./build/yashirolang --check tests/cases/x.ys 2> /tmp/c.txt
+./build/stage1-check    tests/cases/x.ys 2> /tmp/m.txt
 diff /tmp/c.txt /tmp/m.txt
 
 # IR が一致するか／その IR が動くか
-./build/<cc> -S       tests/cases/x<ext> > /tmp/c.ll
-./build/stage1-codegen   tests/cases/x<ext> > /tmp/m.ll
+./build/yashirolang -S       tests/cases/x.ys > /tmp/c.ll
+./build/stage1-codegen   tests/cases/x.ys > /tmp/m.ll
 diff /tmp/c.ll /tmp/m.ll
 clang /tmp/m.ll build/runtime.o -o /tmp/x && /tmp/x
 

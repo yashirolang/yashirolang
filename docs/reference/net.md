@@ -1,6 +1,6 @@
 # ソケットと HTTP
 
-**サーバーもクライアントも書けます。** `{{!cc}}` は TCP ソケットを標準で
+**サーバーもクライアントも書けます。** `yashirolang` は TCP ソケットを標準で
 持っていて、その上に HTTP/1.1 の最小限が乗っています。外部のライブラリは
 要りません（`curl` も要りません）。
 
@@ -23,7 +23,7 @@ def main() -> int:
 ```
 
 ```bash
-{{!cc}} server{{!ext}} -o server && ./server
+yashirolang server.ys -o server && ./server
 ```
 
 取ってくるほうは 1 行です。
@@ -39,8 +39,8 @@ print(str(res.status) + " " + res.body)
 
 | 層 | 置き場 | 役割 |
 |---|---|---|
-| `net` | `lib/net{{!ext}}` | TCP ソケット。C との境界（`extern`）をここに閉じ込める |
-| `http` | `lib/http{{!ext}}` | 要求の解釈・応答の組み立て・受付の輪。**C は 1 行もありません** |
+| `net` | `lib/net.ys` | TCP ソケット。C との境界（`extern`）をここに閉じ込める |
+| `http` | `lib/http.ys` | 要求の解釈・応答の組み立て・受付の輪。**C は 1 行もありません** |
 
 **★ `http` は `net` の上に乗るだけです。** 暗号化や別のプロトコルを足す
 ときも、`net` を差し替えれば済むようにしてあります。
@@ -309,8 +309,8 @@ except net.NetError as e:
 
 | 例 | 中身 |
 |---|---|
-| `webserver{{!ext}}` | 小さな Web サーバー（待ち時間つき） |
-| `webclient{{!ext}}` | 取ってくるだけのクライアント（`curl` の代わり） |
+| `webserver.ys` | 小さな Web サーバー（待ち時間つき） |
+| `webclient.ys` | 取ってくるだけのクライアント（`curl` の代わり） |
 
 ---
 

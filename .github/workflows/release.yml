@@ -161,7 +161,7 @@ jobs:
         run: ls -R dist
 
       # ★ 本文は .github/release-body.md.in（ひな型）から流し込みます。
-      #   docs/ と同じ仕組みなので、改名してもここは直しません。
+      #   CI の YAML に名前を書き写さないための仕組みです（docs/design/naming.md）。
       #
       # ⚠️ 昔はこの中で echo を並べて組み立てていましたが、シェルによっては
       #   echo が "\n" を**本物の改行に変えて**しまい、利用者に見せる
@@ -171,7 +171,7 @@ jobs:
         run: |
           {
             echo 'body<<RELEASE_BODY_EOF'
-            tools/render_docs.sh .github/release-body.md.in
+            tools/render_template.sh .github/release-body.md.in
             echo 'RELEASE_BODY_EOF'
           } >> "$GITHUB_OUTPUT"
 

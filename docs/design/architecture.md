@@ -1,6 +1,6 @@
 # コンパイラ・アーキテクチャ
 
-> `{{cc}}`（C 言語製、stage0 コンパイラ）の内部構造です。
+> `yashirolang`（C 言語製、stage0 コンパイラ）の内部構造です。
 > 「どのファイルが何を担当し、どんなデータが流れるか」を定義します。
 
 ---
@@ -9,7 +9,7 @@
 
 ```
                     ┌──────────────────────────────────────────┐
-  hello{{ext}} ────────▶│  util.c :: read_file()                   │
+  hello.ys ────────▶│  util.c :: read_file()                   │
   (テキスト)         │  ファイルを読む・改行を正規化する           │
                     └──────────────────┬───────────────────────┘
                                        │ char *src
@@ -93,14 +93,14 @@
 ### 🤔 なぜファイルを分けるのか
 
 1 ファイル 5000 行のコンパイラも書けますが（実際 chibicc はそれに近い）、
-今回は**最終的に本言語でこれを書き直す**ことが目的です。
+今回は**最終的に yashirolang でこれを書き直す**ことが目的です。
 モジュール境界を先に決めておくと、セルフホスト版へ 1 ファイルずつ移植できます。
 
 ```
-src/lexer.c    →  selfhost/lexer{{ext}}
-src/parser.c   →  selfhost/parser{{ext}}
-src/sema.c     →  selfhost/sema{{ext}}
-src/codegen.c  →  selfhost/codegen{{ext}}
+src/lexer.c    →  selfhost/lexer.ys
+src/parser.c   →  selfhost/parser.ys
+src/sema.c     →  selfhost/sema.ys
+src/codegen.c  →  selfhost/codegen.ys
 ```
 
 **この 1:1 対応が、セルフホストを「4 つの小さな移植作業」に分解します。**
@@ -146,11 +146,11 @@ struct Token {
 
 **🤔 なぜトークンは「配列」で、リンクリストではないのか**
 
-chibicc など多くの教材はリンクリストを使いますが、本言語では**配列**にします。
+chibicc など多くの教材はリンクリストを使いますが、yashirolang では**配列**にします。
 
 - パーサが `peek(1)`, `peek(2)` のような**任意の先読み**をしたい（`x : int` の判別など）
 - 配列なら `toks[pos + n]` で O(1)。リンクリストだと辿る必要がある
-- 本言語側に移植するとき、`list[Token]` として自然に書ける
+- yashirolang 側に移植するとき、`list[Token]` として自然に書ける
 
 ### 3.2 Node（`ast.h`）
 
@@ -272,7 +272,7 @@ typedef struct {
 ## 4. コマンドラインインターフェース
 
 ```
-{{cc}} [options] <input{{ext}}>
+yashirolang [options] <input.ys>
 
   -o <file>       出力する実行ファイル名（既定: a.out）
   -S              LLVM IR (.ll) を出力してそこで停止
@@ -291,7 +291,7 @@ typedef struct {
 
 ```c
 // 1. .ll を一時ファイルに書き出す
-char *ll_path = "/tmp/{{cc}}-XXXXXX.ll";
+char *ll_path = "/tmp/yashirolang-XXXXXX.ll";
 write_file(ll_path, ir_text);
 
 // 2. clang を呼ぶ
@@ -333,7 +333,7 @@ _Noreturn void error(const char *fmt, ...);   // 位置情報なし
 `switch` の `default:` などで使います。**ユーザーのミスとコンパイラのバグを区別**することが重要です。
 
 ```
-{{cc}} internal error: src/codegen.c:412: 到達しないはずのコード
+yashirolang internal error: src/codegen.c:412: 到達しないはずのコード
   これはコンパイラのバグです。報告してください。
 ```
 
@@ -366,7 +366,7 @@ AST は全体で使われ続けるので、解放するタイミングは「プ�
 
 | 種類 | 方法 | 例 |
 |---|---|---|
-| **終了コードテスト** | `{{ext}}` をコンパイル・実行し、終了コードを検証 | `42` → 42 |
+| **終了コードテスト** | `.ys` をコンパイル・実行し、終了コードを検証 | `42` → 42 |
 | **標準出力テスト** | 実行結果の stdout を期待値と比較 | `print("hi")` → `hi\n` |
 | **エラーテスト** | コンパイルが失敗し、期待するメッセージを含むことを検証 | `1 + "a"` → `型 'int' と 'str'` |
 | **IR テスト** | 生成 IR が期待パターンを含むか（`FileCheck` 相当） | `add i64` を含む |
@@ -374,7 +374,7 @@ AST は全体で使われ続けるので、解放するタイミングは「プ�
 
 ### 7.2 テストランナーの形式
 
-`tests/cases/*{{ext}}` の先頭コメントに期待値を書く方式にします。
+`tests/cases/*.ys` の先頭コメントに期待値を書く方式にします。
 
 ```python
 # EXIT: 42
@@ -402,7 +402,7 @@ def main() -> int:
 
 ```bash
 make test          # 全テスト
-make test-one CASE=tests/cases/prec{{ext}}
+make test-one CASE=tests/cases/prec.ys
 ```
 
 ---
@@ -416,7 +416,7 @@ CC      = clang
 CFLAGS  = -std=c11 -g -O0 -Wall -Wextra -Wno-unused-parameter
 SRCS    = $(wildcard src/*.c)
 OBJS    = $(SRCS:src/%.c=build/%.o)
-TARGET  = build/{{cc}}
+TARGET  = build/yashirolang
 ```
 
 **🤔 なぜ CMake を使わないのか**：依存が 1 つ増え、生成される Makefile が読めなくなります。

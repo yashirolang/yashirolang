@@ -1,7 +1,7 @@
 #!/usr/bin/env perl
 # name_grep.pl — 「言語名がそこに書かれているか」だけを探す小道具
 #
-# ★ tools/check_naming.sh と tools/render_docs.sh --check が使います。
+# ★ tools/check_naming.sh と tools/rename.sh が使います。
 #   ただの grep では足りません。旧パッケージマネージャ名が `pen` だったとき、
 #   `grep -F pen` は **`append` に当たって**しまいました。語の切れ目で探します。
 #

@@ -1,4 +1,4 @@
-# 本言語文法定義（EBNF）
+# yashirolang 文法定義（EBNF）
 
 > パーサを書くときは、このファイルを見ながら書きます。
 > **文法規則 1 つ = パーサ関数 1 つ** に対応させるのがこの教材の方針です。
@@ -364,7 +364,7 @@ Token | None
 AST ダンプ（S 式）で確認するのが確実です。
 
 ```
-$ ./build/{{cc}} --dump-ast tests/cases/prec{{ext}}
+$ ./build/yashirolang --dump-ast tests/cases/prec.ys
 (binop + (int 1) (binop * (int 2) (int 3)))
 ```
 

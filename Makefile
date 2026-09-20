@@ -1,4 +1,4 @@
-# 本言語コンパイラ (stage0) のビルド
+# コンパイラ (stage0) のビルド
 #
 # 使い方:
 #   make            コンパイラをビルド
@@ -18,6 +18,7 @@
 #   make asan       AddressSanitizer 付きでビルド（メモリバグ調査用）
 #   make install    <prefix>/bin と <prefix>/lib/plc に入れる（PREFIX=… で変更）
 #   make dist       配布用のディレクトリを build/dist に作る
+#   make check-naming  言語名がコードに書き写されていないかを見る
 #   make clean      生成物を削除
 
 # ── 動かす環境（Linux / macOS / Windows）──────────────────────
@@ -65,9 +66,11 @@ endif
 # 対になる定義: src/langinfo.h（C 版）/ lib/langinfo$(LANG_EXT)（この言語で書かれた側）
 # ★ 手で直さずに `tools/rename.sh` を使ってください（3 か所を一度に揃えます）。
 #
-# ⚠️ ここ以外のどこにも名前を書かないこと。文書は docs/ のひな型が
-#   {{name}} {{ext}} {{cc}} {{pm}} という合い言葉で書かれていて、
-#   `make docs` が流し込みます。書き漏れは `make check-naming` が見つけます。
+# ⚠️ コードとシェルには名前を書かないこと（C は PLC_LANG_*、この言語は
+#   langinfo、シェルは make -s print-LANG_* に訊きます）。書き漏れは
+#   `make check-naming` が見つけます。
+#   ★ 文書（docs/ と README.md）には**実際の名前を書きます**。読みやすさを
+#     優先したためです。改名のときは tools/rename.sh が文書も書き換えます。
 LANG_NAME := yashirolang
 LANG_EXT  := .ys
 LANG_CC   := yashirolang
@@ -514,38 +517,14 @@ info:
 clean:
 	rm -rf build a.out a.out.ll tests/tmp
 
-# ── 文書に名前を流し込む ────────────────────────────────────
+# ── 言語名の書き漏れを見張る ────────────────────────────────
 #
-# ★ docs/ のファイルは**ひな型**です。言語名を持たせないために
-#   {{name}} {{ext}} {{cc}} {{pm}} {{version}} {{repo}} と書いてあります。
-#   読める形（実際の名前が入ったもの）はここで作ります。
-#
-#   make docs        … docs/ → build/docs/ を作り直す（git に入れない生成物）
-#   make readme      … README.md.in → README.md（★ これだけはコミットする。
-#                      GitHub の入口なので、ひな型のままでは読めないため）
-#   make check-naming … ひな型に生の言語名が混ざっていないかを見張る（CI で回る）
-.PHONY: docs readme check-naming
+# ★ 名前の文字列は「定義の場所」と「文書」にしかない、という約束の見張りです。
+#   コードやシェルに名前を書き写すと、改名のときに必ずどれかを忘れます。
+#   CI で毎回回ります（docs/design/naming.md）。
+.PHONY: check-naming
 
-docs:
-	@tools/render_docs.sh
-
-readme:
-	@tools/render_docs.sh README.md.in > README.md
-	@echo "  README.md を README.md.in から作り直しました"
-
-# ⚠️ README.md は生成物です。README.md.in を直してから `make readme` を
-#   走らせてください。ここでは「生成し直しても変わらないか」も確かめます。
 check-naming:
-	@mkdir -p build
-	@tools/render_docs.sh --check
-	@tools/render_docs.sh README.md.in > build/README.md.expected
-	@if ! diff -u README.md build/README.md.expected > /dev/null 2>&1; then \
-	    echo "★ README.md が README.md.in と食い違っています。"; \
-	    diff -u README.md build/README.md.expected | head -40; \
-	    echo "  → make readme を走らせてコミットしてください"; \
-	    exit 1; \
-	fi
-	@echo "  ok    README.md は README.md.in と一致しています"
 	@tools/check_naming.sh
 
 # ── コンパイラ自身を「所有権エラー」で建てる ────────────────

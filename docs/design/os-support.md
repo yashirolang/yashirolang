@@ -1,6 +1,6 @@
 # OS 開発に向けた設計（仕様先行・実装は後半）
 
-> 最終目標は **本言語で書かれた OS がベアメタルで動く**ことです。
+> 最終目標は **yashirolang で書かれた OS がベアメタルで動く**ことです。
 > **今の設計判断が将来の手戻りになる**ため、
 > 「何が必要か」と「今から守ること」を先に決めます。
 
@@ -130,7 +130,7 @@ STACK: ptr[int] = ...        # .bss に 4096 バイト確保して先頭を指�
 ## 6. ビルドとテスト
 
 ```
-$ {{cc}} kernel{{ext}} --target x86_64-unknown-none -c -o kernel.o
+$ yashirolang kernel.ys --target x86_64-unknown-none -c -o kernel.o
 $ ld.lld -T linker.ld -nostdlib kernel.o core.o -o kernel.elf
 $ qemu-system-x86_64 -kernel kernel.elf -serial stdio -display none
 ```
@@ -139,7 +139,7 @@ $ qemu-system-x86_64 -kernel kernel.elf -serial stdio -display none
 既存の `tests/run_tests.sh` と同じ「期待値をファイル先頭のコメントに書く」方式を踏襲します。
 
 ```python
-# QEMU: Hello from 本言語
+# QEMU: Hello from yashirolang
 # EXIT: 0
 pragma profile freestanding
 ```
@@ -159,7 +159,7 @@ pragma profile freestanding
 
 ## 時計
 
-`lib/time{{ext}}` の実体は `runtime/hosted.c` にあります（**ベアメタルには
+`lib/time.ys` の実体は `runtime/hosted.c` にあります（**ベアメタルには
 ありません**。時計は OS の持ち物です）。
 
 | 環境 | 使うもの |

@@ -11,9 +11,11 @@
 #
 #       C 版のコード      → PLC_LANG_* マクロ（src/langinfo.h）
 #       この言語のコード  → import langinfo → langinfo.cc() など
-#       文書（docs/）     → {{cc}} {{ext}} {{pm}} …（make docs で流し込む）
 #       シェル・CI        → make -s print-LANG_CC などで make に訊く
 #       Makefile          → $(LANG_CC) $(LANG_EXT) …
+#
+#   ★ 文書（docs/ と README.md）は**例外**です。読む人のために実際の名前を
+#     書きます。改名のときは tools/rename.sh が文書を書き換えます。
 #
 # 使い方:
 #   tools/check_naming.sh        # make check-naming から呼ばれます
@@ -35,12 +37,13 @@ PM="$(make -s print-LANG_PM)"
 #   Makefile           … LANG_* の定義そのもの（唯一の出どころ）
 #   src/langinfo.h     … C 版の既定値（Makefile の -D が無いとき用）
 #   lib/langinfo<ext>  … この言語で書かれた側の定義
-#   docs/design/naming.md … 改名の履歴（旧名を消すと履歴にならない）
-#   README.md          … README.md.in から生成したもの（GitHub の入口）
+#   README.md（どの階層でも）… 読む人のために名前を書く
+#   docs/**.md         … 文書（同上。tools/rename.sh が書き換える）
 allowed() {
     case "$1" in
         ./Makefile|./src/langinfo.h|"./lib/langinfo$EXT") return 0 ;;
-        ./docs/design/naming.md|./README.md)              return 0 ;;
+        ./README.md|*/README.md)                          return 0 ;;
+        ./docs/*.md|./docs/*/*.md)                        return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -110,9 +113,10 @@ if [ "$fail" -ne 0 ]; then
 
     C 版のコード      → PLC_LANG_* マクロ（src/langinfo.h）
     この言語のコード  → import langinfo → langinfo.cc() / .ext() / .pm() …
-    文書（docs/）     → {{cc}} {{ext}} {{pm}} …（make docs で読める形が出ます）
     シェル・CI        → LANG_CC="$(make -s print-LANG_CC)" のように make に訊く
     Makefile          → $(LANG_CC) $(LANG_EXT) …
+
+    ★ 文書（README.md と docs/**.md）には名前を書いて構いません。
 MSG
     exit 1
 fi

@@ -1,6 +1,6 @@
-# 本言語ドキュメント
+# yashirolang ドキュメント
 
-**本言語** は、Python の文法をもつ静的型付けのコンパイル言語です。
+**yashirolang** は、Python の文法をもつ静的型付けのコンパイル言語です。
 GC を持たず、所有権と借用の検査でメモリ安全性を確保します。
 
 ```python
@@ -10,68 +10,65 @@ def main() -> int:
     return 0
 ```
 
+```bash
+yashirolang hello.ys -o hello && ./hello
+```
+
 ---
 
-## 使う
+## 読む順番
 
-| ドキュメント | 内容 |
+| | ドキュメント | 中身 |
+|---|---|---|
+| 1 | **[getting-started.md](getting-started.md)** | **5 分** — 入れる・動かす・プロジェクトにする |
+| 2 | **[tutorial.md](tutorial.md)** | **30 分** — 言語のひととおり（Python との差分・所有権・並行・エラー処理） |
+| 3 | [reference/](reference/) | 困ったときに引く（下記） |
+
+---
+
+## 引く（リファレンス）
+
+| ドキュメント | 中身 |
 |---|---|
-| **[tutorial.md](tutorial.md)** | **入門** — Python との差分に絞った案内。まずこれ |
-| **[reference/numerics.md](reference/numerics.md)** | **数値計算の手引き** — numpy / scipy / matplotlib / pandas との対応表と実例 |
-| **[reference/net.md](reference/net.md)** | **ソケットと HTTP** — サーバーとクライアントの書き方（`net` / `http`） |
-| [reference/cli.md](reference/cli.md) | `{{cc}}` のコマンドライン・リファレンス |
-| [reference/pkg.md](reference/pkg.md) | パッケージマネージャ `{{pm}}` のリファレンス |
-| [spec/stdlib.md](spec/stdlib.md) | 標準ライブラリ・リファレンス（文字列・入出力・**数学 / 線形代数 / 統計 / 乱数 / 物理 / 作図 / 表**） |
+| [reference/cli.md](reference/cli.md) | コンパイラ `yashirolang` のオプション |
+| [reference/pkg.md](reference/pkg.md) | パッケージマネージャ `ysm` と `package.pkg` |
+| [reference/stdlib.md](reference/stdlib.md) | 標準ライブラリ（文字列・入出力・`dict` / `set` / `json`・数値計算・作図・表 …） |
+| [reference/numerics.md](reference/numerics.md) | 数値計算の手引き（numpy / scipy / matplotlib / pandas との対応表） |
+| [reference/net.md](reference/net.md) | ソケットと HTTP（サーバーとクライアント） |
 
-## 仕様
+## 決まりごと（仕様）
 
 言語がどう振る舞うかの**唯一の正解**です。実装と食い違ったら、どちらかが間違いです。
 
-| ドキュメント | 内容 |
+| ドキュメント | 中身 |
 |---|---|
-| [spec/language-spec.md](spec/language-spec.md) | **言語仕様** — 字句・型・式・文・プログラム構造・組み込み関数 |
-| [spec/safety-spec.md](spec/safety-spec.md) | **安全性の仕様** — 所有権・借用・可変性・解放・エラー処理・`unsafe` |
-| [spec/type-system.md](spec/type-system.md) | **型システム** — 型の一覧と型付け規則 |
-| [spec/grammar.md](spec/grammar.md) | **文法定義（EBNF）** |
+| [spec/language-spec.md](spec/language-spec.md) | 字句・型・式・文・プログラム構造・組み込み関数 |
+| [spec/safety-spec.md](spec/safety-spec.md) | 所有権・借用・可変性・解放・エラー処理・`unsafe` |
+| [spec/type-system.md](spec/type-system.md) | 型の一覧と型付け規則 |
+| [spec/grammar.md](spec/grammar.md) | 文法定義（EBNF） |
 
-## 設計
+## 処理系の設計
 
-処理系（`{{cc}}`）がどう作られているかです。**言語を使うだけなら読む必要はありません。**
+**言語を使うだけなら読む必要はありません。** コンパイラに手を入れる人向けです。
 
-| ドキュメント | 内容 |
+| ドキュメント | 中身 |
 |---|---|
 | [design/architecture.md](design/architecture.md) | パス構成とデータの流れ |
 | [design/ir-conventions.md](design/ir-conventions.md) | LLVM IR の生成規約 |
 | [design/memory-model.md](design/memory-model.md) | 値の表現・確保・寿命 |
 | [design/ownership.md](design/ownership.md) | 所有権検査（`ownck`）の実装 |
+| [design/generics-and-interfaces.md](design/generics-and-interfaces.md) | ジェネリクス（単相化）・インタフェース（vtable）・演算子の多重定義 |
 | [design/error-handling.md](design/error-handling.md) | `raises` / `try` / `except` の実装 |
+| [design/concurrency.md](design/concurrency.md) | スレッド・`mutex[T]`・送出可能性の検査 |
+| [design/package-manager.md](design/package-manager.md) | レジストリを持たない設計・MVS・安全性 |
 | [design/os-support.md](design/os-support.md) | freestanding・`unsafe`・ベアメタル |
 | [design/self-hosting.md](design/self-hosting.md) | ブートストラップと不動点の検証 |
-| [design/naming.md](design/naming.md) | 名前づけの規約 |
-| [design/ci.md](design/ci.md) | CI の作りと、速くするために入れた工夫（測定値つき） |
-| [design/package-manager.md](design/package-manager.md) | パッケージマネージャ（レジストリを持たない設計・MVS・安全性） |
+| [design/naming.md](design/naming.md) | 言語名の扱いと改名の手順 |
+| [design/ci.md](design/ci.md) | CI の作りと、速くするために入れた工夫 |
 
-## これから
+## これまでとこれから
 
-| ドキュメント | 内容 |
+| ドキュメント | 中身 |
 |---|---|
-| **[roadmap.md](roadmap.md)** | **到達点と、これから入れるもの** — 機能ごとの優先度と設計 |
-| [design/future-features.md](design/future-features.md) | 未実装機能の設計（ジェネリクス・クロージャ・多相ほか） |
-
-## その他
-
-| ドキュメント | 内容 |
-|---|---|
-| [reference/glossary.md](reference/glossary.md) | 用語集 |
-
----
-
-## 実装の現在地
-
-| | |
-|---|---|
-| 処理系 | C 実装（stage0）約 13,000 行 ＋ 本言語実装（stage1）約 9,000 行 |
-| セルフホスト | **到達済み** — stage2 と stage3 がバイト単位で一致（不動点） |
-| テスト | 531 件 ＋ 2 実装の出力比較 276 件 ＋ AddressSanitizer 12 件 ＋ `{{pm}}` 30 件 |
-| 対応環境 | Linux / macOS / Windows（MSYS2）、RISC-V ベアメタル |
-| CI | 4 ジョブすべて GitHub Actions で常時検証 |
+| [roadmap.md](roadmap.md) | 現在地・これから入れるもの・入れないと決めたもの |
+| [changelog.md](changelog.md) | 版ごとの変更 |

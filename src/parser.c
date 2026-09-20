@@ -2226,7 +2226,7 @@ static Node *class_def(Parser *p) {
     n->name = name_tok->text;
 
     // ★ 型引数 class Dict[K, V]:
-    //   ⚠️ 名前だけを並べます（制約は書けません。design/future-features.md）。
+    //   ⚠️ 名前だけを並べます（制約は書けません。design/generics-and-interfaces.md）。
     Token *topen = peek(p);
     if (consume(p, "[")) {
         Node *tail = NULL;
@@ -2247,7 +2247,7 @@ static Node *class_def(Parser *p) {
 
     // ★ 実装するインタフェース class Point(Show):
     //   ⚠️ **継承ではありません。** 書けるのはインタフェース名だけで、
-    //     フィールドも実装も受け継ぎません（design/future-features.md §2）。
+    //     フィールドも実装も受け継ぎません（design/generics-and-interfaces.md §2）。
     Token *iopen = peek(p);
     if (consume(p, "(")) {
         Node *tail = NULL;

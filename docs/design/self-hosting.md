@@ -1,6 +1,6 @@
 # セルフホスト計画
 
-> 最終目標である「本言語で書いた本言語コンパイラが自分自身をコンパイルできる」状態への
+> 最終目標である「yashirolang で書いた yashirolang コンパイラが自分自身をコンパイルできる」状態への
 > 道筋と、達成を検証する方法を定義します。
 
 ---
@@ -9,10 +9,10 @@
 
 ```
 【今】
-  stage0 (C で書かれた実行ファイル)  +  foo{{ext}}  →  foo (実行ファイル)
+  stage0 (C で書かれた実行ファイル)  +  foo.ys  →  foo (実行ファイル)
 
 【目標】
-  stage1 (この言語で書かれた実行ファイル)  +  selfhost/*{{ext}}  →  stage1 と同じもの
+  stage1 (この言語で書かれた実行ファイル)  +  selfhost/*.ys  →  stage1 と同じもの
 ```
 
 コンパイラが**自分自身のソースコードをコンパイルできる**状態です。
@@ -40,7 +40,7 @@
 ```
                      ┌─────────────────────────────────────┐
                      │  ソースコード（変わらない）            │
-                     │  selfhost/*{{ext}}                      │
+                     │  selfhost/*.ys                      │
                      └─────────────────────────────────────┘
                                     │
    ┌────────────────────────────────┼────────────────────────────────┐
@@ -48,7 +48,7 @@
    ▼                                ▼                                ▼
 ┌──────────┐  compiles    ┌──────────┐  compiles    ┌──────────┐  compiles  ┌──────────┐
 │ stage0   │─────────────▶│ stage1   │─────────────▶│ stage2   │───────────▶│ stage3   │
-│ (C 製)   │              │(本言語製)│              │(本言語製)│            │(本言語製)│
+│ (C 製)   │              │(yashirolang 製)│              │(yashirolang 製)│            │(yashirolang 製)│
 └──────────┘              └──────────┘              └──────────┘            └──────────┘
    ↑                                                     │                       │
    │                                                     └────── 比較 ───────────┘
@@ -61,9 +61,9 @@ C で先に作る                                                        │
 | stage | 何で書かれているか | 何でコンパイルされたか |
 |---|---|---|
 | **stage0** | C 言語 | Apple clang（外部のコンパイラ） |
-| **stage1** | 本言語 | stage0 |
-| **stage2** | 本言語 | stage1 |
-| **stage3** | 本言語 | stage2 |
+| **stage1** | yashirolang | stage0 |
+| **stage2** | yashirolang | stage1 |
+| **stage3** | yashirolang | stage2 |
 
 ### 🤔 なぜ stage1 と stage2 は一致しなくてよいのか
 
@@ -72,8 +72,8 @@ C で先に作る                                                        │
 stage1 と stage2 は、**同じソースから作られた**のに一致しないことがあります。
 
 ```
-stage1 = stage0(selfhost/*{{ext}})      ← C 製コンパイラの出力
-stage2 = stage1(selfhost/*{{ext}})      ← セルフホスト版コンパイラの出力
+stage1 = stage0(selfhost/*.ys)      ← C 製コンパイラの出力
+stage2 = stage1(selfhost/*.ys)      ← セルフホスト版コンパイラの出力
 ```
 
 理由：**stage0 と stage1 は「別のコンパイラ」だから**です。
@@ -88,8 +88,8 @@ stage2 = stage1(selfhost/*{{ext}})      ← セルフホスト版コンパイラ
 一方、
 
 ```
-stage2 = stage1(selfhost/*{{ext}})
-stage3 = stage2(selfhost/*{{ext}})
+stage2 = stage1(selfhost/*.ys)
+stage3 = stage2(selfhost/*.ys)
 ```
 
 **stage2 と stage3 は一致しなければなりません。**
@@ -99,7 +99,7 @@ stage3 = stage2(selfhost/*{{ext}})
 これを **不動点（fixed point）に到達した**と言います。
 
 ```
-f = 「selfhost/*{{ext}} をコンパイルする」という関数
+f = 「selfhost/*.ys をコンパイルする」という関数
 stage2 = f(stage1)
 stage3 = f(stage2)
 stage2 == stage3  ⇔  stage2 は f の不動点  ⇔  セルフホスト成功
@@ -133,7 +133,7 @@ stage2 == stage3  ⇔  stage2 は f の不動点  ⇔  セルフホスト成功
 
 **★ 2026-08-22 に全項目の判断が終わりました。**
 以降は、このリストに載っているものだけで書いています。
-すべて ✅ になれば、本言語でコンパイラが書けます。
+すべて ✅ になれば、yashirolang でコンパイラが書けます。
 
 ### 3.1 基本
 
@@ -196,7 +196,7 @@ stage2 == stage3  ⇔  stage2 は f の不動点  ⇔  セルフホスト成功
 | `print(s)` | IR の出力、デバッグ | ⬜ |
 | ファイル全体の読み込み | ソースコードを読む | ✅ `io.read_file` |
 | ファイルへの書き込み | `.ll` を出力する | ✅ `io.write_file` |
-| コマンドライン引数の取得 | `{{cc}} foo{{ext}} -o foo` | ✅ `sys.argv` |
+| コマンドライン引数の取得 | `yashirolang foo.ys -o foo` | ✅ `sys.argv` |
 | 外部コマンド実行（`system`） | `clang foo.ll -o foo` を呼ぶ | ✅ `sys.run` |
 | 終了コード指定（`exit(n)`） | エラー時の終了 | ⬜ |
 | stderr への出力 | エラーメッセージ | ⬜ |
@@ -213,10 +213,10 @@ stage2 == stage3  ⇔  stage2 は f の不動点  ⇔  セルフホスト成功
 | `extern def` | C ランタイムを呼ぶ | ✅ |
 | グローバル変数 | 現在位置などのコンパイラ状態 | ⬜ |
 
-### 3.6 標準ライブラリを本言語で書いて見つかった穴
+### 3.6 標準ライブラリを yashirolang で書いて見つかった穴
 
 **★ 自分の言語で標準ライブラリを書くと、言語の穴が出てきます。**
-`lib/strings{{ext}}` / `lib/dict{{ext}}` を書きながら「これが無いと不便だ」と
+`lib/strings.ys` / `lib/dict.ys` を書きながら「これが無いと不便だ」と
 思ったものを記録します。
 
 | 見つかった穴 | どう回避したか | 結論 |
@@ -253,7 +253,7 @@ stage2 == stage3  ⇔  stage2 は f の不動点  ⇔  セルフホスト成功
 代わりに**ヘルパ関数**を用意します。
 
 ```python
-# lib/strutil{{ext}}
+# lib/strutil.ys
 def cat3(a: str, b: str, c: str) -> str:
     return a + b + c
 
@@ -276,23 +276,23 @@ emit(cat5("  ", t, " = add i64 ", l, ", " + r))
 
 **各段階で C 版が「正解」を持っている**ことを最大限に活用します。
 
-### lexer{{ext}}
+### lexer.ys
 
 ```bash
 # 同じ入力に対するトークン列を比較する
-./build/{{cc}}      --dump-tokens tests/cases/all_syntax{{ext}} > /tmp/c.txt
-./build/stage1-lexer --dump-tokens tests/cases/all_syntax{{ext}} > /tmp/m.txt
+./build/yashirolang      --dump-tokens tests/cases/all_syntax.ys > /tmp/c.txt
+./build/stage1-lexer --dump-tokens tests/cases/all_syntax.ys > /tmp/m.txt
 diff /tmp/c.txt /tmp/m.txt && echo "✅ 一致"
 ```
 
 **★ `--dump-tokens` を最初から作っておく理由がここにあります。**
 これがあるから、字句解析器だけを独立して検証できます。
 
-### parser{{ext}}
+### parser.ys
 
 ```bash
-./build/{{cc}}       --dump-ast tests/cases/all_syntax{{ext}} > /tmp/c.txt
-./build/stage1-parser --dump-ast tests/cases/all_syntax{{ext}} > /tmp/m.txt
+./build/yashirolang       --dump-ast tests/cases/all_syntax.ys > /tmp/c.txt
+./build/stage1-parser --dump-ast tests/cases/all_syntax.ys > /tmp/m.txt
 diff /tmp/c.txt /tmp/m.txt && echo "✅ 一致"
 ```
 
@@ -304,24 +304,24 @@ AST を **S 式**で出力するのは、テキスト比較できるようにす
     (return (binop + (int 1) (binop * (int 2) (int 3))))))
 ```
 
-### sema{{ext}}
+### sema.ys
 
 型検査は「通る/通らない」と「エラーメッセージ」が出力です。
 
 ```bash
 # 型エラーのテストケースすべてで、両者が同じエラーを出すか
-for f in tests/cases/err_*{{ext}}; do
-    a=$(./build/{{cc}}      "$f" 2>&1 >/dev/null)
+for f in tests/cases/err_*.ys; do
+    a=$(./build/yashirolang      "$f" 2>&1 >/dev/null)
     b=$(./build/stage1-sema  "$f" 2>&1 >/dev/null)
     [ "$a" = "$b" ] || echo "❌ $f"
 done
 ```
 
-### codegen{{ext}}
+### codegen.ys
 
 ```bash
-./build/{{cc}}        -S tests/cases/all_syntax{{ext}} -o /tmp/c.ll
-./build/stage1-codegen -S tests/cases/all_syntax{{ext}} -o /tmp/m.ll
+./build/yashirolang        -S tests/cases/all_syntax.ys -o /tmp/c.ll
+./build/stage1-codegen -S tests/cases/all_syntax.ys -o /tmp/m.ll
 diff /tmp/c.ll /tmp/m.ll && echo "✅ IR 完全一致"
 ```
 
@@ -341,11 +341,11 @@ make bootstrap
 
 ```makefile
 # Makefile
-SELF = selfhost/main{{ext}}
+SELF = selfhost/main.ys
 
-bootstrap: build/{{cc}}
+bootstrap: build/yashirolang
 	@echo "── stage1: C 製コンパイラでセルフホスト版コンパイラをビルド ──"
-	./build/{{cc}} $(SELF) -o build/stage1
+	./build/yashirolang $(SELF) -o build/stage1
 
 	@echo "── stage2: stage1 で自分自身をビルド ──"
 	./build/stage1 $(SELF) -o build/stage2
@@ -380,15 +380,15 @@ C 版と 1:1 に対応させます。
 
 | C 版 | セルフホスト版 | 内容 |
 |---|---|---|
-| `src/main.c` | `selfhost/main{{ext}}` | 引数処理、パス起動 |
-| `src/util.c` | `lib/strutil{{ext}}` ほか | 文字列ヘルパ（標準ライブラリへ） |
-| `src/lexer.c` | `selfhost/lexer{{ext}}` | 字句解析 |
-| `src/ast.c` | `selfhost/ast{{ext}}` | Node クラス定義とダンプ |
-| `src/types.c` | `selfhost/types{{ext}}` | Type クラス |
-| `src/parser.c` | `selfhost/parser{{ext}}` | 構文解析 |
-| `src/sema.c` | `selfhost/sema{{ext}}` | 型検査 |
-| `src/codegen.c` | `selfhost/codegen{{ext}}` | IR 出力 |
-| `src/diag.c` | `selfhost/diag{{ext}}` | エラー報告 |
+| `src/main.c` | `selfhost/main.ys` | 引数処理、パス起動 |
+| `src/util.c` | `lib/strutil.ys` ほか | 文字列ヘルパ（標準ライブラリへ） |
+| `src/lexer.c` | `selfhost/lexer.ys` | 字句解析 |
+| `src/ast.c` | `selfhost/ast.ys` | Node クラス定義とダンプ |
+| `src/types.c` | `selfhost/types.ys` | Type クラス |
+| `src/parser.c` | `selfhost/parser.ys` | 構文解析 |
+| `src/sema.c` | `selfhost/sema.ys` | 型検査 |
+| `src/codegen.c` | `selfhost/codegen.ys` | IR 出力 |
+| `src/diag.c` | `selfhost/diag.ys` | エラー報告 |
 
 **この 1:1 対応を崩さないこと。** 崩すと「C 版のどこを見れば正解がわかるか」が失われます。
 
@@ -411,10 +411,10 @@ C 版と 1:1 に対応させます。
 ## 7. 到達後にできること
 
 セルフホストしたら、C 版（stage0）は**もう要らなくなります**。
-言語の改良を本言語自身で行えます。
+言語の改良を yashirolang 自身で行えます。
 
 ```
-新機能を実装する（本言語で書く）
+新機能を実装する（yashirolang で書く）
   → stage2 でコンパイル → stage3（新機能を持つコンパイラ）
   → stage3 で自分をコンパイル → stage4
 ```
@@ -423,13 +423,13 @@ C 版と 1:1 に対応させます。
 新機能のバグで stage が壊れたとき、stage0 から作り直せることが最後の保険になります。
 これを「ブートストラップの退路」と呼びます。
 
-### 到達後の課題（v2 のアイデア）
+### 到達後の課題
+
+✅ **f-string・ジェネリクス・エラー処理（`raises`）は、その後入りました。**
+残っているのは次のものです（[roadmap.md](../roadmap.md) と重なります）。
 
 - アリーナ確保によるメモリ管理と高速化
 - 局所的な型推論（`x = 0` から `int` を推論）
 - エラー回復（複数エラーの報告）
-- f-string
-- ジェネリクス
-- 例外機構
 - LLVM C API に切り替えて `.ll` テキストを経由しない
 - 自前のバックエンド（x86-64 直接出力）

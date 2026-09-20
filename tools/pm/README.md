@@ -1,13 +1,9 @@
 # パッケージマネージャ
 
-> ⚠️ `<cc>` はコンパイラ、`<pm>` はパッケージマネージャのコマンド名、`<ext>` はソースの拡張子です。
-> 実際の値は `make info` で分かります（言語名をここに書き写さない理由は [docs/design/naming.md](../../docs/design/naming.md)）。
-
-
-本言語で書かれています。ビルドするには本言語コンパイラが要ります。
+yashirolang で書かれています。ビルドするには yashirolang コンパイラが要ります。
 
 ```bash
-make pm         # build/<pm> ができます
+make pm         # build/ysm ができます
 make pm-test    # 本物の git リポジトリを作って一通り動かします
 ```
 

@@ -584,7 +584,7 @@ static Type *resolve_type(Sema *s, Node *tr) {
 
 // ── ジェネリクス（単相化） ─────────────────────────────
 //
-// ★ 方針は docs/design/future-features.md §1 のとおり **単相化**です。
+// ★ 方針は docs/design/generics-and-interfaces.md §1 のとおり **単相化**です。
 //   Dict[str, int] と Dict[str, Symbol] は、**別々のクラスを作ります**。
 //   型消去（1 つの実体で済ませる）を採らないのは、int と str で値の大きさと
 //   解放の要否が違い、箱詰めが要るためです（GC を持たない方針と噛み合わない）。
@@ -4116,7 +4116,7 @@ static void check_fields_initialized(Sema *s, Class *c) {
 
 // ── インタフェース ──────────────────────────────────────
 //
-// ★ 表現の決め方（design/future-features.md §2 から変更しました）
+// ★ 表現の決め方（design/generics-and-interfaces.md §2 から変更しました）
 //
 //   設計書ではファットポインタ（実体 + vtable の 2 語）を想定していましたが、
 //   この処理系は **「値はどれも 8 バイト」** という前提で組まれています

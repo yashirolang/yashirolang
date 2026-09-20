@@ -24,10 +24,9 @@
 #   `make check-naming` に「書き漏れ」として拾われてしまいます
 #   （実際、例に書いた名前へ改名する試験で引っかかりました）。
 #
-# ★ このスクリプトは**文書やコードの中身を置換しません**。
-#   置換が要らないように、文書はひな型（{{cc}} などの合い言葉）で、
-#   コードは langinfo 経由で書いてあるからです。やることは
-#   「① ファイル名の拡張子」「② 定義 3 か所」「③ README の作り直し」だけです。
+# ★ このスクリプトが置換するのは**文書（README.md と docs/**.md）だけ**です。
+#   コードは langinfo 経由で名前を受け取るので、置換が要りません。やることは
+#   「① ファイル名の拡張子」「② 定義 3 か所」「③ 文書の置換」の 3 つです。
 #
 #   ⚠️ 昔の版はリポジトリ全体を一括置換していましたが、**テストの中の
 #     ただの文字列**（`Item("pen")` のような試験データ）まで書き換えてしまう
@@ -144,10 +143,29 @@ p_set VERSION "$NEW_VERSION"
 
 echo "  Makefile / src/langinfo.h / $LANGINFO を揃えました"
 
-# ── ③ README を作り直す ────────────────────────────────────
-#   ★ README.md は README.md.in から生成したものです（GitHub の入口なので、
-#     ひな型のままでは読めないため、生成物をコミットします）。
-make -s readme
+# ── ③ 文書（README.md と docs/**.md）の名前を書き換える ───────
+#
+#   ★ 文書には**実際の名前が書いてあります**（読む人のため）。ここだけは
+#     置換します。⚠️ 置換するのは文書だけです。ソースやテストまで一括置換
+#     すると、`Item("pen")` のような**ただの試験データ**を壊します
+#     （昔それで壊しました。だからコードは langinfo 経由で書いてあります）。
+#
+#   ⚠️ 語の切れ目で探します（旧 PM 名が `pen` のとき `append` に当たるため）。
+doc_files() { find . -path ./.git -prune -o -path ./build -prune -o \
+                   \( -name 'README.md' -o -path './docs/*.md' \) -print; }
+doc_sub() { # 旧 新
+    [ "$1" = "$2" ] && return 0
+    O="$1" N="$2" perl -CSD -i -pe '
+        my $o = quotemeta $ENV{O};
+        s/(?<![A-Za-z0-9_.])$o(?![A-Za-z0-9_])/$ENV{N}/g;
+    ' $(doc_files)
+}
+doc_sub "$OLD_EXT"  "$NEW_EXT"      # 先に拡張子（.xx は名前より字面が短い）
+doc_sub "$OLD_REPO" "$NEW_REPO"
+doc_sub "$OLD_CC"   "$NEW_CC"
+doc_sub "$OLD_PM"   "$NEW_PM"
+doc_sub "$OLD_NAME" "$NEW_NAME"
+echo "  README.md と docs/ の名前を書き換えました"
 echo
 
 # ── ④ ほんとうに揃ったか確かめる ────────────────────────────
@@ -191,5 +209,4 @@ cat <<MSG
 
   ★ 手で直すのは 1 つだけです:
     - docs/design/naming.md の「改名の履歴」に 1 行足す
-      （履歴に旧名が要るので、この文書だけは検査の対象外です）
 MSG

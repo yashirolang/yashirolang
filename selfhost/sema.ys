@@ -508,7 +508,7 @@ class Sema:
 
     # ── ジェネリクス（単相化） ─────────────────────────
     #
-    # ★ 方針は design/future-features.md §1 のとおり **単相化**。
+    # ★ 方針は design/generics-and-interfaces.md §1 のとおり **単相化**。
     #   Dict[str, int] と Dict[str, Symbol] は **別々のクラス**を作る。
 
     # ── ジェネリック関数 ──────────────────────────────

@@ -1,13 +1,13 @@
-# `{{cc}}` リファレンス
+# `yashirolang` リファレンス
 
 ```
-{{cc}} [オプション] <入力{{ext}}>
+yashirolang [オプション] <入力.ys>
 ```
 
 コンパイルするのは**入口のファイル 1 つだけ**です。`import` は自動でたどられます。
 
 ```bash
-{{cc}} hello{{ext}} -o hello
+yashirolang hello.ys -o hello
 ```
 
 ---
@@ -18,7 +18,7 @@
 |---|---|
 | `-o <file>` | 出力する実行ファイル名（既定 `a.out`）。Windows では `.` を含まない名前に `.exe` を足す |
 | `-c` | リンクせずオブジェクト（`.o`）を出す |
-| `-I <dir>` | `import` を探す場所を足す（何度でも書ける。`-Ideps` の形も可）。パッケージマネージャ [`{{pm}}`](pkg.md) が `deps/` を渡すのに使います |
+| `-I <dir>` | `import` を探す場所を足す（何度でも書ける。`-Ideps` の形も可）。パッケージマネージャ [`ysm`](pkg.md) が `deps/` を渡すのに使います |
 | `-j <N>` | `clang` を同時に何本走らせるか（既定はコア数、`-j1` で逐次）。⚠️ **出来上がる実行ファイルは並列度で変わりません** |
 | `-S` | LLVM IR を標準出力に書いて終了 |
 | `--keep-ll` | 実行ファイルを作った後も `.ll` を残す |
@@ -62,9 +62,9 @@
 **後に書いたほうが勝ちます**（`--drop` / `--no-drop` と同じ規則）。
 
 ```bash
-{{cc}} app{{ext}} -o app                      # 4 つともエラー（既定）
-{{cc}} --warn-own app{{ext}} -o app            # 4 つとも警告
-{{cc}} --warn-own --deny-move app{{ext}} -o app # 移動だけエラーに戻す
+yashirolang app.ys -o app                      # 4 つともエラー（既定）
+yashirolang --warn-own app.ys -o app            # 4 つとも警告
+yashirolang --warn-own --deny-move app.ys -o app # 移動だけエラーに戻す
 ```
 
 古いコードを持ち込むときは、`--warn-own` で全体を通してから、
@@ -85,6 +85,17 @@
 なお、スレッドに渡せるかどうかの検査（`E-SEND-1`〜`4`）は**常にエラー**で、
 外すオプションはありません。**2 つの実装のどちらでも同じです**（A-25）。
 
+## 数の検査
+
+| オプション | 説明 |
+|---|---|
+| （既定） | 整数の `+` `-` `*` `**`・単項 `-`・`int(float)` / `int(str)` の桁あふれと、`//` `%` `/` の 0 除算を実行時に確かめます |
+| `--no-overflow-check` | 上の**桁あふれと float の 0 除算**を外します（速さのための逃げ道） |
+
+⚠️ **添字の範囲検査は外せません。** `--no-overflow-check` を付けても残ります。
+折り返す計算が要るところだけ `wrap_add` / `wrap_sub` / `wrap_mul` を使ってください
+（こちらはオプション無しで書けます）。
+
 ## C のライブラリを繋ぐ
 
 | オプション | 説明 |
@@ -93,12 +104,12 @@
 | `-framework <名前>` | 同上（macOS の framework。`-framework Accelerate`） |
 
 ```bash
-{{cc}} -O2 app{{ext}} -framework Accelerate -o app   # macOS
-{{cc}} -O2 app{{ext}} -lopenblas -o app              # Linux
+yashirolang -O2 app.ys -framework Accelerate -o app   # macOS
+yashirolang -O2 app.ys -lopenblas -o app              # Linux
 ```
 
 **★ `extern def` で宣言した関数の実体が標準ライブラリの外にあるとき**に要ります
-（[`blas`](../spec/stdlib.md#blas) がその例です）。
+（[`blas`](stdlib.md#blas) がその例です）。
 
 🔒 シェル経由で渡るので、`-o` と同じように**入口で 1 回**確かめます。
 
@@ -112,7 +123,7 @@
 | `--prove-report` | 消えた検査の数を種類ごとに出します |
 
 ```bash
-{{cc}} --prove-report -S app{{ext}} > /dev/null
+yashirolang --prove-report -S app.ys > /dev/null
 証明で消した実行時検査:
   桁あふれ     178 消 /    340 残
   添字         106 消 /    140 残
@@ -124,12 +135,12 @@
 ★ 消せるのは 5 種類です：桁あふれ（`+` `-` `*`）／添字（`xs[i]`）／範囲型
 （A-28）／契約（A-29）／**`//` と `%` の 0 除算**。最後のものは、割る数が
 **コンパイル時に決まる正の数**のときだけ命令 1 つに置き換えます
-（実行時に決まる除数では速くならなかったためです。[roadmap §4.17](../roadmap.md#417-a-34--証明で実行時検査を消しました段-12)）。
+（実行時に決まる除数では速くならなかったためです。[版の記録 0.25.0〜0.27.0](../changelog.md)）。
 
 ⚠️ **`--verify-prove` は CI 向けです。** 解析が誤って検査を消していたら、
 **利用者ではなく私たちに**返ってくるようにするための道具です。
 ★ 実際にこれで健全性バグを 1 つ見つけました（0.25.0〜0.26.0。
-[roadmap §4.17](../roadmap.md#417-a-34--証明で実行時検査を消しました段-12)）。
+[版の記録 0.25.0〜0.27.0](../changelog.md)）。
 **`make prove-verify` を CI で回してください。**
 
 ⚠️ `--no-overflow-check` を付けると、証明が示せる量は減ります。整数が
@@ -143,7 +154,7 @@
 | `-g` | デバッグ情報を出す（DWARF のもとになる metadata）。⚠️ 付けないときの出力は 1 バイトも変わりません |
 
 ```bash
-{{cc}} -g app{{ext}} -o app
+yashirolang -g app.ys -o app
 lldb ./app            # ブレークポイント・バックトレース・変数の中身が出ます
 perf record ./app     # どの行が重いかが出ます
 ```
@@ -171,8 +182,8 @@ perf record ./app     # どの行が重いかが出ます
 (Point) (x = 4, y = 2.5)
 
 (lldb) bt                    ← 引数の値がバックトレースに出ます
-  * frame #0: util.bump(c=0x0000600000d04040, by=5) at util{{ext}}:8:1
-    frame #1: main.main at main{{ext}}:5:1
+  * frame #0: util.bump(c=0x0000600000d04040, by=5) at util.ys:8:1
+    frame #1: main.main at main.ys:5:1
 ```
 
 | 書いた型 | デバッガでの見え方 |
@@ -206,7 +217,7 @@ macOS の lldb には `Rect` という古い型の表示器が入っていて、
 
 ⚠️ **デバッガがソースを開けないときは、渡し方を見てください。**
 デバッグ情報に書くファイル名は、**コンパイルのときに渡したとおり**です
-（`{{cc}} -g app{{ext}}` なら `app{{ext}}`、絶対パスで渡せば絶対パス）。
+（`yashirolang -g app.ys` なら `app.ys`、絶対パスで渡せば絶対パス）。
 相対で渡したものは、デバッガの側でも**同じディレクトリから**始めてください。
 ★ IDE や VS Code 拡張は絶対パスで渡すので、どこから始めても開けます。
 
@@ -219,7 +230,7 @@ macOS の lldb には `Rect` という古い型の表示器が入っていて、
 | オプション | 説明 |
 |---|---|
 | `--version` | 版番号・stage・target triple |
-| `--print-lib-dir` | 標準ライブラリの場所を表示（パッケージマネージャ [`{{pm}}`](pkg.md) が名前の衝突を確かめるのに使います） |
+| `--print-lib-dir` | 標準ライブラリの場所を表示（パッケージマネージャ [`ysm`](pkg.md) が名前の衝突を確かめるのに使います） |
 | `-h`, `--help` | 使い方 |
 
 ## 処理系を追う
@@ -239,7 +250,7 @@ macOS の lldb には `Rect` という古い型の表示器が入っていて、
 |---|---|
 | `PLC_CLANG` | 使う clang（`clang-18` など名前が違うとき） |
 | `PLC_RUNTIME_O` | ランタイム（`runtime.a`）の場所 |
-| `PLC_LIB_DIR` | 標準ライブラリ（`*{{ext}}`）の場所 |
+| `PLC_LIB_DIR` | 標準ライブラリ（`*.ys`）の場所 |
 | `PLC_TARGET_TRIPLE` | 既定の target triple |
 | `PLC_CFLAGS` | `-c` のときに clang へ追加で渡す引数 |
 

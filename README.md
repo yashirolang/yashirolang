@@ -1,7 +1,9 @@
 # yashirolang
 
-**Python の書きやすさのまま、Rust の安全性を手に入れる**ことを目指すプログラミング言語と、
-その処理系（C 言語 + LLVM の自作コンパイラ）です。最終的に **OS を書けること**を目標にしています。
+**Python の書きやすさのまま、Rust の安全性を手に入れる**ことを目指すプログラミング言語です。
+GC はありません。所有権と借用の検査でメモリ安全性を保証し、LLVM を通して機械語まで落とします。
+コンパイラは C 版（`src/`）と yashirolang 版（`selfhost/`）の 2 つがあり、**セルフホストに到達しています**
+（両者はバイト単位で同じ IR を出し、`make bootstrap` が stage2 == stage3 を確かめます）。
 
 ```python
 # examples/fizzbuzz.ys
@@ -18,43 +20,47 @@ def main() -> int:
     return 0
 ```
 
-| | |
-|---|---|
-| 拡張子 | `.ys` |
-| コンパイラ | `yashirolang`（C 実装 → **セルフホスト済み**） |
-| バックエンド | LLVM IR を直接出力（テキスト） |
-| 型付け | 静的・型注釈必須・実行時型情報なし |
-| 現在地 | v2（安全性・エラー処理・共有所有）実装済み／**所有権の検査は既定でエラー**（Rust と同じ強さ）／**範囲型と契約**（Ada の部分型・Pre/Post）／**RISC-V のベアメタルで動作**・604 テスト |
+```bash
+yashirolang fizzbuzz.ys -o fizzbuzz && ./fizzbuzz
+```
 
 ---
 
-## 使ってみる（Linux / macOS / Windows）
+## 特徴
 
-### 必要なもの
+| | |
+|---|---|
+| **見た目は Python** | インデント構文・`for` / `if` / クラス・f-string・内包表記・スライス |
+| **静的型付け** | 型注釈は必須。暗黙の型変換なし（`int` と `float` すら混ざりません） |
+| **GC なし・所有権あり** | 二重解放・解放後の使用は**コンパイルエラー**。ライフタイム注釈（`'a`）も `&` も `.clone()` もありません |
+| **書く安全語は 3 つだけ** | `own` / `mut` / `raises`。それ以外は既定（借用）で動きます |
+| **数もあふれません** | 整数の桁あふれ・0 除算・範囲外アクセスを常に検査して停止します |
+| **範囲型と契約** | `type Percent = int range(0, 100)`、`requires` / `ensures`（Ada の部分型・Pre/Post） |
+| **データ競合も型で止める** | `spawn` / `join` / `mutex[T]`。**注釈は 1 つも増えません** |
+| **必要なのは clang だけ** | LLVM IR のテキストを出力し、アセンブルとリンクは clang に任せます |
+| **ベアメタルでも動く** | RISC-V（QEMU virt）でカーネルが動きます。`unsafe:` と生ポインタあり |
+| 拡張子 / コマンド | `.ys` / `yashirolang`（コンパイラ）・`ysm`（パッケージマネージャ） |
 
-**clang だけです。** このコンパイラは LLVM IR のテキストを出力し、
-アセンブルとリンクを clang に任せる作りなので、clang があればどの OS でも同じように動きます。
+対応環境は Linux / macOS（Intel・Apple Silicon）/ Windows（MSYS2）、それと RISC-V ベアメタルです。
+
+---
+
+## インストール
+
+必要なのは **clang だけ**です。
 
 | OS | 入れるもの |
 |---|---|
-| **Linux** | `sudo apt install clang llvm make`（Debian / Ubuntu）<br>`sudo dnf install clang llvm make`（Fedora） |
-| **macOS** | `xcode-select --install`（Apple clang で足ります） |
-| **Windows** | [MSYS2](https://www.msys2.org/) を入れて、MINGW64 シェルで<br>`pacman -S mingw-w64-x86_64-clang mingw-w64-x86_64-lld make diffutils grep coreutils` |
+| Linux | `sudo apt install clang llvm make`（Debian / Ubuntu）<br>`sudo dnf install clang llvm make`（Fedora） |
+| macOS | `xcode-select --install` |
+| Windows | [MSYS2](https://www.msys2.org/) の MINGW64 シェルで<br>`pacman -S mingw-w64-x86_64-clang mingw-w64-x86_64-lld make diffutils grep coreutils` |
 
-> **⚠️ Windows は MSYS2（または WSL）の上で使ってください。**
-> テストとビルドが bash と make に依存しているためです。
-> WSL を使う場合は「Linux」の手順がそのまま使えます。
+> ⚠️ Windows は MSYS2（または WSL）の上で使ってください。ビルドとテストが bash と make に依存しています。
 
-### A. 配布物をダウンロードして使う（ビルド不要）
+### 配布物を使う（ビルド不要）
 
-[Releases](https://github.com/yashirolang/yashirolang/releases) から
-OS に合う `.tar.gz` を取って展開します。
-
-| ファイル | 対象 |
-|---|---|
-| `yashirolang-linux-x86_64.tar.gz` | Linux（x86_64） |
-| `yashirolang-macos-universal.tar.gz` | macOS（**Intel / Apple Silicon 両対応**） |
-| `yashirolang-windows-x86_64.tar.gz` | Windows（MSYS2 / MINGW64） |
+[Releases](https://github.com/yashirolang/yashirolang/releases) から OS に合う `.tar.gz` を取って展開します。
+**展開した場所がどこでも動きます。**
 
 ```bash
 tar xzf yashirolang-linux-x86_64.tar.gz
@@ -65,292 +71,153 @@ printf 'def main() -> int:\n    print("hello")\n    return 0\n' > hello.ys
 ./hello                      # → hello
 ```
 
-中身はこの 3 つだけです。**展開した場所がどこでも動きます**
-（コンパイラが実行ファイルからの相対で標準ライブラリを探すため）。
-
-```
-bin/yashirolang
-lib/plc/runtime.a
-lib/plc/lib/*.ys        ← 標準ライブラリ（文字列・入出力・JSON・集合・時刻・数学・線形代数・複素数・FFT・作図・表・十進小数・バイト列 ほか）
-```
-
-### B. ソースからビルドする
+### ソースからビルドする
 
 ```bash
 git clone https://github.com/yashirolang/yashirolang.git
 cd yashirolang
-make                         # → build/yashirolang
-
-./build/yashirolang examples/wordcount.ys -o wc
-./wc examples/sample.txt
+make                                  # → build/yashirolang
+./build/yashirolang examples/fizzbuzz.ys -o fizzbuzz
 ```
 
-### C. インストールする（PATH に置く）
+### PATH に入れる
 
 ```bash
-sudo make install            # 既定は /usr/local
-make install PREFIX=$HOME/.local   # 自分の環境だけに入れるなら
+sudo make install                     # 既定は /usr/local
+make install PREFIX=$HOME/.local      # 自分の環境だけに入れるなら
 
-yashirolang hello.ys -o hello  # どこからでも呼べる
-yashirolang --version          # → yashirolang 0.28.0 (stage0)
-ysm --version                 # パッケージマネージャも一緒に入ります
+yashirolang --version                 # コンパイラ
+ysm --version                         # パッケージマネージャも一緒に入ります
 ```
-
-### D. ライブラリを使う（パッケージマネージャ `ysm`）
-
-**レジストリはありません。** 依存は git のリポジトリを直に指します。
-
-```bash
-ysm init myapp
-ysm add toml https://github.com/user/toml-pkg 1.2.0
-ysm build                     # yashirolang -I deps main.ys -o myapp
-```
-
-```python
-import toml.parser               # deps/toml/parser.ys
-import json                      # 標準ライブラリ。**名前はぶつかりません**
-```
-
-`package.lock` が commit と tree の SHA で中身を固定するので、タグを
-張り替えられても入ってくるものは変わりません。**インストール中に
-パッケージのコードは 1 行も実行されません**（`git clone --bare` のあとは
-`rev-parse` / `show` / `ls-tree` で読むだけで、作業ツリーを作らないため）。
-
-→ [使い方](docs/reference/pkg.md) ／ [なぜこの設計か](docs/design/package-manager.md)
-
-### よく使うコマンド
-
-```bash
-make test                  # 全テスト + 解放の検査 + セルフホスト比較 + ysm
-make pm                    # パッケージマネージャ ysm をビルド
-make coverage              # C 版コンパイラのカバレッジを測る
-make stdlib-usage          # 標準ライブラリの API がどれだけ呼ばれているか
-make bootstrap             # 3 段ビルドと不動点の検証（stage2 == stage3）
-make dist                  # 配布用のディレクトリを build/dist に作る
-make qemu-test             # ベアメタル（RISC-V）の検証
-make info                  # 使っている clang・triple などの現在値
-```
-
-環境変数で差し替えられます。
-
-| 変数 | 用途 |
-|---|---|
-| `PLC_CLANG` | 使う clang（`clang-18` など名前が違うとき） |
-| `PLC_RUNTIME_O` / `PLC_LIB_DIR` | ランタイムと標準ライブラリの場所 |
-| `make CC=gcc` | コンパイラ本体のビルドに使う C コンパイラ |
 
 ---
 
-## ドキュメント
+## Rust・Ada と比べたときの立ち位置
 
-**言語の使い方を知りたい方は [docs/tutorial.md](docs/tutorial.md)（入門）から。**
-30 分で読み切れます。
+**「Rust の安全性を、Python の書き味で。足りないぶんは Ada から借りる」**——それがこの言語です。
 
-> ⚠️ `docs/` のファイルは**ひな型**です。言語名を持たせないために
-> `{{cc}}` `{{ext}}` `{{pm}}` という合い言葉で書いてあります。
-> 実際の名前が入った読みやすい形は `make docs` で `build/docs/` に出ます。
+| | yashirolang | Rust | Ada / SPARK |
+|---|---|---|---|
+| 書き味 | Python（インデント構文・型注釈のみ） | 独自（`&`・`'a`・`.clone()`） | Pascal 系（冗長） |
+| メモリ安全（解放） | ✅ 所有権・借用。**既定でエラー** | ✅ 所有権・借用 | ⚠️ 解放は手動 |
+| ライフタイム注釈 | **不要**（借用は呼び出しより長生きしない、という 1 つの規則で代用） | 必要（`'a`） | — |
+| null 参照 | ✅ `T \| None` と絞り込み | ✅ `Option` | ⚠️ 既定では無い |
+| 整数の桁あふれ | ✅ **常に検査** | ⚠️ debug のみ（release は折り返す） | ✅ 常に検査 |
+| 範囲外アクセス | ✅ 検査（外す手段なし） | ✅ 検査 | ✅ 検査 |
+| 値の範囲を型で縛る | ✅ `int range(0, 100)` | ❌ | ✅ 部分型 |
+| 事前・事後条件 | ✅ `requires` / `ensures` | ❌ | ✅ `Pre` / `Post` |
+| データ競合 | ✅ 検査（**追加の注釈なし**） | ✅ `Send` / `Sync` トレイト | ✅ Ravenscar |
+| エラー処理 | `raises` / `try` / `except`（アンワインドしない戻り値検査。握りつぶせません） | `Result` / `?` | 例外（握りつぶせる） |
+| 形式検証 | ⚠️ 区間解析で実行時検査を消すところまで | ❌（外部ツール） | ✅ SPARK |
+| 逃げ道 | `unsafe:` | `unsafe` | `Unchecked_*` |
 
-| | |
-|---|---|
-| [docs/README.md](docs/README.md) | ドキュメントの入口（全体の地図） |
-| [docs/tutorial.md](docs/tutorial.md) | **入門** — 言語の使い方 |
-| **[docs/reference/numerics.md](docs/reference/numerics.md)** | **数値計算の手引き** — numpy / matplotlib / pandas との対応表 |
-| [docs/reference/net.md](docs/reference/net.md) | **ソケットと HTTP**（サーバーとクライアントの書き方） |
-| [docs/reference/cli.md](docs/reference/cli.md) | `yashirolang` のオプション |
-| [docs/reference/pkg.md](docs/reference/pkg.md) | パッケージマネージャ `ysm` の使い方 |
-| [docs/spec/](docs/spec/) | **言語仕様** — 構文・型・安全性・標準ライブラリ |
-| [docs/design/](docs/design/) | **処理系の設計** — パス構成・IR 規約・所有権検査 |
-| [docs/roadmap.md](docs/roadmap.md) | 到達点と、これから入れるもの |
+**要するに:**
+
+- **Rust に対して** — 保証はほぼ同じで、**書く量が減ります**。ライフタイム注釈も借用記号もトレイト境界もありません。代わりにジェネリクスの境界・クロージャ・`match` はまだありません。
+- **Ada に対して** — 部分型（範囲型）と契約という Ada の良さを取り込みつつ、**メモリは所有権で管理します**（Ada は手動解放）。SPARK のような証明器は入れません（「clang だけで建つ」を壊すため）。
+- **Python に対して** — 同じ処理で**行数はおよそ 1.7 倍**（型注釈のぶん）。代わりにネイティブの速さと、実行前に止まる安全性が付きます。
 
 ---
 
-## 安全性の考え方
+## 所有権と借用（覚えるのは 3 語）
 
-Rust の保証（use-after-free / 二重解放 / データ競合 / null の排除）を入れつつ、
-**Rust の記法は持ち込みません**。書かせるのは `own` / `mut` / `raises` の 3 つだけです。
+**引数は既定で「借用」です。** 呼び出し側には何も書きません。
 
 ```python
-def total(xs: list[int]) -> int:        # 引数は既定で「借用」。&Vec<i64> とは書かない
+def total(xs: list[int]) -> int:      # 借用。読むだけ
     s: int = 0
     for x in xs:
         s = s + x
     return s
 
-def store(self, name: own str) -> None:  # 保存するときだけ own を書く
+def fill(xs: mut list[int], n: int) -> None:   # mut = 借りたものを書き換える
+    xs.append(n)
+
+def store(self, name: own str) -> None:        # own = 所有権を受け取る（持ち続ける）
     self.name = name
 
-def read_config(path: str) -> Config raises IOError:   # 失敗は型で宣言する
-    ...
+def main() -> int:
+    xs: list[int] = [1, 2, 3]
+    fill(xs, 4)                       # 呼び出し側に & も mut も書かない
+    print(total(xs))                  # → 10
+    return 0                          # xs はここで自動的に解放される
 ```
 
-- ライフタイム注釈（`'a`）は**ありません** — 借用は呼び出しより長生きしない、という規則で代用します
-- **検査は既定でエラーです**（0.18.0 から）。二重解放・解放後の使用の指摘は、
-  オプションを 1 つも付けなくてもコンパイルを止めます。
-  ⚠️ 逃げ道は `--warn-own`（警告に落とす）ですが、**付けたコードはこの保証の外**です
-- **コンパイラ自身がこの検査を通ります**（`make own-strict`）。共有が要るところは `rc[T]` です
-- **クラスのフィールドは、`init` の「どの経路でも」代入されているかを見ます**
-  （Ada / SPARK の definite assignment にあたる検査。`if` の中だけの代入は止まります）
-- **値の範囲を型で縛れます** — `type Percent = int range(0, 100)`（Ada の部分型）。
-  入れるたびに確かめ、定数はコンパイル時に断ります。**外す手段はありません**
-- **事前条件・事後条件を書けます** — `requires` / `ensures`（Ada の `Pre` / `Post`）。
-  `ensures` の中の `result` は戻り値そのものです
-- 例外はアンワインドしません — `try` / `except` は戻り値検査に落ちるので、**カーネルでも使えます**
-- **`Send` / `Sync` に相当するトレイトもありません** — スレッドに渡せるかは
-  「借りか、所有か、`rc` か」で決まるので、**上の 3 語のほかに書くものは増えません**
+| 書くもの | 意味 | いつ書くか |
+|---|---|---|
+| （何も書かない） | **借用**。読める。呼び出しが終わるまでしか生きない | ほとんどの引数 |
+| `own T` | **所有権をもらう**。保存しても返してもよい | 受け取った値をフィールドやリストに**しまうとき** |
+| `mut T` | **借りたまま書き換える** | 引数の中身を変えるとき |
 
-### 並行実行
+借りたものをしまおうとすると、コンパイルが止まります。
 
 ```python
-def rows(a: list[float], b: list[float], n: int, r0: int, r1: int) -> list[float]:
-    ...                                # ★ a と b は借り。写しを取らない
-
-scope:                                 # 出口で必ず join される
-    ts.append(spawn(rows, a, b, n, 0, 128))
-    ...
+class Node:
+    name: str
+    def init(self, name: str) -> None:
+        self.name = name             # error[E-BORROW-3]: 借用した値 'name' を
+                                     # フィールドに保存できません
+                                     # → 'name: own str' にすると受け取れます
 ```
 
-- スレッドに渡せるのは **`own` した値・`mutex[T]`・`scope:` の中の共有の借り**です。
-  それ以外の借り・`rc[T]`・可変借用はコンパイルエラーになります（`E-SEND-1`〜`4`）。
-  **2 つの実装（C 版・セルフホスト版）のどちらでも同じ検査をします**
-- **`Send` / `Sync` に相当するトレイトはありません** — 判定に使うのは
-  「借りか、所有か、`rc` か」だけなので、書くものが増えません
-- `mutex[T]` は **`m.lock(f)` の形だけ**（生の lock/unlock が無いので解き忘れが起きません）
-- 512×512 の行列積が **316 ms → 7 ms**（`examples/parallel_matmul.ys`）
-- ⚠️ **`async` / `await` はありません。** 理由と、あとから
-  **利用者のコードを変えずに**非同期を得る道は
-  [docs/design/concurrency.md](docs/design/concurrency.md) §6 に書いてあります
+**1 つの値を 2 か所から持ちたい**ときだけ `rc[T]`（参照カウント）を使います。
 
-### C のライブラリを繋ぐ
-
-```bash
-yashirolang -O2 app.ys -framework Accelerate -o app   # macOS
-yashirolang -O2 app.ys -lopenblas -o app              # Linux
+```python
+r: rc[Node] = rc(Node(7))
+h.node = r                            # しまって、
+return r                              # なおかつ返せる
 ```
 
-- `list[float]` の中身は**連続した double の並び**なので、C からはそのまま
-  `double*` に見えます（**写しは 1 回も起きません**）
-- 512³ の行列積で、手書き（ベクトル化つき）**36 ms** → BLAS **3 ms**
-- `import blas` で `dot` / `norm` / `axpy` / `matmul` が使えます
-
-### 証明（実行時検査を消す）
-
-```bash
-yashirolang --prove-report -S app.ys > /dev/null
-```
-
-区間解析で「必ず成り立つ」と示せた実行時検査だけを落とします。
-**書くものは 1 行も増えません**（ループ不変条件も SMT ソルバも要りません）。
-
-- コンパイラ自身（10,641 行）で**桁あふれ 211 個・添字 95 個**が消えます
-- ⚠️ **速さは測定誤差の中**でした。値打ちは「示せた」こと自体と、契約の検査が
-  コンパイル時に片付くことです
-- `--verify-prove` は消せる検査を**残して**建て、外れたら
-  「証明器が誤りました」で止めます（`make prove-verify`）
-
-### デバッグ
-
-```bash
-yashirolang -g app.ys -o app     # デバッグ情報つきで建てる
-lldb ./app                     # 止める・たどる・中身を見る
-```
-
-```
-(lldb) frame variable
-(int) total = 9
-(str) msg = 0x0000000100003f28 "point"
-(list[int]) xs = 0x0000600000d04000
-(Point) p = 0x0000600000904030
-
-(lldb) p *xs                      ← list は中身を開けます
-(list[int]) { data = 0x0000600000d04020, len = 3, cap = 4 }
-(lldb) p *p                       ← クラスはフィールドの名前で
-(Point) (x = 4, y = 2.5)
-
-(lldb) bt                         ← 引数の値がバックトレースに並びます
-  frame #3: lexer.tokenize(file="/tmp/sample.ys", src="x: int = 1\n") at lexer.ys:632:1
-```
-
-- 出るのは**関数の枠・行の対応表・変数の名前と型**です（A-30 と A-35）
-- 範囲型は名前のまま（`(Percent) rate = 42`）、`rc[T]` は**数え札まで**見えます
-- **`-g` を付けないときの出力は 1 バイトも変わりません**
-- macOS では `<出力>.dSYM` も一緒に作ります（`dsymutil` を自動で走らせます）
-- ⚠️ 最適化を掛けると見えない変数が出ます。デバッグは `-O0`（既定）で
-
-**★ エディタから使うものは別のリポジトリです。**
-[yashirolang-IDE](https://github.com/yashirolang/yashirolang-IDE)（Arduino 風の最小 IDE）と
-[yashirolang-vscode](https://github.com/yashirolang/yashirolang-vscode)（VS Code 拡張・言語サーバ）が、
-この `-g` と診断を**外から呼ぶだけ**で動きます。
-
-### 速さ
-
-- **コンパイルが並列に**。コンパイラ自身のビルドが 3.58 s → **1.45 s**
-  （`-j1` で逐次に戻せます。⚠️ 出来上がる実行ファイルは同一）
-- **数える形のループがベクトル化されるように**。添字の範囲を
-  ループの外で 1 回だけ確かめ、検査と負の添字の正規化を落とします。
-  512³ の行列積（平坦な `list[float]`）が **37.6 ms** — C の平坦配列 31.3 ms の
-  1.2 倍です（以前は 6.4 倍）。
-  ⚠️ **診断は変わりません** — 範囲外は今までどおり、その反復で同じメッセージで止まります
-  ⚠️ **0.16.0〜0.17.1 のあいだ、この最適化は既定で効いていませんでした**
-  （解放が既定になったとき、版分けの入口が諦めるようになっていたため。
-  同じ行列積が 357.5 ms）。0.17.2 で直し、`vz_bounds.ys` と
-  `drop_vz_loop.ys` が IR の構造で見張るようにしました
+詳しくは [docs/tutorial.md §7](docs/tutorial.md#7-所有権と借用--この言語の中心) と
+[docs/spec/safety-spec.md](docs/spec/safety-spec.md) にあります。
 
 ---
 
-## ディレクトリ
+## パッケージマネージャ `ysm`
 
-```
-src/        C 版コンパイラ（stage0）
-selfhost/   セルフホスト版コンパイラ（stage1 以降）
-runtime/    C 製ランタイム（core = libc 非依存／hosted = PC 用）
-lib/        セルフホスト製の標準ライブラリ（数値計算を含む。libm は使わない）
-kernel/     ベアメタル（RISC-V）のカーネル
-tools/pm/   パッケージマネージャ（この言語で書かれている）
-tests/      テストケースとテストランナー
-docs/       言語仕様・処理系の設計・入門
-```
-
-## ベアメタルで動かす（RISC-V）
+**レジストリはありません。** 依存は git のリポジトリを直に指します。
 
 ```bash
-brew install llvm riscv64-elf-binutils qemu   # 必要な道具
-make qemu                                     # QEMU で起動（Ctrl-A X で終了）
-make qemu-test                                # 出力を自動で検証
+ysm init myapp                                       # package.pkg を作る
+ysm add toml https://github.com/user/toml-pkg 1.2.0  # 依存を足す（版を省くと最新のタグ）
+ysm build                                            # yashirolang -I deps main.ys -o myapp
 ```
 
-```
-=================================
- kernel on RISC-V (virt)
-=================================
-1 から 10 までの合計: 55
-tick 1
-tick 2
-tick 3
-3 回割り込みが来ました
+```python
+import toml.parser        # deps/toml/parser.ys
+import json               # 標準ライブラリ。名前はぶつかりません
 ```
 
-**カーネル本体（`kernel/kernel.ys`）に `unsafe` は 2 か所だけ**です。
-`print` も `for` も `list[str]` も、PC 上とまったく同じように書けます。
+| コマンド | すること |
+|---|---|
+| `ysm init [名前]` | `package.pkg` を作る |
+| `ysm add <名前> <URL> [版]` | 依存を足して取ってくる |
+| `ysm sync` / `ysm verify` | ロックのとおりに `deps/` を作る / 中身を確かめる |
+| `ysm update [名前]` | 最新のタグまで上げる |
+| `ysm build [引数…]` | コンパイルする（余分な引数はコンパイラへ渡ります） |
 
+`package.lock` が commit と tree の SHA で中身を固定するので、タグを張り替えられても入ってくるものは変わりません。
+**インストール中にパッケージのコードは 1 行も実行されません**（作業ツリーを作らず、`git show` / `git ls-tree` で読むだけです）。
+
+→ [docs/reference/pkg.md](docs/reference/pkg.md)
+
+---
+
+## ドキュメント
+
+**まずは [docs/getting-started.md](docs/getting-started.md)（5 分）、次に [docs/tutorial.md](docs/tutorial.md)（30 分）です。**
+
+| | |
+|---|---|
+| [docs/README.md](docs/README.md) | ドキュメントの地図 |
+| [docs/getting-started.md](docs/getting-started.md) | インストールから最初の 1 本まで |
+| [docs/tutorial.md](docs/tutorial.md) | **言語ガイド** — Python との差分・所有権・並行・エラー処理 |
+| [docs/reference/](docs/reference/) | コマンド・標準ライブラリ・パッケージマネージャ・数値計算・ネットワーク |
+| [docs/spec/](docs/spec/) | 言語仕様（構文・型・安全性・文法） |
+| [docs/design/](docs/design/) | 処理系の設計（使うだけなら不要） |
 
 ---
 
 ## ライセンス
 
-**[Apache License 2.0](LICENSE)** です。
-
-```
-Copyright 2026 The yashirolang Authors
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-```
+**[Apache License 2.0](LICENSE)** — Copyright 2026 The yashirolang Authors.

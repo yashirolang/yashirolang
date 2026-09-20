@@ -1,11 +1,11 @@
-# `{{pm}}` リファレンス
+# `ysm` リファレンス
 
-本言語のパッケージマネージャです。**レジストリはありません。**
+yashirolang のパッケージマネージャです。**レジストリはありません。**
 依存は git のリポジトリを直に指します。設計の理由は
 [設計 §パッケージマネージャ](../design/package-manager.md) にあります。
 
 ```
-{{pm}} <コマンド> [引数…]
+ysm <コマンド> [引数…]
 ```
 
 ---
@@ -13,12 +13,12 @@
 ## はじめかた
 
 ```bash
-{{pm}} init myapp                                          # package.pkg を作る
-{{pm}} add json https://github.com/user/json-pkg 1.2.0      # 依存を足す
-{{pm}} build                                               # 実行ファイルを作る
+ysm init myapp                                          # package.pkg を作る
+ysm add json https://github.com/user/json-pkg 1.2.0      # 依存を足す
+ysm build                                               # 実行ファイルを作る
 ```
 
-`{{pm}} add` の版を省くと、そのリポジトリでいちばん新しい `vX.Y.Z` タグを使います。
+`ysm add` の版を省くと、そのリポジトリでいちばん新しい `vX.Y.Z` タグを使います。
 
 ---
 
@@ -26,23 +26,23 @@
 
 | コマンド | すること |
 |---|---|
-| `{{pm}} init [名前]` | `package.pkg` を作る（既定の名前は `myapp`） |
-| `{{pm}} add <名前> <URL> [版]` | 依存を足し、解決して `deps/` に入れる |
-| `{{pm}} sync` | `package.lock` のとおりに `deps/` を作り直す |
-| `{{pm}} update [名前]` | 最新のタグまで上げてロックを書き直す |
-| `{{pm}} verify` | `deps/` の中身がロックと一致するか確かめる |
-| `{{pm}} list` | いま選ばれている版とモジュールを並べる |
-| `{{pm}} build [引数…]` | `{{cc}} -I deps <entry> -o <name>` を実行する |
-| `{{pm}} clean` | `deps/` とキャッシュを消す |
+| `ysm init [名前]` | `package.pkg` を作る（既定の名前は `myapp`） |
+| `ysm add <名前> <URL> [版]` | 依存を足し、解決して `deps/` に入れる |
+| `ysm sync` | `package.lock` のとおりに `deps/` を作り直す |
+| `ysm update [名前]` | 最新のタグまで上げてロックを書き直す |
+| `ysm verify` | `deps/` の中身がロックと一致するか確かめる |
+| `ysm list` | いま選ばれている版とモジュールを並べる |
+| `ysm build [引数…]` | `yashirolang -I deps <entry> -o <name>` を実行する |
+| `ysm clean` | `deps/` とキャッシュを消す |
 
-余分な引数は `{{pm}} build` からコンパイラへそのまま渡ります。
+余分な引数は `ysm build` からコンパイラへそのまま渡ります。
 
 ```bash
-{{pm}} build -O2                 # 所有権の検査は既定でエラーです（0.18.0〜）
-{{pm}} build --warn-own          # 古い依存を通したいときだけ
+ysm build -O2                 # 所有権の検査は既定でエラーです（0.18.0〜）
+ysm build --warn-own          # 古い依存を通したいときだけ
 ```
 
-`{{pm}} update` に名前を渡すと、**間接の依存でも**上げられます。そのとき
+`ysm update` に名前を渡すと、**間接の依存でも**上げられます。そのとき
 `package.pkg` に `dep` 行が足されます（MVS では「上げる」＝「下限の要求を
 書き換える」なので、要求を記録する必要があるためです）。
 
@@ -55,8 +55,8 @@
 ```
 name    myapp                 パッケージ名（識別子）
 version 0.1.0                 このパッケージの版
-entry   main{{ext}}               {{pm}} build が渡す入口（ライブラリなら省略）
-src     .                     {{ext}} を置いてあるディレクトリ（既定 "."）
+entry   main.ys               ysm build が渡す入口（ライブラリなら省略）
+src     .                     .ys を置いてあるディレクトリ（既定 "."）
 
 dep     json https://github.com/user/json-pkg 1.2.0
 ```
@@ -66,7 +66,7 @@ dep     json https://github.com/user/json-pkg 1.2.0
 
 ## `package.lock`
 
-`{{pm}}` が書きます。**git にコミットしてください。**
+`ysm` が書きます。**git にコミットしてください。**
 commit と tree の SHA で中身を固定するファイルで、中央のレジストリが
 担っていた「一度公開した版は変わらない」保証をこれが肩代わりします。
 
@@ -77,7 +77,7 @@ pkg  httpx https://github.com/v/httpx-pkg 0.3.0 <commit> <tree>
 mod  httpx                                        ← 入るモジュール
 ```
 
-`root` が `package.pkg` の `dep` と食い違うと、`{{pm}} sync` は解決し直します
+`root` が `package.pkg` の `dep` と食い違うと、`ysm sync` は解決し直します
 （依存を消したときもこれで気づきます）。
 
 ---
@@ -85,18 +85,18 @@ mod  httpx                                        ← 入るモジュール
 ## ライブラリを公開する
 
 1. リポジトリの根に `package.pkg` を置き、`name` と `version` を書く。
-2. `{{ext}}` を置く（既定は根。別の場所なら `src`）。
+2. `.ys` を置く（既定は根。別の場所なら `src`）。
 3. `git tag v1.2.3` を打って push する。
 
-これだけです。登録も申請も要りません。利用者は URL を `{{pm}} add` に渡します。
+これだけです。登録も申請も要りません。利用者は URL を `ysm add` に渡します。
 
 **名前の心配は要りません**（A-32 から）。入るのは
-`deps/<パッケージ名>/<モジュール>{{ext}}` で、使う側は
+`deps/<パッケージ名>/<モジュール>.ys` で、使う側は
 `import <パッケージ名>.<モジュール>` と書きます。つまり `json` や `set` の
 ような一般名でも、標準ライブラリとも他のパッケージともぶつかりません。
 
 ```python
-import mytoml.toml          # deps/mytoml/toml{{ext}}
+import mytoml.toml          # deps/mytoml/toml.ys
 import json                 # 標準ライブラリ。同じファイルに書けます
 
 def main() -> int:
@@ -104,8 +104,8 @@ def main() -> int:
     return 0
 ```
 
-⚠️ **パッケージの中でも、名前は完全に書きます。** `mytoml/toml{{ext}}` から
-同じパッケージの `mytoml/lex{{ext}}` を使うときも `import mytoml.lex` です
+⚠️ **パッケージの中でも、名前は完全に書きます。** `mytoml/toml.ys` から
+同じパッケージの `mytoml/lex.ys` を使うときも `import mytoml.lex` です
 （相対 import はありません。名前の出どころがソースから読み取れなくなるため）。
 
 ---
@@ -114,20 +114,20 @@ def main() -> int:
 
 | 変数 | 用途 |
 |---|---|
-| `PLC_CC` | `{{pm}} build` が使うコンパイラ（既定 `{{cc}}`） |
+| `PLC_CC` | `ysm build` が使うコンパイラ（既定 `yashirolang`） |
 | `PLC_CACHE` | 取ってきたリポジトリの置き場（既定 `~/.cache/plc`） |
 
 ---
 
 ## 知っておくべきこと
 
-- **`deps/` は `{{pm}}` のものです。** `sync` のたびに作り直すので、手で置いた
+- **`deps/` は `ysm` のものです。** `sync` のたびに作り直すので、手で置いた
   ファイルは消えます。自分のコードは `deps/` の外に置いてください。
 - **インストール中にパッケージのコードは 1 行も実行されません。**
-  `{{pm}}` は作業ツリーを作らず、`git show` / `git ls-tree` で中身を読むだけです。
+  `ysm` は作業ツリーを作らず、`git show` / `git ls-tree` で中身を読むだけです。
 - **同じパッケージの 2 つの版は同居できません。** モジュール名が IR の
   名前修飾そのものだからです。版は MVS（要求された下限の最大）で 1 つに決まります。
-- **置き場所は `deps/<パッケージ名>/<モジュール>{{ext}}` です**（A-32）。
+- **置き場所は `deps/<パッケージ名>/<モジュール>.ys` です**（A-32）。
   パッケージごとにディレクトリが分かれるので、モジュール名の衝突は起きません。
 - **タグは `vX.Y.Z` の形だけ**を見ます。`1.0.0-rc1` のようなプレリリースは
   受け付けません。

@@ -1,9 +1,5 @@
 # bench/ — 速さを測る
 
-> ⚠️ `<cc>` はコンパイラ、`<pm>` はパッケージマネージャのコマンド名、`<ext>` はソースの拡張子です。
-> 実際の値は `make info` で分かります（言語名をここに書き写さない理由は [docs/design/naming.md](../docs/design/naming.md)）。
-
-
 **この文書とロードマップに載っている数字は、ここで測ったものです。**
 
 ```bash
@@ -34,7 +30,7 @@ BENCH_REPS=5 bench/run.sh   # 繰り返し回数（既定 3。最小値を採る
 
 | 言語 | 使う時計 |
 |---|---|
-| 本言語 | `lib/time` の `time.monotonic_ns()` |
+| yashirolang | `lib/time` の `time.monotonic_ns()` |
 | C | `bench_time.h` の `clock_gettime(CLOCK_MONOTONIC)` |
 | Rust | `std::time::Instant` |
 | Python | `time.perf_counter()` |
@@ -44,7 +40,7 @@ BENCH_REPS=5 bench/run.sh   # 繰り返し回数（既定 3。最小値を採る
 
 ### ② 最適化の水準を必ず書く
 
-`<cc> prog<ext>` の既定は **`-O0`** です。`-O2` とは 5〜8 倍違います。
+`yashirolang prog.ys` の既定は **`-O0`** です。`-O2` とは 5〜8 倍違います。
 表では `-O0`（既定）と `-O2` を別の行にしています。
 
 ### ③ 答え合わせをする
@@ -66,11 +62,11 @@ BENCH_REPS=5 bench/run.sh   # 繰り返し回数（既定 3。最小値を採る
 
 ### 比較対象について
 
-- **Rust** は既定（`-O`）では**桁あふれを検査しません**。本言語は検査するので、
+- **Rust** は既定（`-O`）では**桁あふれを検査しません**。yashirolang は検査するので、
   `-C overflow-checks=on` の行も出します。**比べるならこちらです。**
 - **numpy** の `a @ b` は BLAS（ブロック化・SIMD・マルチスレッド）です。
   **同じ土俵ではありません。** 上限の目安として置いてあります。
-- 本言語に並行実行はないので、**すべて単スレッド同士**の比較です。
+- yashirolang に並行実行はないので、**すべて単スレッド同士**の比較です。
 
 ### N を 512 にしている理由
 

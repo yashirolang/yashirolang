@@ -1,6 +1,6 @@
 # 標準ライブラリ
 
-`import` するだけで使えます。**中身はすべて本言語で書かれています**（`lib/*{{ext}}`）。
+`import` するだけで使えます。**中身はすべて yashirolang で書かれています**（`lib/*.ys`）。
 コンパイラは一切特別扱いしていません — ユーザーが書けるものだけで出来ています。
 
 ```python
@@ -37,14 +37,16 @@ def main() -> int:
 | [`decimal`](#decimal) | **十進の固定小数点** — 金額のための正確な数 |
 | [`bytes`](#bytes) | **固定幅のバイト並び** — 通信フレーム・バイナリ形式 |
 | [`blas`](#blas) | **BLAS を呼ぶ** — 行列積・内積（⚠️ リンクの指定が要ります） |
+| [`net`](net.md) | **TCP ソケット** — 別の文書にまとめてあります |
+| [`http`](net.md) | **HTTP/1.1** — サーバーとクライアント（同上） |
 
 > **numpy / scipy / matplotlib / pandas との対応表**は
-> [数値計算の手引き](../reference/numerics.md)にあります。
+> [数値計算の手引き](numerics.md)にあります。
 
-> **⚠️ 数値計算のモジュールも、すべて本言語で書かれています。**
+> **⚠️ 数値計算のモジュールも、すべて yashirolang で書かれています。**
 > `libm` を呼びません。ランタイムが libc に依存しない約束（ベアメタルで動く）
 > を守るためで、`math.sqrt` はニュートン法、`math.exp` は引数を縮小してから
-> テイラー展開、というように中身まで `lib/math{{ext}}` にあります。
+> テイラー展開、というように中身まで `lib/math.ys` にあります。
 
 ---
 
@@ -330,9 +332,9 @@ def main() -> int:
 
 ```
 error: hash は 'Node' 型を受け取れません
-   --> lib/dict{{ext}}:50:21
+   --> lib/dict.ys:50:21
 note: この実体化（Dict$Node$int）で使われました
-   --> main{{ext}}:7:13          ← 発端の行も示します
+   --> main.ys:7:13          ← 発端の行も示します
 ```
 
 ⚠️ ハッシュは FNV-1a です。**暗号用ではありません。** 敵が鍵を選べる場面
@@ -381,7 +383,7 @@ def main() -> int:
 
 > **ジェネリクスが入るまでは書けませんでした。** 値が `int` に固定されていたので、
 > 「`list` に置いて、その添字を値に入れる」回り道が必要でした
-> （`tests/cases/lib_dict_handle{{ext}}` にその形が残っています）。
+> （`tests/cases/lib_dict_handle.ys` にその形が残っています）。
 
 ### 鍵の所有権に注意
 
@@ -396,7 +398,7 @@ def count(words: list[str]) -> None:
 ```
 
 `copy` を書かないと `E-BORROW-1` の警告が出ます。詳しくは
-[safety-spec.md](safety-spec.md) を参照してください。
+[safety-spec.md](../spec/safety-spec.md) を参照してください。
 
 ---
 
@@ -416,10 +418,10 @@ if "z" not in d:
 **Python の `math` に相当します。** すべて `float` を受け取り `float` を返します。
 
 > **⚠️ `libm` は呼びません。** ランタイムは libc に依存しない約束なので
-> （ベアメタルで動かすため）、`lib/math{{ext}}` にアルゴリズムごと書いてあります。
+> （ベアメタルで動かすため）、`lib/math.ys` にアルゴリズムごと書いてあります。
 > 精度の目標は**倍精度の有効桁のうち下位 1〜2 桁を除いて合う**ことです。
 > libm のような最終ビットまでの正確さは目指していません
-> （`tests/cases/lib_math_libm{{ext}}` が libm の値 580 件と突き合わせています）。
+> （`tests/cases/lib_math_libm.ys` が libm の値 580 件と突き合わせています）。
 
 ### 定数
 
@@ -593,7 +595,7 @@ m[i, j] += 1.0
 | `m[i, j]` / `m[i, j] = v` | `get` / `set`（範囲検査つき） |
 
 > **⚠️ numpy とは違います。** numpy の `a * b` は要素ごとの積、`a @ b` が
-> 行列の積です。本言語に `@` は無いので、数学の書き方に合わせて
+> 行列の積です。yashirolang に `@` は無いので、数学の書き方に合わせて
 > **`*` を行列の積**にしました。**要素ごとの積は `mmul(a, b)`** です。
 
 > **⚠️ スカラー倍（`a * 2.0`）は書けません。** 多重定義は左辺の型だけで
@@ -964,8 +966,8 @@ def main() -> int:
 
 ## complex
 
-**複素数です**。`lib/complex{{ext}}` は **本言語だけで書かれていて、
-言語は 1 行も変えていません** — 0.7.0 の[演算子の多重定義](language-spec.md)で
+**複素数です**。`lib/complex.ys` は **yashirolang だけで書かれていて、
+言語は 1 行も変えていません** — 0.7.0 の[演算子の多重定義](../spec/language-spec.md)で
 `z1 * z2 + z3` がそのまま書けるようになったためです。
 
 ```python
@@ -1013,7 +1015,7 @@ def main() -> int:
 
 ## fft
 
-**高速フーリエ変換**。`complex` の上に、やはり本言語だけで
+**高速フーリエ変換**。`complex` の上に、やはり yashirolang だけで
 書かれています。
 
 ```python
@@ -1159,7 +1161,7 @@ def main() -> int:
 `how` は `"mean"` / `"sum"` / `"count"` / `"min"` / `"max"`。
 返るのは 2 列の新しい表で、**`key` の初出の順**に並びます。
 
-**組み合わせた例**は [examples/sales_report{{ext}}](../../examples/sales_report{{ext}})
+**組み合わせた例**は [examples/sales_report.ys](../../examples/sales_report.ys)
 にあります（CSV → 集計 → 図）。
 
 ---
@@ -1229,7 +1231,7 @@ print(str(bytes.get_i32_le(buf, 2)))  # -2
 | `bytes.from_str(s)` / `bytes.hex(buf)` | 文字列の中身をバイトに / 16 進で見る |
 
 **幅の型**：`bytes.U8` / `U16` / `U32` / `I8` / `I16` / `I32` は
-[範囲型](type-system.md#45-範囲型部分型a-28)です。
+[範囲型](../spec/type-system.md#45-範囲型部分型a-28)です。
 
 ⚠️ **幅に合わない値は、入れる時点で止まります**（黙って切り詰めません）。
 検査は library に 1 行も書いていません——引数の型が範囲型なので、
@@ -1252,8 +1254,8 @@ runtime error: value out of range: U8 accepts 0..255 but got 300
 ⚠️ **リンクの指定が要ります**（標準ライブラリには入っていません）。
 
 ```bash
-{{cc}} -O2 app{{ext}} -framework Accelerate -o app   # macOS
-{{cc}} -O2 app{{ext}} -lopenblas -o app              # Linux（または -lblas）
+yashirolang -O2 app.ys -framework Accelerate -o app   # macOS
+yashirolang -O2 app.ys -lopenblas -o app              # Linux（または -lblas）
 ```
 
 ```python

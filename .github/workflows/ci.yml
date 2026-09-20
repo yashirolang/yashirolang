@@ -7,7 +7,7 @@
 #   ② make test       … テスト + 解放の検査（ASan）+ セルフホストの比較
 #   ③ make bootstrap  … 3 段ビルドと不動点（stage2 == stage3）
 #   ④ make bootstrap-test … セルフホスト版コンパイラでテストを全部通す
-#   ⑤ make check-naming … 言語名がどこにも書き写されていないことを確かめる
+#   ⑤ make check-naming … 言語名がコードに書き写されていないことを確かめる
 name: CI
 
 on:
@@ -82,10 +82,10 @@ jobs:
       - name: 環境を表示する
         run: make info
 
-      # ★ 言語名がどこかに書き写されていないかを、いちばん先に見ます。
+      # ★ 言語名がコードやシェルに書き写されていないかを、いちばん先に見ます。
       #   改名を tools/rename.sh の 1 回で終わらせる、という約束の見張りです
-      #   （docs/design/naming.md）。README.md が README.md.in と
-      #   食い違っていても、ここで落ちます。
+      #   （docs/design/naming.md）。★ 文書（README.md と docs/）は対象外です
+      #   ——読む人のために実際の名前を書いてあり、rename.sh が置換します。
       #
       #   ⚠️ Linux でだけ回します。3 つの OS で同じ結果になる検査なので、
       #     3 回やっても分かることは増えません。
@@ -118,11 +118,6 @@ jobs:
       - name: ④ セルフホスト版コンパイラでテスト
         if: runner.os == 'Linux'
         run: make bootstrap-test
-
-      # ★ 文書のひな型に名前を流し込めるか（プレースホルダの書き損じ検出）
-      - name: 文書を組み立てる
-        if: runner.os == 'Linux'
-        run: make docs
 
       # ★ 言語名・拡張子・コマンド名は **make に訊きます**（ここに書き写さない）。
       #   改名しても CI を直さずに済ませるためです（docs/design/naming.md）。

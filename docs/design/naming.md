@@ -1,26 +1,22 @@
-# 名前づけの規約と「改名手順」
+# 名前づけの規約と改名の手順
 
 > **この言語の名前は将来また変わります。**
-> だから名前はリポジトリのどこにも書きません。改名は
-> `tools/rename.sh` を 1 回走らせるだけで終わります。
-
-> ⚠️ **この文書だけは、言語名を書いてよい例外です。**
-> 下の「改名の履歴」に旧名が要るためで、`make check-naming` の対象外です。
+> 改名は `tools/rename.sh` を 1 回走らせるだけで終わるようにしてあります。
 
 ---
 
 ## 1. 原則
 
-**言語名に依存する文字列は、コードにも文書にも直接書かない。**
+**コードとシェルには言語名を書かない。文書には書く。**
 
 | 種類 | 例 | 名前に依存するか | どこで決まるか |
 |---|---|---|---|
-| 人が読む言語名 | 「◯◯lang」 | ✅ する | `LANG_NAME` |
-| ソースの拡張子 | `.xx` | ✅ する | `LANG_EXT` |
-| コンパイラのコマンド名 | `xxc` | ✅ する | `LANG_CC` |
-| パッケージマネージャのコマンド名 | `xxm` | ✅ する | `LANG_PM` |
-| リポジトリの URL | `https://…/xx` | ✅ する | `LANG_REPO` |
-| 版番号 | `0.15.2` | — | `LANG_VERSION` |
+| 人が読む言語名 | `yashirolang` | ✅ する | `LANG_NAME` |
+| ソースの拡張子 | `.ys` | ✅ する | `LANG_EXT` |
+| コンパイラのコマンド名 | `yashirolang` | ✅ する | `LANG_CC` |
+| パッケージマネージャのコマンド名 | `ysm` | ✅ する | `LANG_PM` |
+| リポジトリの URL | `https://github.com/yashirolang/yashirolang` | ✅ する | `LANG_REPO` |
+| 版番号 | `0.28.0` | — | `LANG_VERSION` |
 | C 側の内部マクロ接頭辞 | `PLC_LIB_DIR` | ❌ しない | 固定 |
 | ランタイム関数の接頭辞 | `pl_str_len` | ❌ しない | 固定 |
 | 環境変数 | `PLC_CC` `PLC_CACHE` | ❌ しない | 固定 |
@@ -37,48 +33,30 @@
 改名しても**環境変数・ABI・リンク互換性は一切動きません**。
 生成コードがリンクするランタイム関数（`pl_alloc` など）も同じ理由で `pl_` に固定です。
 
-**🤔 なぜ文書からも名前を消すのか**
+**🤔 なぜ文書には名前を書くのか**
 
-改名でいちばん時間がかかるのは `docs/` の一括置換でした。しかも
-一括置換は危険です — 前の版の `rename.sh` はリポジトリ全体を置換していて、
-`Item("pen")` のような**テストの中のただの文字列**まで書き換えてしまう
-状態でした。**置換しなくて済むようにする**のが、いまの方針です。
+以前は `docs/` をひな型にして `{{cc}}` のような合い言葉を書き、`make docs` で
+名前を流し込んでいました。改名には強い代わりに、**GitHub で読む人には
+そのままの形が見えてしまい、読みにくく理解しにくい**という害のほうが大きくなりました。
+文書は読まれるためにあるので、いまは**実際の名前を書きます**。
+改名のときは `tools/rename.sh` が文書だけを置換します。
+
+⚠️ **置換してよいのは文書だけです。** 昔の `rename.sh` はリポジトリ全体を置換していて、
+`Item("pen")` のような**テストの中のただの文字列**まで書き換えていました。
+コードは `langinfo` 経由で名前を受け取るので、置換の対象になりません。
 
 ---
 
-## 2. 名前を書かないための 5 つの道具
+## 2. 名前を書かないための 4 つの道具
 
 | 場所 | 名前の代わりに書くもの | 実際の名前が入るとき |
 |---|---|---|
 | C 版のコード（`src/`） | `PLC_LANG_CC` などのマクロ | コンパイル時（`src/langinfo.h`） |
-| この言語のコード（`selfhost/` `lib/` `tools/pm/`） | `langinfo.cc()` `langinfo.ext()` … | 実行時（`lib/langinfo.<ext>`） |
-| 文書（`docs/`） | `{{!cc}}` `{{!ext}}` `{{!pm}}` `{{!name}}` `{{!version}}` `{{!repo}}` | `make docs` → `build/docs/` |
-| `README.md` | ひな型 `README.md.in` に同じ合い言葉 | `make readme` → `README.md`（コミットする） |
+| この言語のコード（`selfhost/` `lib/` `tools/pm/`） | `langinfo.cc()` `langinfo.ext()` … | 実行時（`lib/langinfo.ys`） |
+| ソースのコメント | `<cc>` `<ext>` `<pm>`（山かっこの説明語） | — |
 | シェル・`make`・GitHub Actions | `make -s print-LANG_CC` / `$(LANG_EXT)` | 実行時 |
 
-**★ 文書は「ひな型」です。**
-`docs/*.md` には `{{!cc}}` のような合い言葉が書いてあり、そのままでは
-読みにくい代わりに、**改名しても 1 文字も直す必要がありません**。
-読める形は `make docs` が `build/docs/` に作ります（git には入れません）。
-
-```
-docs/reference/cli.md            build/docs/reference/cli.md
-──────────────────────           ──────────────────────────
-# `{{!cc}}` リファレンス    ──▶   # `xxc` リファレンス
-{{!cc}} hello{{!ext}} -o hello   xxc hello.xx -o hello
-```
-
-⚠️ 合い言葉そのものを文章に書きたいときは `{{!cc}}` のように `!` を挟みます
-（流し込みの最後に `{{cc}}` へ戻るので、値に置き換わりません）。
-
-**★ `README.md` だけは生成物をコミットします。**
-GitHub の入口なので、ひな型のままでは読めないためです。ひな型は
-`README.md.in`、作り直すのは `make readme` です。ずれていたら
-`make check-naming` が落とします。
-
-**★ ソースのコメントには `<cc>` `<ext>` `<pm>` と書きます。**
-コメントは流し込みの対象ではないので、合い言葉ではなく
-「山かっこの説明語」を使います（`make info` で実際の値が分かる、と添えます）。
+文書（`README.md` と `docs/**.md`）はこの表に入りません。**そのまま名前を書きます。**
 
 ---
 
@@ -88,14 +66,14 @@ GitHub の入口なので、ひな型のままでは読めないためです。�
 |---|---|---|
 | `Makefile` の `LANG_*` | ビルド | `-DPLC_LANG_*` として C 版に渡す。実行ファイル名も `build/$(LANG_CC)` / `build/$(LANG_PM)` |
 | `src/langinfo.h` | C 版（stage0） | `-D` が無いときの既定値。コードは必ずこのマクロ経由で名前を使う |
-| `lib/langinfo.<ext>` | この言語で書かれた側 | 同じ値を関数で返す（プリプロセッサが無いため） |
+| `lib/langinfo.ys` | この言語で書かれた側 | 同じ値を関数で返す（プリプロセッサが無いため） |
 
 ```
       Makefile ── -DPLC_LANG_NAME/EXT/CC/PM ──▶ src/langinfo.h ──▶ C 版コンパイラ
-          │                                     lib/langinfo.<ext> ─┬▶ セルフホスト版コンパイラ
-          │                                             ▲           └▶ パッケージマネージャ
+          │                                     lib/langinfo.ys ──┬▶ セルフホスト版コンパイラ
+          │                                             ▲         └▶ パッケージマネージャ
           │                                             └── 値は tools/rename.sh が揃える
-          └── print-LANG_* ──▶ シェル・GitHub Actions・tools/render_docs.sh
+          └── print-LANG_* ──▶ シェル・GitHub Actions
 ```
 
 **★ `lib/` に置いてあるのはなぜか。**
@@ -117,21 +95,16 @@ GitHub の入口なので、ひな型のままでは読めないためです。�
 make check-naming
 ```
 
-これが見ているのは 3 つです。
-
-1. `docs/` のひな型に**生の言語名**が混ざっていないか（`tools/render_docs.sh --check`）
-2. `README.md` が `README.md.in` から作り直したものと一致しているか
-3. リポジトリ全体に、`LANG_NAME` / `LANG_CC` / `LANG_PM` / `LANG_EXT` の値が
-   **定義の 5 ファイル以外に**書かれていないか（`tools/check_naming.sh`）
-
-名前を書いてよいのは次の 5 つだけです。**増やさないでください。**
-増やすということは「改名のときに手で直す場所が増える」ということです。
+`LANG_NAME` / `LANG_CC` / `LANG_PM` / `LANG_EXT` の値が、**次の場所以外に**
+書かれていないかを見ます（`tools/check_naming.sh`）。
 
 - `Makefile`（`LANG_*` の定義そのもの）
 - `src/langinfo.h`（C 版の既定値）
-- `lib/langinfo.<ext>`（この言語で書かれた側の定義）
-- `README.md`（`README.md.in` からの生成物）
-- この文書（改名の履歴）
+- `lib/langinfo.ys`（この言語で書かれた側の定義）
+- `README.md` と `docs/**.md`（文書。読む人のために名前を書く）
+
+⚠️ 文書以外を例外に足さないでください。足すということは
+「改名のときに手で直す場所が増える」ということです。
 
 ---
 
@@ -146,15 +119,11 @@ tools/rename.sh --name ねこ語 --ext .nk --cc nekoc --pm nkm \
 
 1. ソース（`*.<旧拡張子>`）の名前を一括で変える（git 管理下なら `git mv`）
 2. `Makefile` / `src/langinfo.h` / `lib/langinfo.<ext>` の 3 か所を揃える
-3. `README.md` を `README.md.in` から作り直す
+3. **文書（`README.md` と `docs/**.md`）の中の旧名を置換する**（語の切れ目で探します）
 4. 3 か所が揃ったかを確かめ、`make check-naming` で書き漏れを探す
 
 変えたいものだけ渡せます（`--ext` だけ、`--version` だけ、なども可）。
 いまの値を見るだけなら `tools/rename.sh --show` です。
-
-**★ このスクリプトは文書やコードの中身を置換しません。**
-置換が要らないように書いてあるからです。置換しないので、
-テストの中のただの文字列を壊す心配もありません。
 
 仕上げに、**必ず**次を通してください。
 
@@ -184,4 +153,5 @@ LANG_REPO    = https://github.com/you/nekolang
 |---|---|---|---|
 | 2026-08-26 | Mython / `.my` / `mythonc` | Polonium / `.po` / `poloniumc` | 併せて内部接頭辞を `MYTHON_` → `PLC_`、ランタイムを `my_` → `pl_` に名前非依存化 |
 | 2026-09-09 | Polonium / `.po` / `poloniumc` / `po` | penguinlang / `.pe` / `penguin` / `pen` | 併せて ①パッケージマネージャ名を `LANG_PM` として切り出し ②`langinfo` を `lib/` に移して定義を 1 つに ③宣言・ロックを `package.pkg` / `package.lock`、キャッシュを `PLC_CACHE`、配布物の置き場を `lib/plc/` と名前非依存化 ④文書から言語名を削除 ⑤`tools/rename.sh` を追加して改名を自動化 |
-| 2026-09-12 | penguinlang / `.pe` / `penguin` / `pen` | yashirolang / `.ys` / `yashirolang` / `ysm` | ⭐ **一括置換をやめました。** ①`docs/` をひな型化（`{{!cc}}` などの合い言葉＋`make docs`）②`README.md` を `README.md.in` からの生成物に③ソースのコメントと `tools/pm/README.md` などから言語名を削除（`<cc>` `<ext>` `<pm>` 表記へ）④シェルと `Makefile` の `.pe` を `$EXT` / `$(LANG_EXT)` に⑤`LANG_REPO` を切り出し⑥`make check-naming` を新設して CI で見張る⑦`tools/rename.sh` から**リポジトリ全体の置換を削除**（テスト中の `Item("pen")` のような文字列を壊していたため） |
+| 2026-09-12 | penguinlang / `.pe` / `penguin` / `pen` | yashirolang / `.ys` / `yashirolang` / `ysm` | ⭐ **一括置換をやめました。** ①`docs/` をひな型化（`{{cc}}` などの合い言葉＋`make docs`）②`README.md` を `README.md.in` からの生成物に ③ソースのコメントから言語名を削除（`<cc>` `<ext>` `<pm>` 表記へ）④シェルと `Makefile` の拡張子を `$EXT` / `$(LANG_EXT)` に ⑤`LANG_REPO` を切り出し ⑥`make check-naming` を新設して CI で見張り ⑦`tools/rename.sh` から**リポジトリ全体の置換を削除** |
+| 2026-09-20 | （改名なし） | （改名なし） | ⭐ **文書のひな型をやめました。** `docs/` と `README.md` に**実際の名前を書く**ようにし、`README.md.in` と `tools/render_docs.sh` を廃止。代わりに `tools/rename.sh` が**文書だけ**を語の切れ目で置換します。🤔 理由は、合い言葉のまま GitHub に出る文書が読みにくく、理解を妨げていたためです |

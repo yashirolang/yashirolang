@@ -130,21 +130,21 @@ for case_file in "${CASES[@]}"; do
     # ★ **awk 1 回で全部読みます**（tests/markers.awk）。
     #   以前はここで sed を 11 回・tr を 4 回・grep を 1 回起動していました。
     #   ケースは 600 件近くあるので、**1 万プロセス近く**を毎回作っていた
-    #   ことになります。⚠️ Windows（MSYS2）は fork をエミュレートするため
+    #   ことになります。注意: Windows（MSYS2）は fork をエミュレートするため
     #   1 プロセスが Linux より 1 桁高く、CI の Windows ジョブが目に見えて
-    #   遅くなっていました。⚠️ 読み取る中身は 1 バイトも変えていません。
+    #   遅くなっていました。注意: 読み取る中身は 1 バイトも変えていません。
     #
     #   ここで入る変数: want_exit / want_error / want_output / want_tokens
     #                   want_ir / want_ir_not / want_warn / want_explain
     #                   extra_flags / has_exact_ir / stage0_only
     #
-    # ⚠️ \r は awk の中で落とします（Windows のチェックアウトで混ざることが
+    # 注意: \r は awk の中で落とします（Windows のチェックアウトで混ざることが
     #    あります。.gitattributes で変換は止めていますが、既存の作業コピー
     #    でも動くように）。
     strip_cr() { tr -d '\r'; }
 
     # ★ 標準入力を与えるケース。
-    #   ⚠️ 与えないケースでも **必ず空のファイルに繋ぎます**。繋がないと
+    #   注意: 与えないケースでも **必ず空のファイルに繋ぎます**。繋がないと
     #     端末や CI の標準入力をそのまま読んでしまい、結果が環境で変わります。
     stdin_file="$TMP/$(basename "$case_file" "$EXT").stdin"
     eval "$(awk -v stdin_file="$stdin_file" -f "$ROOT/tests/markers.awk" "$case_file")"
@@ -156,13 +156,13 @@ for case_file in "${CASES[@]}"; do
     #   「--drop を既定にしたら何件壊れるか」のような棚卸しに使います。
     #     PLC_EXTRA_FLAGS=--drop tests/run_tests.sh
     #
-    #   ⚠️ **ケースの FLAGS より前**に置きます。打ち消し合うオプション
+    #   注意: **ケースの FLAGS より前**に置きます。打ち消し合うオプション
     #     （--drop と --no-drop）は後に書いたほうが勝つので、この順なら
     #     ケース側の指定が勝ちます。診断を見せるためのテストが
     #     「--no-drop」と書いて自衛できるのは、この順のおかげです。
     # ★ `# EXACT-IR: 理由` … **IR の形そのもの**を見るケース。
     #   PLC_EXTRA_FLAGS が付いているときは飛ばします。
-    #   ⚠️ 「検査が消えたこと」を見る試験は、--verify-prove（検査を残す）と
+    #   注意: 「検査が消えたこと」を見る試験は、--verify-prove（検査を残す）と
     #     必ずぶつかります。ぶつけたまま赤にすると、本当の失敗が埋もれます。
     if [ -n "${PLC_EXTRA_FLAGS:-}" ] && [ -n "$has_exact_ir" ]; then
         skip=$((skip + 1))
@@ -172,7 +172,7 @@ for case_file in "${CASES[@]}"; do
     extra_flags="${PLC_EXTRA_FLAGS:-} $extra_flags"
 
     # ★ C 版でしか動かないケースは、セルフホスト版で回すときに飛ばす
-    #   ⚠️ 計装ビルド（build/cov/<LANG_CC>）のように場所が違う C 版もあるので、
+    #   注意: 計装ビルド（build/cov/<LANG_CC>）のように場所が違う C 版もあるので、
     #     PLC_STAGE0=1 で「これは C 版だ」と明示できます。
     if [ -n "$stage0_only" ] && [ "$is_stage0" -eq 0 ]; then
         printf "  %sskip%s  %s %s(%s)%s\n" "$C_DIM" "$C_END" "$name" \
@@ -344,7 +344,7 @@ $compile_err"
     # ── 実行 ──
     # ★ Windows（MSYS2）では実行ファイルに .exe が付きます
     [ -x "$exe" ] || [ ! -x "$exe.exe" ] || exe="$exe.exe"
-    # ⚠️ パイプで受けると $? が最後のコマンド（tr）のものになります。
+    # 注意: パイプで受けると $? が最後のコマンド（tr）のものになります。
     #    終了コードは**プログラム自身**のものを見なければ意味がないので、
     #    先に受け取ってから \r を落とします。
     actual_output="$("$exe" < "$stdin_file" 2>/dev/null)"

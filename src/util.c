@@ -1,6 +1,6 @@
 #include "util.h"
 
-// ⚠️ Windows の標準出力・標準エラーは既定で \n を \r\n に書き換えます。
+// 注意: Windows の標準出力・標準エラーは既定で \n を \r\n に書き換えます。
 //    診断や --dump-ast の出力が OS によって変わってしまうので、binary に揃えます。
 #ifdef _WIN32
 #include <fcntl.h>

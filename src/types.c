@@ -63,7 +63,7 @@ bool type_assignable(Type *from, Type *to) {
     if (type_equal(from, to)) return true;
 
     // ★ クラス → インタフェース（実装していれば代入できる）。
-    //   ⚠️ **値の変換は起きません。** vtable へのポインタはオブジェクトの
+    //   注意: **値の変換は起きません。** vtable へのポインタはオブジェクトの
     //     先頭に入っているので、ポインタはそのままです。
     if (to->kind == TY_IFACE && from->kind == TY_CLASS && class_implements_hook)
         return class_implements_hook(from->cls, to->iface);
@@ -163,7 +163,7 @@ bool type_equal(Type *a, Type *b) {
     if (a->kind == TY_LIST) return type_equal(a->elem, b->elem);
 
     // ★ 関数型は「引数の並びと戻り型が全部同じ」なら同じ型です。
-    //   ⚠️ 引数名は見ません（型だけが同一性を決めます）。
+    //   注意: 引数名は見ません（型だけが同一性を決めます）。
     if (a->kind == TY_FN) {
         if (a->nparams != b->nparams) return false;
         for (int i = 0; i < a->nparams; i++)
@@ -222,7 +222,7 @@ const char *type_name(Type *t) {
         case TY_NONE: return "None";
         case TY_STR: return "str";
         case TY_LIST: {
-            // ⚠️ 動的に組み立てるので、返り値は毎回新しい文字列になります。
+            // 注意: 動的に組み立てるので、返り値は毎回新しい文字列になります。
             //    解放しない方針（メモリモデル 3 節）なので問題ありません。
             StrBuf sb;
             sb_init(&sb);

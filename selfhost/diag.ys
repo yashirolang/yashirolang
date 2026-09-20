@@ -87,7 +87,7 @@ def is_wide_cp(cp: int) -> bool:
 
 # s の i バイト目から 1 文字ぶんのバイト長を返す
 #
-# ⚠️ 不正なバイト列でも必ず 1 以上を返す（さもないと無限ループになる）
+# 注意: 不正なバイト列でも必ず 1 以上を返す（さもないと無限ループになる）
 def utf8_len(s: str, i: int) -> int:
     c: int = strings.byte_at(s, i)
     if c < 128:
@@ -192,7 +192,7 @@ def render_block(lb: Label, gw: int) -> str:
     parts.append(spaces(gw + 1) + " | ")
 
     # ★ キャレットの手前は「表示幅」ぶんの空白を送る（全角は 2 個）
-    # ⚠️ タブはタブで送ると、端末上の桁が元の行とそろう
+    # 注意: タブはタブで送ると、端末上の桁が元の行とそろう
     i: int = 0
     while i < off:
         if strings.byte_at(src, ls + i) == 9:
@@ -280,7 +280,7 @@ def fail(d: Diag) -> None:
 # ── 簡易版（C 版の error_at / error_at_hint）────────────────
 
 def error_at(tok: rc[token.Token], msg: str) -> None:
-    # ⚠️ msg は借りものなので、複製してから預けます
+    # 注意: msg は借りものなので、複製してから預けます
     #   （own str にすると呼び出し側 200 か所に copy が要ります）
     d: Diag = Diag(copy(msg))
     d.primary = Label(tok, "")

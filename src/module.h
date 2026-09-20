@@ -40,7 +40,7 @@ void module_set_search_paths(const char **dirs, int ndirs);
 
 // 標準ライブラリ（lib/）の場所。★ 探す順番は環境変数 → 埋め込み → 実行ファイル相対。
 //
-// ⚠️ パッケージマネージャが「そのモジュール名が標準ライブラリと
+// 注意: パッケージマネージャが「そのモジュール名が標準ライブラリと
 //   ぶつかっていないか」を**入れる前に**確かめるために要ります
 //   （--print-lib-dir で外から引けます）。
 const char *module_lib_dir(void);

@@ -10,7 +10,7 @@
 #
 # ★ **移植は終わっています。** 0.16.0 で検査 7 種と解放の挿入、
 #   0.18.0 で送出可能性の検査（E-SEND-1〜4。A-25）が揃いました。
-#   ⚠️ これで「どちらのコンパイラで建てたか」で保証が変わることは
+#   注意: これで「どちらのコンパイラで建てたか」で保証が変わることは
 #   無くなりました。
 #
 # ★ 対になる定義: src/ownck.c
@@ -103,7 +103,7 @@ class Flow:
 
 # ── 場所の比較 ──────────────────────────────────────────
 #
-# ⚠️ 添字（PL_INDEX）は**どれも同じ場所**として扱います。xs[0] と xs[1] は
+# 注意: 添字（PL_INDEX）は**どれも同じ場所**として扱います。xs[0] と xs[1] は
 #   コンパイル時に区別できないためです（設計 ownership.md §3）。
 def place_eq(a: rc[Place], b: rc[Place]) -> bool:
     if a.kind != b.kind:
@@ -153,7 +153,7 @@ def ty_is_owned(t: rc[ast.Type]) -> bool:
 
 # ── Flow の操作（C 版 flow_* と対）─────────────────────────
 #
-# ⚠️ C 版は連結リストを継ぎ替えますが、こちらは list[rc[Ent]] を作り直します。
+# 注意: C 版は連結リストを継ぎ替えますが、こちらは list[rc[Ent]] を作り直します。
 #   結果は同じです（表に無い場所は Valid、という約束が同じなので）。
 
 def flow_copy(src: rc[Flow]) -> rc[Flow]:
@@ -324,7 +324,7 @@ class Options:
 
     def init(self) -> None:
         # ★ 既定は **エラー**（A-24）。--warn-own を受け取った入口だけが
-        #   False にします。⚠️ ここを False にしてしまうと、main 以外の
+        #   False にします。注意: ここを False にしてしまうと、main 以外の
         #   入口（check / emit_ir）が **2 実装で食い違う**ことになります
         #   （tests/selfhost.sh の③ が「C=1 stage1=0」で落ちて気づきました）。
         self.deny_move = True
@@ -338,7 +338,7 @@ class Options:
 
 # 報告を 1 件出す（deny なら error に上げて止める）
 #
-# ⚠️ 上限を超えたぶんは数えるだけにします（C 版 OWNCK_MAX_REPORT と同じ）。
+# 注意: 上限を超えたぶんは数えるだけにします（C 版 OWNCK_MAX_REPORT と同じ）。
 #   ただし **error は必ず出します**（黙って通すわけにいかないため）。
 class Reporter:
     opt: Options
@@ -368,7 +368,7 @@ class Reporter:
     # ── E-MOVE-1: 移動済みの値を使った ────────────────────
     #
     # ★ 対になる定義: src/ownck.c の report_use。
-    #   ⚠️ **文面を 1 文字でも変えたら向こうも変えること。**
+    #   注意: **文面を 1 文字でも変えたら向こうも変えること。**
     #     ずれると make selfhost-test が落ちます（それが見張りです）。
     def report_use(mut self, p: rc[Place], moved: rc[Ent],
                    at: rc[token.Token]) -> None:
@@ -405,7 +405,7 @@ class Reporter:
         if mt is not None:
             d.related = diag.Label(mt, rel)
         d.hint = hint
-        # ⚠️ emit は self を可変で借ります。同じ式の中で self.opt を
+        # 注意: emit は self を可変で借ります。同じ式の中で self.opt を
         #   共有借用すると E-BORROW-5 になるので、先に読み出します。
         deny: bool = self.opt.deny_move
         self.emit(d, deny)
@@ -467,7 +467,7 @@ class Reporter:
         if obt is not None:
             d.related = diag.Label(obt, rel)
         d.hint = hint
-        # ⚠️ emit は self を可変で借ります。同じ式の中で self.opt を
+        # 注意: emit は self を可変で借ります。同じ式の中で self.opt を
         #   共有借用すると E-BORROW-5 になるので、先に読み出します。
         deny: bool = self.opt.deny_borrow
         self.emit(d, deny)
@@ -488,7 +488,7 @@ class Reporter:
                                        "' が所有していて、この関数の出口で解放されます")
         d.hint = ("持ち主から取り上げるなら move_out(...)、複製するなら copy(...) を" +
                   "使ってください")
-        # ⚠️ emit は self を可変で借ります。同じ式の中で self.opt を
+        # 注意: emit は self を可変で借ります。同じ式の中で self.opt を
         #   共有借用すると E-BORROW-5 になるので、先に読み出します。
         deny: bool = self.opt.deny_store_borrow
         self.emit(d, deny)
@@ -497,7 +497,7 @@ class Reporter:
     #
     # ★ **新しい注釈は 1 つも足していません。** own / mut / 借用 / rc という
     #   すでにある区別に「スレッドをまたげるか」を尋ねるだけです。
-    #   ⚠️ **既定でエラーです**（deny には従いません）。--warn-own を付けても、
+    #   注意: **既定でエラーです**（deny には従いません）。--warn-own を付けても、
     #     データ競合が無いという保証だけは警告に落としません。
     #   対になる定義: src/ownck.c の check_spawn
     def report_send_borrow(mut self, disp: str, at: rc[token.Token]) -> None:
@@ -567,7 +567,7 @@ class Reporter:
                                        "' が所有しています（読んだだけでは借りものです）")
         d.hint = ("入れる値をその場で作るか、copy(...) で複製してください" +
                   "（共有したままにするなら rc[T] です）")
-        # ⚠️ emit は self を可変で借ります。同じ式の中で self.opt を
+        # 注意: emit は self を可変で借ります。同じ式の中で self.opt を
         #   共有借用すると E-BORROW-5 になるので、先に読み出します。
         deny: bool = self.opt.deny_store_borrow
         self.emit(d, deny)
@@ -598,7 +598,7 @@ class Reporter:
             d.related = diag.Label(ot, rel)
         d.hint = ("同じ値を同時に貸せるのは「共有借用を何個でも」か" +
                   "「可変借用を 1 つだけ」のどちらかです（仕様 §4.3）")
-        # ⚠️ emit は self を可変で借ります。同じ式の中で self.opt を
+        # 注意: emit は self を可変で借ります。同じ式の中で self.opt を
         #   共有借用すると E-BORROW-5 になるので、先に読み出します。
         deny: bool = self.opt.deny_borrow
         self.emit(d, deny)
@@ -640,7 +640,7 @@ class Reporter:
         if obt is not None:
             d.related = diag.Label(obt, rel)
         d.hint = hint
-        # ⚠️ emit は self を可変で借ります。同じ式の中で self.opt を
+        # 注意: emit は self を可変で借ります。同じ式の中で self.opt を
         #   共有借用すると E-BORROW-5 になるので、先に読み出します。
         deny: bool = self.opt.deny_mut
         self.emit(d, deny)
@@ -666,7 +666,7 @@ class Reporter:
                                    "' はこのスコープが終わると消えます")
         d.hint = ("内側で作った値は、内側で使い切ってください" +
                   "（外へ渡すなら所有権ごと渡します）")
-        # ⚠️ emit は self を可変で借ります。同じ式の中で self.opt を
+        # 注意: emit は self を可変で借ります。同じ式の中で self.opt を
         #   共有借用すると E-BORROW-5 になるので、先に読み出します。
         deny: bool = self.opt.deny_borrow
         self.emit(d, deny)
@@ -743,7 +743,7 @@ class Own:
     #   「借りたものの一部」もまた借りものである、という規則がこれです。
     def borrow_root_of(self, p: rc[Place]) -> rc[BorrowRoot] | None:
         root: rc[Place] = p
-        # ⚠️ `root = root.base` とは書けません（rc[Place] | None が入るため）。
+        # 注意: `root = root.base` とは書けません（rc[Place] | None が入るため）。
         #   いったん受けてから絞り込みます。
         nxt: rc[Place] | None = root.base
         while nxt is not None:
@@ -762,7 +762,7 @@ class Own:
 
 # ── 式が「場所」なら Place を作る ───────────────────────────
 #
-# ⚠️ 呼び出しの戻り値やリテラルは場所ではありません（None を返します）。
+# 注意: 呼び出しの戻り値やリテラルは場所ではありません（None を返します）。
 # ★ 対になる定義: src/ownck.c の place_of
 def place_of(n: rc[ast.Node] | None) -> rc[Place] | None:
     if n is None:
@@ -793,7 +793,7 @@ def place_of(n: rc[ast.Node] | None) -> rc[Place] | None:
         return rc(Place(PL_FIELD, fb, copy(nn.name), fb.disp + "." + nn.name))
 
     if nn.kind == ast.ND_INDEX:
-        # ⚠️ str の添字は「場所」ではありません。`s[i]` は 1 文字の
+        # 注意: str の添字は「場所」ではありません。`s[i]` は 1 文字の
         #   **新しい文字列**を作って返すからです（runtime の pl_str_index）。
         #   list[T] の要素と違い、元の文字列を借りているわけではないので、
         #   `for c in s:` で取り出した文字は保存しても構いません。
@@ -830,7 +830,7 @@ def same_tok(a: rc[token.Token], b: rc[token.Token]) -> bool:
 #
 # ★ 対になる定義: src/ownck.c の use_expr / move_expr / check_use。
 #
-# ⚠️ **移植の優先順位**（docs/roadmap.md A-21 ⑩）
+# 注意: **移植の優先順位**（docs/roadmap.md A-21 ⑩）
 #   メモリ安全性に直結する検査から移しています。
 #     移植済み … E-MOVE-1（移動済みの使用）/ E-BORROW-1,3,4,7,8（借用の扱い）
 #     未移植   … E-BORROW-5（同時の可変借用）/ E-SEND-1〜4（スレッド）
@@ -882,7 +882,7 @@ def use_expr(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
 
     # ★ 内包表記 [E for x in xs if C]
     #
-    # ⚠️ **ここを書かないと、警告が静かに消えます。** 同じことを for で
+    # 注意: **ここを書かないと、警告が静かに消えます。** 同じことを for で
     #   書けば止まるのに、内包表記だと素通りしていました（移植時に実際に
     #   warn_listcomp_borrow が落ちて分かりました）。
     if k == ast.ND_LISTCOMP:
@@ -916,7 +916,7 @@ def use_expr(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
         return
 
     # ★ リテラルの要素は **リストへの移動**（A-26）。
-    #   ⚠️ ここを「ただの読み」にしていたのが穴でした。xs.append(v) は
+    #   注意: ここを「ただの読み」にしていたのが穴でした。xs.append(v) は
     #     止まるのに [v] は素通りし、既定で解放する今は早すぎる解放になります。
     #   対になる定義: src/ownck.c の case ND_LIST
     if k == ast.ND_LIST:
@@ -928,7 +928,7 @@ def use_expr(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
         return
 
     # ★ 範囲型の検査（A-28）は値を素通しするだけの包み。
-    #   ⚠️ **ここを書かないと、包んだ中の移動が記録されない**
+    #   注意: **ここを書かないと、包んだ中の移動が記録されない**
     #     （p: Percent = f(xs) の xs が「渡していない」ことになる）。
     if k == ast.ND_RANGECHK:
         use_expr(o, f, node_of_opt(nn.lhs))
@@ -956,7 +956,7 @@ def use_expr(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
                     arefs.append(rc(ArgRef(node_of_opt(nn.args), False, WR_ARG)))
                 check_arg_aliases(o, arefs)
                 return
-        # ⚠️ 'mod.f(args)'（他モジュールの関数・クラス）は ND_METHOD ですが
+        # 注意: 'mod.f(args)'（他モジュールの関数・クラス）は ND_METHOD ですが
         #   self を取りません。第 1 引数をずらすかは
         #   「モジュール修飾か」「インスタンス生成か」で決まります。
         #     obj.m(args)  → m(obj, args)。self を飛ばす
@@ -998,7 +998,7 @@ def mark_call_binds_borrow(o: mut Own, n: mut rc[ast.Node]) -> None:
 
 # 呼び出し先の定義ノード（ND_FUNC）。組み込みなら None。
 #
-# ⚠️ **インスタンス生成も呼び出しです。** `Box(xs[0])` は Box.init の
+# 注意: **インスタンス生成も呼び出しです。** `Box(xs[0])` は Box.init の
 #   仮引数と突き合わせないと、own 引数へ借りものを渡した形（E-BORROW-7）を
 #   見逃します。移植時にここを落として、warn_store_borrow_own_arg が
 #   出なくなっていました。
@@ -1028,7 +1028,7 @@ def call_args(o: mut Own, f: mut rc[Flow], n: rc[ast.Node], skip_self: bool) -> 
     # ★ spawn(f, a) は「引数 1 つを別スレッドへ手放す」呼び出しです。
     #   ふつうの呼び出しとは渡し方が違うので、ここで分けます。
     #
-    # ⚠️ **いまは「移動を記録する」ぶんだけ**移植しています。E-SEND-1〜4
+    # 注意: **いまは「移動を記録する」ぶんだけ**移植しています。E-SEND-1〜4
     #   （スレッドに渡してよいかの検査）は後回しです（docs/roadmap.md A-21 ⑩）。
     #   移動の記録はメモリ安全性に直結する（spawn に渡した値を後から使うと
     #   E-MOVE-1）ので、そこだけ先に入れます。
@@ -1074,7 +1074,7 @@ def call_args(o: mut Own, f: mut rc[Flow], n: rc[ast.Node], skip_self: bool) -> 
             use_expr(o, f, an)
             # ★ mut で受け取る引数へ、読み取り専用の借用を渡していないか（B3）
             #
-            # ⚠️ ここは check_call_borrows の①だけです。②（同じ場所を
+            # 注意: ここは check_call_borrows の①だけです。②（同じ場所を
             #   可変借用と他の借用で同時に渡す＝E-BORROW-5）は未移植
             #   （docs/roadmap.md A-21 ⑩）。
             if is_mut_param:
@@ -1098,7 +1098,7 @@ def move_expr(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None, ctx: int) -> 
     # ★ 「所有者を 1 つに決められない」ためにある型なので、移動として扱いません。
     #   束縛した側は**新しい参照**を持ちます（カウント +1）。
     #
-    # ⚠️ **`rc[T] | None` も共有です。** ここを TY_RC だけで見ていたので、
+    # 注意: **`rc[T] | None` も共有です。** ここを TY_RC だけで見ていたので、
     #   `lhs: rc[Node] | None` のような**いちばん普通の形**が移動と見なされ、
     #   移行しても指摘が減りませんでした（実測 345 → 340）。
     nt: rc[ast.Type] | None = node_type(nn)
@@ -1143,18 +1143,18 @@ def move_expr(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None, ctx: int) -> 
         exempt: bool = ctx == MV_RETURN and brr.is_self
         if ctx != MV_ASSIGN and not exempt and tk is not None:
             o.rep.report_borrow(brr, pp, tk, ctx)
-        # ⚠️ 移動として記録しません。借りものは動いていないので、この後で
+        # 注意: 移動として記録しません。借りものは動いていないので、この後で
         #   使っても E-MOVE-1 にはなりません（1 つの問題は 1 回だけ報告する）。
         use_expr(o, f, nn)
         return False
 
-    # ⚠️ 要素を 1 つだけ move out することは許しません（設計 ownership.md §3）。
+    # 注意: 要素を 1 つだけ move out することは許しません（設計 ownership.md §3）。
     #   添字はコンパイル時に分からないので、xs[0] と xs[1] を区別できません。
     #   for のループ変数もここを通ります（仕様 v2 §3.1「for の要素は借用」）。
     if pp.kind == PL_INDEX or pp.kind == PL_GLOBAL or pp.kind == PL_FIELD:
-        # ⚠️ グローバルはプログラムが終わるまで生きているので、読み出しは
+        # 注意: グローバルはプログラムが終わるまで生きているので、読み出しは
         #   「借りているだけ」として扱います（解放もしません）。
-        # ⚠️ フィールドの読み出しも借用です。当初は「取り出し禁止」に
+        # 注意: フィールドの読み出しも借用です。当初は「取り出し禁止」に
         #   していましたが、それでは**コンパイラ自身が書けません**
         #   （`nx = cur.next` で連結リストをたどれない）。
         if tk is not None:
@@ -1208,7 +1208,7 @@ def remember_decl(o: mut Own, n: rc[ast.Node]) -> None:
 
 # 「この変数は借りものを束縛している」と記録する。
 #
-# ⚠️ 印は**宣言のノード**に付けます（codegen は宣言を見て drop を出すため）。
+# 注意: 印は**宣言のノード**に付けます（codegen は宣言を見て drop を出すため）。
 def mark_borrow_bind(o: mut Own, ir_name: str) -> None:
     d: rc[DeclEnt] | None = o.find_decl(ir_name)
     if d is None:
@@ -1232,14 +1232,14 @@ def bind_alias(o: mut Own, target: rc[ast.Node], rhs: rc[ast.Node] | None) -> No
     if len(target.ir_name) == 0:
         return
 
-    # ⚠️ **コピー型は借りものになりません。**
+    # 注意: **コピー型は借りものになりません。**
     #   `worst = e.st`（st は int）のように、借りた入れ物から**値をコピー**
     #   しているだけの代入は借用ではありません（C 版で誤検出を踏んだ箇所）。
     tt: rc[ast.Type] | None = node_type(target)
     if tt is not None and not ty_is_owned(tt):
         return
 
-    # ⚠️ **rc[T] は借りものではありません。**
+    # 注意: **rc[T] は借りものではありません。**
     #   `m = mm.next`（rc[Module] | None）のような**共有の付け替え**を
     #   「mm の一部を借りた」と記録していたので、内側で作った rc を外側の
     #   変数に入れると E-BORROW-6 が出ていました。rc は独立した参照です。
@@ -1314,7 +1314,7 @@ def bind_alias(o: mut Own, target: rc[ast.Node], rhs: rc[ast.Node] | None) -> No
 
 # None でない前提で取り出す小道具
 #
-# ⚠️ 呼ぶのは「found が True のときだけ」です。found が立つ経路では
+# 注意: 呼ぶのは「found が True のときだけ」です。found が立つ経路では
 #   必ず origin を入れているので、ここへ None は来ません。
 def node_of_opt(n: rc[ast.Node] | None) -> rc[ast.Node]:
     if n is None:
@@ -1355,7 +1355,7 @@ def stmt_list(o: mut Own, f: mut rc[Flow], first: rc[ast.Node] | None) -> None:
 #   back … 本体を通って入口へ戻るときの状態（逆辺）
 #   exit … ループから抜けるときの状態（条件が偽 / break）
 #
-# ⚠️ この言語には「複数の値を返す」形が無いので、結果は WhileOnce に詰めます。
+# 注意: この言語には「複数の値を返す」形が無いので、結果は WhileOnce に詰めます。
 class WhileOnce:
     back: rc[Flow]
     exit_: rc[Flow]
@@ -1384,7 +1384,7 @@ def while_once(o: mut Own, n: rc[ast.Node], entry: rc[Flow]) -> rc[WhileOnce]:
 def check_while(o: mut Own, f: mut rc[Flow], n: rc[ast.Node]) -> None:
     # ── ① 入口の状態を不動点まで下げる（診断は出さない）──
     #
-    # 🤔 なぜ 2 周で収束するのか
+    # なぜ 2 周で収束するのか
     #   格子の高さが 2（Valid → MaybeMoved → Moved）で、状態は単調にしか
     #   下がらないためです。3 周目で変化することはありません。
     #   崩れたらコンパイラの不具合なので、panic して落とします。
@@ -1426,7 +1426,7 @@ def is_hidden_var(name: str) -> bool:
 
 # ★ 隠し変数のうち、`swap.N` だけは**所有します**。
 #
-#   ⚠️ ほかの隠し変数は「対象を 1 回だけ評価するための借り」ですが、
+#   注意: ほかの隠し変数は「対象を 1 回だけ評価するための借り」ですが、
 #     `swap.N` は**右辺の値そのものを預かる場所**なので、借りにすると
 #     `a, b = b, a` で二重解放になります（--drop 付きで実際に壊れました）。
 def is_owning_hidden(name: str) -> bool:
@@ -1524,7 +1524,7 @@ def stmt(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
         return
 
     # ★ 契約（A-29）の式も「読み」としてたどる。
-    #   ⚠️ たどらないと、式の中の呼び出しに渡した値の扱いが記録されない。
+    #   注意: たどらないと、式の中の呼び出しに渡した値の扱いが記録されない。
     #   対になる定義: src/ownck.c の ND_REQUIRES / ND_ENSURES
     if k == ast.ND_REQUIRES or k == ast.ND_ENSURES:
         use_expr(o, f, nn.lhs)
@@ -1543,7 +1543,7 @@ def stmt(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
         else_f: rc[Flow] = flow_copy(f)
         if nn.els is not None:
             stmt(o, else_f, nn.els)
-        # ⚠️ then 側を f に写してから else 側を合流させる（C 版と同じ順序）
+        # 注意: then 側を f に写してから else 側を合流させる（C 版と同じ順序）
         f.ents = move_out(then_f.ents)   # ★ 持ち主ごと移す
         f.dead = then_f.dead
         flow_join(f, else_f)
@@ -1606,7 +1606,7 @@ def stmt(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
 
 # 代入ノードに、その変数の「借りものか」の印を写す。
 #
-# ⚠️ codegen は代入のときに**古い値を解放**します。借りものを束縛している
+# 注意: codegen は代入のときに**古い値を解放**します。借りものを束縛している
 #   変数でそれをやると、他人の値を解放してしまいます。
 #   印が付くのは解析の途中（後の行の代入かもしれない）なので、
 #   **解析が終わってから**まとめて写します。
@@ -1813,7 +1813,7 @@ def check_module(o: mut Own, root: rc[ast.Node]) -> None:
 
 # 型 t の中（たどれる範囲すべて）に rc[T] があるか。見つけたらその名前を返す。
 #
-# ⚠️ **これが無いと検査に穴が開きます。** `own Job` を渡すのは安全に見えても、
+# 注意: **これが無いと検査に穴が開きます。** `own Job` を渡すのは安全に見えても、
 #    Job のフィールドに rc[Node] があれば、**その数え札は 2 つのスレッドから
 #    増減されます**。渡すものの型だけを見て「クラスだから安全」とは言えません。
 #
@@ -1826,7 +1826,7 @@ def rc_inside(t: rc[ast.Type] | None, seen: mut list[str]) -> str:
     tt: rc[ast.Type] = t
     if tt.kind == ast.TY_RC:
         return ast.type_name(tt)
-    # ⚠️ mutex に入っていても同じです。ロックが守るのは**中身**で、
+    # 注意: mutex に入っていても同じです。ロックが守るのは**中身**で、
     #    数え札は箱の外（rc が指す先）にあるためです。
     if tt.kind == ast.TY_LIST or tt.kind == ast.TY_OPT or tt.kind == ast.TY_MUTEX:
         return rc_inside(tt.elem, seen)
@@ -1863,7 +1863,7 @@ def rc_inside(t: rc[ast.Type] | None, seen: mut list[str]) -> str:
 # 関数の本体（と、そこから呼ぶ関数）がグローバルに書いていないか。
 # 書いていれば、その代入のノードを返す。
 #
-# ⚠️ 呼び先までたどります。直下だけ見ると「1 枚かませば通る」検査になり、
+# 注意: 呼び先までたどります。直下だけ見ると「1 枚かませば通る」検査になり、
 #    保証として意味を持ちません。seen は再帰呼び出しで止まらないため。
 #    対になる定義: src/ownck.c の scan_global_write
 def scan_global_write_list(o: mut Own, n: rc[ast.Node] | None,
@@ -1913,7 +1913,7 @@ def scan_global_write(o: mut Own, n: rc[ast.Node],
 
     # ③ 子をたどる
     #
-    # ⚠️ C 版は Node* の配列を 1 本作って回しますが、こちらは **1 つずつ**
+    # 注意: C 版は Node* の配列を 1 本作って回しますが、こちらは **1 つずつ**
     #   書きます。`[n.lhs, n.rhs, …]` と書くと借りものの rc[T] を所有する
     #   list に入れることになり（E-BORROW-7 の形）、寿命が合いません。
     hit3: rc[ast.Node] | None = scan_child(o, n.lhs, seen)
@@ -1947,14 +1947,14 @@ def scan_child(o: mut Own, n: rc[ast.Node] | None,
 # ★ **新しい注釈は 1 つも足しません。** すでにある own / mut / 借用の規則に、
 #   「スレッドの境界を越えられるか」という 1 つの問いを足すだけです。
 #
-#   own T      … ✅ 渡した側はもう触れない。競合しようがない
-#   mutex[T]   … ✅ 触るにはロックが要る
-#   借り        … ❌ 借りは「呼び出しより長生きしない」規則で守られている。
+#   own T      … 渡した側はもう触れない。競合しようがない
+#   mutex[T]   … 触るにはロックが要る
+#   借り        … 渡せない。借りは「呼び出しより長生きしない」規則で守られているが、
 #                    スレッドは呼び出しより長生きしうる（E-SEND-1）
-#   rc[T]      … ❌ 参照数の増減が競合する（E-SEND-2）
-#   グローバル書き込み … ❌ 誰が触っているか静的に分からない（E-SEND-3）
+#   rc[T]      … 渡せない。参照数の増減が競合する（E-SEND-2）
+#   グローバル書き込み … 渡せない。誰が触っているか静的に分からない（E-SEND-3）
 #
-# ⚠️ **検査の順序も C 版と同じです**（E-SEND-2 → 4 → 1 → 移動の記録 → 3）。
+# 注意: **検査の順序も C 版と同じです**（E-SEND-2 → 4 → 1 → 移動の記録 → 3）。
 #   最初の 1 件でエラー終了するので、順序が違うと出る診断が変わります。
 def spawn_args(o: mut Own, f: mut rc[Flow], n: rc[ast.Node]) -> None:
     fexpr: rc[ast.Node] | None = n.args
@@ -2001,7 +2001,7 @@ def spawn_args(o: mut Own, f: mut rc[Flow], n: rc[ast.Node]) -> None:
 
         # ── E-SEND-4: 可変借用はスレッドに渡せない ──
         #
-        # 🤔 なぜ scope: の中でも許さないのか
+        # なぜ scope: の中でも許さないのか
         #   scope: が保証するのは**寿命**だけです。同じ値への可変借用を
         #   2 本のスレッドが持てば、寿命が足りていてもデータ競合になります。
         if is_mut and atok is not None:
@@ -2013,7 +2013,7 @@ def spawn_args(o: mut Own, f: mut rc[Flow], n: rc[ast.Node]) -> None:
 
         # ── E-SEND-1: 借りは渡せない（scope: の中を除く）──
         #
-        # 🤔 ここが設計の要点です。借用検査がすでに持っている
+        # ここが設計の要点です。借用検査がすでに持っている
         #   「借りは呼び出しより長生きしない」という不変条件が、そのまま
         #   「借りはスレッドに渡せない」に翻訳されます。**規則を足すのではなく、
         #   既にある規則の帰結として出てきます。**
@@ -2089,7 +2089,7 @@ def check_arg_aliases(o: mut Own, args: list[rc[ArgRef]]) -> None:
 # ★ 既定は警告です。移動済みの値を使っていても、生成される IR は
 #   変わりません（解放を挿すのは --drop のときだけ）。
 #
-# ⚠️ **2 パスです。** 先に全モジュールの関数表を作ってから検査します。
+# 注意: **2 パスです。** 先に全モジュールの関数表を作ってから検査します。
 #   「この呼び出しの戻り値は借りものか」を引くのに、呼び先の解析が
 #   先に終わっている必要があるためです。
 # この式の木のどこかに spawn があるか。

@@ -13,13 +13,13 @@
 #
 # ★ **待ち時間を決められます**（A-23。`set_timeout(ms)`。0 なら無期限）。
 #   時間切れは `NetError.timed_out` で見分けられます。
-#   ⚠️ 決まるのは**繋がったあとの読み書き**だけで、connect は区切れません。
+#   注意: 決まるのは**繋がったあとの読み書き**だけで、connect は区切れません。
 #
-# ⚠️ **失敗は raises で返します。panic しません。**
+# 注意: **失敗は raises で返します。panic しません。**
 #   「ポートが使われている」「相手が切った」は**ふつうに起きること**で、
 #   プログラムが続けられなければ困るからです。
 #
-# ⚠️ **閉じるのは利用者の仕事です**（`c.close()`）。
+# 注意: **閉じるのは利用者の仕事です**（`c.close()`）。
 #   クラスに「解放されるときに呼ばれる処理」はまだ無いので、
 #   fd を自動では閉じません。忘れると fd が尽きます。
 
@@ -114,7 +114,7 @@ class Conn:
     # ★ **繋がったあとの読み書きにだけ効きます。** 相手が繋いだきり
     #   何も送ってこない、という形の止まり方を防ぐためのものです。
     #
-    # ⚠️ 時間切れになった send は「どこまで届いたか分かりません」。
+    # 注意: 時間切れになった send は「どこまで届いたか分かりません」。
     #   そうなった接続は**閉じてください**（続きを書いても壊れた列が届きます）。
     def set_timeout(mut self, ms: int) -> None raises NetError:
         if self.fd < 0:
@@ -159,7 +159,7 @@ class Listener:
     #   set_timeout を書かずに済みます（http.serve_n は accept しか
     #   していないので、この指定がそのまま効きます）。
     #
-    # ⚠️ **すでに accept した接続は変わりません。** 変えたいときは
+    # 注意: **すでに accept した接続は変わりません。** 変えたいときは
     #   その Conn の set_timeout を呼んでください。
     def set_conn_timeout(mut self, ms: int) -> None:
         self.conn_timeout_ms = ms
@@ -170,7 +170,7 @@ class Listener:
     #   NetError の timed_out で分かるので、そこで終わりの合図を見て
     #   やめる、という形が書けます。
     #
-    # ⚠️ **set_conn_timeout とは別ものです。** こちらは待ち受け口に、
+    # 注意: **set_conn_timeout とは別ものです。** こちらは待ち受け口に、
     #   あちらは受け付けた接続に効きます。
     def set_timeout(mut self, ms: int) -> None raises NetError:
         if self.fd < 0:
@@ -211,7 +211,7 @@ def connect(host: str, port: int) -> Conn raises NetError:
     return Conn(fd)
 
 
-# ⚠️ strings を import すると循環になりかねないので、ここで足します
+# 注意: strings を import すると循環になりかねないので、ここで足します
 #   （net は下の層でいたいため）。
 def join_parts(parts: list[str]) -> str:
     out: str = ""

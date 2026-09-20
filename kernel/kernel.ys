@@ -30,7 +30,7 @@ def timer_next(delta: int) -> None:
 
 # ── 割り込みハンドラ（boot.s の trap_entry から呼ばれる）──
 #
-# ⚠️ ここは「関数の途中に割り込んで」実行されます。
+# 注意: ここは「関数の途中に割り込んで」実行されます。
 #   レジスタの退避は boot.s がやっています（高級言語では書けないため）。
 def trap() -> None:
     cause: int = 0

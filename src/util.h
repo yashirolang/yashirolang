@@ -45,7 +45,7 @@ void write_file(const char *path, const char *text);
 //
 // ソース上の位置を示せるエラーは diag.h の error_at() / diag_fail() を使います。
 //
-// 🤔 なぜ診断機能を全部 diag.c に移さないのか
+// なぜ診断機能を全部 diag.c に移さないのか
 //   xmalloc() は確保に失敗したらエラー終了する必要があります。
 //   もし error() を diag.c に置くと util → diag の依存が生まれ、
 //   diag.c も xmalloc / StrBuf を使うので **循環依存**になります。

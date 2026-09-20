@@ -12,7 +12,7 @@
 # OUTPUT: 2
 # EXIT: 0
 # enumerate（添字と要素を同時に受け取る）
-#   ⚠️ タプルはありません。**この形だけ**を特別扱いしています
+#   注意: タプルはありません。**この形だけ**を特別扱いしています
 def main() -> int:
     xs: list[str] = ["a", "b", "c"]
     for i, x in enumerate(xs):

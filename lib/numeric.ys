@@ -4,7 +4,7 @@
 #   初めて書けるようになりました。それまでは `integrate(f, a, b)` の `f` を
 #   渡す手段がなく、この種のものは一切書けませんでした。
 #
-# ⚠️ 渡す関数は `raises` しないものに限ります（関数型はエラーの受け渡しを
+# 注意: 渡す関数は `raises` しないものに限ります（関数型はエラーの受け渡しを
 #   表さないため）。失敗しうる計算は、呼ぶ側で包んでください。
 
 import math
@@ -27,7 +27,7 @@ def trapezoid(f: fn(float) -> float, a: float, b: float, n: int) -> float:
         i = i + 1
     return s * h
 
-# シンプソン則。⚠️ n は **偶数**でなければなりません
+# シンプソン則。注意: n は **偶数**でなければなりません
 #
 # ★ 各 2 区間を放物線で近似します。誤差は h⁴ に比例するので、
 #   台形則と同じ分割数でも桁違いに正確です。
@@ -48,7 +48,7 @@ def simpson(f: fn(float) -> float, a: float, b: float, n: int) -> float:
 # 分割数を自動で増やす積分（相対誤差 tol を目安に）
 #
 # ★ 分割を倍にして結果がほとんど変わらなくなったら止めます。
-# ⚠️ **収束は保証しません。** 上限に達したらそこまでの値を返します
+# 注意: **収束は保証しません。** 上限に達したらそこまでの値を返します
 #   （振動する関数や特異点があると収束しません）。
 def integrate(f: fn(float) -> float, a: float, b: float, tol: float) -> float:
     n: int = 8
@@ -68,7 +68,7 @@ def integrate(f: fn(float) -> float, a: float, b: float, tol: float) -> float:
 #  求根
 # ══════════════════════════════════════════════════════════
 
-# 二分法。⚠️ f(a) と f(b) の符号が違うことが必要です
+# 二分法。注意: f(a) と f(b) の符号が違うことが必要です
 #
 # ★ 遅い代わりに **必ず収束します**。区間が毎回半分になるので、
 #   倍精度なら 60 回ほどで限界まで詰まります。
@@ -103,7 +103,7 @@ def bisect(f: fn(float) -> float, a: float, b: float) -> float:
 #
 # ★ 速い（1 回で有効桁が倍になる）代わりに **収束しないことがあります**。
 #   導関数が 0 に近いところに来ると飛んでいきます。
-# ⚠️ 収束しなければ panic します。黙って間違った値を返すよりましだからです。
+# 注意: 収束しなければ panic します。黙って間違った値を返すよりましだからです。
 def newton(f: fn(float) -> float, df: fn(float) -> float, x0: float,
            tol: float) -> float:
     x: float = x0
@@ -149,7 +149,7 @@ def secant(f: fn(float) -> float, a: float, b: float, tol: float) -> float:
 
 # 中心差分による 1 階微分
 #
-# ⚠️ **刻み幅は小さければよいものではありません。** 小さくすると打ち切り
+# 注意: **刻み幅は小さければよいものではありません。** 小さくすると打ち切り
 #   誤差は減りますが、f(x+h) - f(x-h) の引き算で桁落ちが起きます。
 #   中心差分では h ≈ ∛ε ≈ 6e-6 あたりが最良で、それを既定にしています。
 def derivative(f: fn(float) -> float, x: float) -> float:
@@ -169,7 +169,7 @@ def derivative2(f: fn(float) -> float, x: float) -> float:
 # dy/dt = f(t, y) を古典的 4 次ルンゲ＝クッタ法で解く
 #
 # ★ t0 から t1 まで n 段で進め、**各段の y を並べて返します**（長さ n+1）。
-# ⚠️ オイラー法は入れていません。誤差が段数に比例して溜まり、
+# 注意: オイラー法は入れていません。誤差が段数に比例して溜まり、
 #   実用にならないためです。
 def solve_ode(f: fn(float, float) -> float, t0: float, y0: float, t1: float,
               n: int) -> list[float]:
@@ -201,7 +201,7 @@ def solve_ode(f: fn(float, float) -> float, t0: float, y0: float, t1: float,
 # 黄金分割探索で **区間 [a, b] にある極小**を求める
 #
 # ★ 微分が要らないのが利点です。区間を黄金比で詰めていきます。
-# ⚠️ 区間内に極小が **1 つだけ**あることを前提にします
+# 注意: 区間内に極小が **1 つだけ**あることを前提にします
 #   （複数あるとどれに落ちるか決まりません）。
 def minimize(f: fn(float) -> float, a: float, b: float, tol: float) -> float:
     # 黄金比の逆数 (√5 - 1) / 2

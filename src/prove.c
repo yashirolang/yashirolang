@@ -3,14 +3,14 @@
 // ★ 道具は 1 つだけです：**区間**（この値は lo 以上 hi 以下）。
 //   SMT ソルバもループ不変条件も使いません。
 //
-// 🤔 なぜ区間だけで足りるのか
+// なぜ区間だけで足りるのか
 //   この言語は、証明したい性質のほとんどを**型と契約が先に言っています**。
 //     ・範囲型（A-28）   … `Percent` なら [0, 100] から始められる
 //     ・契約（A-29）     … `requires b != 0` なら除数は 0 でない
 //     ・所有権（A-24）   … **別名が無い**ので、呼び出しで勝手に値が変わらない
 //   関数をまたぐ情報が型と契約に書いてあるので、関数間解析が要りません。
 //
-// ⚠️ 関係（`i < len(xs)`）だけは区間で表せないので、**1 つだけ**関係を
+// 注意: 関係（`i < len(xs)`）だけは区間で表せないので、**1 つだけ**関係を
 //   覚えます（「この変数は、この list の長さより小さい」）。添字の検査は
 //   これが無いと 1 つも消えません。
 #include "prove.h"
@@ -46,7 +46,7 @@ static bool iv_fits(Iv a, long long lo, long long hi) {
 
 // 足し算・引き算・掛け算が折り返すか。
 //
-// ⚠️ **組み込みの __builtin_*_overflow は使いません。** セルフホスト版にも
+// 注意: **組み込みの __builtin_*_overflow は使いません。** セルフホスト版にも
 //   同じ判断をさせる必要があり（IR が 1 バイトでも違うと落ちます）、
 //   向こうには組み込みがないためです。**両方で同じ式**を書きます。
 //
@@ -76,17 +76,17 @@ static bool mul_ovf(long long a, long long b, long long *out) {
 
 // ★ **端が溢れたら、そこで止める（飽和）**。⊤ には落としません。
 //
-// 🔒 **なぜこれが健全なのか。** 桁あふれの検査が残っているからです。
+// **なぜこれが健全なのか。** 桁あふれの検査が残っているからです。
 //   `i + 1` が本当に溢れるなら、そこで**実行が止まります**（折り返しません）。
 //   つまり「この先へ進んだ」のなら結果は必ず表せる範囲に収まっています。
 //   溢れる側の端を LLONG_MAX / LLONG_MIN で止めるのは、**進めた場合の値の
 //   集合**を正しく覆います。
 //
-//   ⚠️ **だから `--no-overflow-check` のときは、これをしません。**
+//   注意: **だから `--no-overflow-check` のときは、これをしません。**
 //     検査が無ければ本当に折り返し、`i` が負になりえます。そのまま
 //     「0 以上」と信じると、添字の検査を誤って消します（下の no_ovf_mode）。
 //
-//   ⚠️ 堂々巡りにはなりません。`i = i + 1` 自身の検査は「端が溢れた」＝
+//   注意: 堂々巡りにはなりません。`i = i + 1` 自身の検査は「端が溢れた」＝
 //     示せなかった側に入るので、**消えずに残ります**。残った検査が上の
 //     理屈を支える、という順序です。
 static bool sat_mode = true;   // false … --no-overflow-check（折り返しうる）
@@ -164,24 +164,24 @@ static Iv iv_join(Iv a, Iv b) {
 
 // ── 環境（変数ごとの区間と、1 つだけの関係）────────────────
 //
-// ⚠️ 表は**出現順のリスト**です。2 つの実装で同じ結果にするため、
+// 注意: 表は**出現順のリスト**です。2 つの実装で同じ結果にするため、
 //    順序が結果に影響しない形（名前で引く）にしてあります。
 typedef struct Ent Ent;
 struct Ent {
     const char *name;   // IR 名（%x）
     Iv iv;
     // ★ 「この変数は、この list の長さより小さい」（添字の検査を消すため）
-    //   ⚠️ 区間では表せない唯一の関係なので、1 つだけ覚えます。
+    //   注意: 区間では表せない唯一の関係なので、1 つだけ覚えます。
     const char *lt_len;  // list の IR 名。無ければ NULL
     Ent *next;
 };
 
 // ★ 「この 2 つの list は長さが同じ」（A-34 段 1 の続き）
 //
-//   ⚠️ 区間でも lt_len でも言えない関係です。これが無いと、
+//   注意: 区間でも lt_len でも言えない関係です。これが無いと、
 //   `if len(a) != len(b): return` で守った後の `a[i]` と `b[i]` のうち
 //   **片方しか**検査を消せません（いちばん多く残っていた型です）。
-//   ⚠️ 推移律は取りません（a==b と b==c から a==c は出しません）。
+//   注意: 推移律は取りません（a==b と b==c から a==c は出しません）。
 //     2 実装で同じ結果にするため、持ち方を単純に保ちます。
 typedef struct LenEq LenEq;
 struct LenEq {
@@ -209,23 +209,23 @@ typedef struct {
     EnsRec *ens;    // いま検査している関数の ensures
     // ★ **印を立ててよい回か。**
     //
-    // 🔒 ここが安全の要です。ループの不動点は、入口を**少しずつ広げながら**
+    // ここが安全の要です。ループの不動点は、入口を**少しずつ広げながら**
     //   何周も本体を歩きます。途中の回の入口は**まだ狭い**（＝楽観的）ので、
     //   その環境で印を立てると、**消してはいけない検査を消します**。
     //   例: `while i < n: s = s + i * 1000000000000`
     //     1 周目の入口は i ∈ [0, 0] なので「桁あふれしない」と見えますが、
     //     広げ切った入口は i ∈ [0, ∞) で、実際には折り返します。
-    //   ⚠️ 印は**入口が決まってからの最後の 1 周だけ**で立てます。
+    //   注意: 印は**入口が決まってからの最後の 1 周だけ**で立てます。
     bool mark;
 } Prove;
 
 // グローバルか（IR 名が @ で始まる）。
 //
-// ⚠️ **グローバルは追いません。** 他の関数がいつでも書き換えられるので、
+// 注意: **グローバルは追いません。** 他の関数がいつでも書き換えられるので、
 //   ここで覚えた値を信じると、消してはいけない検査を消します。
 static bool is_global_name(const char *name) { return name && name[0] == '@'; }
 
-// この組をすでに持っているか（⚠️ **向きは問いません**）
+// この組をすでに持っているか（注意: **向きは問いません**）
 static bool leneq_has(Env *e, const char *x, const char *y) {
     if (!x || !y) return false;
     for (LenEq *q = e->eq; q; q = q->next) {
@@ -407,7 +407,7 @@ static Iv iv_of_type(Type *t) {
 // 場所の鍵。**同じ場所なら同じ文字列**になります。
 //
 // ★ 変数（%x）と、1 段のフィールド（%self.toks）まで扱います。
-//   ⚠️ ここを深くすると「本当に同じ場所か」の判断が難しくなるので、
+//   注意: ここを深くすると「本当に同じ場所か」の判断が難しくなるので、
 //     1 段で止めます（この処理系自身の添字は、ほぼこの 2 つの形です）。
 static const char *place_key(Node *n) {
     if (!n) return NULL;
@@ -493,7 +493,7 @@ static Iv eval(Prove *pr, Env *env, Node *n) {
                     return IV_TOP;
                 }
                 case OP_MOD: {
-                    // ⚠️ Python と同じ切り下げなので、b > 0 なら結果は [0, b-1]
+                    // 注意: Python と同じ切り下げなので、b > 0 なら結果は [0, b-1]
                     if (b.lo > 0) {
                         Iv r = {0, b.hi - 1};
                         return r;
@@ -720,10 +720,10 @@ static void walk_expr(Prove *pr, Env *env, Node *n) {
             //   ① 両方 0 以上（切り下げ＝切り捨てになる。Python と LLVM の差）
             //   ② 除数が **コンパイル時に決まっている正の数**
             //
-            // 🤔 なぜ ② が要るのか（測って決めました）
+            // なぜ ② が要るのか（測って決めました）
             //   除数が定数なら、LLVM が掛け算とシフトに置き換えます
             //   （20,000,000 回の `i % 7` が **93 ms → 26 ms**）。
-            //   ⚠️ **定数でないときは、命令にすると逆に遅くなりました**
+            //   注意: **定数でないときは、命令にすると逆に遅くなりました**
             //     （105 ms 対 66 ms）。64 ビットの除算命令が重く、ランタイムの
             //     呼び出しと変わらないためです。速くならない最適化は入れません。
             if (n->type && n->type->kind == TY_INT &&
@@ -747,7 +747,7 @@ static void walk_expr(Prove *pr, Env *env, Node *n) {
                                        : iv_mul(a, b, &exact);
                 (void)r;
                 // ★ **どの端でも溢れなかった**ときだけ消します。
-                //   ⚠️ 飽和した区間（端が止まっただけ）では消せません。
+                //   注意: 飽和した区間（端が止まっただけ）では消せません。
                 //     消さずに残すからこそ、飽和が健全でいられます。
                 if (!pr->mark) {
                     // 不動点の途中。まだ印は立てません
@@ -767,7 +767,7 @@ static void walk_expr(Prove *pr, Env *env, Node *n) {
 
         case ND_LOGICAL:
             walk_expr(pr, env, n->lhs);
-            // ⚠️ 右側は評価されないことがあるので、区間は触りません
+            // 注意: 右側は評価されないことがあるので、区間は触りません
             walk_expr(pr, env, n->rhs);
             return;
 
@@ -802,7 +802,7 @@ static void walk_expr(Prove *pr, Env *env, Node *n) {
                      leneq_has(env, p->lt_len, lk)))
                     inb = true;
             }
-            // ⚠️ str の添字も同じ形ですが、こちらは要素の取り出し方が
+            // 注意: str の添字も同じ形ですが、こちらは要素の取り出し方が
             //   違うので触りません（list のときだけ消します）。
             bool is_list = n->lhs && n->lhs->type && n->lhs->type->kind == TY_LIST;
             if (!pr->mark) {
@@ -820,7 +820,7 @@ static void walk_expr(Prove *pr, Env *env, Node *n) {
         case ND_METHOD:
             walk_expr(pr, env, n->lhs);
             for (Node *a = n->args; a; a = a->next) walk_expr(pr, env, a);
-            // ⚠️ 呼び出しの後は、渡したものについて分かっていたことを落とします
+            // 注意: 呼び出しの後は、渡したものについて分かっていたことを落とします
             kill_mut_args(env, n);
             return;
 
@@ -841,7 +841,7 @@ static void walk_expr(Prove *pr, Env *env, Node *n) {
 //   呼び先が触れるのは `mut` で渡したものだけです。
 // その鍵（とその下のフィールド）について分かっていたことを落とす。
 //
-// ⚠️ **フィールドまで落とすのが要点です。** `self` を渡した先で
+// 注意: **フィールドまで落とすのが要点です。** `self` を渡した先で
 //   `self.toks.append(...)` をされると、`i < len(self.toks)` は崩れます。
 //   `%self` を落とすときに `%self.toks` も落とさないと、**消してはいけない
 //   検査を消します**。
@@ -876,7 +876,7 @@ static void kill_global_rels(Env *env) {
 //
 // ★ **所有権検査（A-24）のおかげでここが軽くなります。** 別名が無いので、
 //   呼び先が触れるのは渡したものだけです。渡していない変数は無傷です。
-//   ⚠️ 借りだけを渡したなら本当は縮みませんが、仮引数の受け取り方をここで
+//   注意: 借りだけを渡したなら本当は縮みませんが、仮引数の受け取り方をここで
 //     引く仕掛けがないので、**渡したものは落とす**（安全側）にします。
 static void kill_mut_args(Env *env, Node *n) {
     // ★ **`len(x)` は長さを変えません。** ここを落としていたせいで、
@@ -886,19 +886,19 @@ static void kill_mut_args(Env *env, Node *n) {
     for (Node *a = n->args; a; a = a->next) kill_place(env, place_key(a));
     // メソッドの受け手（xs.append(v) の xs）も落とします
     if (n->kind == ND_METHOD) kill_place(env, place_key(n->lhs));
-    // ⚠️ グローバルは誰でも触れるので、指していた関係を落とします
+    // 注意: グローバルは誰でも触れるので、指していた関係を落とします
     kill_global_rels(env);
 }
 
-// ⚠️ **要素を渡すこと（f(xs[i])）では list を落としません。**
+// 注意: **要素を渡すこと（f(xs[i])）では list を落としません。**
 //   渡っているのは要素で、list そのものではありません。長さを変えるには
 //   list を `mut` で渡すか、list のメソッドを呼ぶ必要があります（所有権検査
-//   がそれを保証しています）。⚠️ ここを落としていたせいで、**関係が消えない
+//   がそれを保証しています）。注意: ここを落としていたせいで、**関係が消えない
 //   はずの場所で 499 件消えていました**（計測して分かりました）。
 
 // 本体に break / continue があるか（ループの道が増えるかどうか）
 //
-// ⚠️ 内側のループの break は、そのループのものなので数えません。
+// 注意: 内側のループの break は、そのループのものなので数えません。
 static bool has_jump(Node *n) {
     for (; n; n = n->next) {
         if (n->kind == ND_BREAK || n->kind == ND_CONTINUE) return true;
@@ -933,7 +933,7 @@ static void walk_stmt(Prove *pr, Env *env, Node *n);
 //
 // ★ これが分かると `if len(a) != len(b): return` の**後ろ**で
 //   「長さは同じ」と言えます（then 側は合流に混ぜません）。
-//   ⚠️ 分からないときは false を返します（混ぜる＝安全側）。
+//   注意: 分からないときは false を返します（混ぜる＝安全側）。
 static bool always_exits(Node *first) {
     for (Node *s = first; s; s = s->next) {
         switch (s->kind) {
@@ -1017,7 +1017,7 @@ static void walk_stmt(Prove *pr, Env *env, Node *n) {
             } else if (else_out && !then_out) {
                 *env = then_e;
             } else {
-                // ⚠️ 両方抜けるときもここに来ます（この先は届かないので
+                // 注意: 両方抜けるときもここに来ます（この先は届かないので
                 //   どちらでも構いません）。合流は「両方で言えること」だけ。
                 env_join(&then_e, &else_e);
                 *env = then_e;
@@ -1028,17 +1028,17 @@ static void walk_stmt(Prove *pr, Env *env, Node *n) {
         case ND_WHILE: {
             // ★ ループの入口で成り立つことを求めます。
             //
-            // 🤔 なぜ「確かめてから使う」のか
+            // なぜ「確かめてから使う」のか
             //   不動点の反復は、本体を**まっすぐ 1 本の道**として歩きます。
             //   `break` / `continue` があると道が増えるので、その前提が崩れます。
-            //   ⚠️ 崩れたまま使うと、**消してはいけない検査を消します**。
+            //   注意: 崩れたまま使うと、**消してはいけない検査を消します**。
             //   だから ① 飛び出しがあるときは保守的な入口（本体で書き換わる
             //   ものを全部忘れる）を使い、② 無いときも「本当に不動点か」を
             //   最後に確かめます。
             Env in;
             bool ok = false;
-            // 🔒 **不動点を探している間は印を立てません**（入口がまだ狭い＝
-            //   楽観的なので、ここで消すと消しすぎます）。⚠️ 内側のループも
+            // **不動点を探している間は印を立てません**（入口がまだ狭い＝
+            //   楽観的なので、ここで消すと消しすぎます）。注意: 内側のループも
             //   自分の探索中だけ消すので、元の値に戻します。
             bool mark_save = pr->mark;
             pr->mark = false;
@@ -1082,7 +1082,7 @@ static void walk_stmt(Prove *pr, Env *env, Node *n) {
             walk_stmt(pr, &body, n->body);
             if (n->incr) walk_stmt(pr, &body, n->incr);
 
-            // ★ ループを抜けた後。⚠️ break で抜けたなら条件は偽とは限りません。
+            // ★ ループを抜けた後。注意: break で抜けたなら条件は偽とは限りません。
             if (!has_jump(n->body)) narrow(pr, &in, n->lhs, false);
             *env = in;
             return;
@@ -1106,7 +1106,7 @@ static void walk_stmt(Prove *pr, Env *env, Node *n) {
         // ── 契約（A-29。段 2）────────────────────────────
         //
         // ★ 区間で「必ず真」と言えたら、実行時の検査を消します。
-        //   ⚠️ 言えなくても**赤にはしません**（今までどおり実行時に確かめる）。
+        //   注意: 言えなくても**赤にはしません**（今までどおり実行時に確かめる）。
         case ND_REQUIRES: {
             walk_expr(pr, env, n->lhs);
             if (!pr->mark) {
@@ -1125,7 +1125,7 @@ static void walk_stmt(Prove *pr, Env *env, Node *n) {
         }
 
         case ND_ENSURES:
-            // ⚠️ ここ（関数の先頭）では確かめません。**return の場所**で、
+            // 注意: ここ（関数の先頭）では確かめません。**return の場所**で、
             //   返す値を result に入れてから確かめます（下の ND_RETURN）。
             walk_expr(pr, env, n->lhs);
             return;
@@ -1133,7 +1133,7 @@ static void walk_stmt(Prove *pr, Env *env, Node *n) {
         case ND_TRY:
             walk_stmt(pr, env, n->body);
             for (Node *ex = n->els; ex; ex = ex->next) walk_stmt(pr, env, ex->body);
-            // ⚠️ try の後は「どこで抜けたか」が分からないので、全部忘れます
+            // 注意: try の後は「どこで抜けたか」が分からないので、全部忘れます
             *env = (Env){NULL, NULL};
             return;
 
@@ -1177,7 +1177,7 @@ static void prove_func(Prove *pr, Node *fn) {
     walk_list(pr, &env, fn->body->body);
 
     // ② すべての出口で示せた事後条件だけ消します
-    //   ⚠️ 値を返さない関数は「最後まで落ちてくる出口」もあるので、
+    //   注意: 値を返さない関数は「最後まで落ちてくる出口」もあるので、
     //     return を 1 つも見ていないときは消しません（安全側）。
     for (EnsRec *r = ens; r; r = r->next) {
         bool ok = r->seen && r->all_ok && fn->type && fn->type->kind != TY_NONE;

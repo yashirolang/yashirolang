@@ -30,7 +30,7 @@ def main() -> int:
     sp: list[float] = fft.spectrum(xs)
 
     print("周波数  振幅")
-    # ⚠️ 後半は前半の鏡像なので、N/2 まで見れば足ります
+    # 注意: 後半は前半の鏡像なので、N/2 まで見れば足ります
     k: int = 0
     while k <= N // 2:
         amp: float = sp[k] * 2.0 / float(N)

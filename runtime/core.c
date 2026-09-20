@@ -3,7 +3,7 @@
 // ★ ここには **libc に依存しないもの**だけを置きます。
 //   OS を書くとき、リンクできるのはこのファイルだけです。
 //
-// 🤔 なぜ分けるのか
+// なぜ分けるのか
 //   v1 のランタイムは printf / malloc / fopen を直接呼んでいました。
 //   ベアメタルにはそのどれもありません。かといって「OS 用の別ランタイム」を
 //   もう 1 本書くと、同じ処理が 2 か所に増えて必ずずれます。
@@ -16,7 +16,7 @@
 //   │              │        │ pl_hook_panic     │    → UART / 停止
 //   └─────────────┘        └──────────────────┘
 //
-// ⚠️ このファイルでは <stdio.h> / <stdlib.h> / <string.h> を include しません。
+// 注意: このファイルでは <stdio.h> / <stdlib.h> / <string.h> を include しません。
 //    必要な小道具（memcpy 相当）は自分で持ちます。
 
 #include "core.h"
@@ -109,7 +109,7 @@ void *pl_alloc(long long size) {
 //   init で入れ忘れたまま参照すると segfault しますが、
 //   ここを通しておけば「何が起きたか分かるメッセージ」に変わります。
 //
-// ⚠️ 本来の解決策は型システム側（T | None と narrowing）です。のちに塞ぎます。
+// 注意: 本来の解決策は型システム側（T | None と narrowing）です。のちに塞ぎます。
 //
 // ★ 検査そのものは codegen が IR に展開するようになりました
 //   （gen_not_none）。フィールド参照はこの言語で最も回数の多い操作で、
@@ -117,7 +117,7 @@ void *pl_alloc(long long size) {
 //   ランタイムは別にリンクされるのでインライン化されません。
 
 // None だったときだけ呼ばれる出口。
-// ⚠️ **戻ってきません**。呼び出し側の IR は直後に unreachable を置きます。
+// 注意: **戻ってきません**。呼び出し側の IR は直後に unreachable を置きます。
 void pl_none_fail(void) {
     pl_panic("field access on None (uninitialized reference field?)");
 }
@@ -132,7 +132,7 @@ void *pl_check_not_none(void *p) {
 
 // ── double を 10 進の文字列にする ────────────────────────
 //
-// ⚠️ **libc は使えません。** このランタイムはベアメタルでも動く必要があり、
+// 注意: **libc は使えません。** このランタイムはベアメタルでも動く必要があり、
 //    snprintf("%g") に頼れません（runtime/README.md）。そこで最小限の
 //    変換を自前で持ちます。
 //
@@ -146,10 +146,10 @@ void *pl_check_not_none(void *p) {
 //   `str(0.1 + 0.2)` が `0.3` に見えるのは、数値計算の言語として害でした
 //   （自分の誤差が見えない）。いまは Python と同じく `0.30000000000000004` です。
 //
-//   ⚠️ **「17 桁出す」ではありません。** double → 文字列 → double が元に戻る、
+//   注意: **「17 桁出す」ではありません。** double → 文字列 → double が元に戻る、
 //     いちばん短い表記を選びます（1.0 は "1.0"、0.1 は "0.1"）。
 //
-//   ⚠️ **10 のべき乗で割って桁を作る素朴なやり方では駄目でした。**
+//   注意: **10 のべき乗で割って桁を作る素朴なやり方では駄目でした。**
 //     試作して 200 件中 116 件しか往復しませんでした（1 ulp ずれる）。
 //     正しくやるには多倍長整数が要ります（Steele & White / Burger–Dybvig の
 //     いわゆる Dragon4）。下の pl_shortest_digits がそれです。
@@ -172,13 +172,13 @@ static long long pl_utoa(unsigned long long u, char *out) {
 //   R/S を 10 倍しながら 1 桁ずつ取り出し、**残りが中点より内側に入った
 //   時点で打ち切る**ので、元に戻る最短の桁数になります。
 //
-// ⚠️ 桁数の上限（PL_BN_LIMBS）は余裕を見てあります。表示（pl_ftoa）に
+// 注意: 桁数の上限（PL_BN_LIMBS）は余裕を見てあります。表示（pl_ftoa）に
 //   要るのは 1e308 や非正規化数でも 40 桁ほどですが（32bit × 40 = 1280bit）、
 //   **読み取り（pl_str_to_float）のほうが要ります**。十進 780 桁を
 //   10^-1104 で割る形になるので 3700 ビットほど必要です。
-//   ⚠️ ここを縮めると、pl_bn_shl が黙って何もしなくなります（あふれ検査で
+//   注意: ここを縮めると、pl_bn_shl が黙って何もしなくなります（あふれ検査で
 //     return するため）。縮めるときは PL_MAX_SIG も一緒に見てください。
-//   ⚠️ ベアメタルのスタックは 16KB です（kernel/boot.s）。PlBn 1 つが
+//   注意: ベアメタルのスタックは 16KB です（kernel/boot.s）。PlBn 1 つが
 //     516 バイトで、いちばん多く使う pl_shortest_digits が 6 つです。
 #define PL_BN_LIMBS 128
 
@@ -214,7 +214,7 @@ static void pl_bn_mul_small(PlBn *a, unsigned int m) {
 static void pl_bn_shl(PlBn *a, int k) {
     int words = k / 32, bits = k % 32;
     if (words) {
-        if (a->n + words > PL_BN_LIMBS) return;  // ⚠️ 起きない大きさに取ってある
+        if (a->n + words > PL_BN_LIMBS) return;  // 注意: 起きない大きさに取ってある
         for (int i = a->n - 1; i >= 0; i--) a->d[i + words] = a->d[i];
         for (int i = 0; i < words; i++) a->d[i] = 0;
         a->n += words;
@@ -282,7 +282,7 @@ static void pl_decompose(double v, unsigned long long *f, int *e) {
 }
 
 // digits に '0'〜'9' を並べ、桁数を返す。*exp10 は先頭の桁の 10 の指数。
-// ⚠️ v は **正の有限値**であること（呼び出し側で確かめています）。
+// 注意: v は **正の有限値**であること（呼び出し側で確かめています）。
 static int pl_shortest_digits(double v, char *digits, int *exp10) {
     unsigned long long f;
     int e;
@@ -354,7 +354,7 @@ static int pl_shortest_digits(double v, char *digits, int *exp10) {
 
         if (!low && !high) {
             digits[n++] = (char)('0' + d);
-            if (n >= 18) break;   // ⚠️ double は 17 桁で必ず往復します
+            if (n >= 18) break;   // 注意: double は 17 桁で必ず往復します
             continue;
         }
         if (low && !high) {
@@ -386,7 +386,7 @@ static long long pl_ftoa(double v, char *out) {
         out[n++] = 'i'; out[n++] = 'n'; out[n++] = 'f';
         return n;
     }
-    // ⚠️ -0.0 は `v < 0` が偽なので、ここだけビットで符号を見ます。
+    // 注意: -0.0 は `v < 0` が偽なので、ここだけビットで符号を見ます。
     //   落とすと float(str(-0.0)) が +0.0 になり、往復しなくなります。
     {
         union { double d; unsigned long long u; } cv;
@@ -481,7 +481,7 @@ void pl_print_bool(long long v) {
 //     [ i64 長さ ][ バイト列 ... ][ '\0' ]
 //                  ^ str の値が指すのはここ
 //
-//   ⚠️ なぜ変えたか
+//   注意: なぜ変えたか
 //     それまでの str は「ただの NUL 終端文字列」でした。すると
 //     len(s) も s[i] も毎回 strlen する＝ O(n) になり、
 //     字句解析器のように 1 文字ずつ回るコードが O(n^2) になります。
@@ -501,7 +501,7 @@ void pl_print_bool(long long v) {
 //
 //   ヘッダ（8 バイト手前）:  [ 静的ビット | 長さ ]
 //
-// ⚠️ 印を付けるのは codegen（--drop のとき）です。ランタイム側で作る文字列は
+// 注意: 印を付けるのは codegen（--drop のとき）です。ランタイム側で作る文字列は
 //    すべてヒープなので、印は付きません。
 #define PL_STR_STATIC (1LL << 62)
 
@@ -522,7 +522,7 @@ char *pl_str_from_cstr(const char *s) {
 
 // ★ O(1) になりました。
 //
-// ⚠️ ヘッダの最上位ビットの 1 つを「静的な文字列」の印に使うので、
+// 注意: ヘッダの最上位ビットの 1 つを「静的な文字列」の印に使うので、
 //    長さを読むときは必ず落とします（下の PL_STR_STATIC を参照）。
 long long pl_str_len(const char *s) {
     return ((const long long *)s)[-1] & ~PL_STR_STATIC;
@@ -552,7 +552,7 @@ char *pl_str_concat(const char *a, const char *b) {
 // ★ これ 1 つで == != < <= > >= の 6 種類すべてに使えます
 //   （生成側は結果を 0 と比べる述語を変えるだけ）。
 long long pl_str_cmp(const char *a, const char *b) {
-    // ⚠️ libc の strcmp は使えません（core は libc に触らない）。
+    // 注意: libc の strcmp は使えません（core は libc に触らない）。
     //    符号だけ分かればよいので、自分で比べます。
     const unsigned char *x = (const unsigned char *)a;
     const unsigned char *y = (const unsigned char *)b;
@@ -586,7 +586,7 @@ char *pl_str_from_float(double v) {
 // ★ 命令 1 つ（sitofp / fptosi）で済みますが、**組み込み関数の仕組みに
 //   そのまま乗せる**ためにランタイム関数にしています。コード生成器に
 //   float 専用の分岐を増やさずに済みます。
-// ⚠️ float → int は **0 方向への切り捨て**です（-1.7 → -1）。
+// 注意: float → int は **0 方向への切り捨て**です（-1.7 → -1）。
 //    Python の int() と同じで、round() ではありません。
 double pl_float_from_int(long long v) { return (double)v; }
 // float → int（0 方向へ切り捨て）
@@ -594,7 +594,7 @@ double pl_float_from_int(long long v) { return (double)v; }
 // ★ **範囲の外を黙って通しません。** C の (long long) キャストは
 //   範囲外だと未定義動作で、実際には int の最小値が返っていました
 //   （int(1.0e30) が -9223372036854775808）。NaN も同じです。
-//   ⚠️ 境界は正確です。9223372036854775808.0（＝ int の最大値 + 1）は
+//   注意: 境界は正確です。9223372036854775808.0（＝ int の最大値 + 1）は
 //     double でちょうど表せるので、これ以上を弾けば足ります。
 //     最小値のほうは -9223372036854775808.0 が表せるので、そのものは通します。
 long long pl_int_from_float(double v) {
@@ -610,7 +610,7 @@ char *pl_str_from_bool(long long v) {
 
 // 文字列を整数にする。パースできなければ実行時エラー（言語仕様 7 節）。
 long long pl_str_to_int(const char *s) {
-    // ⚠️ libc の strtoll は使えないので、自分で読みます。
+    // 注意: libc の strtoll は使えないので、自分で読みます。
     //    ★ v1 と同じ規則：符号 1 個 + 数字 1 個以上、余りがあれば panic。
     const char *p = s;
     int neg = 0;
@@ -623,7 +623,7 @@ long long pl_str_to_int(const char *s) {
     // ★ **桁があふれたら panic します。**
     //   int("99999999999999999999") が黙って 7766279631452241919 に
     //   なっていました。
-    //   ⚠️ 負の側は 1 つ広い（-9223372036854775808 まで）ので、
+    //   注意: 負の側は 1 つ広い（-9223372036854775808 まで）ので、
     //     符号を見て上限を変えます。累算は符号なしで行い、
     //     1 桁進めるたびに上限と比べます。
     unsigned long long limit = neg ? 9223372036854775808ULL
@@ -637,7 +637,7 @@ long long pl_str_to_int(const char *s) {
         p++;
     }
     if (*p != '\0') pl_panic("int(): not a number");
-    // ⚠️ -9223372036854775808 は long long の正の側に無いので、
+    // 注意: -9223372036854775808 は long long の正の側に無いので、
     //   符号なしのまま否定してから変換します。
     if (neg) return (long long)(0ULL - v);
     return (long long)v;
@@ -650,7 +650,7 @@ long long pl_str_to_int(const char *s) {
 //   戻らなくなります。ここでは十進を M × 10^E の**分数**として持ち、
 //   多倍長で割って仮数を取り出します（pl_ftoa の裏返しです）。
 //
-// ⚠️ 有効数字は **780 桁**まで見ます。double の丸めの境目（中点）を
+// 注意: 有効数字は **780 桁**まで見ます。double の丸めの境目（中点）を
 //    十進で書くのに要るのは高々 767 桁なので、これで**どんな入力でも
 //    正しく丸まります**。落とした桁に 0 でないものがあれば sticky を
 //    立てるので、「ちょうど中点」を取り違えることもありません。
@@ -756,7 +756,7 @@ static double pl_dec_to_double(const unsigned char *dig, int nd, int exp10,
 
     if (nbits < 53) {
         // 非正規化数。q がそのまま仮数で、指数部は 0。
-        // ⚠️ 丸めで q が 2^52 に達したときは、そのビット列が
+        // 注意: 丸めで q が 2^52 に達したときは、そのビット列が
         //   ちょうど「最小の正規化数」になります（何もしなくて正しい）。
         return pl_bits_to_double(q, neg);
     }
@@ -863,7 +863,7 @@ double pl_str_to_float(const char *s) {
             for (; *p >= '0' && *p <= '9'; p++)
                 if (ev < 1000000) ev = ev * 10 + (*p - '0');
             if (eneg) ev = -ev;
-            // ⚠️ exp10 は int なので、極端な指数は先に潰しておきます
+            // 注意: exp10 は int なので、極端な指数は先に潰しておきます
             //   （100000 を超えれば、どのみち inf か 0 です）
             if (ev > 100000) ev = 100000;
             if (ev < -100000) ev = -100000;
@@ -882,7 +882,7 @@ tail:
 }
 
 // ★ float の 0 除算。整数の `//` `%` と同じく止めます。
-//   ⚠️ 「inf を返す」ほうが IEEE754 の既定ですが、それだと
+//   注意: 「inf を返す」ほうが IEEE754 の既定ですが、それだと
 //     「どこで壊れたか」が分からないまま nan が伝わります。
 _Noreturn void pl_fdiv_zero_fail(void) {
     pl_panic("float division by zero");
@@ -913,10 +913,10 @@ char *pl_chr(long long v) {
 //   Python と同じく負の無限大の方向へ丸め、-7 // 2 == -4 とします。
 //   「Python の書きやすさは絶対」（ロードマップ §0）に従った判断です。
 //
-//   ⚠️ 商だけ直して余りを直さないと a == (a // b) * b + a % b が崩れます。
+//   注意: 商だけ直して余りを直さないと a == (a // b) * b + a % b が崩れます。
 //     この等式が成り立つことは tests/cases/floordiv_sign で固定しています。
 //
-//   ⚠️ 検査は 1 つ増えますが、どのみち 0 除算のためにこの関数を通るので
+//   注意: 検査は 1 つ増えますが、どのみち 0 除算のためにこの関数を通るので
 //     命令数の増分だけです（呼び出しは元から 1 回）。
 long long pl_floordiv(long long a, long long b) {
     if (b == 0) pl_panic("division by zero");
@@ -934,8 +934,8 @@ long long pl_floordiv(long long a, long long b) {
 // ── 桁あふれ ────────────────────────────────────────
 //
 // ★ codegen が出す `llvm.sadd/ssub/smul.with.overflow` の失敗側から呼ばれます。
-//   ⚠️ **戻りません。** IR は直後に unreachable を置きます。
-//   ⚠️ 宣言には noreturn と cold の両方が付きます。付けないと
+//   注意: **戻りません。** IR は直後に unreachable を置きます。
+//   注意: 宣言には noreturn と cold の両方が付きます。付けないと
 //     この呼び出しの費用が、囲む関数のインライン化の見積りに入ります。
 //
 // 引数は演算の種類です。文字列を渡すと演算のたびに大域定数が増えるので、
@@ -953,7 +953,7 @@ void pl_overflow_fail(long long op) {
 // ── 範囲型（部分型。A-28）──
 //
 // ★ 範囲の外の値を入れようとしたときに呼ばれます。
-//   ⚠️ **戻りません**（IR は直後に unreachable を置きます）。
+//   注意: **戻りません**（IR は直後に unreachable を置きます）。
 //
 // 型の名前は大域定数として IR に 1 つ置かれ、そのポインタが渡ります。
 // 数は 3 つとも i64 です（メッセージの組み立てはこちら側の仕事）。
@@ -981,7 +981,7 @@ void pl_range_fail(const char *name, long long v, long long lo, long long hi) {
 //
 // ★ メッセージはコンパイル時に組み立てて大域定数に置いてあります
 //   （"requires of divide (line 12)" のような文字列）。
-//   ⚠️ **戻りません**（IR は直後に unreachable を置きます）。
+//   注意: **戻りません**（IR は直後に unreachable を置きます）。
 void pl_contract_fail(const char *what) {
     char buf[256];
     long long k = 0;
@@ -996,7 +996,7 @@ void pl_contract_fail(const char *what) {
 //
 // ★ 「消せる」と判断した検査を**残したまま**建てたときに、その検査が
 //   外れたら呼ばれます。つまり **証明器が間違えた**ということです。
-//   ⚠️ 利用者のコードの誤りではないので、ふつうの診断と分けます。
+//   注意: 利用者のコードの誤りではないので、ふつうの診断と分けます。
 void pl_prove_fail(const char *what) {
     char buf[256];
     long long k = 0;
@@ -1022,7 +1022,7 @@ long long pl_mod(long long a, long long b) {
 // ★ ハードウェアの桁あふれフラグを使う組み込み（__builtin_mul_overflow）は
 //   使いません。ベアメタル（RISC-V）でライブラリ呼び出しに化けないことを
 //   保証したいので、割り戻して確かめる形にしてあります。
-// ⚠️ -1 を先に外すのは、p / b が b == -1 で未定義動作になるためです。
+// 注意: -1 を先に外すのは、p / b が b == -1 で未定義動作になるためです。
 static int pl_mul_ovf(long long a, long long b, long long *out) {
     if (a == 0 || b == 0) { *out = 0; return 0; }
     if (a == -1) { if (b == PL_LLONG_MIN) return 1; *out = -b; return 0; }
@@ -1038,7 +1038,7 @@ static int pl_mul_ovf(long long a, long long b, long long *out) {
 // 負の指数は int で表せないので実行時エラーにします（先送りしていた宿題）。
 //
 // ★ **あふれたら panic します。** 2 ** 64 が黙って 0 を返していました。
-//   ⚠️ 二乗は「次の周がある」ときだけ行います。最後の周でも二乗していた
+//   注意: 二乗は「次の周がある」ときだけ行います。最後の周でも二乗していた
 //     元の形だと、答えは正しいのに途中の二乗だけがあふれて
 //     **誤検出**になります（2 ** 62 など）。
 long long pl_ipow(long long base, long long exp) {
@@ -1063,7 +1063,7 @@ long long pl_ipow(long long base, long long exp) {
 //     指数が整数なら **繰り返し二乗法**（負の底も扱える／誤差も小さい）
 //     そうでなければ exp(y·log(x))
 //
-// ⚠️ math の exp / log と **同じアルゴリズム**にしてあります。
+// 注意: math の exp / log と **同じアルゴリズム**にしてあります。
 //   片方だけ直すと `2.0 ** 0.5` と `math.pow(2.0, 0.5)` がずれます。
 static double pl_exp_(double x) {
     if (x != x) return x;
@@ -1141,7 +1141,7 @@ double pl_fpow(double x, double y) {
 //
 // ★ ここは「C でしか書けないもの」です。本言語で書けるものは lib/* に置きます
 //
-// ⚠️ 失敗したら panic で落とします。エラー値を返して利用者に検査させる形は
+// 注意: 失敗したら panic で落とします。エラー値を返して利用者に検査させる形は
 //    `T | None` がまだ無いので書けません。
 
 
@@ -1187,11 +1187,11 @@ long long pl_list_len(PlList *l) { return l->len; }
 //   連続して並んでいるので、`list[float]` の中身は C から見れば `double*`、
 //   `list[int]` は `long long*` です。写す必要はありません。
 //
-// ⚠️ 返すのは**借りもの**です。`append` で伸びると別の場所へ移ることがあるので、
+// 注意: 返すのは**借りもの**です。`append` で伸びると別の場所へ移ることがあるので、
 //   **渡したあいだは list を変えないでください**（設計 ffi.md）。
 void *pl_list_data(PlList *l) { return l->data; }
 
-// ⚠️ realloc を使わないのは「一度渡したポインタは永久に有効」という
+// 注意: realloc を使わないのは「一度渡したポインタは永久に有効」という
 //    方針（メモリモデル 3 節）と噛み合わないためです。
 //    memcpy して古い領域を捨てるほうが、方針と一貫します。
 //
@@ -1207,7 +1207,7 @@ static void pl_list_grow(PlList *l) {
 
 // 範囲検査（規約 R10）。
 //
-// ⚠️ 負の添字は **末尾からの位置**です（Python と同じ）。
+// 注意: 負の添字は **末尾からの位置**です（Python と同じ）。
 //   xs[-1] が最後の要素。呼ぶ側で正規化してから渡します。
 //
 // ★ **ここはもう「検査の置き場所」ではありません。**
@@ -1218,8 +1218,8 @@ static void pl_list_grow(PlList *l) {
 //   持ち上げたり、範囲が自明なときに消したりできます。
 
 // 範囲外だったときだけ呼ばれる出口。
-// ⚠️ **戻ってきません**。呼び出し側の IR は直後に unreachable を置きます。
-// ⚠️ 3 つめの引数は「添字の計算で桁があふれたか」です。
+// 注意: **戻ってきません**。呼び出し側の IR は直後に unreachable を置きます。
+// 注意: 3 つめの引数は「添字の計算で桁があふれたか」です。
 //   あふれたときは i に意味がない（折り返した値）ので、数を出しません。
 void pl_index_fail(long long i, long long len, long long overflowed) {
     if (overflowed) pl_panic("integer overflow in index computation");
@@ -1243,7 +1243,7 @@ static void pl_list_check(PlList *l, long long i) {
 
 // 部分文字列の位置（'in' 演算子）。無ければ -1
 //
-// ⚠️ 素朴な走査（O(n·m)）です。KMP のような高速化はしていません。
+// 注意: 素朴な走査（O(n·m)）です。KMP のような高速化はしていません。
 //   'in' の用途では入力が短いことがほとんどで、コードの短さを優先しました。
 // ★ 空文字列はどこにでも含まれるので 0 を返します（Python と同じ）。
 long long pl_str_find(const char *hay, const char *needle) {
@@ -1261,7 +1261,7 @@ long long pl_str_find(const char *hay, const char *needle) {
 
 // 部分文字列。**新しい文字列を作って返します**
 //
-// ⚠️ 範囲は Python と同じ規則で丸めます。**範囲外でも落ちません**
+// 注意: 範囲は Python と同じ規則で丸めます。**範囲外でも落ちません**
 //   （添字と違い、スライスは「はみ出したぶんは無い」と読むのが自然なため）。
 //     負の値 → 0、長さを超える → 長さ、開始 > 終端 → 空
 char *pl_str_slice(const char *s, long long lo, long long hi) {
@@ -1282,7 +1282,7 @@ char *pl_str_slice(const char *s, long long lo, long long hi) {
 // ── 探索（'in' 演算子と list のメソッド） ────────────────
 //
 // ★ 見つかった位置を返し、無ければ -1。'in' はこの結果を >= 0 と比べます。
-//   ⚠️ 位置を返す形にしておくと index() にもそのまま使えます。
+//   注意: 位置を返す形にしておくと index() にもそのまま使えます。
 
 long long pl_list_index_i64(PlList *l, long long v) {
     for (long long i = 0; i < l->len; i++)
@@ -1290,7 +1290,7 @@ long long pl_list_index_i64(PlList *l, long long v) {
     return -1;
 }
 
-// ⚠️ float は **ビットではなく数値として**比べます。ビットで比べると
+// 注意: float は **ビットではなく数値として**比べます。ビットで比べると
 //    0.0 と -0.0 が別物になり、NaN が自分自身と一致してしまいます。
 long long pl_list_index_f64(PlList *l, double v) {
     for (long long i = 0; i < l->len; i++) {
@@ -1327,10 +1327,10 @@ void pl_list_push_i64(PlList *l, long long v);   // 下で定義
 //   用意します。**要素の型はコンパイル時に決まっている**ので、
 //   どれを呼ぶかは codegen が選べます。
 //
-// ⚠️ 形は Python に寄せます: [1, 2, 3] / ["a", "b"] / [True, False]
+// 注意: 形は Python に寄せます: [1, 2, 3] / ["a", "b"] / [True, False]
 //   文字列だけ引用符で囲むのは、空文字や空白を含む要素が見えるようにするためです。
 //
-// ⚠️ **入れ子（list[list[int]]）は対象外です。** 要素をさらに文字列に
+// 注意: **入れ子（list[list[int]]）は対象外です。** 要素をさらに文字列に
 //   する手立てが要るためで、sema が先に弾きます。
 
 // 組み立て用の可変長バッファ（この節の中だけで使う）
@@ -1402,9 +1402,9 @@ void pl_print_list(PlList *l, long long kind) {
 // ── ハッシュ ────────────────────────────────────────────
 //
 // ★ FNV-1a。短い鍵に強く、実装が数行で済みます。
-//   ⚠️ **暗号用ではありません。** 敵が鍵を選べる場面（外部入力を鍵にする
+//   注意: **暗号用ではありません。** 敵が鍵を選べる場面（外部入力を鍵にする
 //     サーバなど）では、衝突を狙われて線形探索に落とされます。
-//   ⚠️ 返す値は **非負**にします（剰余で添字にするため）。
+//   注意: 返す値は **非負**にします（剰余で添字にするため）。
 long long pl_hash_str(const char *s) {
     unsigned long long h = 14695981039346656037ULL;
     long long n = pl_str_len(s);
@@ -1427,7 +1427,7 @@ long long pl_hash_i64(long long v) {
 }
 
 // float はビット列を整数として散らす
-// ⚠️ 0.0 と -0.0 はビットが違うので別の値になります。鍵にするときは注意。
+// 注意: 0.0 と -0.0 はビットが違うので別の値になります。鍵にするときは注意。
 long long pl_hash_f64(double v) {
     long long bits;
     pl_memcpy(&bits, &v, 8);
@@ -1441,7 +1441,7 @@ double pl_fabs(double v) { return v < 0.0 ? -v : v; }
 // ── 負の添字の正規化 ────────────────────────────────────
 //
 // ★ Python と同じく、負の添字は **末尾から**数えます（-1 が最後）。
-//   ⚠️ 正規化だけで、範囲の検査はしません（後段の pl_list_check / pl_str_index
+//   注意: 正規化だけで、範囲の検査はしません（後段の pl_list_check / pl_str_index
 //     がそのまま担当します）。-100 のような値は負のまま渡り、そこで落ちます。
 long long pl_norm_index(long long i, long long len) {
     if (i < 0) return i + len;
@@ -1449,7 +1449,7 @@ long long pl_norm_index(long long i, long long len) {
 }
 
 // list[int] の総和
-// ⚠️ **int のリストだけ**です。float の総和は要素の型で命令が変わるので、
+// 注意: **int のリストだけ**です。float の総和は要素の型で命令が変わるので、
 //   linalg.vsum を使ってください（sema が型を見て弾きます）。
 long long pl_list_sum(PlList *l) {
     long long s = 0;
@@ -1479,7 +1479,7 @@ PlList *pl_list_repeat(PlList *a, long long n) {
 
 // list のスライス。**新しい list を作ります**（借用ではありません）
 //
-// ⚠️ 要素をそのまま写すので、参照型なら「同じものを指す 2 つのリスト」に
+// 注意: 要素をそのまま写すので、参照型なら「同じものを指す 2 つのリスト」に
 //   なります。所有権の観点では借用と同じ扱いが要るため、複製した中身の
 //   解放は行いません（仕様 §6 の一時値と同じ扱い）。
 PlList *pl_list_slice(PlList *l, long long lo, long long hi) {
@@ -1615,7 +1615,7 @@ char *pl_str_join(PlList *xs, const char *sep) {
 //
 // ★ pl_str_index と違い、確保しません。字句解析器のように 1 文字ずつ回る
 //   コードでは、1 文字ごとの 2 バイト確保が効いてきます（実測）。
-// ⚠️ 言語には足していません。lib/strings から extern で呼ぶだけです
+// 注意: 言語には足していません。lib/strings から extern で呼ぶだけです
 //   （引いた境界線のとおり）。
 long long pl_byte_at(const char *s, long long i) {
     long long n = pl_str_len(s);
@@ -1679,7 +1679,7 @@ char *pl_str_copy(const char *s) {
 //   │ i64      │ i64      │ ptr           │
 //   └──────────┴──────────┴──────────────┘
 //
-// ⚠️ 設計（ownership.md §7）では「中身を埋め込む」形にしていましたが、
+// 注意: 設計（ownership.md §7）では「中身を埋め込む」形にしていましたが、
 //    本言語の所有型はすべてポインタなので、**ポインタを 1 本持つ**ほうが
 //    型ごとのレイアウト計算が要らず、どの型でも同じ形になります。
 typedef struct {
@@ -1702,7 +1702,7 @@ _Noreturn void pl_rc_none_fail(void) {
     pl_panic("rc: None の中身は読めません");
 }
 
-// ⚠️ ランタイムの中からはまだ使います（codegen は呼びません）。
+// 注意: ランタイムの中からはまだ使います（codegen は呼びません）。
 void *pl_rc_get(void *p) {
     if (!p) pl_panic("rc: None の中身は読めません");
     return ((PlRc *)p)->value;
@@ -1752,7 +1752,7 @@ void pl_rc_unborrow(void *p) {
 //   所有権で「誰が所有者か」が静的に決まったので、
 //   ここで初めて pl_hook_free() を入れます。
 //
-// ⚠️ どれも「NULL を渡してよい」ようにしてあります。
+// 注意: どれも「NULL を渡してよい」ようにしてあります。
 //    T | None のフィールドや、まだ入っていない値をそのまま渡せるからです。
 
 void pl_drop_str(char *s) {

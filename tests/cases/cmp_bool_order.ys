@@ -1,5 +1,5 @@
 # EXIT: 1
-# ⚠️ i1 の符号付き比較は逆になる（True=1 は 2 の補数で -1）。
+# 注意: i1 の符号付き比較は逆になる（True=1 は 2 の補数で -1）。
 #    icmp slt i1 だと False になるので、bool は符号なし比較を使う。
 def main() -> int:
     if False < True:

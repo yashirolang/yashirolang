@@ -3,7 +3,7 @@
 # 整数の + - * が桁あふれで panic すること、および
 #   **あふれない計算を誤検出しない**こと。
 #
-#   ⚠️ 「あふれる側」は 1 プロセスで 1 回しか試せない（panic するため）ので、
+#   注意: 「あふれる側」は 1 プロセスで 1 回しか試せない（panic するため）ので、
 #     ここでは誤検出しないことだけを見ます。あふれる側は
 #     rt_overflow_add / rt_overflow_mul / rt_overflow_neg です。
 def main() -> int:
@@ -27,7 +27,7 @@ def main() -> int:
     if (lo + 1) - 1 != lo:
         ok = False
 
-    # 単項マイナス。⚠️ -lo は表せないので、ここでは試さない（rt_overflow_neg）
+    # 単項マイナス。注意: -lo は表せないので、ここでは試さない（rt_overflow_neg）
     if 0 - hi != -hi:
         ok = False
 

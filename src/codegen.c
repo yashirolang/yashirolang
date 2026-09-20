@@ -83,7 +83,7 @@ typedef struct {
     //   デバッガが中身を出せるようになります（A-35。`p x` / 変数一覧）。
     // ── 証明（A-34）──
     //
-    // ⚠️ true なら、証明で「消せる」と判断した検査を**残します**。
+    // 注意: true なら、証明で「消せる」と判断した検査を**残します**。
     //   外れたときに専用の診断で止めるので、解析の誤りが CI で捕まります。
     bool verify_prove;
     // ★ いま出している検査が「証明では消せるはず」のものか（--verify-prove）。
@@ -191,11 +191,11 @@ static char *force_retain(Emitter *e, char *val);
 
 // 新しい一時値の名前を返す（"%t0", "%t1", ...）
 //
-// ⚠️ 規約 R4：必ず英字始まりの名前にします。
+// 注意: 規約 R4：必ず英字始まりの名前にします。
 //    %0 のような数値名を自分で使うと、LLVM の暗黙採番と衝突して
 //    "instruction expected to be numbered '%N'" という分かりにくい
 //    エラーになります。
-// ⚠️ 名前に '.' を入れます。
+// 注意: 名前に '.' を入れます。
 //    それまでは "%tN" でしたが、利用者が `t0` という変数を書くと
 //    IR 上で衝突しました（stage1 の移植中に踏んだ実際のバグ）。
 //
@@ -239,7 +239,7 @@ static const char *llvm_type(Type *t) {
 
 // メモリ（alloca / load / store）としての LLVM 型。
 //
-// ⚠️ 規約 R5：bool はメモリ上 i8。
+// 注意: 規約 R5：bool はメモリ上 i8。
 //    alloca i1 も合法ですが、実際には 1 バイト確保され残り 7 ビットが未定義に
 //    なります。C ランタイム連携で困るので、i8 に揃えておきます。
 static const char *llvm_mem_type(Type *t) {
@@ -258,7 +258,7 @@ static const char *llvm_mem_type(Type *t) {
         case TY_PTR: return "ptr";
         case TY_THREAD: return "ptr";
         case TY_MUTEX: return "ptr";
-        // ⚠️ TY_NONE はメモリ上の表現を持ちません。
+        // 注意: TY_NONE はメモリ上の表現を持ちません。
         //    ここに来たら「None の変数を作ろうとしている」= コンパイラのバグ。
         default: UNREACHABLE();
     }
@@ -272,7 +272,7 @@ static const char *llvm_mem_type(Type *t) {
 
 // 二項演算子に対応する LLVM 命令の名前を返す。
 //
-// ⚠️ int は符号付きなので、必ず 's' の付く命令を使います。
+// 注意: int は符号付きなので、必ず 's' の付く命令を使います。
 //    sdiv / srem / ashr（udiv / urem / lshr ではない）。
 //    間違えると負数で誤った結果になります。
 static const char *llvm_binop(Node *n) {
@@ -314,7 +314,7 @@ static const char *llvm_binop(Node *n) {
 
 // 比較演算子に対応する icmp の述語。
 //
-// ⚠️ 落とし穴：i1 の符号付き比較は逆になる
+// 注意: 落とし穴：i1 の符号付き比較は逆になる
 //    i1 を 2 の補数で解釈すると True(1) は -1 です。
 //    icmp slt i1 0, 1 は「0 < -1」を聞くことになり False になります。
 //    そのため bool の大小比較は符号なし（ult など）を使います。
@@ -336,7 +336,7 @@ static const char *icmp_pred(OpKind op, Type *operand_type) {
 static const char *fcmp_pred(OpKind op) {
     switch (op) {
         case OP_EQ: return "oeq";
-        // ⚠️ '!=' だけ **unordered**（une）です。
+        // 注意: '!=' だけ **unordered**（une）です。
         //    a != b は「a == b ではない」と定義されるので、NaN が絡むと
         //    == が False → != は True でなければなりません。
         //    ここを one（ordered）にすると nan != nan が False になり、
@@ -373,7 +373,7 @@ static const char *fcmp_pred(OpKind op) {
 //   （runtime/core.c）、クラスのオブジェクトもまた別の確保です。
 //   この 3 つは決して重なりません。
 //
-// ⚠️ **タグを付けないアクセスは「何とでも別名かもしれない」**と扱われます。
+// 注意: **タグを付けないアクセスは「何とでも別名かもしれない」**と扱われます。
 //   ローカル変数・グローバル・文字列・`unsafe:` の生ポインタ・`extern` には
 //   付けません。**付けないほうが安全側**です。
 #define TBAA_NONE ""
@@ -383,17 +383,17 @@ static const char *fcmp_pred(OpKind op) {
 
 // ★ グローバル変数にもタグを付けます（当初の宿題②）。
 //
-// 🤔 なぜ付けるのか
+// なぜ付けるのか
 //   `while i < N:` の N がグローバルだと、LLVM は「本体の書き込みが N を
 //   書き換えるかもしれない」と見て、**毎回読み直します**。すると
 //   ループ回数が不定になり（uncountable loop）、ベクトル化できません。
 //   実測：512³ の行列積で 109 ms 対 41 ms（上限を局所変数に写した場合）。
 //
-// ⚠️ 健全性：グローバルは .data にあり、`pl_alloc` が返すヒープの
+// 注意: 健全性：グローバルは .data にあり、`pl_alloc` が返すヒープの
 //   オブジェクト（field / listhdr / listelem）とは**決して重なりません**。
-//   だから別の兄弟にしてよいのです。⚠️ グローバルどうしは同じタグなので、
+//   だから別の兄弟にしてよいのです。注意: グローバルどうしは同じタグなので、
 //   互いに別名かもしれない、と扱われます（安全側）。
-//   ⚠️ `unsafe:` の生ポインタはタグ無しのままです。タグ無しは
+//   注意: `unsafe:` の生ポインタはタグ無しのままです。タグ無しは
 //   「何とでも別名かもしれない」なので、こちらも安全側です。
 #define TBAA_GLOBAL ", !tbaa !8"
 
@@ -434,7 +434,7 @@ static void gen_store(Emitter *e, Type *ty, const char *val, const char *ptr) {
 
 // ── 基本ブロック（規約 R6 / R7）────────────────────────────
 //
-// ⚠️ IR にフォールスルーはありません。「次のブロックに続くだけ」でも
+// 注意: IR にフォールスルーはありません。「次のブロックに続くだけ」でも
 //    br label %next が必要です。初心者が最もよくハマる落とし穴です。
 //
 // ★ 「終端したか」を追跡する変数を 1 つ持つだけで、
@@ -478,7 +478,7 @@ static void ensure_block(Emitter *e) {
 
 // IR の文字列に 1 バイト出力する。
 //
-// ⚠️ 安全策として、ASCII 印字可能文字**以外はすべて** \XX にします。
+// 注意: 安全策として、ASCII 印字可能文字**以外はすべて** \XX にします。
 //    「どの文字をエスケープすべきか」を考えなくて済むようにするためです。
 //    UTF-8 の日本語も各バイトが \XX になるだけで、そのまま通ります。
 static void emit_ir_byte(StrBuf *sb, unsigned char c) {
@@ -512,7 +512,7 @@ static void declare_rt(Emitter *e, const char *sig);
 //     str                 → char へのポインタ（デバッガが "..." で出します）
 //     list / クラス / rc  → 構造体へのポインタ（中身を開いて見られます）
 //
-//   ⚠️ **参照型はポインタのまま**にしています。`p xs` は番地を出し、
+//   注意: **参照型はポインタのまま**にしています。`p xs` は番地を出し、
 //     `p *xs` で中身が出ます。デリファレンスして見せることもできますが、
 //     `T | None` が None のときに「読めません」としか出せなくなります。
 //     番地が出るほうが、共有（別名）を追うときにも役に立ちます。
@@ -558,7 +558,7 @@ static int dbg_ptr_to(Emitter *e, const char *key, int base) {
                   "!%d = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: !%d, "
                   "size: 64)\n", id, base);
     else
-        // ⚠️ baseType は省けません（LLVM が missing required field で止まります）。
+        // 注意: baseType は省けません（LLVM が missing required field で止まります）。
         //   「何を指すか分からないポインタ」は baseType: null と書きます。
         sb_printf(&e->dbgmeta,
                   "!%d = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: null, "
@@ -591,7 +591,7 @@ static int dbg_type(Emitter *e, Type *t);
 
 // list の 1 要素ぶんの型。
 //
-// ⚠️ list の要素は**どの型でも 8 バイト**です（規約。runtime/core.c）。
+// 注意: list の要素は**どの型でも 8 バイト**です（規約。runtime/core.c）。
 //   bool だけは変数の箱の中では 1 バイトなので、そのまま書くと
 //   `xs[1]` がとなりの要素を読みます。8 バイトの int として出します。
 //
@@ -613,7 +613,7 @@ static int dbg_type(Emitter *e, Type *t) {
     //   デバッガの中で `Token` と `Token | None` が別の型になってしまいます。
     if (t->kind == TY_OPT) return dbg_type(e, t->elem);
 
-    // 引くための名前。⚠️ クラスは**モジュール修飾した名前**で区別します
+    // 引くための名前。注意: クラスは**モジュール修飾した名前**で区別します
     //   （別のモジュールに同じ名前のクラスがあります）。
     const char *key = (t->kind == TY_CLASS && t->cls) ? t->cls->ir_name
                                                       : type_name(t);
@@ -623,7 +623,7 @@ static int dbg_type(Emitter *e, Type *t) {
     switch (t->kind) {
         // ── 数そのもの ──
         //
-        // ⚠️ **typedef で名前を付け直します。** デバッガは
+        // 注意: **typedef で名前を付け直します。** デバッガは
         //   `!DIBasicType` の名前を見ずに、大きさと符号から自分の言葉に
         //   直してしまうためです（int が `(long)`、float が `(double)` と
         //   出ていました）。typedef の名前はそのまま出ます。
@@ -653,7 +653,7 @@ static int dbg_type(Emitter *e, Type *t) {
         // ★ 値が指すのは「バイト列の先頭」で、そこは NUL 終端です
         //   （長さは 8 バイト手前。runtime/core.c）。char へのポインタだと
         //   書いておけば、デバッガがそのまま "hello" と出します。
-        //   ⚠️ もとの型の名前は "char" にします。デバッガが「文字列として
+        //   注意: もとの型の名前は "char" にします。デバッガが「文字列として
         //     出してよい」と判断する手がかりがここだからです（"u8" と
         //     名づけたときは番地しか出ませんでした）。
         case TY_STR: {
@@ -667,7 +667,7 @@ static int dbg_type(Emitter *e, Type *t) {
         // ── list[T] ──
         //   PlList { void *data; long long len; long long cap; }（runtime/core.c）
         case TY_LIST: {
-            // ⚠️ 先に番号を取り、**中身を作る前に**表へ入れます。
+            // 注意: 先に番号を取り、**中身を作る前に**表へ入れます。
             //   list[Node] のように自分を含む型で無限に回らないためです。
             int sid = dbg_id(e), pid = dbg_id(e), tid = dbg_id(e);
             dbg_ty_put(e, key, tid);
@@ -785,7 +785,7 @@ static int dbg_type(Emitter *e, Type *t) {
 
         // ── 中身をまだ書いていないもの ──
         //   タプル・関数・インタフェース・Thread[R]・mutex[T]。
-        //   ⚠️ 番地だけが出ます。型の名前は付くので、`p x` が
+        //   注意: 番地だけが出ます。型の名前は付くので、`p x` が
         //     「何も知らないポインタ」になることはありません。
         default: {
             int p = dbg_ptr_to(e, "*void", 0);
@@ -807,7 +807,7 @@ static int dbg_type(Emitter *e, Type *t) {
 //   引数もローカル変数もまったく同じ扱いで済みます）。最適化を掛けると
 //   LLVM が箱をレジスタに上げ、この印も一緒に付いて回ります。
 //
-// ⚠️ 脱糖が作る隠し変数（for.ix.0 / comp.res.0）は出しません。
+// 注意: 脱糖が作る隠し変数（for.ix.0 / comp.res.0）は出しません。
 //   利用者が書いていない名前なので、変数一覧に出ると邪魔になります。
 //   見分けは「名前に '.' が入っているか」です（識別子には入りません）。
 static void dbg_local(Emitter *e, const char *name, const char *ir_name, Type *t,
@@ -853,12 +853,12 @@ static int dbg_location(Emitter *e) {
 
 // e->fn の start から後ろに出した**命令の行**へ、`!dbg` を付けて回る。
 //
-// 🤔 なぜ後から付けるのか
+// なぜ後から付けるのか
 //   命令を出す場所は数百か所あります。そのすべてに「行の印」を渡して回ると、
 //   本筋（何を出すか）が印の受け渡しで埋まります。**出し終えてから、
 //   その範囲の行に付ける**ほうが、読む場所が 1 つで済みます。
 //
-// ⚠️ 付けないもの：ラベル行（行頭が空白でない）・空行・すでに `!dbg` がある行
+// 注意: 付けないもの：ラベル行（行頭が空白でない）・空行・すでに `!dbg` がある行
 //   （内側の文が先に付けているので、外側は上書きしません）。
 static void dbg_annotate(Emitter *e, size_t start) {
     if (!e->dbg || !e->dbg_fn) return;
@@ -874,7 +874,7 @@ static void dbg_annotate(Emitter *e, size_t start) {
         char *nl = strchr(p, '\n');
         size_t n = nl ? (size_t)(nl - p) : strlen(p);
         bool is_insn = n > 2 && p[0] == ' ' && p[1] == ' ';
-        // ⚠️ 1 行に 2 つ付けないこと（内側の文がすでに付けている）
+        // 注意: 1 行に 2 つ付けないこと（内側の文がすでに付けている）
         for (size_t i = 0; is_insn && i + 4 <= n; i++)
             if (memcmp(p + i, "!dbg", 4) == 0) is_insn = false;
         sb_printf(&e->fn, "%.*s", (int)n, p);
@@ -899,14 +899,14 @@ static char *intern_str(Emitter *e, const char *bytes, int len) {
     //     @.str.0 = private unnamed_addr constant { i64, [6 x i8] }
     //                 { i64 5, [6 x i8] c"hello\00" }
     //
-    // ⚠️ 配列の長さは「バイト数 + 1」。NUL の分を忘れない。
+    // 注意: 配列の長さは「バイト数 + 1」。NUL の分を忘れない。
     StrBuf g;
     sb_init(&g);
     // ★ --drop のときは長さのヘッダに「静的」の印を立てます。
     //   リテラルは .rodata にあるので、解放しようとすると落ちるためです
     //   （runtime.c の PL_STR_STATIC を参照）。
     //
-    // ⚠️ 印を立てるのは --drop のときだけです。既定の出力は v1 と 1 バイトも
+    // 注意: 印を立てるのは --drop のときだけです。既定の出力は v1 と 1 バイトも
     //    変えない、というのがこの章の約束なので（移植したら常に立てます）。
     long long hdr = e->drop ? ((long long)len | (1LL << 62)) : (long long)len;
     sb_printf(&g, "%s = private unnamed_addr constant { i64, [%d x i8] } "
@@ -995,7 +995,7 @@ static char *gen_expr(Emitter *e, Node *n) {
             return n->sval;
 
         // ★ ensures の中の 'result'（A-29）。**いま返そうとしている値**です。
-        //   ⚠️ 箱は作りません（所有型の戻り値で解放の釣り合いが崩れるため）。
+        //   注意: 箱は作りません（所有型の戻り値で解放の釣り合いが崩れるため）。
         case ND_RESULT:
             return (char *)e->ret_val;
 
@@ -1021,7 +1021,7 @@ static char *gen_expr(Emitter *e, Node *n) {
         }
 
         case ND_BINOP: {
-            // ★ in / not in。⚠️ **左右をここで評価してはいけません。**
+            // ★ in / not in。注意: **左右をここで評価してはいけません。**
             //   渡す形が要素の型で変わるので、gen_in の中で作ります。
             if (n->op == OP_IN || n->op == OP_NOTIN) return gen_in(e, n);
 
@@ -1039,7 +1039,7 @@ static char *gen_expr(Emitter *e, Node *n) {
             char *r = gen_expr(e, n->rhs);
             char *t = new_tmp(e);
 
-            // ⚠️ オペランドの型は「結果の型」ではありません。
+            // 注意: オペランドの型は「結果の型」ではありません。
             //    比較の結果は bool ですが、比べているのは左辺の型（int など）です。
             //    当初は両者が一致していたので llvm_type(n->type) で
             //    動いていました。比較演算子で初めてこの前提が崩れます。
@@ -1082,7 +1082,7 @@ static char *gen_expr(Emitter *e, Node *n) {
                     drop_temp(e, n->rhs, r);
                     return t;
                 }
-                // ⚠️ 比較は「内容」で行う（言語仕様 4.3）。ポインタ比較ではない。
+                // 注意: 比較は「内容」で行う（言語仕様 4.3）。ポインタ比較ではない。
                 //   pl_str_cmp が strcmp の符号を返すので、0 と比べる述語を
                 //   変えるだけで 6 種類すべてに対応できます。
                 declare_rt(e, "i64 @pl_str_cmp(ptr, ptr)");
@@ -1102,7 +1102,7 @@ static char *gen_expr(Emitter *e, Node *n) {
             //   より、メッセージを出して死ぬほうが親切です。分岐を IR に出さず、
             //   ランタイム関数に押し込むのが R10 の実践です。
             // ★ float の '**' はランタイムの pl_fpow に落とします。
-            //   ⚠️ libc の pow は使えません（ベアメタルで動く必要があるため）。
+            //   注意: libc の pow は使えません（ベアメタルで動く必要があるため）。
             if (n->op == OP_POW && ot->kind == TY_FLOAT) {
                 declare_rt(e, "double @pl_fpow(double, double)");
                 sb_printf(&e->fn,
@@ -1149,7 +1149,7 @@ static char *gen_expr(Emitter *e, Node *n) {
                 return gen_checked_fdiv(e, l, r);
             } else {
                 // ★ int の + - * は桁あふれを検査します。
-                //   ⚠️ 意図的に折り返したいときは wrap_add / wrap_sub /
+                //   注意: 意図的に折り返したいときは wrap_add / wrap_sub /
                 //     wrap_mul を使ってください（そちらは gen_call で出します）。
                 // ★ 証明（A-34）が「折り返さない」と示した計算は検査を出しません
                 bool proven = n->no_ovf_check && !e->verify_prove;
@@ -1215,7 +1215,7 @@ static char *gen_expr(Emitter *e, Node *n) {
 
         case ND_VAR: {
             // ★ ガードの計算中は、誘導変数を「両端の値」に読み替えます。
-            //   ⚠️ 添字の式をもう一度そのまま生成するので、substitution は
+            //   注意: 添字の式をもう一度そのまま生成するので、substitution は
             //     ここ 1 か所で足ります（式の形を分解する必要がありません）。
             if (e->subst_ir && n->ir_name &&
                 strcmp(n->ir_name, e->subst_ir) == 0)
@@ -1252,7 +1252,7 @@ static char *gen_expr(Emitter *e, Node *n) {
                 //   反転するだけ。0.0 - x とは -0.0 の扱いが違います）。
                 sb_printf(&e->fn, "  %s = fneg double %s\n", t, v);
             } else if (n->op == OP_NEG) {
-                // ⚠️ LLVM に整数の neg 命令はありません。0 からの減算で表現します。
+                // 注意: LLVM に整数の neg 命令はありません。0 からの減算で表現します。
                 // ★ -(-9223372036854775808) は表せないので検査します。
                 if (!e->no_ovf) return gen_checked_arith(e, "ssub", "0", v, 3);
                 sb_printf(&e->fn, "  %s = sub i64 0, %s\n", t, v);
@@ -1285,14 +1285,14 @@ static char *gen_expr(Emitter *e, Node *n) {
 //
 //   「評価しない」を実現するには命令を飛び越える必要があるので、分岐が要ります。
 //
-// 🤔 なぜ phi を使わないのか（規約 R3）
+// なぜ phi を使わないのか（規約 R3）
 //   教科書的には合流点で phi を使いますが、phi は「どのブロックから来たか」を
 //   書く必要があり、生成側が前のブロックのラベルを覚えていなければなりません。
 //   ネストすると管理が急激に面倒になります。
 //   「alloca に置いて最後に読む」方式ならその面倒がゼロで、
 //   mem2reg がこの alloca を phi に変換してくれます。
 static char *gen_logical(Emitter *e, Node *n) {
-    // ⚠️ 番号は最初に 1 回だけ確保する。
+    // 注意: 番号は最初に 1 回だけ確保する。
     //    使うたびに e->label_counter++ すると同じ and の中で番号がずれます。
     int id = e->label_counter++;
     const char *kind = n->op == OP_AND ? "and" : "or";
@@ -1495,7 +1495,7 @@ static bool elem_is_ptr(Type *elem) {
 
 // 要素の値を「ランタイムに渡す形」にする（bool は i64 に広げる。規約 R5）
 // 探索関数に渡す形にする。
-// ⚠️ elem_to_slot と違い、**float は double のまま**渡します
+// 注意: elem_to_slot と違い、**float は double のまま**渡します
 //   （数値として比べたいので、ビットに崩しません）。
 static char *elem_to_slot_cmp(Emitter *e, Type *elem, char *v) {
     if (elem->kind != TY_BOOL) return v;
@@ -1508,7 +1508,7 @@ static char *elem_to_slot(Emitter *e, Type *elem, char *v) {
     // ★ float はビットパターンのまま i64 のスロットに入れます。
     //   list の中身は「ポインタ 1 個か i64 1 個」という当初の作りを
     //   変えずに済みます（double も 8 バイトなので過不足なく入ります）。
-    //   ⚠️ 数値としての変換（sitofp）ではありません。bitcast です。
+    //   注意: 数値としての変換（sitofp）ではありません。bitcast です。
     if (elem->kind == TY_FLOAT) {
         char *t = new_tmp(e);
         sb_printf(&e->fn, "  %s = bitcast double %s to i64\n", t, v);
@@ -1552,7 +1552,7 @@ static char *gen_list_lit(Emitter *e, Node *n) {
     declare_rt(e, sb_str(&sig));
 
     for (Node *el = n->body; el; el = el->next) {
-        // ⚠️ **maybe_retain が要ります。** 場所（変数・フィールド・添字）から
+        // 注意: **maybe_retain が要ります。** 場所（変数・フィールド・添字）から
         //    読んだ rc[T] をリストに入れると、**参照が 1 つ増えます**。
         //    増やさずに入れると、リストの解放だけが効いて早すぎる解放に
         //    なります（A-26。append は最初からこうしていました）。
@@ -1571,7 +1571,7 @@ static char *gen_list_lit(Emitter *e, Node *n) {
 //   三項演算子や and / or の右側に書かれたときに「評価されないはずのもの」を
 //   評価してしまうためです（ロードマップ §2 の A-12）。
 //
-// ⚠️ 隠し変数（結果の list / 添字 / ループ変数）の alloca は
+// 注意: 隠し変数（結果の list / 添字 / ループ変数）の alloca は
 //   collect_allocas が n->body から拾っています。ここでは名前を使うだけです。
 //
 // 出す形（list を回すとき）:
@@ -1609,7 +1609,7 @@ static char *gen_listcomp(Emitter *e, Node *n) {
     sb_printf(&sig, "void @%s(ptr, %s)", push, sty);
     declare_rt(e, sb_str(&sig));
 
-    // ⚠️ 対象（list）と range の端は **ループの外で 1 回だけ**評価します。
+    // 注意: 対象（list）と range の端は **ループの外で 1 回だけ**評価します。
     char *it = NULL, *stop = NULL;
     if (n->args) {
         char *start = gen_expr(e, n->args);
@@ -1655,7 +1655,7 @@ static char *gen_listcomp(Emitter *e, Node *n) {
         emit_label(e, keep_l);
     }
 
-    // ⚠️ リテラルと同じ理由で retain が要ります（A-26）。
+    // 注意: リテラルと同じ理由で retain が要ります（A-26）。
     char *val = elem_to_slot(e, elem, maybe_retain(e, n->lhs, gen_expr(e, n->lhs)));
     char *lst2 = new_tmp(e);
     sb_printf(&e->fn, "  %s = load ptr, ptr %s\n", lst2, res->ir_name);
@@ -1665,7 +1665,7 @@ static char *gen_listcomp(Emitter *e, Node *n) {
     char *i2 = new_tmp(e);
     sb_printf(&e->fn, "  %s = load i64, ptr %s\n", i2, ix->ir_name);
     char *i3 = new_tmp(e);
-    // ⚠️ ここは桁あふれ検査を出しません（長さ／終端までしか進まないため）。
+    // 注意: ここは桁あふれ検査を出しません（長さ／終端までしか進まないため）。
     sb_printf(&e->fn, "  %s = add i64 %s, %lld\n", i3, i2,
               n->args ? n->ival : 1);
     sb_printf(&e->fn, "  store i64 %s, ptr %s\n", i3, ix->ir_name);
@@ -1680,7 +1680,7 @@ static char *gen_listcomp(Emitter *e, Node *n) {
 
 // None の検査を IR に展開する。
 //
-// ⚠️ クラス型のフィールドは NULL から始まります（12.6 節）。
+// 注意: クラス型のフィールドは NULL から始まります（12.6 節）。
 //   NULL 参照を segfault ではなく親切なメッセージに変えるための検査です。
 //
 // ★ もとは pl_check_not_none への**呼び出し 1 回**でした。
@@ -1713,7 +1713,7 @@ static char *gen_not_none(Emitter *e, char *obj) {
 
 // ── 添字を IR に展開する ───────────────────────
 //
-// ⚠️ ここがこの言語の最大のボトルネックでした。
+// 注意: ここがこの言語の最大のボトルネックでした。
 //   xs[i] はもともと pl_list_len / pl_norm_index / pl_list_get_* の
 //   **関数呼び出し 3 回**でした。ランタイムは runtime.a として
 //   別にリンクされ、LTO を使っていないので -O2 でもインライン化
@@ -1742,7 +1742,7 @@ static char *gen_index_addr(Emitter *e, char *obj, char *idx, const char *sty,
     //   「全反復ぶんの添字が 0 以上・長さ未満」を確かめてあるので、
     //   ここでは検査も**負の添字の正規化も**出しません。
     //
-    // 🤔 正規化（select）を消すのが要点です。検査だけ消しても
+    // 正規化（select）を消すのが要点です。検査だけ消しても
     //   アドレスが `data + idx + (idx<0 ? len : 0)` のままで、
     //   LLVM から見ると添字が 1 ずつ進むと分からず、ベクトル化できません。
     if (e->nobc) {
@@ -1802,7 +1802,7 @@ static char *gen_index_addr(Emitter *e, char *obj, char *idx, const char *sty,
     else
         sb_printf(&e->fn, "  call void @pl_index_fail(i64 %s, i64 %s, i64 %s)\n",
                   idx, len, ovf_arg);
-    // ⚠️ pl_index_fail は戻ってきません。unreachable を置かないと
+    // 注意: pl_index_fail は戻ってきません。unreachable を置かないと
     //   LLVM は「戻るかも」と見て、検査をループ外へ出せなくなります。
     sb_printf(&e->fn, "  unreachable\n");
     e->terminated = true;
@@ -1825,7 +1825,7 @@ static char *gen_index_addr(Emitter *e, char *obj, char *idx, const char *sty,
 // ★ 当たりの経路は `llvm.*.with.overflow` 1 命令 ＋ 予測の当たる分岐だけです。
 //   実測で **2.4%**（整数ループ 2000 万回が 166 → 170 ms）でした。
 //
-// ⚠️ 外れの経路の pl_overflow_fail は **noreturn cold** です。
+// 注意: 外れの経路の pl_overflow_fail は **noreturn cold** です。
 //   cold が無いと、この分岐の費用が囲む関数のインライン化の見積りに
 //   入ります（ linalg.Matrix.check が丸ごと落ちた件と同じ）。
 //
@@ -1862,7 +1862,7 @@ static char *gen_arith_ovf(Emitter *e, const char *intr, const char *l,
 //   %bad = or i1 %lo, %hi
 //   br i1 %bad, label %rng.bad.N, label %rng.ok.N
 //
-// ⚠️ 値はそのまま返します。範囲型の表現は int のままなので、
+// 注意: 値はそのまま返します。範囲型の表現は int のままなので、
 //   変換も詰め替えも要りません（Ada の部分型と同じ考え方）。
 // 検査が外れたときの呼び先。--verify-prove で「消せるはず」と判断した
 // 場所だけ、証明器の誤りとして報告します。
@@ -1914,12 +1914,12 @@ static char *gen_range_check(Emitter *e, Type *rt, char *val) {
 // ★ 出るのは **条件の式と分岐 1 つ**だけです（assert と同じ形）。
 //   外れの経路は cold なので、インライン化の見積りにはほとんど載りません。
 //
-// ⚠️ メッセージは**コンパイル時に組み立てて**大域定数に置きます。
+// 注意: メッセージは**コンパイル時に組み立てて**大域定数に置きます。
 //   実行時に数を文字列にする手間を、外れの経路にも置かないためです。
 static void gen_contract_check(Emitter *e, Node *c, const char *fname) {
     // ★ 証明（A-34 段 2）が「常に真」と示した契約は検査を出しません
     if (c->no_contract && !e->verify_prove) return;
-    // ⚠️ --verify-prove では残して、外れたら証明器の誤りとして報告します
+    // 注意: --verify-prove では残して、外れたら証明器の誤りとして報告します
     const char *saved_vk = e->verify_kind;
     if (c->no_contract) e->verify_kind = "contract";
     declare_rt(e, "void @pl_contract_fail(ptr) noreturn cold");
@@ -1961,7 +1961,7 @@ static void gen_ensures(Emitter *e, const char *val) {
     const char *saved = e->ret_val;
     e->ret_val = val;
     for (Node *st = e->fn_node->body->body; st; st = st->next) {
-        // ⚠️ 契約は本体の先頭に並んでいます（sema が保証）。
+        // 注意: 契約は本体の先頭に並んでいます（sema が保証）。
         //   先頭以外に出てきたら、そこで止めます。
         if (st->kind != ND_REQUIRES && st->kind != ND_ENSURES) break;
         if (st->kind == ND_ENSURES)
@@ -1996,16 +1996,16 @@ static char *gen_checked_arith(Emitter *e, const char *intr, const char *l,
 
 // ★ float の 0 除算を検査する。
 //
-//   ⚠️ 整数の `//` と `%` は 0 除算で panic するのに、`1.0 / 0.0` は
+//   注意: 整数の `//` と `%` は 0 除算で panic するのに、`1.0 / 0.0` は
 //     inf になっていました。**同じ「割る」で挙動が違う**のは穴です。
 //     Python は両方 ZeroDivisionError なので、そちらに揃えます。
 //
-//   ⚠️ 規約 R13：外れの経路の**呼び出し**が 1 つ増えます（約 25 点）。
+//   注意: 規約 R13：外れの経路の**呼び出し**が 1 つ増えます（約 25 点）。
 //     費用は測って記録しました。
 static char *gen_checked_fdiv(Emitter *e, const char *l, const char *r) {
     declare_rt(e, "void @pl_fdiv_zero_fail() noreturn cold");
     char *z = new_tmp(e);
-    // ⚠️ oeq を使います。-0.0 も 0.0 と等しく、割れば ±inf になるためです。
+    // 注意: oeq を使います。-0.0 も 0.0 と等しく、割れば ±inf になるためです。
     //   NaN で割るのは NaN なので、ここでは止めません（0 だけを見ます）。
     sb_printf(&e->fn, "  %s = fcmp oeq double %s, 0.000000e+00\n", z, r);
 
@@ -2043,7 +2043,7 @@ static void gen_ovf_br(Emitter *e, const char *flag) {
 }
 
 // 整数の + - * で、検査つきにするかどうか。
-// ⚠️ float・str・list の + * はここに来ません（呼び出し側で分けています）。
+// 注意: float・str・list の + * はここに来ません（呼び出し側で分けています）。
 static const char *ovf_intr(OpKind op) {
     if (op == OP_ADD) return "sadd";
     if (op == OP_SUB) return "ssub";
@@ -2068,11 +2068,11 @@ static const char *ovf_intr(OpKind op) {
 //   失敗の呼び出しは **もともと 1 つある pl_index_fail だけ**になり、
 //   分岐も呼び出しも増えません。
 //
-//   ⚠️ **健全性。** 折り返した添字がたまたま範囲内に入っても、
+//   注意: **健全性。** 折り返した添字がたまたま範囲内に入っても、
 //     旗が立っているので必ず失敗します（gen_index_addr の and）。
 //     「検査を省く」案とはここが違います。
 //
-//   ⚠️ **意味の違いが 1 つだけあります。** あふれた時点ではなく
+//   注意: **意味の違いが 1 つだけあります。** あふれた時点ではなく
 //     添字の計算が終わった時点で止まるので、`xs[a * b + f()]` は
 //     a * b があふれても f() が呼ばれます。診断は
 //     「添字の計算があふれた」になります（演算子の種類は言いません）。
@@ -2084,7 +2084,7 @@ static char *gen_index_expr(Emitter *e, Node *n, char **ovf) {
         n->lhs->type->kind == TY_INT)
         intr = ovf_intr(n->op);
 
-    // ⚠️ 単項 - も同じ扱いにします（-INT_MIN があふれます）。
+    // 注意: 単項 - も同じ扱いにします（-INT_MIN があふれます）。
     bool neg = !e->no_ovf && n->kind == ND_UNARY && n->op == OP_NEG && n->type &&
                n->type->kind == TY_INT;
 
@@ -2122,7 +2122,7 @@ static char *gen_index(Emitter *e, Node *n) {
     // ★ こちらは 1 文字の str を**新しく作る**ので、どのみち確保が
     //   入ります。展開しても利かないので従来どおり呼び出します。
     if (ot->kind == TY_STR) {
-        // ⚠️ str の添字は pl_norm_index / pl_str_index に任せるので、
+        // 注意: str の添字は pl_norm_index / pl_str_index に任せるので、
         //   相乗りさせる範囲検査がここにはありません。旗が立っていたら
         //   ここで 1 回だけ分岐して報告します。
         if (ovf) gen_ovf_br(e, ovf);
@@ -2174,7 +2174,7 @@ static void gen_index_store(Emitter *e, Node *target, char *val) {
     char *idx = gen_index_expr(e, target->rhs, &ovf);
 
     const char *sty = slot_ty(elem);
-    // ⚠️ 代入側は負の添字を正規化しません。
+    // 注意: 代入側は負の添字を正規化しません。
     //   pl_list_set_* を呼んでいたころからそうでした（xs[-1] = v は panic）。
     //   ここで変えると意味が変わるので、振る舞いはそのままにします。
     bool saved_nobc2 = e->nobc;
@@ -2199,7 +2199,7 @@ static char *gen_new(Emitter *e, Node *n);
 //   gen_args は引数の文字列を組み立てるだけで、call を出すのは emit_call です。
 //   引数を作った直後に解放すると、**まだ渡していない値を解放**してしまいます。
 //
-// ⚠️ 入れるのは「借用で渡す」と**分かっている**実引数だけです。
+// 注意: 入れるのは「借用で渡す」と**分かっている**実引数だけです。
 //   own なら所有権が相手に移るので解放してはいけません。分からない経路
 //   （メソッド呼び出し）も入れません。sema が arg_is_borrowed に入れます。
 typedef struct TempArg {
@@ -2213,7 +2213,7 @@ static TempArg *g_pending_temps;  // gen_args → emit_call のあいだだけ�
 static void gen_args(Emitter *e, Node *args, StrBuf *vals, StrBuf *types,
                      bool first) {
     for (Node *a = args; a; a = a->next) {
-        // ⚠️ 内側の呼び出しに、外側の控えを触らせないこと。
+        // 注意: 内側の呼び出しに、外側の控えを触らせないこと。
         //   f(g(x)) のとき、g の emit_call が f の控えまで解放してしまい、
         //   **まだ渡していない値**が消えます。
         TempArg *saved = g_pending_temps;
@@ -2239,7 +2239,7 @@ static void gen_args(Emitter *e, Node *args, StrBuf *vals, StrBuf *types,
 
 // 控えておいた一時値を解放して、控えを空にする（A-21e）。
 //
-// ⚠️ **戻り値が借りものの呼び出しでは解放しません。**
+// 注意: **戻り値が借りものの呼び出しでは解放しません。**
 //   `def pick(a: str) -> str: return a` のように引数をそのまま返す関数だと、
 //   戻り値が実引数と**同じ実体**です。呼び出し後に実引数を解放すると、
 //   受け取ったばかりの戻り値が消えます（ASan が heap-use-after-free と言う）。
@@ -2288,7 +2288,7 @@ static char *emit_call(Emitter *e, Node *n, const char *args) {
         char *bad = new_tmp(e);
         sb_printf(&e->fn, "  %s = icmp ne i64 %s, 0\n", bad, tag);
 
-        // ⚠️ 解放が有効なら、失敗の経路でも「抜けるスコープ」を解放します。
+        // 注意: 解放が有効なら、失敗の経路でも「抜けるスコープ」を解放します。
         //   分岐の辺には命令を置けないので、専用のブロックを 1 つ挟みます。
         if (e->drop) {
             char fail_l[32];
@@ -2314,7 +2314,7 @@ static char *emit_call(Emitter *e, Node *n, const char *args) {
         emit_label(e, ok_l);
     }
     // ★ 実引数の一時値をここで解放します（A-21e）。
-    //   ⚠️ **呼び出しを出し終えてから**です。gen_args の直後に解放すると、
+    //   注意: **呼び出しを出し終えてから**です。gen_args の直後に解放すると、
     //     まだ渡していない値を解放してしまいます。
     flush_pending_temps(e, n);
     return t;
@@ -2366,7 +2366,7 @@ static char *gen_method(Emitter *e, Node *n) {
 
     // ★ インタフェース越しの呼び出し。
     //   ① 実体の先頭から vtable を読む ② スロットの関数ポインタを読む ③ 呼ぶ
-    //   ⚠️ 呼び先はコンパイル時には決まりません（実行時の型で決まります）。
+    //   注意: 呼び先はコンパイル時には決まりません（実行時の型で決まります）。
     if (n->is_iface_call) {
         char *obj = gen_expr(e, n->lhs);
         char *ok = gen_not_none(e, obj);
@@ -2531,9 +2531,9 @@ static char *gen_method(Emitter *e, Node *n) {
 //
 // ★ 増やすのは「場所から読んだ参照を、別の場所に置く」ときだけです。
 //   rc(...) や関数の戻り値は**新しい参照**なので、そのまま置けます。
-// ⚠️ retain と release は対です。解放を挿さない（--drop 無し）ときは、
+// 注意: retain と release は対です。解放を挿さない（--drop 無し）ときは、
 //    どちらも出しません（数が合わなくなるより、何もしないほうが安全）。
-// ⚠️ **`rc[T] | None` も数えます。** ここを TY_RC だけで見ていたので、
+// 注意: **`rc[T] | None` も数えます。** ここを TY_RC だけで見ていたので、
 //   nullable な rc を共有すると数が足りず、`--drop` で早すぎる解放になりました。
 static bool ty_is_rc_shared(Type *t) {
     if (!t) return false;
@@ -2567,7 +2567,7 @@ static char *maybe_retain(Emitter *e, Node *rhs, char *val) {
 //   5〜10% 遅くなりました。中身は**オフセット 16 の load 1 つ**です
 //   （`PlRc { i64 strong; i64 borrow; ptr value; }`。runtime/core.c）。
 //
-// ⚠️ **null の検査は外しません**（方針 §0-②）。移動済みのスロットは
+// 注意: **null の検査は外しません**（方針 §0-②）。移動済みのスロットは
 //   null になるので（決定 D17）、黙って隣を読むわけにはいきません。
 //   外れの経路は `pl_rc_none_fail`（noreturn cold）です。
 static char *deref_rc(Emitter *e, Type *t, char *v) {
@@ -2617,12 +2617,12 @@ static char *gen_field_ptr(Emitter *e, Node *n) {
     Class *c = ot->kind == TY_RC ? ot->elem->cls : ot->cls;
     char *obj = deref_rc(e, ot, gen_expr(e, n->lhs));
 
-    // ⚠️ クラス型のフィールドは NULL から始まります（12.6 節）。
+    // 注意: クラス型のフィールドは NULL から始まります（12.6 節）。
     //    NULL 参照を segfault ではなく親切なメッセージに変えます。
     // ★ 検査を IR に展開します（規約 R10 の例外。理由は gen_not_none）。
     char *ok = gen_not_none(e, obj);
 
-    // ⚠️ 第 1 インデックスは常に 0（「Token の配列の何個目か」）。
+    // 注意: 第 1 インデックスは常に 0（「Token の配列の何個目か」）。
     //    ここを 1 にすると隣のオブジェクトがある場所を読みます。
     char *t = new_tmp(e);
     sb_printf(&e->fn, "  %s = getelementptr %%%s.type, ptr %s, i32 0, i32 %d\n", t,
@@ -2649,7 +2649,7 @@ static void declare_extern_global(Emitter *e, Node *n) {
 
 static char *gen_field(Emitter *e, Node *n) {
     // ★ math.sin のように、他モジュールの関数を値として使う場合。
-    //   ⚠️ 呼ぶわけではないので **declare だけ**出して、ラベルを値にします。
+    //   注意: 呼ぶわけではないので **declare だけ**出して、ラベルを値にします。
     if (n->is_func_ref) {
         StrBuf types;
         sb_init(&types);
@@ -2686,11 +2686,11 @@ static char *gen_field(Emitter *e, Node *n) {
 //   インタフェース・メソッドのスロット数」ぶんの関数ポインタの配列で、
 //   そのクラスが実装しているスロットだけが埋まり、残りは null です。
 //
-// 🤔 なぜスロットを全体で一意にするのか
+// なぜスロットを全体で一意にするのか
 //   1 つのクラスが複数のインタフェースを実装できるようにするためです。
 //   インタフェースごとに 0 から番号を振ると、呼ぶ側（インタフェースしか
 //   知らない）がどの表のどこを見ればよいか決められません。
-//   ⚠️ 代わりに表は疎になります。インタフェースが増えると全クラスの表が
+//   注意: 代わりに表は疎になります。インタフェースが増えると全クラスの表が
 //     伸びるので、数が多くなったら別の方式（実行時に探す）が要ります。
 static void gen_vtable(Emitter *e, Class *c) {
     if (!c->impls) return;
@@ -2732,7 +2732,7 @@ static char *gen_new(Emitter *e, Node *n) {
     sb_printf(&e->fn, "  %s = call ptr @pl_alloc(i64 %d)\n", obj, c->size);
 
     // ★ インタフェースを実装するなら、先頭に vtable を入れます。
-    //   ⚠️ ここを忘れると、インタフェース越しの呼び出しが null を呼びます。
+    //   注意: ここを忘れると、インタフェース越しの呼び出しが null を呼びます。
     if (c->impls) {
         gen_vtable(e, c);
         char *vp = new_tmp(e);
@@ -2786,7 +2786,7 @@ static char *gen_new(Emitter *e, Node *n) {
 // クラスの型定義を出す：%lexer.Token.type = type { i64, ptr }
 //
 // ★ フィールドの LLVM 型は「メモリ上の型」（bool は i8。規約 R5）。
-// ⚠️ LLVM の型定義はモジュールローカルです。import したクラスを
+// 注意: LLVM の型定義はモジュールローカルです。import したクラスを
 //    使うモジュールにも、同じ定義を書き直す必要があります。レイアウトは
 //    コンパイラのプロセス内で 1 回だけ計算した Class * を共有しているので、
 //    2 つの .ll が食い違うことはありません（13.7 節）。
@@ -2802,7 +2802,7 @@ static void gen_class_type(Emitter *e, Class *c) {
     sb_printf(&e->header, "%%%s.type = type { ", c->ir_name);
     bool first = true;
     // ★ インタフェースを実装するなら、先頭に vtable へのポインタ。
-    //   ⚠️ sema の layout_class と **並びを揃えること**（ずれると全部壊れます）。
+    //   注意: sema の layout_class と **並びを揃えること**（ずれると全部壊れます）。
     if (c->impls) {
         sb_printf(&e->header, "ptr");
         first = false;
@@ -2811,7 +2811,7 @@ static void gen_class_type(Emitter *e, Class *c) {
         sb_printf(&e->header, "%s%s", first ? "" : ", ", llvm_mem_type(f->type));
         first = false;
     }
-    // ⚠️ フィールドが 0 個でも空の構造体は書けます（サイズ 0）。
+    // 注意: フィールドが 0 個でも空の構造体は書けます（サイズ 0）。
     //    pl_alloc(0) は calloc(1, 0) になり、有効なポインタが返ります。
     sb_printf(&e->header, " }\n");
 }
@@ -2884,7 +2884,7 @@ static const char *default_value(Type *t) {
 
 // 失敗したときの飛び先（内側の try があればその振り分け、無ければ伝播）。
 //
-// ⚠️ どちらでもない場合（この関数は raises を宣言していない）は **到達しません**。
+// 注意: どちらでもない場合（この関数は raises を宣言していない）は **到達しません**。
 //    sema が「捕まえるか宣言するか」を強制しているからです（E-RAISE-1）。
 //    その場合は NULL を返し、呼ぶ側が unreachable を出します。
 static const char *fail_label(Emitter *e) {
@@ -2975,7 +2975,7 @@ static void drop_fn_remember(Emitter *e, const char *key, const char *name) {
 //   ② 所有型のフィールドを宣言順に解放する
 //   ③ インスタンス自身を解放する
 //
-// ⚠️ 自分自身を含むクラス（連結リストなど）では再帰します。
+// 注意: 自分自身を含むクラス（連結リストなど）では再帰します。
 //    長いリストではスタックを使い切る可能性があります（見直します）。
 static const char *gen_class_drop(Emitter *e, Class *c) {
     StrBuf key;
@@ -3010,7 +3010,7 @@ static const char *gen_class_drop(Emitter *e, Class *c) {
     sb_printf(&b, "  br i1 %%isnull, label %%done, label %%body\nbody:\n");
 
     if (dtor) {
-        // ⚠️ 別モジュールのクラスなら declare が要ります。自分のモジュールで
+        // 注意: 別モジュールのクラスなら declare が要ります。自分のモジュールで
         //    定義しているクラスに declare を出すと「再定義」で落ちます。
         bool local = false;
         for (Node *d = e->ast->body; d; d = d->next)
@@ -3122,7 +3122,7 @@ static void emit_drop_value(Emitter *e, Type *t, const char *val);
 //   pl_str_concat に渡され、**誰も解放しません**。束縛すれば解放されるので、
 //   式の途中に現れる一時値だけが漏れていました。
 //
-// ⚠️ **所有権が移る場所では呼んではいけません。** xs.append(str(i)) は
+// 注意: **所有権が移る場所では呼んではいけません。** xs.append(str(i)) は
 //   リストが所有権を受け取るので、ここで解放すると二重解放になります。
 //   呼んでよいのは「借りて読むだけ」の場所です:
 //     ・二項演算のオペランド（連結・比較）
@@ -3158,7 +3158,7 @@ static void emit_drop_value(Emitter *e, Type *t, const char *val) {
 
 // この変数はスコープ終端で解放する対象か。
 //
-// ⚠️ 借りものを束縛している変数（`t = xs[i]` や for のループ変数）は
+// 注意: 借りものを束縛している変数（`t = xs[i]` や for のループ変数）は
 //    **所有していない**ので解放しません。ownck が印を付けています。
 static bool is_droppable(Node *decl) {
     return decl->type && !decl->is_global && !decl->binds_borrow &&
@@ -3207,7 +3207,7 @@ static void gen_if(Emitter *e, Node *n) {
 
     emit_label(e, then_l);
     gen_stmt(e, n->body);
-    // ⚠️ then 節が break / continue で終わっていたら、そこは既に終端済み。
+    // 注意: then 節が break / continue で終わっていたら、そこは既に終端済み。
     //    もう 1 つ br を出すと「1 ブロックに終端命令が 2 つ」になり LLVM が怒ります。
     if (!e->terminated) emit_br(e, end_l);
 
@@ -3223,7 +3223,7 @@ static void gen_if(Emitter *e, Node *n) {
 
 // ── 添字の範囲をループの外で 1 回だけ確かめる（loop versioning）──
 //
-// 🤔 なぜこれを入れたか
+// なぜこれを入れたか
 //   平坦な list[float] の三重ループ（512×512 の行列積）を測ったら、
 //   **境界検査が 4 倍**の費用でした（365 ms → 89 ms）。当初の
 //   「外しても 1.5 倍」は list[list[float]] での数字で、平坦な配列では
@@ -3236,7 +3236,7 @@ static void gen_if(Emitter *e, Node *n) {
 //     if 全部の添字が両端で範囲内:  検査なしの版（ここがベクトル化される）
 //     else:                        今までどおりの版（診断もそのまま）
 //
-// ⚠️ **診断は変わりません。** 範囲外になるループは今までどおり、
+// 注意: **診断は変わりません。** 範囲外になるループは今までどおり、
 //    ちょうどその反復で、同じメッセージで止まります。
 //
 // ★ 両端だけ見れば足りるのは、添字が誘導変数について**アフィン**
@@ -3294,7 +3294,7 @@ static bool vz_assigns(Node *n, const char *ir) {
 
 // 式に出てくる変数（誘導変数を除く）が、この本体で書き換わらないか。
 //
-// ⚠️ **これが無いと健全性が壊れます。** 例えば
+// 注意: **これが無いと健全性が壊れます。** 例えば
 //
 //     while j < n:
 //         s = s + xs[k]
@@ -3321,9 +3321,9 @@ static int vz_count(Node *n, const char *ir) {
 
 // 版分けしてよい本体か。
 //
-// ⚠️ **呼び出しがあってはいけません。** 呼んだ先が list に append すれば
+// 注意: **呼び出しがあってはいけません。** 呼んだ先が list に append すれば
 //    長さが変わり、入口で確かめた前提が崩れます。
-// ⚠️ 入れ子のループ・break / continue / return も外します（速い側から
+// 注意: 入れ子のループ・break / continue / return も外します（速い側から
 //    抜ける道が増えると、どのみちベクトル化できません）。
 static bool vz_body_ok(Node *n);
 
@@ -3353,11 +3353,11 @@ static bool vz_body_ok(Node *n) {
         case ND_LOGICAL:
             return vz_body_ok(n->lhs) && vz_body_ok(n->rhs);
         case ND_UNARY:
-            // ⚠️ 単項マイナスは int だと桁あふれ検査（分岐）が出ますが、
+            // 注意: 単項マイナスは int だと桁あふれ検査（分岐）が出ますが、
             //    正しさには関わりません（速い側でも検査は残ります）。
             return vz_body_ok(n->lhs);
         case ND_BINOP:
-            // ⚠️ ** // % は実体がランタイム関数の呼び出しです。
+            // 注意: ** // % は実体がランタイム関数の呼び出しです。
             //    str / list の + * も同じ（連結・繰り返し）。
             if (n->op == OP_IN || n->op == OP_NOTIN || n->op == OP_POW ||
                 n->op == OP_FLOORDIV || n->op == OP_MOD)
@@ -3367,11 +3367,11 @@ static bool vz_body_ok(Node *n) {
                 return false;
             return vz_body_ok(n->lhs) && vz_body_ok(n->rhs);
         case ND_INDEX:
-            // ⚠️ str の添字はランタイム関数を呼びます（pl_str_index）。
+            // 注意: str の添字はランタイム関数を呼びます（pl_str_index）。
             if (!n->lhs->type || n->lhs->type->kind == TY_STR) return false;
             return vz_body_ok(n->lhs) && vz_body_ok(n->rhs);
         case ND_ASSIGN:
-            // ⚠️ フィールドやリスト変数への代入は外します。代入されると
+            // 注意: フィールドやリスト変数への代入は外します。代入されると
             //    「入口で見た list と同じものか」が言えなくなります。
             if (n->lhs->kind == ND_FIELD) return false;
             if (n->lhs->kind == ND_VAR && n->type &&
@@ -3450,7 +3450,7 @@ static void gen_while_plain(Emitter *e, Node *n) {
     snprintf(body_l, sizeof(body_l), "while.body.%d", id);
     snprintf(end_l, sizeof(end_l), "while.end.%d", id);
 
-    // ⚠️ 条件ブロックに「入る」ための br が必要（規約 6.4）。
+    // 注意: 条件ブロックに「入る」ための br が必要（規約 6.4）。
     //    条件を独立したブロックにしないと 1 回目の判定が飛ばされ、
     //    do-while になってしまいます。
     emit_br(e, cond_l);
@@ -3462,7 +3462,7 @@ static void gen_while_plain(Emitter *e, Node *n) {
     // ★ 増分があるなら continue の飛び先は「増分ブロック」。
     //   無ければ従来どおり「条件ブロック」。
     //
-    // ⚠️ ここを間違えると、for の中の continue が増分を飛ばして無限ループになります。
+    // 注意: ここを間違えると、for の中の continue が増分を飛ばして無限ループになります。
     char incr_l[32];
     const char *cont_l = cond_l;
     if (n->incr) {
@@ -3497,7 +3497,7 @@ static void gen_while_plain(Emitter *e, Node *n) {
 
 // ループが版分けできるなら、誘導変数の IR 名を返す（できなければ NULL）。
 //
-// ⚠️ **かつてここは `if (e->drop) return NULL;` で始まっていました**
+// 注意: **かつてここは `if (e->drop) return NULL;` で始まっていました**
 //    （理由は「本体を 2 回出すと解放の記録が二重になる」）。0.16.0 で
 //    `--drop` が既定になった結果、**版分けが既定で丸ごと死んでいました**。
 //    512³ の行列積（平坦な list[float]）が 36.6 ms → 357.5 ms です。
@@ -3551,7 +3551,7 @@ static const char *vz_analyze(Emitter *e, Node *n, Node **sites, int *nsites) {
         step->rhs = NULL;                       // 増分を一時的に隠して数える
         bool other = vz_assigns(n->body, iv) || (n->incr && vz_assigns(n->incr, iv));
         step->rhs = saved;
-        // ⚠️ step 自身も n->body の中にいるので、隠しても ND_ASSIGN の
+        // 注意: step 自身も n->body の中にいるので、隠しても ND_ASSIGN の
         //    lhs は残ります。ここは「本体の中の代入が step だけか」を
         //    別に数えます。
         (void)other;
@@ -3593,7 +3593,7 @@ static const char *vz_analyze(Emitter *e, Node *n, Node **sites, int *nsites) {
         while (root->kind == ND_FIELD) root = root->lhs;
         if (!root->ir_name || vz_assigns(n->body, root->ir_name)) return NULL;
     }
-    // ⚠️ 上限に len(xs) を使っているなら、その xs も不変であること。
+    // 注意: 上限に len(xs) を使っているなら、その xs も不変であること。
     if (L->kind == ND_CALL) {
         Node *lr = L->args;
         while (lr && lr->kind == ND_FIELD) lr = lr->lhs;
@@ -3617,7 +3617,7 @@ static char *vz_check_at(Emitter *e, Node *site, const char *iv, const char *val
     char *in = new_tmp(e);
     sb_printf(&e->fn, "  %s = icmp ult i64 %s, %s\n", in, idx, len);
 
-    // ⚠️ 両端の計算で桁あふれしたら、ガードを落として遅い側へ行かせます
+    // 注意: 両端の計算で桁あふれしたら、ガードを落として遅い側へ行かせます
     //    （そちらが正しい位置で正しく panic します）。
     if (ovf) {
         char *nov = new_tmp(e);
@@ -3706,8 +3706,8 @@ static void gen_while(Emitter *e, Node *n) {
 //     ② 条件 `i < len` から `i <u len` が常に真だと導いて**検査を消す**
 //   ようになります。
 //
-// ⚠️ list の長さはヘッダのオフセット 8（`PlList { ptr data; i64 len; i64 cap }`）。
-// ⚠️ str の長さは**ポインタの 8 バイト手前**にあり、最上位側の 1 ビットが
+// 注意: list の長さはヘッダのオフセット 8（`PlList { ptr data; i64 len; i64 cap }`）。
+// 注意: str の長さは**ポインタの 8 バイト手前**にあり、最上位側の 1 ビットが
 //   「静的な文字列か」の印なので落とします（`runtime/core.c` の PL_STR_STATIC）。
 static char *gen_len(Emitter *e, Node *n, Type *at) {
     char *obj = gen_expr(e, n->args);
@@ -3721,7 +3721,7 @@ static char *gen_len(Emitter *e, Node *n, Type *at) {
     }
     // str：ptr[-8] を読んで、PL_STR_STATIC（1 << 62）を落とす
     //
-    // ⚠️ 解放は**長さを読み終えてから**です。先に解放すると読めません。
+    // 注意: 解放は**長さを読み終えてから**です。先に解放すると読めません。
     char *p = new_tmp(e);
     sb_printf(&e->fn, "  %s = getelementptr i8, ptr %s, i64 -8\n", p, obj);
     char *raw = new_tmp(e);
@@ -3734,7 +3734,7 @@ static char *gen_len(Emitter *e, Node *n, Type *at) {
 
 static char *gen_builtin_call(Emitter *e, Node *n) {
     const Builtin *b = n->builtin;
-    // ⚠️ 引数の型は表からではなく実引数から取ります。
+    // 注意: 引数の型は表からではなく実引数から取ります。
     //    list[T] にはシングルトンが無いので type_from_kind では引けません。
     Type *at = n->args->type;
     Type *rt = type_from_kind(b->ret);
@@ -3748,7 +3748,7 @@ static char *gen_builtin_call(Emitter *e, Node *n) {
     //   （int の複製に関数呼び出しを 1 つ払うのは筋が通りません）。
     if (strcmp(b->impl, "pl_copy_id") == 0) return gen_expr(e, n->args);
 
-    // ⚠️ bool は本言語のレジスタ上では i1 ですが、C 側は long long で
+    // 注意: bool は本言語のレジスタ上では i1 ですが、C 側は long long で
     //    受け取ります。境界で i64 に広げます（規約 R5 と同じ考え方）。
     const char *argty = at->kind == TY_BOOL ? "i64" : llvm_type(at);
 
@@ -3767,10 +3767,10 @@ static char *gen_builtin_call(Emitter *e, Node *n) {
     //     ② panic までに並ぶ文字列連結を「メモリを書くかもしれない呼び出し」
     //        として扱い、**ループ内の load を外に持ち上げられなくなる**
     //   の 2 つが起きます。
-    //   ⚠️ ②「linalg.Matrix.check の self.rows / self.cols / self.data が
+    //   注意: ②「linalg.Matrix.check の self.rows / self.cols / self.data が
     //     ループ外に出せない」と当初は書いていましたが、**間違いでした**。
     //     測ったところ、あの遅さの原因はインライン化のほうです。
-    //   ⚠️ sema の never_returns_call と対になっています。片方だけ変えないこと。
+    //   注意: sema の never_returns_call と対になっています。片方だけ変えないこと。
     const char *nr = (strcmp(b->impl, "pl_panic") == 0 ||
                       strcmp(b->impl, "pl_exit") == 0)
                          ? " noreturn cold"
@@ -3795,7 +3795,7 @@ static char *gen_builtin_call(Emitter *e, Node *n) {
     char *t = new_tmp(e);
     sb_printf(&e->fn, "  %s = call %s @%s(%s %s)\n", t, llvm_type(rt), b->impl,
               argty, v);
-    // ⚠️ 組み込みはどれも**借りて読むだけ**です（所有権を受け取りません）。
+    // 注意: 組み込みはどれも**借りて読むだけ**です（所有権を受け取りません）。
     //   だから引数が一時値なら、呼び終わったところで解放できます（A-21e）。
     drop_temp(e, n->args, v);
     return t;
@@ -3803,13 +3803,12 @@ static char *gen_builtin_call(Emitter *e, Node *n) {
 
 // 関数呼び出し。
 //
-// ⚠️ void の呼び出しに結果を代入してはいけません。
+// 注意: void の呼び出しに結果を代入してはいけません。
 //      %t0 = call void @f()   ✗
-//      call void @f()         ✅
-// ── 低レベルの生成 ──────────────────────────────────────
+//      call void @f()         // ── 低レベルの生成 ──────────────────────────────────────
 //
 // ★ どれも命令 1〜2 個です。ランタイム関数は要りません（OS では呼べないので）。
-//   ⚠️ 読み書きは volatile にします。MMIO（装置のレジスタ）は
+//   注意: 読み書きは volatile にします。MMIO（装置のレジスタ）は
 //     「同じ番地を読んでも値が変わる」ので、最適化で消されると困ります。
 static char *gen_lowlevel(Emitter *e, Node *n) {
     Node *a0 = n->args;
@@ -3819,7 +3818,7 @@ static char *gen_lowlevel(Emitter *e, Node *n) {
     // ★ sideeffect を付けます。「値を返さないから消してよい」と
     //   最適化に判断されると、csrw も wfi も消えてしまうためです。
     if (strncmp(n->name, "asm", 3) == 0) {
-        // ⚠️ 利用者は C と同じ %0 で書きますが、LLVM IR のインライン
+        // 注意: 利用者は C と同じ %0 で書きますが、LLVM IR のインライン
         //    アセンブリでは $0 が「1 番目のオペランド」です。ここで直します
         //    （RISC-V では % は %hi(...) のような再配置指定に使われるため、
         //     そのままだとアセンブラが別物として読んでしまいます）。
@@ -3922,7 +3921,7 @@ static char *gen_call(Emitter *e, Node *n) {
     // ★ wrap_add / wrap_sub / wrap_mul。
     //   **桁あふれを検査せず 2 の補数で折り返します。**
     //   法 2⁶⁴ の計算（線形合同法など）を書くための逃げ道です。
-    //   ⚠️ min / max と同じく 2 引数なので、組み込みの表では表せません。
+    //   注意: min / max と同じく 2 引数なので、組み込みの表では表せません。
     if (n->is_wrap) {
         char *a = gen_expr(e, n->args);
         char *b = gen_expr(e, n->args->next);
@@ -3941,7 +3940,7 @@ static char *gen_call(Emitter *e, Node *n) {
     //     ② 空の値を作る        … str なら ""、list なら新しい空リスト
     //     ③ その場所へ書き戻す  … 場所は有効なまま残る
     //
-    // ⚠️ **retain も release も出しません。** 参照の数は動いていません
+    // 注意: **retain も release も出しません。** 参照の数は動いていません
     //   （持ち主が「場所」から「呼び出し側」へ移っただけです）。
     //   だから move_out は --drop の有無で意味が変わりません。
     if (n->is_move_out) {
@@ -3986,11 +3985,11 @@ static char *gen_call(Emitter *e, Node *n) {
     if (n->cls) return gen_new(e, n);  // ★ インスタンス生成
 
     // ★ 関数ポインタ越しの呼び出し。
-    //   ⚠️ LLVM では **呼び先がラベルでもレジスタでも同じ書き方**です
+    //   注意: LLVM では **呼び先がラベルでもレジスタでも同じ書き方**です
     //     （call <戻り型> <呼び先>(引数)）。だから箱から読んだ値を
     //     そのまま置くだけで間接呼び出しになります。declare も要りません。
     if (n->is_indirect) {
-        // ⚠️ **ptr として読むこと。** ty_int を渡すと i64 で読んでしまい、
+        // 注意: **ptr として読むこと。** ty_int を渡すと i64 で読んでしまい、
         //    call の呼び先が整数になって LLVM に弾かれます。
         char *fp = new_tmp(e);
         sb_printf(&e->fn, "  %s = load ptr, ptr %s\n", fp, n->ir_name);
@@ -4014,7 +4013,7 @@ static char *gen_call(Emitter *e, Node *n) {
         char *fv = gen_expr(e, n->args);            // 関数ポインタ
         int na = fnty->nparams;
 
-        // ★ 引数は i64 の配列にして渡します。⚠️ この箱は entry ブロックの
+        // ★ 引数は i64 の配列にして渡します。注意: この箱は entry ブロックの
         //   alloca です（規約 R1）。ランタイムが**写しを取ってから**
         //   スレッドを作るので、呼び出しのあいだだけ生きていれば足ります。
         char *buf = new_tmp(e);
@@ -4084,7 +4083,7 @@ static char *gen_call(Emitter *e, Node *n) {
 
 // 値（型 t）を i64 に詰める。
 static char *pack_i64(Emitter *e, Type *t, char *v) {
-    // ⚠️ 一時値は**必要になってから**取ります。先に new_tmp すると、
+    // 注意: 一時値は**必要になってから**取ります。先に new_tmp すると、
     //    int のときに番号が 1 つ飛び、セルフホスト版と IR がずれます。
     if (t->kind == TY_INT) return v;  // そのまま
     char *r = new_tmp(e);
@@ -4093,7 +4092,7 @@ static char *pack_i64(Emitter *e, Type *t, char *v) {
             sb_printf(&e->fn, "  %s = zext i1 %s to i64\n", r, v);
             return r;
         case TY_FLOAT:
-            // ⚠️ fptosi ではありません。**ビットをそのまま**運びます。
+            // 注意: fptosi ではありません。**ビットをそのまま**運びます。
             sb_printf(&e->fn, "  %s = bitcast double %s to i64\n", r, v);
             return r;
         default:  // ポインタで表される型はすべてここ
@@ -4124,7 +4123,7 @@ static char *unpack_i64(Emitter *e, Type *t, char *v) {
 // ★ シグネチャごとに 1 つだけ作ります（同じ形の関数が何本 spawn されても
 //   thunk は 1 つ）。名前は @pl.thunk.N。
 //
-// 🤔 なぜ thunk が要るのか
+// なぜ thunk が要るのか
 //   「全部 i64 として直接呼べばいい」ように見えますが、**呼び出し規約は
 //   型で決まります**。float は整数と別のレジスタで渡され、None を返す
 //   関数には戻り値レジスタがありません。型を偽って呼ぶと、その 2 つで
@@ -4255,14 +4254,14 @@ static char *gen_stmt_inner(Emitter *e, Node *n) {
         // ★ unsafe: は「検査のための印」なので、生成は中身そのまま
         // ★ scope: ブロック（A-18 の scoped spawn）。
         //   入口で枠を開き、出口で「まだ待っていないスレッド」を全部 join します。
-        //   ⚠️ 途中から抜ける道（return / break / continue / 失敗の伝播）は
+        //   注意: 途中から抜ける道（return / break / continue / 失敗の伝播）は
         //     sema が禁じているので、出口はここ 1 か所だけです。
         case ND_SCOPE: {
             declare_rt(e, "void @pl_scope_begin()");
             declare_rt(e, "void @pl_scope_end()");
             sb_printf(&e->fn, "  call void @pl_scope_begin()\n");
 
-            // ⚠️ ここは ND_BLOCK を呼ばずに自分で展開します。**join を
+            // 注意: ここは ND_BLOCK を呼ばずに自分で展開します。**join を
             //    解放より先に**行う必要があるためです（スレッドがこの
             //    ブロックの局所変数を借りていることがあります）。
             ScopeCtx sc68 = {e->scope, NULL};
@@ -4371,10 +4370,10 @@ static char *gen_stmt_inner(Emitter *e, Node *n) {
             } else {
                 // ★ 戻り値を先に評価します。移動した変数はスロットが null に
                 //   なっているので、この後の解放は何もしません（設計 §6.1）。
-                //   ⚠️ rc[T] を返すときは参照を 1 つ増やします（呼び出し側のぶん）。
+                //   注意: rc[T] を返すときは参照を 1 つ増やします（呼び出し側のぶん）。
                 char *v = maybe_retain(e, n->lhs, gen_expr(e, n->lhs));
                 // ★ 契約（A-29）：**解放の前に**確かめます。
-                //   ⚠️ 順序が逆だと、ensures の式が解放済みの値を読みます。
+                //   注意: 順序が逆だと、ensures の式が解放済みの値を読みます。
                 gen_ensures(e, v);
                 emit_drops_until(e, NULL);
                 sb_printf(&e->fn, "  ret %s %s\n", llvm_type(n->lhs->type), v);
@@ -4430,7 +4429,7 @@ static char *gen_stmt_inner(Emitter *e, Node *n) {
             // ★ 版分けの速い側では、誘導変数の増分の桁あふれ検査を
             //   外します。`v < L` のあいだ回るので、v が最後に取る値は L で、
             //   L は i64 に収まっています（＝あふれません）。
-            //   ⚠️ 外すのは**この 1 本だけ**です。本体の他の足し算
+            //   注意: 外すのは**この 1 本だけ**です。本体の他の足し算
             //     （s = s + x など）は今までどおり検査します。
             bool saved_ovf67 = e->no_ovf;
             if (e->nobc && e->iv_ir && n->lhs->kind == ND_VAR && n->lhs->ir_name &&
@@ -4441,14 +4440,14 @@ static char *gen_stmt_inner(Emitter *e, Node *n) {
 
             // ★ 入れ替える前に、古い値を解放します。
             //   `s = s + "!"` のように、上書きは v1 では黙って捨てていました。
-            //   ⚠️ 借りものを束縛している変数（ownck が印を付けた）は所有者では
+            //   注意: 借りものを束縛している変数（ownck が印を付けた）は所有者では
             //      ないので触りません。
             if (e->drop && !n->binds_borrow) {
-                // ⚠️ グローバル（@g.x）は「プログラムが終わるまで生きる場所」
+                // 注意: グローバル（@g.x）は「プログラムが終わるまで生きる場所」
                 //    なので、ここでは触りません（解放するのは所有者だけ）。
                 if (n->lhs->kind == ND_VAR && n->lhs->ir_name[0] == '%')
                     emit_drop_value(e, n->type, gen_load(e, n->type, n->lhs->ir_name));
-                // ⚠️ 対象を 2 回評価しないこと。古い値を読むために
+                // 注意: 対象を 2 回評価しないこと。古い値を読むために
                 //    gen_field_ptr をもう一度通すので、対象が単純な変数の
                 //    ときだけに限ります（xs[f()].g = v で f が 2 回走るのを防ぐ）。
                 else if (n->lhs->kind == ND_FIELD && !n->lhs->mod_name &&
@@ -4482,7 +4481,7 @@ static char *gen_stmt_inner(Emitter *e, Node *n) {
         default: {
             char *v = gen_expr(e, n);  // 式文
             // ★ 捨てられる一時値（呼び出しの戻り値）を解放します。
-            //   ⚠️ 借用を返す関数（仕様 §4.5）の戻り値は所有していません。
+            //   注意: 借用を返す関数（仕様 §4.5）の戻り値は所有していません。
             if (e->drop && !n->binds_borrow && n->type) emit_drop_value(e, n->type, v);
             return v;
         }
@@ -4502,12 +4501,12 @@ static char *gen_stmt_inner(Emitter *e, Node *n) {
 static void collect_allocas(Emitter *e, Node *n) {
     if (!n) return;
 
-    // ⚠️ グローバル変数は alloca しない（@g.x をそのまま読み書きする）
+    // 注意: グローバル変数は alloca しない（@g.x をそのまま読み書きする）
     if (n->kind == ND_VARDECL && !n->is_global) {
         sb_printf(&e->allocas, "  %s = alloca %s\n", n->ir_name,
                   llvm_mem_type(n->type));
         // ★ デバッグ情報（A-35）：箱を作ったついでに「名前と型」を書きます。
-        //   ⚠️ 箱を作る場所と印を付ける場所を分けると、必ずどちらかが
+        //   注意: 箱を作る場所と印を付ける場所を分けると、必ずどちらかが
         //     先に増えて食い違います。**同じ 1 か所**に置きます。
         dbg_local(e, n->name, n->ir_name, n->type, n->tok ? n->tok->line : 0, 0);
     }
@@ -4527,7 +4526,7 @@ static void collect_allocas(Emitter *e, Node *n) {
         dbg_local(e, n->name, n->ir_name, n->type, n->tok ? n->tok->line : 0, 0);
     }
 
-    // ⚠️ except の並びは next で繋がっています（if の else と違って複数あります）。
+    // 注意: except の並びは next で繋がっています（if の else と違って複数あります）。
     //    2 番目以降はここでたどります（先頭は下の collect_allocas(n->els) が拾う）。
     if (n->kind == ND_TRY && n->els)
         for (Node *ex = n->els->next; ex; ex = ex->next) collect_allocas(e, ex);  // ★ bool は i8（規約 R5）
@@ -4564,7 +4563,7 @@ static void gen_func(Emitter *e, Node *n) {
     //   `add(a=2, b=3)` の形で出るのは、この型と、下で出す
     //   !DILocalVariable(arg: N) が揃っているからです。
     //
-    // ⚠️ types の**先頭は戻り値**で、None（void）は `null` と書きます。
+    // 注意: types の**先頭は戻り値**で、None（void）は `null` と書きます。
     //   失敗しうる関数が余分に取るエラー出力（%err.out）は書いていません。
     //   利用者が書いた引数だけを並べます。
     e->dbg_fn = 0;
@@ -4617,7 +4616,7 @@ static void gen_func(Emitter *e, Node *n) {
 
     // ① 引数を alloca にコピーする（規約 R8）。
     //
-    // 🤔 なぜコピーするのか
+    // なぜコピーするのか
     //   %n.arg は SSA レジスタなので代入できません。本言語では引数に代入
     //   できる（a = a + 1）ので、ローカル変数と同じ「箱」にしてしまいます。
     //   mem2reg がこの余分なコピーを消してくれます。
@@ -4638,7 +4637,7 @@ static void gen_func(Emitter *e, Node *n) {
 
     // ★ 範囲型の仮引数は、**関数の入口で 1 回だけ**確かめます（A-28）。
     //
-    // 🤔 なぜ呼び出し側ではないのか
+    // なぜ呼び出し側ではないのか
     //   呼び出しの経路は 5 通り（ふつうの呼び出し・メソッド・生成・
     //   関数ポインタ越し・spawn）あり、どれか 1 つ書き忘れると
     //   **そこだけ検査が外れます**。入口なら 1 か所で全部を守れます。
@@ -4650,7 +4649,7 @@ static void gen_func(Emitter *e, Node *n) {
         }
 
     // ★ 契約（A-29）：requires は**関数の入口**で確かめます。
-    //   ⚠️ 範囲型の引数の検査（A-28）より後です。引数が範囲型なら、
+    //   注意: 範囲型の引数の検査（A-28）より後です。引数が範囲型なら、
     //     まず「その型に入るか」、次に「契約を満たすか」の順になります。
     e->fn_node = n;
     for (Node *st = n->body->body; st; st = st->next) {
@@ -4686,7 +4685,7 @@ static void gen_func(Emitter *e, Node *n) {
     // ④ 終端されていなければ終端する（規約 R6）
     if (!e->terminated) {
         // ★ 契約（A-29）：**最後まで落ちてくる出口**でも ensures を確かめます。
-        //   ⚠️ ここを忘れると、`return` を書かない None の関数だけ
+        //   注意: ここを忘れると、`return` を書かない None の関数だけ
         //     事後条件がすり抜けます（出口は return だけではありません）。
         if (n->type->kind == TY_NONE) gen_ensures(e, NULL);
         if (e->drop) emit_scope_drops(e, &params);
@@ -4751,10 +4750,10 @@ static void gen_global(Emitter *e, Node *n) {
 // それを呼んで trunc するラッパにする」方式をとります。
 // （ir-conventions.md 第7節の方式 A）
 //
-// 🤔 なぜラッパ方式か：main を他の関数と同じ規則で生成できるので、
+// なぜラッパ方式か：main を他の関数と同じ規則で生成できるので、
 //    コード生成器に「main だけ特別」という分岐が入りません。
 //
-// ⚠️ これを出すのは入口モジュールだけです。
+// 注意: これを出すのは入口モジュールだけです。
 //    全モジュールが出すと、リンク時に @main が重複します。
 static void gen_c_main(Emitter *e, const char *main_ir_name) {
     e->tmp_counter = 0;
@@ -4819,7 +4818,7 @@ char *codegen(Module *mod, const char *main_ir_name, bool drop, bool no_ovf,
     sb_printf(&e.header, "; Generated by " PLC_LANG_CC "\n");
     sb_printf(&e.header, "source_filename = \"%s\"\n", mod->path);
 
-    // ⚠️ 規約 R11：target triple は必ず出力する。
+    // 注意: 規約 R11：target triple は必ず出力する。
     //    書かないと clang が -Woverride-module 警告を出します。
     // ★ triple は外から渡します（--target / pragma target）。
     //   NULL ならビルド時に埋め込んだ既定値（＝この機械のもの）。
@@ -4827,8 +4826,8 @@ char *codegen(Module *mod, const char *main_ir_name, bool drop, bool no_ovf,
     if (triple[0]) sb_printf(&e.header, "target triple = \"%s\"\n", triple);
 
     // ★ デバッグ情報（A-30）：モジュールに 1 組だけ要るものを先に作ります。
-    //   ⚠️ 関数より**先**に作ります。番号の振り方が 2 実装で同じになるためです。
-    //   ⚠️ 共有の !DISubroutineType は A-35 で無くなりました（関数ごとに
+    //   注意: 関数より**先**に作ります。番号の振り方が 2 実装で同じになるためです。
+    //   注意: 共有の !DISubroutineType は A-35 で無くなりました（関数ごとに
     //     本物の型を出すようになったためです）。
     if (e.dbg) {
         e.dbg_file = dbg_id(&e);
@@ -4844,7 +4843,7 @@ char *codegen(Module *mod, const char *main_ir_name, bool drop, bool no_ovf,
 
     // ② クラスの型定義（★ 使う側より先に、モジュールの先頭に出す）
     for (Node *d = ast->body; d; d = d->next) {
-        // ⚠️ ジェネリックなテンプレートは出しません。
+        // 注意: ジェネリックなテンプレートは出しません。
         //   K や V が何なのか決まっていないので、構造体の形が作れません。
         //   出すのは実体（Box$int など）だけです。
         if (d->kind == ND_CLASS && !d->targs) gen_class_type(&e, d->cls);
@@ -4868,7 +4867,7 @@ char *codegen(Module *mod, const char *main_ir_name, bool drop, bool no_ovf,
             declare_extern(&e, llvm_type(d->type), d->name, sb_str(&types));
             continue;
         }
-        // ⚠️ ジェネリックなテンプレートは出しません
+        // 注意: ジェネリックなテンプレートは出しません
         if (d->kind == ND_FUNC && !d->targs) gen_func(&e, d);
         // メソッドも、ふつうの関数とまったく同じ関数で出します。
         // 違うのは名前（@lexer.Token.show）と、第 1 引数が self であることだけ。
@@ -4877,7 +4876,7 @@ char *codegen(Module *mod, const char *main_ir_name, bool drop, bool no_ovf,
                 if (m->kind == ND_FUNC) gen_func(&e, m);
     }
 
-    // ⚠️ C の main を出すのは入口モジュールだけ（重複定義になるため）
+    // 注意: C の main を出すのは入口モジュールだけ（重複定義になるため）
     if (main_ir_name) gen_c_main(&e, main_ir_name);
 
     // バッファを規定の順に連結する
@@ -4892,7 +4891,7 @@ char *codegen(Module *mod, const char *main_ir_name, bool drop, bool no_ovf,
     sb_printf(&out, "%s", sb_str(&e.dropdefs));
     sb_printf(&out, "%s", sb_str(&e.thunkdefs));
     // ⑥ 別名解析（TBAA）の型タグ。
-    //   ⚠️ 番号は固定です。**2 実装が同じ IR を出す**ため、
+    //   注意: 番号は固定です。**2 実装が同じ IR を出す**ため、
     //     使っていなくても常にこの 7 行を出します。
     sb_printf(&out, "\n!0 = !{!\"" PLC_LANG_NAME "\"}\n");
     sb_printf(&out, "!1 = !{!\"field\", !0}\n");
@@ -4905,7 +4904,7 @@ char *codegen(Module *mod, const char *main_ir_name, bool drop, bool no_ovf,
     sb_printf(&out, "!8 = !{!7, !7, i64 0}\n");
 
     // ★ デバッグ情報（A-30）。-g のときだけ出ます。
-    //   ⚠️ 「Debug Info Version」を書かないと、clang が metadata を丸ごと
+    //   注意: 「Debug Info Version」を書かないと、clang が metadata を丸ごと
     //     捨てます（黙って消えるので、気づくのに時間がかかります）。
     if (e.dbg) {
         int flags1 = dbg_id(&e);

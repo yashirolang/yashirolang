@@ -7,11 +7,11 @@
 #   言語に既にある型で足りるものに、新しい型を足さないためです。
 #   行列だけは「行数・列数」を持たせる必要があるのでクラスにします。
 #
-# ⚠️ **形が合わないときは panic します。** 行列の積で列数と行数が食い違うのは
+# 注意: **形が合わないときは panic します。** 行列の積で列数と行数が食い違うのは
 #   実行時に回復できる状況ではなく、書いた人の間違いだからです
 #   （添字の範囲外と同じ扱い。言語仕様 8 節）。
 #
-# ⚠️ 添字は 0 から始まります。行列は **行優先**（row-major）で持ちます。
+# 注意: 添字は 0 から始まります。行列は **行優先**（row-major）で持ちます。
 
 import math
 import strings
@@ -79,9 +79,9 @@ def vcopy(a: list[float]) -> list[float]:
 
 # ── 要素ごとの計算 ──────────────────────────────────────────
 
-# ⚠️ 長さが違えば panic。黙って短いほうに合わせると、間違いが
+# 注意: 長さが違えば panic。黙って短いほうに合わせると、間違いが
 #   「動くが結果がおかしい」形で残ってしまいます。
-# ⚠️ ここは Matrix.check と違い、**切り出していません**。
+# 注意: ここは Matrix.check と違い、**切り出していません**。
 #   same_len は add / sub / mul の**ループの外**で 1 回呼ばれるだけなので、
 #   インライン化されてもされなくても速さは変わりません。
 #   実際に測ったら、切り出したほうが少し遅くなりました（0.31 → 0.34 秒）。
@@ -118,7 +118,7 @@ def mul(a: list[float], b: list[float]) -> list[float]:
         i = i + 1
     return v
 
-# ⚠️ 0 で割ると実行時エラーです（float の / が止まるようになったため）。
+# 注意: 0 で割ると実行時エラーです（float の / が止まるようになったため）。
 #   ここで**何番目の要素か**を言うために、先に自分で見ています。
 #   ランタイムの "float division by zero" だけでは場所が分かりません。
 def div(a: list[float], b: list[float]) -> list[float]:
@@ -220,7 +220,7 @@ def dot(a: list[float], b: list[float]) -> float:
     return s
 
 # ユークリッドノルム（L2）
-# ⚠️ 途中で溢れないよう、最大成分で割ってから足します
+# 注意: 途中で溢れないよう、最大成分で割ってから足します
 def norm(a: list[float]) -> float:
     m: float = 0.0
     for x in a:
@@ -271,7 +271,7 @@ def angle(a: list[float], b: list[float]) -> float:
     if d == 0.0:
         panic("linalg.angle: 零ベクトルとの角度は定義されません")
     c: float = dot(a, b) / d
-    # ⚠️ 丸めで |c| がわずかに 1 を超えることがあるので挟みます
+    # 注意: 丸めで |c| がわずかに 1 を超えることがあるので挟みます
     c = math.fmax(-1.0, math.fmin(1.0, c))
     return math.acos(c)
 
@@ -312,7 +312,7 @@ class Matrix:
     #   check の大きさとして数えられ、check が get / set に
     #   インライン化されなくなります。get / set は行列積の内側ループから
     #   1 周に 3 回呼ばれるので、これだけで **2.4 倍** 遅くなりました。
-    #   ⚠️ 検査そのものは減らしていません。分けただけです。
+    #   注意: 検査そのものは減らしていません。分けただけです。
     def index_fail(self, i: int, j: int) -> None:
         panic("linalg.Matrix: 添字が範囲外です（" + str(i) + ", " +
               str(j) + "）")
@@ -348,12 +348,12 @@ class Matrix:
     #     c = a * b + d          （前は madd(matmul(a, b), d)）
     #     print(str(m[i, j]))    （前は m.get(i, j)）
     #
-    # ⚠️ **`*` は行列の積です（numpy とは違います）。**
+    # 注意: **`*` は行列の積です（numpy とは違います）。**
     #   numpy の `a * b` は要素ごとの積、`a @ b` が行列の積ですが、
     #   本言語に `@` はありません。数学の書き方に合わせて `*` を
     #   行列の積にしました。**要素ごとの積は `mmul(a, b)`** です。
     #
-    # ⚠️ **スカラー倍は `mscale(a, k)`** です。`a * 2.0` とは書けません
+    # 注意: **スカラー倍は `mscale(a, k)`** です。`a * 2.0` とは書けません
     #   （多重定義は左辺の型だけで決まり、引数の型では選び分けないため）。
 
     def __add__(self, o: Matrix) -> Matrix:
@@ -362,14 +362,14 @@ class Matrix:
     def __sub__(self, o: Matrix) -> Matrix:
         return msub(self, o)
 
-    # ⚠️ 行列の積です（要素ごとの積は mmul）
+    # 注意: 行列の積です（要素ごとの積は mmul）
     def __mul__(self, o: Matrix) -> Matrix:
         return matmul(self, o)
 
     def __neg__(self) -> Matrix:
         return mneg(self)
 
-    # 形と全要素が等しいか。⚠️ float の比較なので、誤差は考慮しません
+    # 形と全要素が等しいか。注意: float の比較なので、誤差は考慮しません
     #   （近いかを見たいときは msub してノルムを取ってください）。
     def __eq__(self, o: Matrix) -> bool:
         if self.rows != o.rows or self.cols != o.cols:
@@ -552,7 +552,7 @@ def mpow(a: Matrix, n: int) -> Matrix:
 #
 # ★ どれも **ガウスの消去法（部分ピボット選択つき）** で解きます。
 #
-#   🤔 なぜピボット選択が要るのか
+#   なぜピボット選択が要るのか
 #     消去のときに「割る数」が 0 だと計算できません。0 でなくても、
 #     **極端に小さい数で割ると誤差が一気に膨らみます**。そこで各段で
 #     「その列でいちばん絶対値の大きい行」を選んで先頭に持ってきます。
@@ -671,7 +671,7 @@ def solve(a: Matrix, b: list[float]) -> list[float]:
 
 # 逆行列（ガウス・ジョルダン法）
 #
-# ⚠️ **連立方程式を解くだけなら solve を使ってください。**
+# 注意: **連立方程式を解くだけなら solve を使ってください。**
 #   逆行列を作ってから掛けるのは、遅いうえに誤差も大きくなります。
 def inverse(a: Matrix) -> Matrix:
     need_square(a, "inverse")

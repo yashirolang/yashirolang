@@ -57,7 +57,7 @@ static Place *new_place(PlaceKind kind, Place *base, const char *key,
 
 // 式が「場所」なら Place を作る。そうでなければ NULL。
 //
-// ⚠️ 呼び出しの戻り値やリテラルは場所ではありません（NULL を返します）。
+// 注意: 呼び出しの戻り値やリテラルは場所ではありません（NULL を返します）。
 //    一時的な値なので、移動しても誰も困らないからです。
 static Place *place_of(Node *n) {
     if (!n) return NULL;
@@ -83,7 +83,7 @@ static Place *place_of(Node *n) {
         }
 
         case ND_INDEX: {
-            // ⚠️ str の添字は「場所」ではありません。`s[i]` は 1 文字の
+            // 注意: str の添字は「場所」ではありません。`s[i]` は 1 文字の
             //    **新しい文字列**を作って返すからです（runtime の pl_str_index）。
             //    list[T] の要素と違い、元の文字列を借りているわけではないので、
             //    `for c in s:` で取り出した文字は保存しても構いません。
@@ -535,7 +535,7 @@ static void report_return_borrow(Own *o, Place *p, Node *at) {
 //   BorrowRoot がありません。それでも所有スロットへ入れれば所有者が 2 つになり、
 //   --drop すると二重解放になります（実測：tests/mods/mod_class_across が segfault）。
 //
-// ⚠️ **own 引数へ渡す形（MV_OWN_ARG）もここで見ます。** 以前は MV_FIELD と
+// 注意: **own 引数へ渡す形（MV_OWN_ARG）もここで見ます。** 以前は MV_FIELD と
 //   MV_APPEND だけを見ていたので、`Box(xs[0])` のように借りものを own 引数へ
 //   渡す形が**診断なしで二重解放**になっていました。受け取った側は own なので
 //   解放し、貸し手も解放します（実測：--drop 版のコンパイラが自分自身を
@@ -751,7 +751,7 @@ static Node *callee_of(Own *o, Node *n) {
 //   `v.field("k").as_str()` のように `return self.text` を返すメソッドが
 //   その例で、解放すると持ち主の中身が消えます。
 //
-// ⚠️ move_expr でも同じ印を付けていますが、あちらは**結果を束縛するとき**
+// 注意: move_expr でも同じ印を付けていますが、あちらは**結果を束縛するとき**
 //   しか通りません。二項演算のオペランドや引数の位置では通らないので、
 //   ここで全部の呼び出しに付けます（collect_funcs が事前パスで
 //   関数側の binds_borrow を立て終えているので、ここで引けます）。
@@ -781,21 +781,21 @@ static void args_by_mode(Own *o, Flow *f, Node *args, Node *params) {
 // ★ **新しい注釈は 1 つも足しません。** すでにある own / mut / 借用の規則に、
 //   「スレッドの境界を越えられるか」という 1 つの問いを足すだけです。
 //
-//   own T      … ✅ 渡した側はもう触れない。競合しようがない
-//   mutex[T]   … ✅ 触るにはロックが要る
-//   借り        … ❌ 借りは「呼び出しより長生きしない」規則で守られている。
+//   own T      … 渡した側はもう触れない。競合しようがない
+//   mutex[T]   … 触るにはロックが要る
+//   借り        … 渡せない。借りは「呼び出しより長生きしない」規則で守られているが、
 //                    スレッドは呼び出しより長生きしうる（E-SEND-1）
-//   rc[T]      … ❌ 参照数の増減が競合する（E-SEND-2）
-//   グローバル書き込み … ❌ 誰が触っているか静的に分からない（E-SEND-3）
+//   rc[T]      … 渡せない。参照数の増減が競合する（E-SEND-2）
+//   グローバル書き込み … 渡せない。誰が触っているか静的に分からない（E-SEND-3）
 //
-// ⚠️ 既定でエラーです（警告ではありません）。所有権検査が既定で警告なのは
+// 注意: 既定でエラーです（警告ではありません）。所有権検査が既定で警告なのは
 //    「既存コードがそのまま動く」ためでしたが、**spawn は新機能なので
 //    既存コードがありません**。最初からエラーにできます（設計文書 2.3）。
 
 // 関数の本体（と、そこから呼ぶ関数）がグローバルに書いていないか。
 // 書いていれば、その代入のノードを返す。
 //
-// ⚠️ 呼び先までたどります。直下だけ見ると「1 枚かませば通る」検査になり、
+// 注意: 呼び先までたどります。直下だけ見ると「1 枚かませば通る」検査になり、
 //    保証として意味を持ちません。visited は再帰呼び出しで止まらないため。
 typedef struct SeenFn SeenFn;
 struct SeenFn {
@@ -861,7 +861,7 @@ static Node *scan_global_write(Own *o, Node *n, SeenFn **seen) {
 
 // 型 t の中（たどれる範囲すべて）に rc[T] があるか。見つけたらその名前を返す。
 //
-// ⚠️ **これが無いと検査に穴が開きます。** `own Job` を渡すのは安全に見えても、
+// 注意: **これが無いと検査に穴が開きます。** `own Job` を渡すのは安全に見えても、
 //    Job のフィールドに rc[Node] があれば、**その数え札は 2 つのスレッドから
 //    増減されます**（渡した側が同じ節点への rc を別に持っていることがある）。
 //    渡すものの型だけを見て「クラスだから安全」とは言えません。
@@ -887,7 +887,7 @@ static const char *rc_inside(Type *t, SeenCls **seen) {
             return NULL;
         }
         case TY_MUTEX:
-            // ⚠️ mutex に入っていても同じです。ロックが守るのは**中身**で、
+            // 注意: mutex に入っていても同じです。ロックが守るのは**中身**で、
             //    数え札は箱の外（rc が指す先）にあるためです。
             return rc_inside(t->elem, seen);
         case TY_CLASS: {
@@ -955,12 +955,12 @@ static void check_spawn(Own *o, Flow *f, Node *n) {
 
         // ── E-SEND-4: 可変借用はスレッドに渡せない ──
         //
-        // 🤔 なぜ scope: の中でも許さないのか
+        // なぜ scope: の中でも許さないのか
         //   scope: が保証するのは**寿命**だけです。同じ値への可変借用を
         //   2 本のスレッドが持てば、寿命が足りていてもデータ競合になります。
         //   そして「配る先が重なっていないか」は、ループの中で spawn する形
         //   （まさに並列化したい形）では静的に分かりません。
-        //   ⚠️ 書き換えたいものは own で渡すか、mutex[…] に入れてください。
+        //   注意: 書き換えたいものは own で渡すか、mutex[…] に入れてください。
         if (is_mut) {
             Diag d = {0};
             d.code = "E-SEND-4";
@@ -976,7 +976,7 @@ static void check_spawn(Own *o, Flow *f, Node *n) {
 
         // ── E-SEND-1: 借りは渡せない（scope: の中を除く）──
         //
-        // 🤔 ここが設計の要点です。借用検査がすでに持っている
+        // ここが設計の要点です。借用検査がすでに持っている
         //   「借りは呼び出しより長生きしない」という不変条件が、そのまま
         //   「借りはスレッドに渡せない」に翻訳されます。**規則を足すのではなく、
         //   既にある規則の帰結として出てきます。**
@@ -1107,7 +1107,7 @@ static void use_expr(Own *o, Flow *f, Node *n) {
 
         // ★ 内包表記 [E for x in xs if C]
         //
-        //   ⚠️ **ここを書かないと、警告が静かに消えます。** 同じことを
+        //   注意: **ここを書かないと、警告が静かに消えます。** 同じことを
         //     手で書くと E-BORROW-3（借りたものをリストに保存）が出るのに、
         //     内包表記では出ない、という穴でした（`--drop` を付けると
         //     どちらも二重解放で落ちます）。
@@ -1145,7 +1145,7 @@ static void use_expr(Own *o, Flow *f, Node *n) {
         case ND_LIST:
             // ★ リテラルの要素は **リストへの移動**です（A-26 で直しました）。
             //
-            // ⚠️ ここを「ただの読み」にしていたのが穴でした。`xs.append(v)` は
+            // 注意: ここを「ただの読み」にしていたのが穴でした。`xs.append(v)` は
             //    止まるのに `[v]` は素通りし、**既定で解放するようになった
             //    0.16.0 以降は、借りものを入れると早すぎる解放になります**
             //    （内包表記は A-12 のときに MV_APPEND へ直してありました。
@@ -1173,7 +1173,7 @@ static void use_expr(Own *o, Flow *f, Node *n) {
                 check_call_borrows(o, n, recv);
                 return;
             }
-            // ⚠️ 'mod.f(args)'（他モジュールの関数・クラス）は ND_METHOD ですが
+            // 注意: 'mod.f(args)'（他モジュールの関数・クラス）は ND_METHOD ですが
             //    self を取りません。第 1 引数をずらすかどうかは
             //    「モジュール修飾か」「インスタンス生成か」で決まります。
             //      obj.m(args)     → m(obj, args)。self を飛ばす
@@ -1184,7 +1184,7 @@ static void use_expr(Own *o, Flow *f, Node *n) {
             return;
 
         // ★ 範囲型の検査（A-28）は値を素通しするだけの包みです。
-        //   ⚠️ **ここを書かないと、包んだ中の移動が記録されません**
+        //   注意: **ここを書かないと、包んだ中の移動が記録されません**
         //     （p: Percent = f(xs) の xs が「渡していない」ことになります）。
         case ND_RANGECHK:
             use_expr(o, f, n->lhs);
@@ -1206,7 +1206,7 @@ static bool move_expr(Own *o, Flow *f, Node *n, MoveCtx ctx) {
     // ★ 「所有者を 1 つに決められない」ためにある型なので、移動として扱いません。
     //   束縛した側は**新しい参照**を持ちます（カウント +1）。
     //
-    // ⚠️ **`rc[T] | None` も共有です。** ここを `TY_RC` だけで見ていたので、
+    // 注意: **`rc[T] | None` も共有です。** ここを `TY_RC` だけで見ていたので、
     //   `lhs: rc[Node] | None` のような**いちばん普通の形**が移動と見なされ、
     //   移行しても指摘が減りませんでした（実測 345 → 340）。
     if (ty_is_rc(n->type)) {
@@ -1243,13 +1243,13 @@ static bool move_expr(Own *o, Flow *f, Node *n, MoveCtx ctx) {
     if (br) {
         if (ctx != MV_ASSIGN && !(ctx == MV_RETURN && br->is_self))
             report_borrow(o, br, p, n, ctx);
-        // ⚠️ 移動として記録しません。借りものは動いていないので、
+        // 注意: 移動として記録しません。借りものは動いていないので、
         //    この後で使っても E-MOVE-1 にはなりません（1 つの問題は 1 回だけ報告する）。
         use_expr(o, f, n);
         return false;
     }
 
-    // ⚠️ 要素を 1 つだけ move out することは許しません（設計 ownership.md §3）。
+    // 注意: 要素を 1 つだけ move out することは許しません（設計 ownership.md §3）。
     //    添字はコンパイル時に分からないので、xs[0] と xs[1] を区別できません。
     //    for のループ変数もここを通ります（仕様 v2 §3.1「for の要素は借用」）。
     //    所有権ごと取り出す xs.pop() は次章で入れます。
@@ -1261,7 +1261,7 @@ static bool move_expr(Own *o, Flow *f, Node *n, MoveCtx ctx) {
         return false;
     }
 
-    // ⚠️ グローバルはプログラムが終わるまで生きているので、
+    // 注意: グローバルはプログラムが終わるまで生きているので、
     //    読み出しは「借りているだけ」として扱います（解放もしません）。
     if (p->kind == PL_GLOBAL) {
         if (ctx == MV_FIELD || ctx == MV_APPEND || ctx == MV_OWN_ARG)
@@ -1272,7 +1272,7 @@ static bool move_expr(Own *o, Flow *f, Node *n, MoveCtx ctx) {
 
     // ── フィールドの読み出しは「借用」──
     //
-    // ⚠️ 当初は「取り出し禁止（E-MOVE-2）」にしていました。撤回した理由は
+    // 注意: 当初は「取り出し禁止（E-MOVE-2）」にしていました。撤回した理由は
     //   次のとおりです：この規則では **コンパイラ自身が書けません**
     //   （`nx = cur.next` で連結リストをたどることすらできない）。
     //
@@ -1309,7 +1309,7 @@ static DeclEnt *find_decl(Own *o, const char *ir_name) {
 static void bind_alias(Own *o, Node *target, Node *rhs) {
     if (!target->ir_name) return;
 
-    // ⚠️ **コピー型は借りものになりません。**
+    // 注意: **コピー型は借りものになりません。**
     //   `worst = e.st`（st は int）のように、借りた入れ物から**値をコピー**
     //   しているだけの代入は借用ではありません。ここを見ていなかったので、
     //   内側のスコープの rc から int を読んで外側の変数に入れると
@@ -1317,7 +1317,7 @@ static void bind_alias(Own *o, Node *target, Node *rhs) {
     //   ★ 借用として追うのは、解放の対象になりうる型だけで足ります。
     if (target->type && !ty_is_owned(target->type)) return;
 
-    // ⚠️ **rc[T] は借りものではありません。**
+    // 注意: **rc[T] は借りものではありません。**
     //   `m = mm.next`（`rc[Module] | None`）のような**共有の付け替え**を
     //   「mm の一部を借りた」と記録していたので、内側で作った rc を外側の
     //   変数に入れると E-BORROW-6 が出ていました。rc は独立した参照です。
@@ -1424,7 +1424,7 @@ static bool is_hidden_var(const char *name) {
 
 // ★ 隠し変数のうち、`swap.N` だけは**所有します**。
 //
-//   ⚠️ ほかの隠し変数（`for.it.N` / `aug.obj.N` / `aug.idx.N`）は
+//   注意: ほかの隠し変数（`for.it.N` / `aug.obj.N` / `aug.idx.N`）は
 //     「対象を 1 回だけ評価するための借り」です。ところが `swap.N` は
 //     **右辺の値そのものを預かる場所**なので、借りにすると壊れます。
 //
@@ -1491,7 +1491,7 @@ static void while_once(Own *o, Node *n, const Flow *entry, Flow *back, Flow *exi
 static void check_while(Own *o, Flow *f, Node *n) {
     // ── ① 入口の状態を不動点まで下げる（診断は出さない）──
     //
-    // 🤔 なぜ 2 周で収束するのか
+    // なぜ 2 周で収束するのか
     //   格子の高さが 2（Valid → MaybeMoved → Moved）で、状態は単調にしか
     //   下がらないためです。3 周目で変化することはありません。
     //   崩れたらコンパイラのバグなので、assert して落とします。
@@ -1571,7 +1571,7 @@ static void stmt(Own *o, Flow *f, Node *n) {
             return;
 
         // ★ 契約（A-29）の式も「読み」としてたどります。
-        //   ⚠️ たどらないと、式の中の呼び出しに渡した値の扱いが記録されません。
+        //   注意: たどらないと、式の中の呼び出しに渡した値の扱いが記録されません。
         case ND_REQUIRES:
         case ND_ENSURES:
             use_expr(o, f, n->lhs);
@@ -1659,7 +1659,7 @@ static void stmt(Own *o, Flow *f, Node *n) {
 
 // 代入ノードに、その変数の「借りものか」の印を写す。
 //
-// ⚠️ codegen は代入のときに **古い値を解放**します。借りものを束縛している
+// 注意: codegen は代入のときに **古い値を解放**します。借りものを束縛している
 //    変数では、それをやると他人の値を解放してしまいます。
 //    印が付くのは解析の途中（後の行の代入かもしれない）なので、
 //    **解析が終わってから**まとめて写します。
@@ -1761,7 +1761,7 @@ static void mark_returns_borrow(Node *fn) {
 //   印が立ちません。すると呼び出し側が一時値として解放し、
 //   **dict の中の文字列が消えます**（ASan が heap-use-after-free と言う）。
 //
-// ⚠️ next は**ループで**たどります（has_spawn と同じ理由）。
+// 注意: next は**ループで**たどります（has_spawn と同じ理由）。
 static bool returns_borrowed_call(Own *o, Node *n) {
     for (; n; n = n->next) {
         if (n->kind == ND_RETURN && n->lhs &&
@@ -1821,7 +1821,7 @@ static void collect_funcs(Own *o, Node *ast) {
 
 
 // この式の木のどこかに spawn があるか。
-// ⚠️ next は**ループで**たどります。再帰にすると、木の深さではなく
+// 注意: next は**ループで**たどります。再帰にすると、木の深さではなく
 //    ノードの総数ぶんスタックを積むことになり、大きいファイルで落ちます。
 static bool has_spawn(Node *n) {
     for (; n; n = n->next) {
@@ -1847,7 +1847,7 @@ void ownck_program(Module *mods, const OwnckOptions *opt) {
 
     // ── spawn を使ったら、--warn-own でも警告に落とさない ──
     //
-    // 🤔 なぜここだけ扱いを変えるのか
+    // なぜここだけ扱いを変えるのか
     //   A-24 で既定はエラーになりました。ここが効くのは
     //   **--warn-own を付けたとき**だけです。所有権の指摘を警告に落とすと、
     //   「データ競合が無い」という保証も一緒に警告どまりになります
@@ -1870,7 +1870,7 @@ void ownck_program(Module *mods, const OwnckOptions *opt) {
         }
     }
 
-    // ⚠️ 上限を超えたぶんは件数だけ知らせます。selfhost/ を
+    // 注意: 上限を超えたぶんは件数だけ知らせます。selfhost/ を
     //    書き換えるまで、ここは何百件も出うるためです。
     if (o.nmore > 0)
         fprintf(stderr,

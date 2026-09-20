@@ -29,7 +29,7 @@ DEC        ::= digit { digit | "_" }
 HEX        ::= "0" ("x"|"X") hexdigit { hexdigit | "_" }
 OCT        ::= "0" ("o"|"O") octdigit { octdigit | "_" }
 BIN        ::= "0" ("b"|"B") bindigit { bindigit | "_" }
-(* ⚠️ 小数点の後には**必ず数字が要ります**（`1.` は FLOAT ではない）。
+(* 注意: 小数点の後には**必ず数字が要ります**（`1.` は FLOAT ではない）。
    `1.foo` のような書き方と食い違わせないためです。 *)
 FLOAT      ::= digit { digit | "_" } "." digit { digit | "_" } [ exponent ]
              | digit { digit | "_" } exponent
@@ -97,7 +97,7 @@ top_level  ::= func_def
              | NEWLINE
 ```
 
-⚠️ **`range_decl` は `global_var` より先に試します。** `type` は予約語では
+注意: **`range_decl` は `global_var` より先に試します。** `type` は予約語では
 ないので、`type: int = 0`（`type` という名前のグローバル変数）と区別するには
 3 つ先まで見る必要があります。
 
@@ -123,7 +123,7 @@ class_body ::= { field_decl } { func_def | NEWLINE }
 field_decl ::= IDENT ":" type NEWLINE
 
 (* ── 範囲型（部分型。A-28）── *)
-(* ⚠️ "type" も "range" も予約語ではありません。トップレベルで
+(* 注意: "type" も "range" も予約語ではありません。トップレベルで
    「IDENT("type") IDENT "="」と並んだときだけこの規則に入ります。 *)
 range_decl ::= "type" IDENT "=" "int" "range" "(" int_lit "," int_lit ")" NEWLINE
 int_lit    ::= [ "-" ] INT
@@ -136,11 +136,11 @@ global_var ::= IDENT ":" type "=" expr NEWLINE
    使うときも `pkg.mod.f()` と全部書きます（短い名前で束ねません）。 *)
 import_stmt::= "import" IDENT { "." IDENT } NEWLINE
 
-(* ⚠️ "from X import Y" は採用しません。名前の出どころが
+(* 注意: "from X import Y" は採用しません。名前の出どころが
    ソースから読み取れなくなるためです。 *)
 ```
 
-**⚠️ 注意**：`class_body` はフィールド宣言をすべてメソッドより先に置くことを要求します。
+**注意**：`class_body` はフィールド宣言をすべてメソッドより先に置くことを要求します。
 これは「フィールドのレイアウトを確定してからメソッドを型検査したい」という
 実装上の都合を、文法レベルで保証させるためです。
 
@@ -158,10 +158,10 @@ stmt       ::= simple_stmt NEWLINE
              | contract_stmt
 
 (* ── 契約（A-29）──
-   ⚠️ "requires" / "ensures" は予約語ではありません。次のトークンが
+   注意: "requires" / "ensures" は予約語ではありません。次のトークンが
    "=" "+=" "-=" "*=" "//=" "%=" ":" "." "(" "[" "," と改行のどれでもない
    ときだけ、この規則に入ります（`requires = 3` は今までどおりの代入）。
-   ⚠️ 置ける場所は**関数の本体の先頭**だけです（意味解析が確かめます）。 *)
+   注意: 置ける場所は**関数の本体の先頭**だけです（意味解析が確かめます）。 *)
 contract_stmt ::= ( "requires" | "ensures" ) expr NEWLINE
 
 simple_stmt::= var_decl
@@ -258,7 +258,7 @@ primary    ::= INT | FLOAT | STRING
 list_display ::= "[" [ expr { "," expr } [ "," ] ] "]"
 ```
 
-### 📖 この階層がなぜ優先順位を実現するのか
+### この階層がなぜ優先順位を実現するのか
 
 `1 + 2 * 3` を `add_expr` から読む様子を追ってみます。
 
@@ -292,7 +292,7 @@ add_expr:
 「優先順位の高い演算子を、深い（後から呼ばれる）関数に置く」
 これだけで優先順位が実現します。
 
-### 📖 左結合と右結合の書き分け
+### 左結合と右結合の書き分け
 
 ```ebnf
 (* 左結合：ループで書く → ((1-2)-3) *)
@@ -349,10 +349,10 @@ list[lexer.Token]
 Token | None
 ```
 
-**⚠️ モジュール修飾は 1 段だけ**です（`a.b.Token` は書けません）。
+**注意: モジュール修飾は 1 段だけ**です（`a.b.Token` は書けません）。
 パッケージ（階層モジュール）を採用しないためです。
 
-**⚠️ 曖昧性**：`type` の `|` と、式の `|`（ビット OR）は同じ記号です。
+**注意: 曖昧性**：`type` の `|` と、式の `|`（ビット OR）は同じ記号です。
 型が現れる文脈（`:` の後、`->` の後、`[` `]` の中）でのみ型パーサを呼ぶことで区別します。
 **型と式を別のパーサ関数で処理する**のが解決策です。
 

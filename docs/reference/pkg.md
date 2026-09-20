@@ -61,7 +61,7 @@ src     .                     .ys を置いてあるディレクトリ（既定 
 dep     json https://github.com/user/json-pkg 1.2.0
 ```
 
-⚠️ `version` は **タグ `v1.2.3` と一致していなければなりません**。
+注意: `version` は **タグ `v1.2.3` と一致していなければなりません**。
 食い違うパッケージは受け取りを断ります。
 
 ## `package.lock`
@@ -104,7 +104,7 @@ def main() -> int:
     return 0
 ```
 
-⚠️ **パッケージの中でも、名前は完全に書きます。** `mytoml/toml.ys` から
+注意: **パッケージの中でも、名前は完全に書きます。** `mytoml/toml.ys` から
 同じパッケージの `mytoml/lex.ys` を使うときも `import mytoml.lex` です
 （相対 import はありません。名前の出どころがソースから読み取れなくなるため）。
 

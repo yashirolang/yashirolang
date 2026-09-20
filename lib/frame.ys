@@ -3,7 +3,7 @@
 # ★ **列ごとに型のある表**です。CSV の読み書き・絞り込み・並べ替え・
 #   グループ集計まで、本言語だけで書いてあります。
 #
-# ⚠️ **pandas の設計は真似していません。** pandas の列は「何でも入る」
+# 注意: **pandas の設計は真似していません。** pandas の列は「何でも入る」
 #   ものですが、この言語には暗黙の型変換がありません。列は
 #   `Column`（数値か文字列か）として持ち、**取り出すときに型を選ばせます**
 #   （`df.num("price")` / `df.text("name")`）。取り違えたらその場でエラーです。
@@ -84,7 +84,7 @@ class Frame:
     def has(self, name: str) -> bool:
         return self.index_of(name) >= 0
 
-    # ⚠️ 「無い列」は None を返さず、その場で panic します。
+    # 注意: 「無い列」は None を返さず、その場で panic します。
     #   綴りを間違えた列名が空のリストとして流れていくほうが危険です。
     def col(self, name: str) -> Column:
         i: int = self.index_of(name)
@@ -190,7 +190,7 @@ class Frame:
     def show(self) -> str:
         return self.show_head(20)
 
-    # 先頭 n 行を桁を揃えて表にします（⚠️ 幅は**表示幅**で数えます）
+    # 先頭 n 行を桁を揃えて表にします（注意: 幅は**表示幅**で数えます）
     def show_head(self, n: int) -> str:
         m: int = n
         if m > self.rows():
@@ -304,7 +304,7 @@ def same_len(a: list[bool], b: list[bool], who: str) -> None:
 # ── 並べ替えの順番を作る ───────────────────────────────────
 
 # xs を昇順（asc が False なら降順）に並べる行番号を返します。
-# ⚠️ **安定です**（同じ値なら元の順を保ちます）。併合整列。
+# 注意: **安定です**（同じ値なら元の順を保ちます）。併合整列。
 def order_of(xs: list[float], asc: bool) -> list[int]:
     idx: list[int] = []
     for i in range(len(xs)):
@@ -497,7 +497,7 @@ def distinct_count(xs: list[str]) -> int:
 #
 # ★ 列の型は**中身を見て決めます**：その列の値が全部数として読めるなら
 #   数値の列、そうでなければ文字列の列です（空の値があれば文字列）。
-# ⚠️ 引用符（"…"）に対応しています（"" は " 1 個）。改行を含む欄も読めます。
+# 注意: 引用符（"…"）に対応しています（"" は " 1 個）。改行を含む欄も読めます。
 def read_csv(path: str) -> Frame:
     return parse_csv(io.read_file(path))
 
@@ -542,7 +542,7 @@ def all_numeric(cells: list[str]) -> bool:
             return False
     return True
 
-# ⚠️ float(s) は読めなければ panic するので、**先にここで確かめます**。
+# 注意: float(s) は読めなければ panic するので、**先にここで確かめます**。
 #   （try で受けないのは、raises を宣言しない設計にそろえるためです）
 def is_number(s: str) -> bool:
     t: str = strings.strip(s)

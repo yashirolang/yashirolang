@@ -5,7 +5,7 @@
 # EXIT: 0
 # input() — Python と同じ形
 #
-# ⚠️ EOF では panic する。読めないかもしれない場面では
+# 注意: EOF では panic する。読めないかもしれない場面では
 #   io.read_line()（None が返る）を使う。
 
 def main() -> int:

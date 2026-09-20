@@ -7,7 +7,7 @@
 
 // ── UART（QEMU virt の 16550 互換。0x10000000）────────────────
 //
-// ⚠️ volatile が要ります。装置のレジスタは「書いた値が読めるとは限らない」
+// 注意: volatile が要ります。装置のレジスタは「書いた値が読めるとは限らない」
 //    ので、最適化で消したりまとめたりされると壊れます。
 static volatile unsigned char *const UART = (volatile unsigned char *)0x10000000UL;
 

@@ -148,7 +148,7 @@ fi
 
 # ③ シンボリックリンク（mode 120000）は持ち込まない。
 #    cfg は実際にインストールされるので、これは本物の確認です。
-#    ⚠️ Windows（MSYS2）では ln -s が実体のコピーになることがあります。
+#    注意: Windows（MSYS2）では ln -s が実体のコピーになることがあります。
 #      git が 120000 で持っていないなら確認の意味が無いので飛ばします。
 mode="$(git -C "$WORK/cfg" ls-tree v1.1.0 secrets$EXT | awk '{print $1}')"
 if [ "$mode" != "120000" ]; then
@@ -176,7 +176,7 @@ expect "直った"        0 "$PO" verify
 #
 # ★ evil は cfg$EXT を出しますが、deps/evil/cfg$EXT に入るので
 #   deps/cfg/cfg$EXT とぶつかりません。名前も evil.cfg と cfg.cfg で別ものです。
-#   ⚠️ 0.22 まではここで断っていました（フラットに置いていたため）。
+#   注意: 0.22 まではここで断っていました（フラットに置いていたため）。
 cp "$APP/package.pkg" "$WORK/pkg.before"
 cp "$APP/package.lock" "$WORK/lock.before"
 expect "同名モジュールのパッケージを入れられる" 0 "$PO" add evil "$WORK/evil"

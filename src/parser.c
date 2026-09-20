@@ -81,11 +81,11 @@ static Token *expect_close(Parser *p, const char *close, Token *open) {
 // ★ 「必要になる」と予告しておいた関数です。
 //   NEWLINE / INDENT / DEDENT を要求する block() のために実装しました。
 //
-// ⚠️ 仮想トークンの名前（INDENT）をそのままユーザーに見せないこと。
+// 注意: 仮想トークンの名前（INDENT）をそのままユーザーに見せないこと。
 //    「INDENT が必要です」では利用者に意味が伝わりません。
 //    what と hint には人間の言葉を渡します。
 // トークン種別の日本語名。
-// ⚠️ token_kind_name() は "INDENT" のような内部名を返すので、
+// 注意: token_kind_name() は "INDENT" のような内部名を返すので、
 //    利用者に見せる診断ではこちらを使います。
 static const char *tok_kind_ja(TokenKind kind) {
     switch (kind) {
@@ -160,10 +160,10 @@ static Node *type_ref(Parser *p, const char *what);
 // ★ 埋め込んだ式は **その場で字句解析し直して**構文解析します。
 //   こうすると f"{a + b * 2}" のような任意の式がそのまま書けます。
 //
-// ⚠️ 中身は必ず str(...) で包みます。パーサの時点では型が分からないためです
+// 注意: 中身は必ず str(...) で包みます。パーサの時点では型が分からないためです
 //   （str には str→str の恒等もあるので、文字列を入れても通ります）。
 //
-// ⚠️ 波括弧そのものを書きたいときは {{ }} と重ねます（Python と同じ）。
+// 注意: 波括弧そのものを書きたいときは {{ }} と重ねます（Python と同じ）。
 static Node *fstring(Parser *p, Token *t) {
     const char *src = t->text;
     Node *result = NULL;
@@ -226,7 +226,7 @@ static Node *fstring(Parser *p, Token *t) {
             diag_fail(&d);
         }
 
-        // ⚠️ 部分文字列を字句解析するので、**改行を足して**論理行を閉じます
+        // 注意: 部分文字列を字句解析するので、**改行を足して**論理行を閉じます
         //   （tokenize は行の終わりに NEWLINE を要求します）。
         StrBuf sub;
         sb_init(&sub);
@@ -237,7 +237,7 @@ static Node *fstring(Parser *p, Token *t) {
         sp.pos = 0;
         Node *inner = expr(&sp);
 
-        // ⚠️ **式を最後まで読み切ったかを確かめます。**
+        // 注意: **式を最後まで読み切ったかを確かめます。**
         //    これが無いと f"{x:>8}" のような書式指定が「x」だけ読まれて
         //    **黙って無視され**ます。エラーにするより悪い挙動です。
         if (peek(&sp)->kind != TK_NEWLINE && peek(&sp)->kind != TK_EOF) {
@@ -280,7 +280,7 @@ static Node *primary(Parser *p) {
 
         // ★ タプルのリテラル (a, b)
         //
-        //   ⚠️ **要素が 2 つ以上のときだけ**です。`(x)` は「括弧で囲んだ x」で、
+        //   注意: **要素が 2 つ以上のときだけ**です。`(x)` は「括弧で囲んだ x」で、
         //     Python の `(1,)` にあたる 1 要素のタプルは入れていません
         //     （`(int)` と区別できないため。言語仕様 5.6）。
         //
@@ -350,7 +350,7 @@ static Node *primary(Parser *p) {
 
                 // ★ 内包表記 [E for x in xs if C]
                 //
-                //   ⚠️ **構文解析での脱糖にはできません。** for やカンマ代入と
+                //   注意: **構文解析での脱糖にはできません。** for やカンマ代入と
                 //     違って、内包表記は**式の位置**に現れます。文に持ち上げると、
                 //     三項演算子や and / or の右側に書かれたときに
                 //     「評価されないはずのもの」を評価してしまいます。
@@ -405,7 +405,7 @@ static Node *primary(Parser *p) {
 // ★ ここでは**形を作るだけ**です。ループ変数の型も結果の型も
 //   意味解析（check_listcomp）が決めます。
 //
-// ⚠️ 隠し変数の宣言 3 つを body に並べておきます。alloca の収集
+// 注意: 隠し変数の宣言 3 つを body に並べておきます。alloca の収集
 //   （codegen の collect_allocas）が body をたどるので、これで箱が用意されます。
 static Node *list_comp(Parser *p, Token *open, Node *elem) {
     Token *ft = peek(p);
@@ -428,11 +428,11 @@ static Node *list_comp(Parser *p, Token *open, Node *elem) {
 
     // 対象。range(...) だけは「並び」ではなく数え上げなので、別に持ちます。
     //
-    // ⚠️ **for 文とまったく同じ規則**にします（言語仕様 5.5）。
+    // 注意: **for 文とまったく同じ規則**にします（言語仕様 5.5）。
     //   増分は整数リテラルだけです。符号が実行時に決まると、条件式が
     //   `(step>0 and i<end) or (step<0 and i>end)` になってしまうためです。
     //
-    // ⚠️ **対象は or_expr で読みます**（expr ではありません）。expr は三項演算子
+    // 注意: **対象は or_expr で読みます**（expr ではありません）。expr は三項演算子
     //   まで読むので、`[x for x in xs if c]` の `if` を三項演算子の if と
     //   取り違えて「else がありません」と言い出します（Python も同じ理由で、
     //   ここは or_test までしか読みません）。
@@ -483,7 +483,7 @@ static Node *list_comp(Parser *p, Token *open, Node *elem) {
     // if の条件（省略できます）
     if (tok_is_kw(peek(p), "if")) {
         advance(p);
-        n->els = or_expr(p);   // ⚠️ ここも三項演算子まで読ませない
+        n->els = or_expr(p);   // 注意: ここも三項演算子まで読ませない
     }
 
     if (tok_is_kw(peek(p), "for"))
@@ -521,7 +521,7 @@ static Node *postfix(Parser *p) {
         // 添字 xs[i]とスライス xs[a:b]
         //
         // ★ どちらも '[' で始まるので、区切りの ':' が出るまでは同じ形です。
-        //   ⚠️ 開始・終端はどちらも省略できます（xs[:3] / xs[2:] / xs[:]）。
+        //   注意: 開始・終端はどちらも省略できます（xs[:3] / xs[2:] / xs[:]）。
         if (consume(p, "[")) {
             Node *lo = NULL;
             if (!tok_is(peek(p), ":")) lo = expr(p);
@@ -541,7 +541,7 @@ static Node *postfix(Parser *p) {
             idx->rhs = lo;
 
             // ★ 2 次元の添字 m[i, j]。
-            //   ⚠️ 添字は **next でつないだ並び**にします（引数リストと同じ形）。
+            //   注意: 添字は **next でつないだ並び**にします（引数リストと同じ形）。
             //     list[T] と str は 1 つだけです（意味解析で弾きます）。
             Node *tail = lo;
             while (consume(p, ",")) {
@@ -631,7 +631,7 @@ static Node *postfix(Parser *p) {
 
 // power ::= postfix [ "**" unary ]
 //
-// ⚠️ '**' は実行時エラーにします（負の指数を実行時エラーにするため
+// 注意: '**' は実行時エラーにします（負の指数を実行時エラーにするため
 //    ランタイムが必要）。今は親切なメッセージを出すだけにします。
 //
 // ★ 検査をここに置く理由：
@@ -754,7 +754,7 @@ static int compare_op(Token *t) {
 
 // comparison ::= bitor_expr [ compop bitor_expr ]
 //
-// ⚠️ 連鎖しません（言語仕様 4.1）。while ではなく if で書くのがポイントです。
+// 注意: 連鎖しません（言語仕様 4.1）。while ではなく if で書くのがポイントです。
 static Node *comparison(Parser *p) {
     Node *lhs = bitor_expr(p);
 
@@ -849,7 +849,7 @@ static Node *or_expr(Parser *p) {
 // ★ 三項演算子。**いちばん優先度が低い**ので、or_expr の外側に
 //   1 段だけ積みます。
 //
-// ⚠️ else 側は expr（自分自身）を呼ぶので **右結合**になります。
+// 注意: else 側は expr（自分自身）を呼ぶので **右結合**になります。
 //     a if p else b if q else c  →  a if p else (b if q else c)
 //   Python と同じ結合です。左結合にすると読めない式になります。
 static Node *expr(Parser *p) {
@@ -965,7 +965,7 @@ static Node *retarget(Node *target, char *obj, char **idx, int nidx) {
 //                  aug.idx.1 = i               ← 添字も 1 回だけ
 //                  aug.obj.0[aug.idx.1] = aug.obj.0[aug.idx.1] + e
 //
-// ⚠️ 上に「のちに必要になる」と予告した書き換えです。実際にはクラスが入るまで
+// 注意: 上に「のちに必要になる」と予告した書き換えです。実際にはクラスが入るまで
 //    先送りされ、その間 xs[f()] += 1 は**コンパイラを落としていました**
 //    （左辺を変数だと決め打ちして name を読んでいたため）。
 static Node *aug_assign(Parser *p, Token *t, OpKind op, Node *target, Node *rhs) {
@@ -985,7 +985,7 @@ static Node *aug_assign(Parser *p, Token *t, OpKind op, Node *target, Node *rhs)
     cur = cur->next;
 
     // ★ 添字は 1 つとは限りません（m[i, j] += v）。全部を 1 回ずつ
-    //   隠し変数に入れます。⚠️ 並びから外すときに next を切ること
+    //   隠し変数に入れます。注意: 並びから外すときに next を切ること
     //   （切らないと、隠し変数の初期化式に隣の添字がぶら下がったままになります）。
     char *idx[8];
     int nidx = 0;
@@ -1037,7 +1037,7 @@ static Node *simple_stmt(Parser *p) {
     //     assert cond, msg   →   if not cond: panic(msg)
     //   新しいノードも意味解析の規則も要りません。elif や複合代入と同じ手です。
     //
-    // ⚠️ Python の -O のような「assert を消す」切り替えは**入れません**。
+    // 注意: Python の -O のような「assert を消す」切り替えは**入れません**。
     //   「本番では検査が消える」のは、事故のもとになるためです。
     if (tok_is_kw(t0, "assert")) {
         advance(p);
@@ -1060,7 +1060,7 @@ static Node *simple_stmt(Parser *p) {
         call->name = "panic";
         call->args = msg;
 
-        // ⚠️ if の本体は **ND_BLOCK** でなければなりません。ふつうに書いた
+        // 注意: if の本体は **ND_BLOCK** でなければなりません。ふつうに書いた
         //    if は必ずブロックを持つので、後段（sema / codegen）はそれを
         //    前提にしています。脱糖でも同じ形にします。
         Node *body = new_node(ND_BLOCK, t0);
@@ -1114,7 +1114,7 @@ static Node *simple_stmt(Parser *p) {
 
     // ★ 分解代入 q, r = divmod(17, 5)
     //
-    // ⚠️ **宣言も兼ねます**（型は右辺のタプルから決まります）。宣言と代入を
+    // 注意: **宣言も兼ねます**（型は右辺のタプルから決まります）。宣言と代入を
     //   分けている言語ですが、ここで型注釈を書かせると
     //     q: int, r: int = ...
     //   となって Python から離れすぎます。**右辺から決まるものは書かせない**、
@@ -1143,7 +1143,7 @@ static Node *simple_stmt(Parser *p) {
 
         // ★ 右辺もカンマで並べられます（`a, b = b, a`）。
         //
-        //   ⚠️ **こちらは「代入」です**（宣言は兼ねません）。
+        //   注意: **こちらは「代入」です**（宣言は兼ねません）。
         //     宣言も兼ねるのは `q, r = f()`（右辺がタプル 1 つ）のほうです。
         //     入れ替えに使うのが目的なので、**既にある変数**へ書きます。
         //
@@ -1182,7 +1182,7 @@ static Node *simple_stmt(Parser *p) {
             for (Node *v = vhead.next; v;) {
                 Node *nx = v->next;
                 v->next = NULL;
-                // ⚠️ 上限は selfhost/parser にも同じ数を書いてあります
+                // 注意: 上限は selfhost/parser にも同じ数を書いてあります
                 //   （2 実装で同じものを受け付けるため）。
                 if (k == 8)
                     error_at_hint(ut, "並べられるのは 8 個までです",
@@ -1249,7 +1249,7 @@ static Node *simple_stmt(Parser *p) {
     // ★ 複合代入は脱糖する（言語仕様 5.2）
     //     x += e  →  x = x + e
     //
-    // ⚠️ 左辺が「読み」と「書き」の 2 回現れます。変数なら 2 回評価しても
+    // 注意: 左辺が「読み」と「書き」の 2 回現れます。変数なら 2 回評価しても
     //    同じですが、xs[f()] += 1 や t.g().f += 1 では f() が 2 回呼ばれます。
     //    上に「のちに必要になる」と書いた書き換えを、ここで実装します。
     if (aug >= 0) return aug_assign(p, t, (OpKind)aug, lhs, rhs);
@@ -1288,7 +1288,7 @@ static Node *block(Parser *p) {
 
     Node head = {0};
     Node *cur = &head;
-    // ⚠️ TK_EOF も終了条件に入れる。字句解析器は末尾で DEDENT を必ず出すので
+    // 注意: TK_EOF も終了条件に入れる。字句解析器は末尾で DEDENT を必ず出すので
     //    理屈の上では到達しませんが、入れておかないと万一のとき無限ループになります。
     while (peek(p)->kind != TK_DEDENT && peek(p)->kind != TK_EOF) {
         cur->next = stmt(p);
@@ -1334,7 +1334,7 @@ static Node *if_stmt(Parser *p) {
 
 // 脱糖で作る隠し変数の名前。
 //
-// ⚠️ '.' を含むので、利用者が書ける識別子とは絶対に衝突しません。
+// 注意: '.' を含むので、利用者が書ける識別子とは絶対に衝突しません。
 //    ネストしても衝突しないよう連番を振ります（シャドーイング禁止のため、
 //    同名だと内側の for が「外側を隠しています」というエラーになる）。
 static char *hidden_name(Parser *p, const char *tag) {
@@ -1365,7 +1365,7 @@ static Node *hidden_decl(Token *tok, char *name, Node *init) {
 //                                 BODY
 //                               incr: for.ix.0 += 1  ← continue の飛び先
 //
-// ⚠️ 脱糖で作るノードにはソース上の位置がないので、
+// 注意: 脱糖で作るノードにはソース上の位置がないので、
 //    for のトークンを流用します（全ノードが tok を持つ約束）。
 // list をまわる for の脱糖（ enumerate と共用にしました）
 //
@@ -1442,7 +1442,7 @@ static Node *for_stmt(Parser *p) {
 
     // ★ for i, x in enumerate(xs)
     //
-    // ⚠️ タプルはありません。**この形だけ**を特別に認めます
+    // 注意: タプルはありません。**この形だけ**を特別に認めます
     //   （2 つ目の変数は「添字」に固定。一般の分解代入ではありません）。
     Token *idx_tok = NULL;
     if (tok_is(peek(p), ",")) {
@@ -1468,7 +1468,7 @@ static Node *for_stmt(Parser *p) {
                     tok_is(peek_at(p, 1), "(");
 
     // ★ enumerate(xs) も同じく特別扱いです。
-    //   ⚠️ **中身を剥がすだけ**：enumerate(xs) → xs として読み、
+    //   注意: **中身を剥がすだけ**：enumerate(xs) → xs として読み、
     //     隠しの添字変数を 2 つ目のループ変数に束縛します。
     if (peek(p)->kind == TK_IDENT && strcmp(peek(p)->text, "enumerate") == 0 &&
         tok_is(peek_at(p, 1), "(")) {
@@ -1521,7 +1521,7 @@ static Node *for_stmt(Parser *p) {
         }
 
         if (a3) {
-            // ⚠️ 増分は整数リテラルだけ（v1 の制限）。
+            // 注意: 増分は整数リテラルだけ（v1 の制限）。
             //    符号が実行時に決まると条件式が複雑になります
             //    （(step>0 and i<end) or (step<0 and i>end) を組み立てることになる）。
             //    符号がコンパイル時に分かれば '<' か '>' を選ぶだけで済みます。
@@ -1715,7 +1715,7 @@ static Node *stmt(Parser *p) {
     //         t: Thread[int] = ...
     //
     //     scope: rc[Scope] | None   ← 変数宣言（今までどおり）
-    // ⚠️ tok_is は記号（TK_PUNCT）専用なので、識別子の中身は text で比べます。
+    // 注意: tok_is は記号（TK_PUNCT）専用なので、識別子の中身は text で比べます。
     if (peek(p)->kind == TK_IDENT && strcmp(peek(p)->text, "scope") == 0 &&
         tok_is(peek_at(p, 1), ":") && peek_at(p, 2)->kind == TK_NEWLINE) {
         Token *kw = advance(p);
@@ -1753,7 +1753,7 @@ static Node *stmt(Parser *p) {
     // ── unsafe: ブロック ──
     //
     // ★ 中でだけ生ポインタを触れます（仕様 §10.1）。
-    //   ⚠️ unsafe は「借用検査を止める」ものではありません。止めるのは
+    //   注意: unsafe は「借用検査を止める」ものではありません。止めるのは
     //     「ポインタ操作の禁止」だけです。
     if (tok_is_kw(t, "unsafe")) {
         Token *kw = advance(p);
@@ -1782,7 +1782,7 @@ static Node *stmt(Parser *p) {
 
 // 型注釈に書ける名前を 1 つ読む。
 //
-// ⚠️ 'None' は予約語（TK_KEYWORD）なので、IDENT だけを受け付けると弾かれます。
+// 注意: 'None' は予約語（TK_KEYWORD）なので、IDENT だけを受け付けると弾かれます。
 //    型名として書ける予約語は今のところ None だけです。
 static Token *type_name_token(Parser *p, const char *what) {
     Token *t = peek(p);
@@ -1800,7 +1800,7 @@ static Token *type_name_token(Parser *p, const char *what) {
 // ★ モジュール修飾（lexer.Token）が書けるようになりました。
 static Node *type_ref(Parser *p, const char *what) {
     // ★ タプル型 (A, B)
-    //   ⚠️ **1 要素のタプルは書けません。** (int) は「括弧で囲んだ int」と
+    //   注意: **1 要素のタプルは書けません。** (int) は「括弧で囲んだ int」と
     //     区別できないためです。Python の (1,) のような記法は入れません。
     Token *tuo = peek(p);
     if (tok_is(tuo, "(")) {
@@ -1828,7 +1828,7 @@ static Node *type_ref(Parser *p, const char *what) {
 
     // ★ 関数型 fn(A, B) -> C
     //
-    // ⚠️ 'fn' は **予約語にしていません。** 型の位置でだけ、識別子 "fn" の
+    // 注意: 'fn' は **予約語にしていません。** 型の位置でだけ、識別子 "fn" の
     //    直後に '(' が来たときに関数型として読みます。予約語にすると
     //    既存のコードで fn という名前が使えなくなるためです
     //    （型を読む関数と式を読む関数が別なので、ここで迷いません）。
@@ -1895,7 +1895,7 @@ static Node *type_ref(Parser *p, const char *what) {
     Token *open = peek(p);
     if (consume(p, "[")) {
         // ★ 型引数は **複数**取れるようになりました（Dict[str, int]）。
-        //   ⚠️ 1 個目は今までどおり lhs にも入れます。list[T] / rc[T] / ptr[T]
+        //   注意: 1 個目は今までどおり lhs にも入れます。list[T] / rc[T] / ptr[T]
         //     を読む側のコードを変えずに済ませるためです。
         Node *ta_tail = NULL;
         for (;;) {
@@ -1930,7 +1930,7 @@ static Node *type_ref(Parser *p, const char *what) {
 
 // raises に書けるのは「エラー型の名前」だけ。
 //
-// ⚠️ type_ref は使えません。`raises A | B` の '|' を
+// 注意: type_ref は使えません。`raises A | B` の '|' を
 //    「T | None」の '|' と読んでしまうからです。
 //    **同じ記号でも、読む文脈が違えば別の文法**です（同じ判断です）。
 static Node *raises_type(Parser *p) {
@@ -1955,7 +1955,7 @@ static Node *raises_type(Parser *p) {
 // ★ 受け取り方（own / mut）を読みます。**意味づけはまだしません。**
 //   own / mut は「型の前」に置きます（言語仕様 v2 §11）。
 //
-//   🤔 なぜ名前の前ではなく型の前なのか
+//   なぜ名前の前ではなく型の前なのか
 //     名前の前だと `mut xs: list[int]` となり、Python の
 //     「名前: 型」という並びの途中に修飾が割り込みます。型の前に置けば
 //     「xs は『可変で借りた list[int]』である」と、型注釈の一部として読めます。
@@ -2033,7 +2033,7 @@ static Node *func_def_x(Parser *p, bool in_class, bool in_iface) {
     n->name = name_tok->text;
 
     // ★ 型引数 def first[T](xs: list[T]) -> T | None:
-    //   ⚠️ クラスと同じ形です（名前だけを並べる。制約は書けません）。
+    //   注意: クラスと同じ形です（名前だけを並べる。制約は書けません）。
     Token *topen = peek(p);
     if (tok_is(topen, "[")) {
         advance(p);
@@ -2072,7 +2072,7 @@ static Node *func_def_x(Parser *p, bool in_class, bool in_iface) {
     n->params = head.next;
 
     // メソッドの第 1 引数は self でなければならない（言語仕様 5.10）。
-    // ⚠️ ここで弾いておけば、sema は「メソッドの第 1 引数は self」と仮定できます。
+    // 注意: ここで弾いておけば、sema は「メソッドの第 1 引数は self」と仮定できます。
     if (in_class && (!n->params || strcmp(n->params->name, "self") != 0)) {
         Diag d = {0};
         d.message = diag_fmt("メソッド '%s' の第 1 引数は self でなければなりません",
@@ -2085,7 +2085,7 @@ static Node *func_def_x(Parser *p, bool in_class, bool in_iface) {
     }
 
     // 戻り型は必須（言語仕様 3.3）。
-    // 🤔 省略を許すと再帰関数で「戻り型を知るには本体が要り、
+    // 省略を許すと再帰関数で「戻り型を知るには本体が要り、
     //    本体を見るには戻り型が要る」という循環に陥ります。
     if (!consume(p, "->"))
         error_at_hint(peek(p),
@@ -2226,7 +2226,7 @@ static Node *class_def(Parser *p) {
     n->name = name_tok->text;
 
     // ★ 型引数 class Dict[K, V]:
-    //   ⚠️ 名前だけを並べます（制約は書けません。design/generics-and-interfaces.md）。
+    //   注意: 名前だけを並べます（制約は書けません。design/generics-and-interfaces.md）。
     Token *topen = peek(p);
     if (consume(p, "[")) {
         Node *tail = NULL;
@@ -2246,7 +2246,7 @@ static Node *class_def(Parser *p) {
     }
 
     // ★ 実装するインタフェース class Point(Show):
-    //   ⚠️ **継承ではありません。** 書けるのはインタフェース名だけで、
+    //   注意: **継承ではありません。** 書けるのはインタフェース名だけで、
     //     フィールドも実装も受け継ぎません（design/generics-and-interfaces.md §2）。
     Token *iopen = peek(p);
     if (consume(p, "(")) {
@@ -2302,7 +2302,7 @@ static Node *class_def(Parser *p) {
         }
 
         if (t->kind == TK_IDENT && tok_is(peek_at(p, 1), ":")) {
-            // ⚠️ フィールドはメソッドより先（文法がそう決めている）。
+            // 注意: フィールドはメソッドより先（文法がそう決めている）。
             //    レイアウトを確定してからメソッドを型検査したいためです。
             if (first_method) {
                 Diag d = {0};
@@ -2386,7 +2386,7 @@ static Node *extern_def(Parser *p) {
     n->params = head.next;
     n->type_ref = type_ref(p, "戻り型を書いてください（例: -> int）");
 
-    // ⚠️ 本体は読みません。':' を書いていたらここで気づけるようにします。
+    // 注意: 本体は読みません。':' を書いていたらここで気づけるようにします。
     if (tok_is(peek(p), ":"))
         error_at_hint(peek(p), "extern 宣言は本体を持ちません（改行で終わります）",
                       "extern def に ':' は書けません");
@@ -2439,7 +2439,7 @@ static Node *import_stmt(Parser *p) {
 
 // 範囲の端（整数のリテラル。先頭の '-' を許す）。
 //
-// ⚠️ **式ではありません。** 端は「コンパイル時に決まっている 2 つの数」で
+// 注意: **式ではありません。** 端は「コンパイル時に決まっている 2 つの数」で
 //   なければならないので、ここでは足し算も名前も受け取りません。
 static Node *int_literal(Parser *p, const char *what) {
     Token *t = peek(p);
@@ -2580,7 +2580,7 @@ static Node *program(Parser *p) {
 
         // 範囲型 ::= "type" IDENT "=" int range "(" INT "," INT ")" NEWLINE
         //
-        // ⚠️ **3 つ先まで見てから決めます。** 'type' は予約語ではないので、
+        // 注意: **3 つ先まで見てから決めます。** 'type' は予約語ではないので、
         //    `type: int = 0`（グローバル変数）と区別が要ります。
         if (t->kind == TK_IDENT && strcmp(t->text, "type") == 0 &&
             peek_at(p, 1)->kind == TK_IDENT && tok_is(peek_at(p, 2), "=")) {

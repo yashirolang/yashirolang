@@ -15,7 +15,7 @@ import token
 
 # 標準ライブラリの場所。
 #
-# ⚠️ C 版はビルド時に埋め込みます（-DPLC_LIB_DIR）が、本言語には
+# 注意: C 版はビルド時に埋め込みます（-DPLC_LIB_DIR）が、本言語には
 #   プリプロセッサがありません。**環境変数 PLC_LIB_DIR**で受け取り、
 #   無ければ "lib" を使います。C 版も同じ環境変数を先に見るようにしたので、
 #   両者は同じ規則で探します。
@@ -24,7 +24,7 @@ DEFAULT_LIB_DIR: str = "lib"
 # ── 追加の探索場所（-I <dir>） ─────────────────────────
 #
 # ★ C 版（src/module.c）の静的変数 g_search に対応します。
-# ⚠️ グローバル変数の初期化式は定数だけなので list[str] は持てません。
+# 注意: グローバル変数の初期化式は定数だけなので list[str] は持てません。
 #   改行で区切った 1 本の文字列に畳んで持ちます。
 SEARCH_PATHS: str = ""
 
@@ -136,7 +136,7 @@ def join_path(dir_: str, name: str) -> str:
 # ★ パッケージ（A-32）。名前のドットが、そのままディレクトリの区切り。
 #   対になる定義: src/module.c の name_to_relpath
 def name_to_relpath(name: str) -> str:
-    # ⚠️ replace は own で受け取るので、借りものは写してから渡します
+    # 注意: replace は own で受け取るので、借りものは写してから渡します
     return strings.replace(copy(name), ".", "/")
 
 

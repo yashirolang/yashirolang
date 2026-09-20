@@ -5,7 +5,7 @@
 #   リンクして実行します。通常のテスト（run_tests.sh）では観測できない
 #   **二重解放・解放後の使用**を、実行時に捕まえるための網です。
 #
-# ⚠️ **リーク検査（LeakSanitizer）は既定で切ります。**
+# 注意: **リーク検査（LeakSanitizer）は既定で切ります。**
 #    この検査で見たいのは「二重解放」と「解放後の使用」——**壊れる間違い**です。
 #    リークは宿題として残してあるもの（式の途中の一時値など）なので、
 #    ここで落とすと「壊れていないのに赤い」状態が続いてしまいます。
@@ -31,7 +31,7 @@ PLC_CC="${PLC_CC:-$ROOT/build/$LANG_CC}"
 TMP="$ROOT/tests/tmp"
 mkdir -p "$TMP"
 
-# ⚠️ Windows では ws2_32 を明示的にリンクします（tests/selfhost.sh と同じ理由）。
+# 注意: Windows では ws2_32 を明示的にリンクします（tests/selfhost.sh と同じ理由）。
 LINK_LIBS=""
 case "$(uname -s 2>/dev/null || echo unknown)" in
     MINGW*|MSYS*|CYGWIN*) LINK_LIBS="-lws2_32" ;;

@@ -6,7 +6,7 @@
 # OUTPUT: 10.0
 # EXIT: 0
 # linalg.Matrix の演算子
-#   ⚠️ '*' は**行列の積**です（numpy と違います。要素ごとの積は mmul）。
+#   注意: '*' は**行列の積**です（numpy と違います。要素ごとの積は mmul）。
 import linalg
 
 def main() -> int:

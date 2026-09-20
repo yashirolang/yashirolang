@@ -5,13 +5,13 @@
 #     lib/plc/runtime.a
 #     lib/plc/lib/*.<ext>
 #
-# ⚠️ 名前（言語名・コマンド名・拡張子）を**このファイルに書かないこと**。
+# 注意: 名前（言語名・コマンド名・拡張子）を**このファイルに書かないこと**。
 #    すべて `make -s print-LANG_*` で make に訊きます。改名しても
 #    この workflow を直さずに済ませるためです（docs/design/naming.md）。
 #   コンパイラは実行ファイルからの相対でこの 2 つを探すので、
 #   **展開した場所がどこでも動きます**（src/main.c の runtime_o を参照）。
 #
-# ⚠️ 使う側には clang が必要です（このコンパイラは LLVM IR を出して
+# 注意: 使う側には clang が必要です（このコンパイラは LLVM IR を出して
 #    clang にリンクを任せる作りなので）。README の「必要なもの」を参照。
 name: Release
 
@@ -64,7 +64,7 @@ jobs:
         shell: bash
         run: sudo apt-get update && sudo apt-get install -y clang llvm
 
-      # ⚠️ `update: true` は入れません（毎回 pacman -Syuu で数分かかり、
+      # 注意: `update: true` は入れません（毎回 pacman -Syuu で数分かかり、
       #   パッケージのキャッシュも毎回無効になります）。要るのは clang と
       #   lld と make だけです。詳しくは ci.yml の同じところ。
       - name: 道具を入れる（Windows / MSYS2）
@@ -143,7 +143,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      # ⚠️ checkout は download-artifact より**先**に置くこと。
+      # 注意: checkout は download-artifact より**先**に置くこと。
       #   actions/checkout は既定で作業ディレクトリを掃除する（clean: true）ので、
       #   後に置くと落としてきた dist/ ごと消えてしまいます。
       #
@@ -163,7 +163,7 @@ jobs:
       # ★ 本文は .github/release-body.md.in（ひな型）から流し込みます。
       #   CI の YAML に名前を書き写さないための仕組みです（docs/design/naming.md）。
       #
-      # ⚠️ 昔はこの中で echo を並べて組み立てていましたが、シェルによっては
+      # 注意: 昔はこの中で echo を並べて組み立てていましたが、シェルによっては
       #   echo が "\n" を**本物の改行に変えて**しまい、利用者に見せる
       #   printf の例が崩れました。ひな型をそのまま流し込むのが確実です。
       - name: Release の本文を組み立てる

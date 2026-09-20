@@ -10,7 +10,7 @@
 # OUTPUT: 1
 # EXIT: 0
 # str は UTF-8 の **バイト列**
-#   ⚠️ len / 添字 / スライス / find はすべて **バイト**単位です。
+#   注意: len / 添字 / スライス / find はすべて **バイト**単位です。
 #     `for c in s` も 9 回まわります（3 回ではありません）。
 #   ★ 文字として扱いたいときは strings.chars / char_count / width を使います。
 import strings

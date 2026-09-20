@@ -3,11 +3,11 @@
 # ★ **言語は変えていません。** 0.7.0 で入った演算子の多重定義
 #   （`__add__` など）だけで書けています。`z1 * z2 + z3` がそのまま書けます。
 #
-# ⚠️ **複素数はオブジェクトです**（`int` / `float` と違って「値」ではありません）。
+# 注意: **複素数はオブジェクトです**（`int` / `float` と違って「値」ではありません）。
 #   演算のたびに 1 つ確保します。内側ループで何万回も回すところでは、
 #   実部と虚部を `float` 2 本で持つほうが速くなります。
 #
-# ⚠️ **スカラー倍は `scale(z, k)`** です。`z * 2.0` とは書けません
+# 注意: **スカラー倍は `scale(z, k)`** です。`z * 2.0` とは書けません
 #   （多重定義は左辺の型だけで決まり、引数の型では選び分けないため）。
 
 import math
@@ -32,7 +32,7 @@ class Complex:
         return Complex(self.re * o.re - self.im * o.im,
                        self.re * o.im + self.im * o.re)
 
-    # ⚠️ 0 で割ると **panic します**（float の割り算と同じです）。
+    # 注意: 0 で割ると **panic します**（float の割り算と同じです）。
     #   絶対値が 0 かどうかは mag2(z) で先に確かめてください。
     def __truediv__(self, o: Complex) -> Complex:
         d: float = o.re * o.re + o.im * o.im
@@ -44,7 +44,7 @@ class Complex:
     def __neg__(self) -> Complex:
         return Complex(-self.re, -self.im)
 
-    # ⚠️ float の比較なので、誤差は考慮しません（近さを見るなら isclose）。
+    # 注意: float の比較なので、誤差は考慮しません（近さを見るなら isclose）。
     def __eq__(self, o: Complex) -> bool:
         return self.re == o.re and self.im == o.im
 
@@ -85,7 +85,7 @@ def copy_of(z: Complex) -> Complex:
 
 # ── 基本 ────────────────────────────────────────────────────
 
-# 大きさ |z|。⚠️ hypot なので、途中で桁があふれません。
+# 大きさ |z|。注意: hypot なので、途中で桁があふれません。
 def mag(z: Complex) -> float:
     return math.hypot(z.re, z.im)
 
@@ -101,7 +101,7 @@ def phase(z: Complex) -> float:
 def conj(z: Complex) -> Complex:
     return Complex(z.re, -z.im)
 
-# スカラー倍。⚠️ z * 2.0 とは書けないので、これを使ってください
+# スカラー倍。注意: z * 2.0 とは書けないので、これを使ってください
 def scale(z: Complex, k: float) -> Complex:
     return Complex(z.re * k, z.im * k)
 
@@ -137,7 +137,7 @@ def sqrt(z: Complex) -> Complex:
         b = -b
     return Complex(a, b)
 
-# z^w = exp(w · log z)。⚠️ 0^0 は 1 とします
+# z^w = exp(w · log z)。注意: 0^0 は 1 とします
 def pow(z: Complex, w: Complex) -> Complex:
     if z.re == 0.0 and z.im == 0.0:
         if w.re == 0.0 and w.im == 0.0:

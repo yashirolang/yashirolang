@@ -7,7 +7,7 @@ import io
 import strings
 
 def main() -> int:
-    # ⚠️ 絶対パス（/tmp）は Windows には無いので、作業ディレクトリに作ります
+    # 注意: 絶対パス（/tmp）は Windows には無いので、作業ディレクトリに作ります
     path: str = "lib_io_test.txt"
     io.write_file(path, "a,b,c")
     print(io.read_file(path) == "a,b,c")

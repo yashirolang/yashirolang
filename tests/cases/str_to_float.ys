@@ -20,7 +20,7 @@ import math
 import strings
 
 # 2^-1075 を厳密な十進で作ります（0.000…0 のあと 5^1075 の桁が並ぶ）。
-#   ⚠️ 5^1075 を多倍長で作るので、10 進の桁を list[int] で持ちます。
+#   注意: 5^1075 を多倍長で作るので、10 進の桁を list[int] で持ちます。
 def midpoint_2_1075() -> str:
     dig: list[int] = [1]        # dig[0] が下位
     p: int = 0

@@ -4,7 +4,7 @@
 #   関数名・優先順位の階層・判定の順序を C 版と揃えてあるので、
 #   S 式が食い違ったときに diff で追えます。
 #
-# ⚠️ 診断の描画（src/diag.c）はまだ移植していません。
+# 注意: 診断の描画（src/diag.c）はまだ移植していません。
 #   位置とメッセージだけを出して止まります（本物にします）。
 import strings
 import diag
@@ -18,7 +18,7 @@ class Parser:
     pos: int
     hidden: int   # 隠し変数の連番（for の脱糖で使う）
 
-    # ⚠️ トークンの並びは **所有ごと**受け取ります（own）。
+    # 注意: トークンの並びは **所有ごと**受け取ります（own）。
     #   借りたものをフィールドに置くと、貸してくれた相手より長生きします。
     def init(self, toks: own list[rc[token.Token]]) -> None:
         self.toks = toks
@@ -59,7 +59,7 @@ class Parser:
     def tok_of(self, n: rc[ast.Node]) -> rc[token.Token]:
         t: rc[token.Token] | None = n.tok
         if t is None:
-            # ⚠️ panic は戻りませんが、stage0 の到達可能性検査はそれを知りません
+            # 注意: panic は戻りませんが、stage0 の到達可能性検査はそれを知りません
             #   （C 版の _Noreturn にあたる印が無い）。else で書きます。
             panic("parser: node without token")
             return self.peek()
@@ -143,8 +143,8 @@ class Parser:
     #   f"a{x}b"  →  "a" + str(x) + "b"
     #
     # ★ 埋め込んだ式は **その場で字句解析し直して**構文解析します。
-    #   ⚠️ 中身は必ず str(...) で包みます（パーサの時点では型が分からない）。
-    # ⚠️ 波括弧そのものは {{ }} と重ねます（Python と同じ）。
+    #   注意: 中身は必ず str(...) で包みます（パーサの時点では型が分からない）。
+    # 注意: 波括弧そのものは {{ }} と重ねます（Python と同じ）。
     def fstring(mut self, t: rc[token.Token]) -> rc[ast.Node]:
         src: str = t.text
         result: rc[ast.Node] | None = None
@@ -204,11 +204,11 @@ class Parser:
                 self.fail_full(t, "f-string の '{}' が空です",
                                "ここに式が必要です", "")
 
-            # ⚠️ tokenize は行末に改行を要求するので足します
+            # 注意: tokenize は行末に改行を要求するので足します
             sub: Parser = Parser(lexer.tokenize(t.src.file, ex + "\n"))
             inner: rc[ast.Node] = sub.expr()
 
-            # ⚠️ **式を最後まで読み切ったかを確かめる。**
+            # 注意: **式を最後まで読み切ったかを確かめる。**
             #    これが無いと f"{x:>8}" のような書式指定が「x」だけ読まれて
             #    **黙って無視される**（エラーにするより悪い）。
             rest: rc[token.Token] = sub.peek()
@@ -248,7 +248,7 @@ class Parser:
 
             # ★ タプルのリテラル (a, b)
             #
-            #   ⚠️ **要素が 2 つ以上のときだけ**。`(x)` は「括弧で囲んだ x」で、
+            #   注意: **要素が 2 つ以上のときだけ**。`(x)` は「括弧で囲んだ x」で、
             #     1 要素のタプル（Python の `(1,)`）は入れていない
             #     （`(int)` と区別できないため。言語仕様 5.6）。
             #
@@ -309,7 +309,7 @@ class Parser:
                         cur = nx
 
                     # ★ 内包表記 [E for x in xs if C]
-                    #   ⚠️ **構文解析での脱糖にはできない。** for やカンマ代入と
+                    #   注意: **構文解析での脱糖にはできない。** for やカンマ代入と
                     #     違って、内包表記は**式の位置**に現れる。文に持ち上げると、
                     #     三項演算子や and / or の右側に書かれたときに
                     #     「評価されないはずのもの」を評価してしまう。
@@ -352,7 +352,7 @@ class Parser:
     #   [ E for x in xs if C ]       → els = C
     #
     # ★ ここでは**形を作るだけ**。型は意味解析（check_listcomp）が決める。
-    # ⚠️ 隠し宣言 3 つを body に並べておく。alloca の収集が body をたどる。
+    # 注意: 隠し宣言 3 つを body に並べておく。alloca の収集が body をたどる。
     def list_comp(mut self, open_tok: rc[token.Token],
                   elem: mut rc[ast.Node]) -> rc[ast.Node]:
         ft: rc[token.Token] = self.peek()
@@ -376,10 +376,10 @@ class Parser:
 
         # 対象。range(...) だけは「並び」ではなく数え上げなので、別に持つ。
         #
-        # ⚠️ **for 文とまったく同じ規則**にする（言語仕様 5.5）。増分は整数
+        # 注意: **for 文とまったく同じ規則**にする（言語仕様 5.5）。増分は整数
         #   リテラルだけ。符号が実行時に決まると条件式が複雑になるため。
         #
-        # ⚠️ **対象は or_expr で読む**（expr ではない）。expr は三項演算子まで
+        # 注意: **対象は or_expr で読む**（expr ではない）。expr は三項演算子まで
         #   読むので、`[x for x in xs if c]` の if を三項演算子の if と
         #   取り違えて「else がありません」と言い出す。
         it: rc[ast.Node] = self.or_expr()
@@ -435,7 +435,7 @@ class Parser:
         # if の条件（省略できる）
         if self.peek().is_kw("if"):
             self.advance()
-            n.els = self.or_expr()   # ⚠️ ここも三項演算子まで読ませない
+            n.els = self.or_expr()   # 注意: ここも三項演算子まで読ませない
 
         if self.peek().is_kw("for"):
             self.fail_hint(self.peek(),
@@ -485,7 +485,7 @@ class Parser:
                 idx.rhs = lo
 
                 # ★ 2 次元の添字 m[i, j]。
-                #   ⚠️ 添字は **next でつないだ並び**にする（引数リストと同じ形）。
+                #   注意: 添字は **next でつないだ並び**にする（引数リストと同じ形）。
                 #     list[T] と str は 1 つだけ（意味解析で弾く）。
                 if lo is not None:
                     tail: rc[ast.Node] = lo
@@ -665,7 +665,7 @@ class Parser:
         return -1
 
     # comparison ::= bitor_expr [ compop bitor_expr ]
-    # ⚠️ 連鎖しません（while ではなく if）
+    # 注意: 連鎖しません（while ではなく if）
     def comparison(mut self) -> rc[ast.Node]:
         lhs: rc[ast.Node] = self.bitor_expr()
 
@@ -738,7 +738,7 @@ class Parser:
     # expr ::= or_expr [ "if" or_expr "else" expr ]
     #
     # ★ いちばん優先度が低いので or_expr の外側に 1 段だけ積みます。
-    # ⚠️ else 側は expr（自分自身）なので **右結合**（Python と同じ）
+    # 注意: else 側は expr（自分自身）なので **右結合**（Python と同じ）
     def expr(mut self) -> rc[ast.Node]:
         lhs: rc[ast.Node] = self.or_expr()
         t: rc[token.Token] = self.peek()
@@ -762,12 +762,12 @@ class Parser:
     # var_decl ::= IDENT ":" type "=" expr
     # 範囲の端（整数のリテラル。先頭の '-' を許す）
     #
-    # ⚠️ **式ではない。** 端は「コンパイル時に決まっている 2 つの数」で
+    # 注意: **式ではない。** 端は「コンパイル時に決まっている 2 つの数」で
     #   なければならないので、足し算も名前も受け取らない。
     #   対になる定義: src/parser.c の int_literal
     # `requires` / `ensures` の次に来たら「契約ではない」と決める記号
     #
-    # ⚠️ C 版 src/parser.c の stmt と**同じ並び**にすること。
+    # 注意: C 版 src/parser.c の stmt と**同じ並び**にすること。
     def contract_stop(self, t: rc[token.Token]) -> bool:
         if t.kind == token.TK_NEWLINE:
             return True
@@ -878,7 +878,7 @@ class Parser:
         return -1
 
     # 脱糖で作る隠し変数の名前。
-    # ⚠️ 連番の振り方まで C 版と揃えること（S 式に名前が出るため）
+    # 注意: 連番の振り方まで C 版と揃えること（S 式に名前が出るため）
     def hidden_name(mut self, tag: str) -> str:
         name: str = tag + "." + str(self.hidden)
         self.hidden = self.hidden + 1
@@ -931,9 +931,9 @@ class Parser:
         cur = decl
 
         # ★ 添字は 1 つとは限らない（m[i, j] += v）。全部を 1 回ずつ
-        #   隠し変数に入れる。⚠️ 並びから外すときに next を切ること
+        #   隠し変数に入れる。注意: 並びから外すときに next を切ること
         #   （切らないと、隠し変数の初期化式に隣の添字がぶら下がったままになる）。
-        # ⚠️ 上限（8）は C 版（src/parser.c）と同じにします。
+        # 注意: 上限（8）は C 版（src/parser.c）と同じにします。
         idx: list[str] = []
         if target.kind == ast.ND_INDEX:
             ix: rc[ast.Node] | None = target.rhs
@@ -979,7 +979,7 @@ class Parser:
         #
         # ★ **パーサで脱糖する**：assert cond, msg → if not cond: panic(msg)
         #   新しいノードも意味解析の規則も要らない（elif と同じ手）。
-        # ⚠️ if の本体は必ず ND_BLOCK にすること（後段がそれを前提にしている）
+        # 注意: if の本体は必ず ND_BLOCK にすること（後段がそれを前提にしている）
         if t0.is_kw("assert"):
             self.advance()
             cond: rc[ast.Node] = self.expr()
@@ -1039,7 +1039,7 @@ class Parser:
 
         # ★ 分解代入 q, r = divmod(17, 5)
         #
-        # ⚠️ **宣言も兼ねる**（型は右辺のタプルから決まる）。宣言と代入を
+        # 注意: **宣言も兼ねる**（型は右辺のタプルから決まる）。宣言と代入を
         #   分けている言語だが、ここで型注釈を書かせると
         #     q: int, r: int = ...
         #   となって Python から離れすぎる。**右辺から決まるものは書かせない**、
@@ -1072,7 +1072,7 @@ class Parser:
 
             # ★ 右辺もカンマで並べられる（`a, b = b, a`）。
             #
-            #   ⚠️ **こちらは「代入」**（宣言は兼ねない）。宣言も兼ねるのは
+            #   注意: **こちらは「代入」**（宣言は兼ねない）。宣言も兼ねるのは
             #     `q, r = f()`（右辺がタプル 1 つ）のほう。
             #
             #   a, b = b, a   →   swap.0 = b       ← 右辺を先に全部読む
@@ -1097,9 +1097,9 @@ class Parser:
                                    str(len(vals)) + " 個です",
                                    "受け取る名前と値の数が違います")
 
-                # ⚠️ C 版（src/parser.c）は隠し変数の名前を 8 個の配列で持つので、
+                # 注意: C 版（src/parser.c）は隠し変数の名前を 8 個の配列で持つので、
                 #   **同じ上限**にします（2 実装で同じものを受け付けるため）。
-                #   ⚠️ 個数の食い違いより**後**に見ること（C 版と順序を揃える）。
+                #   注意: 個数の食い違いより**後**に見ること（C 版と順序を揃える）。
                 if len(vals) > 8:
                     self.fail_hint(ut, "並べられるのは 8 個までです",
                                    "値が多すぎます")
@@ -1138,7 +1138,7 @@ class Parser:
         aug: int = self.aug_op(t)
         if not t.is_punct("=") and aug < 0:
             # 式文になれるのは呼び出しだけ
-            # ⚠️ 位置は「左辺のトークン」（C 版と揃える）
+            # 注意: 位置は「左辺のトークン」（C 版と揃える）
             if lhs.kind != ast.ND_CALL and lhs.kind != ast.ND_METHOD:
                 self.fail_full(self.tok_of(lhs), "この式は文として書けません",
                                "計算した値がどこにも使われていません",
@@ -1174,7 +1174,7 @@ class Parser:
 
         head: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, head_tok)
         cur: rc[ast.Node] = head
-        # ⚠️ TK_EOF も終了条件に入れる（万一のときの無限ループ避け）
+        # 注意: TK_EOF も終了条件に入れる（万一のときの無限ループ避け）
         while (self.peek().kind != token.TK_DEDENT and
                self.peek().kind != token.TK_EOF):
             st: rc[ast.Node] = self.stmt()
@@ -1283,7 +1283,7 @@ class Parser:
 
         # ★ for i, x in enumerate(xs)
         #
-        # ⚠️ タプルはありません。**この形だけ**を特別に認めます
+        # 注意: タプルはありません。**この形だけ**を特別に認めます
         #   （2 つ目の変数は「添字」に固定。一般の分解代入ではない）。
         idx_tok: rc[token.Token] | None = None
         if self.peek().is_punct(","):
@@ -1353,7 +1353,7 @@ class Parser:
                 stop = a2
 
             if a3 is not None:
-                # ⚠️ 増分は整数リテラルだけ（v1 の制限）
+                # 注意: 増分は整数リテラルだけ（v1 の制限）
                 sign: int = 1
                 lit: rc[ast.Node] = a3
                 if lit.kind == ast.ND_UNARY and lit.op == ast.OP_NEG:
@@ -1536,7 +1536,7 @@ class Parser:
     # type_ref ::= [ IDENT "." ] IDENT [ "[" type_ref "]" ] [ "|" None ]
     def type_ref(mut self, what: str) -> rc[ast.Node]:
         # ★ タプル型 (A, B)
-        #   ⚠️ **1 要素のタプルは書けない。** (int) は「括弧で囲んだ int」と
+        #   注意: **1 要素のタプルは書けない。** (int) は「括弧で囲んだ int」と
         #     区別できないため。Python の (1,) のような記法は入れない。
         tuo: rc[token.Token] = self.peek()
         if tuo.is_punct("("):
@@ -1570,7 +1570,7 @@ class Parser:
 
         # ★ 関数型 fn(A, B) -> C
         #
-        # ⚠️ 'fn' は **予約語にしていません。** 型の位置でだけ、識別子 "fn" の
+        # 注意: 'fn' は **予約語にしていません。** 型の位置でだけ、識別子 "fn" の
         #    直後に '(' が来たときに関数型として読みます（既存のコードで
         #    fn という名前が使えなくなるのを避けるため）。
         ft: rc[token.Token] = self.peek()
@@ -1627,7 +1627,7 @@ class Parser:
         open_tok: rc[token.Token] = self.peek()
         if self.consume("[") is not None:
             # ★ 型引数は **複数**取れる（Dict[str, int]）。
-            #   ⚠️ 1 個目は今までどおり lhs にも入れる（list[T] を読む側を変えない）
+            #   注意: 1 個目は今までどおり lhs にも入れる（list[T] を読む側を変えない）
             ta_tail: rc[ast.Node] | None = None
             while True:
                 a: rc[ast.Node] = self.type_ref("型引数を書いてください（例: list[int]）")
@@ -1747,7 +1747,7 @@ class Parser:
         n.name = copy(name_tok.text)
 
         # ★ 型引数 def first[T](xs: list[T]) -> T:
-        #   ⚠️ クラスと同じ形（名前だけを並べる。制約は書けない）
+        #   注意: クラスと同じ形（名前だけを並べる。制約は書けない）
         ftopen: rc[token.Token] = self.peek()
         if ftopen.is_punct("["):
             self.advance()
@@ -1789,7 +1789,7 @@ class Parser:
             if p0 is None:
                 self.fail_full(name_tok, msg, "ここに self が必要です", hint)
             elif p0.name != "self":
-                # ⚠️ 位置は「第 1 引数」（C 版と揃える）
+                # 注意: 位置は「第 1 引数」（C 版と揃える）
                 self.fail_full(self.tok_of(p0), msg, "ここに self が必要です", hint)
 
         # 戻り型は必須（言語仕様 3.3）
@@ -1878,7 +1878,7 @@ class Parser:
 
     # raises に書けるのは「エラー型の名前」だけ。
     #
-    # ⚠️ type_ref は使えません。`raises A | B` の '|' を
+    # 注意: type_ref は使えません。`raises A | B` の '|' を
     #    「T | None」の '|' と読んでしまうからです。
     def raises_type(mut self) -> rc[ast.Node]:
         t: rc[token.Token] = self.type_name_token(
@@ -1964,7 +1964,7 @@ class Parser:
         n.name = copy(name_tok.text)
 
         # ★ 型引数 class Dict[K, V]:
-        #   ⚠️ 名前だけを並べる（制約は書けない）
+        #   注意: 名前だけを並べる（制約は書けない）
         topen: rc[token.Token] = self.peek()
         if self.consume("[") is not None:
             ttail: rc[ast.Node] | None = None
@@ -1987,7 +1987,7 @@ class Parser:
             self.expect_close("]", topen)
 
         # ★ 実装するインタフェース class Point(Show):
-        #   ⚠️ **継承ではない。** 書けるのはインタフェース名だけで、
+        #   注意: **継承ではない。** 書けるのはインタフェース名だけで、
         #     フィールドも実装も受け継がない。
         iopen: rc[token.Token] = self.peek()
         if self.consume("(") is not None:
@@ -2044,7 +2044,7 @@ class Parser:
                 continue
 
             if t.kind == token.TK_IDENT and self.peek_at(1).is_punct(":"):
-                # ⚠️ フィールドはメソッドより先（文法がそう決めている）
+                # 注意: フィールドはメソッドより先（文法がそう決めている）
                 if first_method is not None:
                     diag.error_full(t, "フィールドはメソッドより前に書いてください",
                                     "このフィールド宣言がメソッドより後ろにあります",
@@ -2105,7 +2105,7 @@ class Parser:
         n.params = params
         n.type_ref = self.type_ref("戻り型を書いてください（例: -> int）")
 
-        # ⚠️ 本体は読まない
+        # 注意: 本体は読まない
         if self.peek().is_punct(":"):
             self.fail_hint(self.peek(),
                            "extern 宣言は本体を持ちません（改行で終わります）",
@@ -2198,7 +2198,7 @@ class Parser:
 
             # 範囲型 ::= "type" IDENT "=" int range "(" INT "," INT ")" NEWLINE
             #
-            # ⚠️ **3 つ先まで見てから決める。** 'type' は予約語ではないので、
+            # 注意: **3 つ先まで見てから決める。** 'type' は予約語ではないので、
             #    `type: int = 0`（グローバル変数）と区別が要る。
             if (t.kind == token.TK_IDENT and t.text == "type" and
                     self.peek_at(1).kind == token.TK_IDENT and
@@ -2239,7 +2239,7 @@ def unwrap_node(n: rc[ast.Node] | None) -> rc[ast.Node]:
         return n
 
 
-# ⚠️ Parser がフィールドに持つので、所有ごと受け取ります
+# 注意: Parser がフィールドに持つので、所有ごと受け取ります
 def parse(toks: own list[rc[token.Token]]) -> rc[ast.Node]:
     p: Parser = Parser(toks)
     return p.program()

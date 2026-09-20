@@ -2,7 +2,7 @@
 # EXIT: 0
 # math が libm と一致するか（基準値は clang の libm から生成）
 #   ★ 相対誤差 1e-13 以内。sin/cos は |x|<=50、exp は ±200、log は 1e-9〜1e9 まで
-#   ⚠️ libm は呼びません。lib/math はすべて本言語で書かれています
+#   注意: libm は呼びません。lib/math はすべて本言語で書かれています
 import math
 
 def check(name: str, got: float, want: float) -> None:

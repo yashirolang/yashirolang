@@ -4,10 +4,10 @@
 //   ① core.c が求める 4 つのフックを libc で実装する
 //   ② ファイル入出力など、**OS があるからこそ使える機能**を提供する
 //
-// ⚠️ ベアメタルではこのファイルをリンクしません。
+// 注意: ベアメタルではこのファイルをリンクしません。
 //    代わりにカーネルが同じ 4 つのフックを実装します。
 
-// ⚠️ **どの #include よりも前に書くこと。**
+// 注意: **どの #include よりも前に書くこと。**
 //
 //   glibc は `-std=c11`（＝ `__STRICT_ANSI__` が立つ）のとき、POSIX の
 //   拡張を宣言しません。`popen` / `pclose` がまさにそれで、
@@ -19,7 +19,7 @@
 //   `_DEFAULT_SOURCE` は glibc に「POSIX 2008 + BSD の拡張を見せる」と
 //   伝える印で、macOS と MSYS2 では単に無視されます。
 //
-//   ⚠️ 同じ理由で `sys/wait.h` も明示的に include しています（下）。
+//   注意: 同じ理由で `sys/wait.h` も明示的に include しています（下）。
 //     ランタイムに POSIX の関数を足すときは、ここを思い出してください。
 #ifndef _DEFAULT_SOURCE
 #define _DEFAULT_SOURCE 1
@@ -33,7 +33,7 @@
 #include <sys/stat.h>
 #include <time.h>
 
-// ⚠️ WIFEXITED / WEXITSTATUS は POSIX の <sys/wait.h> にあります。
+// 注意: WIFEXITED / WEXITSTATUS は POSIX の <sys/wait.h> にあります。
 //    macOS では <stdlib.h> が連れてきますが、Linux では明示しないと通りません
 //    （CI の Linux ジョブが最初に見つけた移植性の穴です）。
 //    Windows にはこのヘッダが無いので、system() の戻り値をそのまま使います。
@@ -42,12 +42,12 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #else
-// ⚠️ Windows の標準出力は既定で「テキストモード」で、\n を \r\n に書き換えます。
+// 注意: Windows の標準出力は既定で「テキストモード」で、\n を \r\n に書き換えます。
 //    それでは **書いたバイトと出るバイトが違う**ことになり、
 //    「どの OS でも同じ結果」という約束が崩れます（CI の Windows ジョブが
 //    出力の不一致で見つけました）。binary モードに切り替えて、
 //    print が書いた通りのバイトを出します。
-// ⚠️ **winsock2.h は windows.h より前に include すること。**
+// 注意: **winsock2.h は windows.h より前に include すること。**
 //   windows.h は古い winsock.h を連れてくるので、あとから winsock2.h を
 //   読むと「再定義」の山になります（Windows で最初に踏む穴です）。
 //   WIN32_LEAN_AND_MEAN を立てて winsock.h を外し、winsock2.h を先に読みます。
@@ -61,7 +61,7 @@
 #include <fcntl.h>
 #include <io.h>
 #include <windows.h>
-// ⚠️ MSVC には S_ISDIR がありません（MinGW にはあります）。
+// 注意: MSVC には S_ISDIR がありません（MinGW にはあります）。
 #ifndef S_ISDIR
 #define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
 #endif
@@ -137,7 +137,7 @@ char *pl_read_file(const char *path) {
     char *buf = pl_str_alloc((long long)size);
     size_t got = fread(buf, 1, (size_t)size, fp);
     buf[got] = '\0';
-    // ⚠️ テキストモードの差などで読めたバイト数が減ることがあるので、
+    // 注意: テキストモードの差などで読めたバイト数が減ることがあるので、
     //    実際に読めた長さで書き直します（長さは 8 バイト手前）。
     ((long long *)buf)[-1] = (long long)got;
     fclose(fp);
@@ -146,7 +146,7 @@ char *pl_read_file(const char *path) {
 
 // ── 標準入力 ────────────────────────────────────────────
 //
-// ⚠️ **core.c ではなく、ここ（hosted.c）に置きます。**
+// 注意: **core.c ではなく、ここ（hosted.c）に置きます。**
 //    ベアメタルには標準入力がありません。core.c に置くと、カーネル側に
 //    「使わないのに実装しなければならないフック」を強いることになります
 //    （docs/design/os-support.md の 4 フックを増やさない、という判断）。
@@ -164,7 +164,7 @@ char *pl_read_line(void) {
         free(buf);
         return NULL;
     }
-    // ⚠️ 改行の直前の '\r' を落とします。Windows で作ったファイルを
+    // 注意: 改行の直前の '\r' を落とします。Windows で作ったファイルを
     //    読んだときに、末尾に見えない文字が残らないようにするためです。
     while (c != EOF && c != '\n') {
         if (n + 1 >= cap) {
@@ -188,7 +188,7 @@ char *pl_read_line(void) {
 // input(prompt) — プロンプトを出して 1 行読む
 //
 // ★ Python の input() に合わせます。
-//   ⚠️ **EOF では panic します。** Python も EOFError を投げます。
+//   注意: **EOF では panic します。** Python も EOFError を投げます。
 //     「読めなかった」を静かに空文字列にすると、ループが止まらなくなります。
 //     読めないかもしれない場面では io.read_line()（None が返る）を使ってください。
 char *pl_input(const char *prompt) {
@@ -238,7 +238,7 @@ void pl_write_file(const char *path, const char *text) {
     fclose(fp);
 }
 
-// ⚠️ bool ではなく int を返します。extern の境界を bool は越えられません
+// 注意: bool ではなく int を返します。extern の境界を bool は越えられません
 //    （14.2 節。C の _Bool と i1 の ABI が環境依存のため）。
 long long pl_file_exists(const char *path) {
     FILE *fp = fopen(path, "rb");
@@ -253,7 +253,7 @@ void pl_set_args(long long argc, char **argv) {
     g_argv = argv;
 }
 
-// ⚠️ system() が返すのは「終了コード」ではなく wait(2) の状態値です。
+// 注意: system() が返すのは「終了コード」ではなく wait(2) の状態値です。
 //    そのまま返すと exit 3 が 768（3 << 8）に見えて驚くので、
 //    ここで終了コードに直します。境界の食い違いはランタイムで吸収します。
 // ファイルを削除する（失敗しても何もしない）。
@@ -290,7 +290,7 @@ long long pl_system(const char *cmd) {
 //   argv の文字列はプロセスの寿命のあいだ有効なので、複製せずそのまま指します。
 PlList *pl_argv(void) {
     PlList *l = pl_list_new();
-    // ⚠️ argv の文字列は C のものなので長さヘッダがありません。
+    // 注意: argv の文字列は C のものなので長さヘッダがありません。
     //    本言語の str として渡すには作り直す必要があります。
     for (long long i = 0; i < g_argc; i++)
         pl_list_push_ptr(l, pl_str_from_cstr(g_argv[i]));
@@ -302,12 +302,12 @@ PlList *pl_argv(void) {
 // ★ lib/time がこの 2 つだけを使います。単位は**ナノ秒**です。
 //   秒やミリ秒への換算は本言語側でやります（境界は int だけで済ませる）。
 //
-// ⚠️ **ベアメタルにはありません。** 時計は OS（か割り込み）の持ち物なので、
+// 注意: **ベアメタルにはありません。** 時計は OS（か割り込み）の持ち物なので、
 //    core.c ではなくここに置いています。kernel/ からは import time できません。
 
 // 単調時計。**起点に意味はありません**（差だけを使ってください）。
 //
-// ⚠️ 実時刻を使わないのは、NTP の補正で**時間が戻ることがある**ためです。
+// 注意: 実時刻を使わないのは、NTP の補正で**時間が戻ることがある**ためです。
 //    速さを測っている最中に戻ると、負の経過時間が出ます。
 long long pl_time_ns(void) {
 #if defined(CLOCK_MONOTONIC)
@@ -318,9 +318,9 @@ long long pl_time_ns(void) {
             return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
     }
 #endif
-    // ⚠️ 単調時計が無い環境への逃げ道。実時刻なので**戻ることがあります**。
+    // 注意: 単調時計が無い環境への逃げ道。実時刻なので**戻ることがあります**。
     //
-    // ⚠️ **timespec_get は「C11 だからどこでもある」ではありません。**
+    // 注意: **timespec_get は「C11 だからどこでもある」ではありません。**
     //    MSYS2（mingw-w64）の clang は -std=c11 でも持っていません
     //    （CI の Windows ジョブが「undeclared function」で見つけました）。
     //    TIME_UTC が定義されているかで判断します。
@@ -337,7 +337,7 @@ long long pl_time_ns(void) {
 
 // 実時刻（1970-01-01 00:00:00 UTC からのナノ秒）。
 //
-// ⚠️ こちらは**飛びます**（NTP・夏時間・利用者が時計を直す）。
+// 注意: こちらは**飛びます**（NTP・夏時間・利用者が時計を直す）。
 //    経過時間を測るのには使わないでください。
 long long pl_time_wall_ns(void) {
 #if defined(TIME_UTC)
@@ -369,7 +369,7 @@ long long pl_time_wall_ns(void) {
 //   ですが、codegen が **シグネチャごとに中継関数（thunk）** を 1 つ出して、
 //   その thunk をここに渡します。
 //
-//   ⚠️ 「全部 i64 に読み替えて直接呼ぶ」ではいけません。float は整数と
+//   注意: 「全部 i64 に読み替えて直接呼ぶ」ではいけません。float は整数と
 //      **別のレジスタ**で渡され、None を返す関数には戻り値レジスタが
 //      ありません。型どおりに呼ぶのは thunk の仕事、待ち合わせるのが
 //      このファイルの仕事、と分けてあります。
@@ -406,7 +406,7 @@ static void *pl_thread_trampoline(void *p) {
     return NULL;
 }
 
-// ⚠️ args は**この呼び出しのあいだだけ**有効で構いません。ここで写しを
+// 注意: args は**この呼び出しのあいだだけ**有効で構いません。ここで写しを
 //    取ってからスレッドを作るので、呼ぶ側は alloca に置けます。
 void *pl_thread_spawn(pl_thread_body thunk, long long fn, const long long *args,
                       long long nargs) {
@@ -441,7 +441,7 @@ long long pl_thread_join(void *h) {
         t->joined = 1;
     }
     long long r = t->ret;
-    // ⚠️ 枠に記録されているものは、ここでは解放しません（枠の出口で
+    // 注意: 枠に記録されているものは、ここでは解放しません（枠の出口で
     //    もう一度たどるため）。記録されていないものは今までどおり。
     if (!t->scoped) {
         pl_hook_free(t->args);
@@ -566,7 +566,7 @@ long long pl_mutex_with(void *h, pl_thread_body thunk, long long fn) {
 //   モジュールごとの clang を並べるには、「起こす」と「待つ」を分ける必要が
 //   あります（C 版 src/main.c の run_jobs と対になる道具）。
 //
-// ⚠️ **スレッドから system() を呼ぶ形にしてはいけません。** macOS の system()
+// 注意: **スレッドから system() を呼ぶ形にしてはいけません。** macOS の system()
 //    はシグナル処理を守るためにグローバルなロックを取るので、何本のスレッドから
 //    呼んでも 1 本ずつしか走りません（C 版で実測して気づきました）。
 #ifndef _WIN32
@@ -589,7 +589,7 @@ long long pl_proc_wait(long long pid) {
     return WIFEXITED(status) ? (long long)WEXITSTATUS(status) : 1;
 }
 #else
-// ⚠️ Windows では**使えません**（-1 を返します）。呼ぶ側は sys.run に落ちます。
+// 注意: Windows では**使えません**（-1 を返します）。呼ぶ側は sys.run に落ちます。
 //    cmd.exe には & による並行実行が無く、並べるなら Win32 の API を
 //    別に書くことになります。「効かないだけで、壊れない」ほうを選びました。
 long long pl_proc_spawn(const char *cmd) {
@@ -606,16 +606,16 @@ long long pl_proc_wait(long long pid) {
 
 // ── scope（スレッドの生存範囲） ─────────────────────────
 //
-// 🤔 なぜ「枠」が要るのか
+// なぜ「枠」が要るのか
 //   scope: ブロックの出口で、**そこで始めたスレッドを全部** join する必要が
 //   あります。変数に入っているものだけ見ればよい、とは言えません
 //   （list[Thread[R]] に貯めることがあるため）。だから spawn した時点で
 //   枠に記録し、出口でその枠をたどります。
 //
-// ⚠️ 枠はスレッドごとに別々です（_Thread_local）。scope: の中で spawn した
+// 注意: 枠はスレッドごとに別々です（_Thread_local）。scope: の中で spawn した
 //    スレッドが、さらにその中で scope: を開くことがあるためです。
 //
-// ⚠️ **この保証が「借りをスレッドに渡してよい」の根拠です。** 出口までに
+// 注意: **この保証が「借りをスレッドに渡してよい」の根拠です。** 出口までに
 //    必ず join されるので、「借りは呼び出しより長生きしない」という
 //    借用検査の不変条件が**成り立ったまま**になります。
 typedef struct PlScope PlScope;
@@ -676,7 +676,7 @@ void pl_scope_end(void) {
 }
 
 // 使える CPU コアの数（並列度を決めるのに使います）。
-// ⚠️ 0 を返してはいけません（利用者が割り算に使うため）。
+// 注意: 0 を返してはいけません（利用者が割り算に使うため）。
 long long pl_cpu_count(void) {
 #ifdef _WIN32
     SYSTEM_INFO si;
@@ -695,7 +695,7 @@ long long pl_cpu_count(void) {
 //   一覧するのも `sys.run("mkdir -p …")` に頼るしかないことが分かったので、
 //   境界をランタイムに引き直します（シェルを介さない＝引用の心配が無い）。
 //
-// ⚠️ 返り値の約束（本言語側で bool に直します）:
+// 注意: 返り値の約束（本言語側で bool に直します）:
 //     0  … できた
 //     1  … 既にある（mkdir だけ）
 //    -1  … 失敗した
@@ -741,9 +741,9 @@ long long pl_file_size(const char *path) {
 
 // ディレクトリの中身を list[str] で返す（"." と ".." は除く）。
 //
-// ⚠️ **並びは OS 任せです。** 名前順が要るなら呼び出し側で整列してください
+// 注意: **並びは OS 任せです。** 名前順が要るなら呼び出し側で整列してください
 //    （そうしないと、同じプログラムが環境によって違う順で動きます）。
-// ⚠️ 開けなかったときは**空のリスト**を返します。空のディレクトリと
+// 注意: 開けなかったときは**空のリスト**を返します。空のディレクトリと
 //    区別したいときは先に pl_is_dir で確かめてください。
 PlList *pl_listdir(const char *path) {
     PlList *l = pl_list_new();
@@ -788,12 +788,12 @@ PlList *pl_listdir(const char *path) {
 // ★ これが無いと、外部コマンドの出力を読むのに**一時ファイルを経由**する
 //   しかありません（パッケージマネージャの shell.capture が実際そうでした）。
 //
-// ⚠️ 受け取るのは標準出力だけです。標準エラーも欲しいときは
+// 注意: 受け取るのは標準出力だけです。標準エラーも欲しいときは
 //   コマンド側に "2>&1" を書いてください（混ぜるかどうかは呼ぶ側の判断）。
-// ⚠️ 終了コードは pl_capture_status() で受け取ります。戻り値を 2 つ返せない
+// 注意: 終了コードは pl_capture_status() で受け取ります。戻り値を 2 つ返せない
 //   ためで、**スレッドごとに別の値**を持ちます（同時に走らせても混ざりません）。
 //
-// ⚠️ **Windows では popen を使いません。**
+// 注意: **Windows では popen を使いません。**
 //   `_popen` は `cmd.exe` を起動しますが、`system()`（＝ sys.run）は
 //   MSYS2 では `sh` を使います。同じ文字列が run と capture で**別の
 //   シェルに解釈される**のは危険なので（`echo a; echo b` が 1 行になって
@@ -849,7 +849,7 @@ char *pl_capture(const char *cmd) {
     if (GetTempPathA((DWORD)sizeof(dir), dir) == 0) return pl_str_from_cstr("");
     if (GetTempFileNameA(dir, "plc", 0, path) == 0) return pl_str_from_cstr("");
 
-    // ⚠️ 一時ファイルの名前は GetTempFileNameA が作るので空白は入りませんが、
+    // 注意: 一時ファイルの名前は GetTempFileNameA が作るので空白は入りませんが、
     //    念のため引用符で囲みます（sh と cmd のどちらでも通る形）。
     size_t n = strlen(cmd) + strlen(path) + 8;
     char *full = (char *)pl_hook_alloc((long long)n);
@@ -913,12 +913,12 @@ char *pl_capture(const char *cmd) {
 //   A-23 で足した set_timeout / timed_out）。多重化（select / epoll）は
 //   まだありません。要るようになってから足します。
 //
-// ⚠️ **失敗は戻り値で返します。panic しません。**
+// 注意: **失敗は戻り値で返します。panic しません。**
 //   「相手が切った」「ポートが使われている」は**ふつうに起きること**で、
 //   プログラムが続けられなければ困ります。直前の失敗の理由は
 //   pl_sock_error() が文字列で返します（errno を持ち回らせないため）。
 //
-// ⚠️ **fd は int です。** Windows の SOCKET は符号なし 64 ビットですが、
+// 注意: **fd は int です。** Windows の SOCKET は符号なし 64 ビットですが、
 //   実際に返る値は小さく、INVALID_SOCKET だけが特別です。ここで
 //   -1 に正規化して、言語側からは「負なら失敗」だけを見れば済むようにします。
 
@@ -942,7 +942,7 @@ typedef socklen_t pl_socklen;
 // 直前の失敗の理由（言語側は pl_sock_error() で取り出す）
 static char g_sock_err[256] = {0};
 
-// ⚠️ **待ち時間切れは、他の失敗と分けられなければ役に立ちません**（A-23）。
+// 注意: **待ち時間切れは、他の失敗と分けられなければ役に立ちません**（A-23）。
 //   「まだ来ないだけ」と「壊れた」を同じ NetError にしてしまうと、
 //   呼び出し側が「もう一度待つ」のか「あきらめて閉じる」のかを選べません。
 //   直前の失敗がそれだったかを覚えておき、pl_sock_timed_out() で渡します。
@@ -950,7 +950,7 @@ static int g_sock_timeout = 0;
 
 // この失敗は「待ち時間を過ぎた」か。
 //
-// ⚠️ 待ち時間付きの recv が空振りしたときに返るのは ETIMEDOUT とは
+// 注意: 待ち時間付きの recv が空振りしたときに返るのは ETIMEDOUT とは
 //   限りません。**POSIX は EAGAIN / EWOULDBLOCK を返します**（Linux では
 //   この 2 つは同じ値なので、|| で並べても 1 つぶんです）。
 static int pl_sock_is_timeout(int code) {
@@ -989,7 +989,7 @@ long long pl_sock_timed_out(void) { return g_sock_timeout ? 1 : 0; }
 //   送ってこない相手が 1 つあるだけで、accept の輪がそこで止まります
 //   （http.serve は 1 本ずつ順に捌くので、他の客も全員待たされます）。
 //
-// ⚠️ **繋ぎに行く（connect）の待ち時間はこれでは決まりません。**
+// 注意: **繋ぎに行く（connect）の待ち時間はこれでは決まりません。**
 //   SO_RCVTIMEO / SO_SNDTIMEO は繋がったあとの読み書きにだけ効きます。
 //   connect を区切るには非同期の接続と select が要るので、まだありません。
 long long pl_sock_set_timeout(long long fd, long long ms) {
@@ -1020,7 +1020,7 @@ long long pl_sock_set_timeout(long long fd, long long ms) {
     return 0;
 }
 
-// ⚠️ **Windows は使う前に WSAStartup が要ります。**
+// 注意: **Windows は使う前に WSAStartup が要ります。**
 //   利用者に「最初に init を呼んでください」とは言いたくないので、
 //   ソケットを作る入口で 1 回だけ済ませます。POSIX では何もしません。
 static int pl_sock_start(void) {
@@ -1034,7 +1034,7 @@ static int pl_sock_start(void) {
         return 0;
     }
 #else
-    // ⚠️ **書き込み側が閉じた相手へ送ると SIGPIPE で落ちます。**
+    // 注意: **書き込み側が閉じた相手へ送ると SIGPIPE で落ちます。**
     //   サーバーでは「相手が先に切る」のがふつうなので、無視して
     //   send の戻り値（EPIPE）として扱えるようにします。
     signal(SIGPIPE, SIG_IGN);
@@ -1049,7 +1049,7 @@ static int pl_sock_start(void) {
 //   どちらで繋がるかは相手と機械の設定しだいなので、ここでは選ばず、
 //   **呼び出し側が返ってきた順に試します**。
 //
-//   ⚠️ v4 だけにしていた頃は、`localhost` が `::1` に解決される機械で
+//   注意: v4 だけにしていた頃は、`localhost` が `::1` に解決される機械で
 //     繋がりませんでした。名前が複数の住所を持つのがふつうで、
 //     「1 つめが駄目なら次」を**呼び出し側が書かなければならない**のが
 //     getaddrinfo の作法です。
@@ -1098,14 +1098,14 @@ long long pl_sock_listen(const char *host, long long port, long long backlog) {
             continue;
         }
 
-        // ⚠️ **SO_REUSEADDR を既定で立てます。** これが無いと、落としたばかりの
+        // 注意: **SO_REUSEADDR を既定で立てます。** これが無いと、落としたばかりの
         //   サーバーを立て直すときに「アドレスが使用中です」で数十秒待たされます
         //   （TIME_WAIT）。サーバーを書く人がまず引っかかるところです。
         int one = 1;
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof(one));
 
 #ifdef IPV6_V6ONLY
-        // ⚠️ **v6 の待ち受け口は、既定では v4 の客を受けない機械があります**
+        // 注意: **v6 の待ち受け口は、既定では v4 の客を受けない機械があります**
         //   （Windows と多くの BSD。Linux は設定しだい）。0 を入れて
         //   **1 本で両方**受けられるようにします。断られたら（OpenBSD は
         //   これを許しません）v6 だけの待ち受け口として続けます。
@@ -1140,7 +1140,7 @@ long long pl_sock_listen(const char *host, long long port, long long backlog) {
 
 // 実際に割り当てられたポート番号（listen(…, 0) のあとで使う）。
 //
-// ⚠️ **sockaddr_storage で受けます。** sockaddr_in（v4 ぶん）では IPv6 の
+// 注意: **sockaddr_storage で受けます。** sockaddr_in（v4 ぶん）では IPv6 の
 //   住所が入りきらず、切り詰められた中身からポートを読むことになります
 //   （A-23 で v6 を受け付けるようになったので、v4 決め打ちは危険です）。
 long long pl_sock_port(long long fd) {
@@ -1208,14 +1208,14 @@ long long pl_sock_connect(const char *host, long long port) {
 // 書けるだけ書く。**全部書けるまで繰り返します**（部分送信は上に見せない）。
 // 書いたバイト数を返す。失敗すれば -1。
 //
-// ⚠️ **待ち時間を決めてあると、途中まで書けた状態で失敗しえます**（A-23）。
+// 注意: **待ち時間を決めてあると、途中まで書けた状態で失敗しえます**（A-23）。
 //   どこまで届いたかは分からないので、**送り出しが時間切れになった接続は
 //   閉じてください**。続きを書いても相手には壊れた列が届きます。
 long long pl_sock_send(long long fd, const char *s) {
     long long n = pl_str_len(s);
     long long sent = 0;
     while (sent < n) {
-        // ⚠️ MSG_NOSIGNAL が無い環境（macOS / Windows）があるので 0 を渡し、
+        // 注意: MSG_NOSIGNAL が無い環境（macOS / Windows）があるので 0 を渡し、
         //   代わりに SIGPIPE を無視します（下の pl_sock_init_once）。
         long long k = (long long)send((int)fd, s + sent, (size_t)(n - sent), 0);
         if (k <= 0) {
@@ -1230,7 +1230,7 @@ long long pl_sock_send(long long fd, const char *s) {
 
 // 最大 max バイト読む。
 //
-// ⚠️ **戻り値の意味を 3 つに分けます。**
+// 注意: **戻り値の意味を 3 つに分けます。**
 //     文字列（長さ > 0） … 読めた
 //     ""                  … 相手が閉じた（EOF）
 //     None                … 失敗（理由は pl_sock_error）

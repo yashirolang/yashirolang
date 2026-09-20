@@ -5,7 +5,7 @@
 # EXIT: 1
 # float の 0 除算は panic します
 #
-#   ⚠️ **ここが 0.13.0 で変わったところです。** 1.0 / 0.0 は inf でした。
+#   注意: **ここが 0.13.0 で変わったところです。** 1.0 / 0.0 は inf でした。
 #     整数の 1 // 0 は panic するのに float だけ通る、という穴でした
 #     （Python はどちらも ZeroDivisionError です）。
 #
@@ -20,7 +20,7 @@ def main() -> int:
     print(str(a / math.inf()))     # inf で割る → 0.0（止めない）
     print(str(math.inf()))         # inf 自体は掛け算で作るので無事
 
-    # ⚠️ -0.0 でも止まります（fcmp oeq なので -0.0 == 0.0）
+    # 注意: -0.0 でも止まります（fcmp oeq なので -0.0 == 0.0）
     z: float = -0.0
     print(str(a / z))              # panic
     return 0

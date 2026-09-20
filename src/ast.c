@@ -429,7 +429,7 @@ void dump_ast(Node *node) { dump(node, 0); }
 //   置き換え自体は sema が「型引数の束縛」で行うので、ここでは**複製だけ**を
 //   担当します。木を作り直すので、実体ごとに別の ir_name / type を持てます。
 //
-// ⚠️ **sema が埋める欄（type / ir_name / cls / builtin）は写しません。**
+// 注意: **sema が埋める欄（type / ir_name / cls / builtin）は写しません。**
 //   写すと「テンプレートを検査したときの結果」が実体に混入します。
 //   複製した木は、まっさらな状態から検査し直します。
 Node *ast_clone(Node *n) {

@@ -14,7 +14,7 @@
 #include "util.h"
 
 // ビルド時に Makefile が -DPLC_LIB_DIR=... で渡してきます。
-// ⚠️ stage0 だけの割り切り（ビルドツリー内で完結すればよい）。いずれ見直します。
+// 注意: stage0 だけの割り切り（ビルドツリー内で完結すればよい）。いずれ見直します。
 #ifndef PLC_LIB_DIR
 #define PLC_LIB_DIR "lib"
 #endif
@@ -69,7 +69,7 @@ static char *dir_of(const char *path) {
 
 // "a/b/lexer" → "lexer"
 //
-// ⚠️ 入口のファイル名は識別子とは限りません（future-fizzbuzz など）。
+// 注意: 入口のファイル名は識別子とは限りません（future-fizzbuzz など）。
 //    モジュール名は IR の名前修飾に使うので、識別子として使えない文字を
 //    '_' に置き換えます。import される側は "import 名前" と書ける以上
 //    必ず識別子なので、この置き換えが効くのは入口ファイルだけです。
@@ -103,7 +103,7 @@ static bool file_exists(const char *path) {
 // モジュール名をファイルの相対パスにする（"pkg.mod" → "pkg/mod"）。
 //
 // ★ パッケージ（A-32）。名前のドットが、そのままディレクトリの区切りです。
-//   ⚠️ `..` のような名前は字句解析が作れません（識別子とドットの並びだけ）。
+//   注意: `..` のような名前は字句解析が作れません（識別子とドットの並びだけ）。
 static char *name_to_relpath(const char *name) {
     char *out = xstrndup(name, strlen(name));
     for (char *p = out; *p; p++)
@@ -114,7 +114,7 @@ static char *name_to_relpath(const char *name) {
 static char *join_path(const char *dir, const char *name) {
     StrBuf sb;
     sb_init(&sb);
-    // ⚠️ 入口が "main" のときディレクトリは "." になります。
+    // 注意: 入口が "main" のときディレクトリは "." になります。
     //    "./lexer" と表示されると診断が読みにくいので、そこだけ省きます。
     if (strcmp(dir, ".") == 0) sb_printf(&sb, "%s" PLC_LANG_EXT, name);
     else sb_printf(&sb, "%s/%s" PLC_LANG_EXT, dir, name);

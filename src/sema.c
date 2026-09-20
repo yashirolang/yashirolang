@@ -13,7 +13,7 @@
 //
 // 「名前 → 型」の対応表です。
 //
-// 🤔 なぜハッシュテーブルではなく線形リストなのか
+// なぜハッシュテーブルではなく線形リストなのか
 //   1 つのスコープに宣言される変数は普通 10 個程度です。
 //   線形探索で十分速く、コードは 5 行で済みます。
 //   「まず動かす、測ってから直す」が原則（docs/spec/type-system.md 7.2）。
@@ -113,7 +113,7 @@ struct ModuleSyms {
 // エラー型の ID。
 //
 // ★ 0 は「エラー無し」に予約し、1 から連番を振ります。
-//   ⚠️ 割り当て規則は仕様として固定してあります（error-handling.md §4）：
+//   注意: 割り当て規則は仕様として固定してあります（error-handling.md §4）：
 //     「モジュールを依存順に、モジュール内は出現順に」。
 //     stage0 と stage1 で番号が食い違うと IR が一致しなくなるためです。
 typedef struct ErrTag ErrTag;
@@ -144,7 +144,7 @@ typedef struct {
     // ★ 空リスト [] だけは、それ自身から要素型が決まりません。
     //   本格的なやり方は双方向型検査（期待型を引数で渡す）ですが、
     //   v1 で期待型を必要とする式は [] だけなので、状態を 1 つ持たせて済ませます。
-    // ⚠️ 期待型が要る式が増えたら、この手は破綻します。そのときは引数で渡す形に直します。
+    // 注意: 期待型が要る式が増えたら、この手は破綻します。そのときは引数で渡す形に直します。
     Type *expected;
 
     // ── エラー処理 ──
@@ -174,7 +174,7 @@ typedef struct {
     struct Instance *pending;
 
     // ★ いま検査しているのが「どこで要求された実体か」。
-    //   ⚠️ テンプレートの中で出たエラーは、**ライブラリの中の行**を
+    //   注意: テンプレートの中で出たエラーは、**ライブラリの中の行**を
     //     指してしまいます。使う側のどの行が発端かを添えます。
     Token *inst_site;
     const char *inst_name;
@@ -267,7 +267,7 @@ static void enter_module(Sema *s, ModuleSyms *ms) {
 }
 
 // import しているモジュールを名前で引く。
-// ⚠️ import していないモジュールは、たとえ読み込まれていても見えません。
+// 注意: import していないモジュールは、たとえ読み込まれていても見えません。
 static ModuleSyms *lookup_import(Sema *s, const char *name) {
     Module *m = s->cur->mod;
     for (int i = 0; i < m->ndeps; i++)
@@ -405,11 +405,11 @@ static VarEntry *lookup(Sema *s, const char *name) {
 //   衝突したら連番を足します。これは名前修飾（mangling）の入口で、
 //   メソッドとモジュールで本格的に必要になります。
 //
-// 🤔 なぜ sema がやるのか
+// なぜ sema がやるのか
 //   parser はスコープを知らず、codegen は宣言と参照を結びつける情報を
 //   持っていません。シンボルテーブルを持つ sema だけが両方できます。
 static bool name_used(Sema *s, const char *name) {
-    // ⚠️ "entry" は予約する。
+    // 注意: "entry" は予約する。
     //
     //   LLVM ではラベルとローカル値が同じ名前空間にいます。関数の先頭は
     //   慣習的に `entry:` なので、利用者が `entry` という変数を書くと
@@ -520,7 +520,7 @@ static Type *resolve_base_type(Sema *s, Node *tr);
 // ★ 定数なら**コンパイル時に**断ります。実行時まで待つ理由がありません。
 //   それ以外は ND_RANGECHK で包み、codegen が比較 2 つを出します。
 //
-// ⚠️ 仮引数は**ここでは包みません**。呼び出し側は 5 通りもあるので、
+// 注意: 仮引数は**ここでは包みません**。呼び出し側は 5 通りもあるので、
 //   関数の入口で 1 回だけ確かめます（codegen の gen_func）。そのほうが
 //   関数ポインタ越しの呼び出しや spawn も同じ 1 か所で守れます。
 static Node *range_coerce(Sema *s, Node *val, Type *want) {
@@ -598,7 +598,7 @@ static Type *lookup_tbind(Sema *s, const char *name) {
 
 // 実体の名前を作る（Dict$str$int）。
 //
-// ⚠️ 型名をそのまま使うと '[' や ',' が混ざって IR の名前に使えません。
+// 注意: 型名をそのまま使うと '[' や ',' が混ざって IR の名前に使えません。
 //   英数字と '.' 以外を '_' に潰します。
 static char *mangle_inst(const char *base, Type **args, int n) {
     StrBuf sb;
@@ -643,9 +643,9 @@ static Type *instantiate_class(Sema *s, Class *tmpl, Type **args, int nargs,
 
     // ★ テンプレートが定義されているモジュールに実体を作ります。
     //   メソッドの本体はそのモジュールの名前しか参照しないためです。
-    //   ⚠️ 型引数（Symbol など）は **Type として**渡すので、名前解決は要りません。
+    //   注意: 型引数（Symbol など）は **Type として**渡すので、名前解決は要りません。
     //
-    // ⚠️ モジュールの出入りは **enter_module に任せます**。
+    // 注意: モジュールの出入りは **enter_module に任せます**。
     //   自前で s->funcs / s->classes を退避すると、enter_module が行う
     //   「今のモジュールへの書き戻し」と二重になり、表が失われます
     //   （実際にそれで main が見つからなくなりました）。
@@ -750,7 +750,7 @@ static bool unify_tparam(const char *name, Node *decl_tr, Type *actual,
     //   これが無いと、集合演算のような「自分で作った容器を受け取る関数」が
     //   1 つも書けません（def union[T](a: Set[T], b: Set[T])）。
     //
-    // ⚠️ 突き合わせるのは**名前だけ**です（モジュールは見ません）。
+    // 注意: 突き合わせるのは**名前だけ**です（モジュールは見ません）。
     //   同じ名前のジェネリッククラスを 2 つのモジュールから 1 つの
     //   シグネチャに混ぜたときだけ取り違えますが、そのときは
     //   型検査が後で弾きます（決まった型で本体を検査するため）。
@@ -908,7 +908,7 @@ static Type *resolve_base_type(Sema *s, Node *tr) {
     }
 
     // ★ 型引数の名前（class Dict[K, V] の K）。
-    //   ⚠️ **クラス名より先に**引きます。テンプレートを読む間だけ有効です。
+    //   注意: **クラス名より先に**引きます。テンプレートを読む間だけ有効です。
     Type *tv = lookup_tbind(s, tr->name);
     if (tv) {
         if (tr->lhs)
@@ -1068,7 +1068,7 @@ static bool op_supports(OpKind op, Type *t) {
         return op == OP_EQ || op == OP_NE;
 
     // ★ list は連結（+）と繰り返し（*）ができます。
-    //   ⚠️ どちらも **新しい list を作ります**（元は変わりません）。
+    //   注意: どちらも **新しい list を作ります**（元は変わりません）。
     if (t->kind == TY_LIST)
         return op == OP_EQ || op == OP_NE || op == OP_ADD || op == OP_MUL;
 
@@ -1087,7 +1087,7 @@ static bool op_supports(OpKind op, Type *t) {
     }
     // ★ float は int のちょうど裏返しです。
     //   '/' が使えて、'//' '%' とビット演算が使えません。
-    //   ⚠️ 切り捨てが要るなら int に変換してから（暗黙変換はしない）。
+    //   注意: 切り捨てが要るなら int に変換してから（暗黙変換はしない）。
     if (t->kind == TY_FLOAT) {
         switch (op) {
             case OP_ADD: case OP_SUB: case OP_MUL: case OP_TRUEDIV:
@@ -1138,13 +1138,13 @@ static Type *check_in(Sema *s, Node *n);        // in / not in
 //   codegen と IR は 1 行も変えていません（ふつうのメソッド呼び出しに
 //   なるためです）。
 //
-// 🤔 なぜ Python と同じ `__add__` という名前か
+// なぜ Python と同じ `__add__` という名前か
 //   ふつうのメソッドと**必ず区別できる**名前が要ります。`add` にすると
 //   `linalg.Matrix.add` のような既存のメソッドが、書いた覚えのないところで
 //   演算子として呼ばれてしまいます。`__…__` は Python の利用者にそのまま
 //   通じる、いちばん驚きの少ない選び方です。
 //
-// ⚠️ **反転（`__radd__`）はありません。** `2.0 * m` は書けません
+// 注意: **反転（`__radd__`）はありません。** `2.0 * m` は書けません
 //   （`m * 2.0` と書いてください）。左辺の型だけで決まるほうが、
 //   どのメソッドが呼ばれるか読んで分かります。
 static const char *op_method_name(OpKind op) {
@@ -1191,7 +1191,7 @@ static Type *check_binop(Sema *s, Node *n) {
     Type *l = check_expr(s, n->lhs);
 
     // ★ 左辺がクラスなら、演算子は多重定義を探します。
-    //   ⚠️ 右辺はここでは検査しません。**メソッドの引数として**
+    //   注意: 右辺はここでは検査しません。**メソッドの引数として**
     //     check_class_method が検査します（2 回検査しないため）。
     if (l->kind == TY_CLASS && l->cls) {
         const char *mn = op_method_name(n->op);
@@ -1225,7 +1225,7 @@ static Type *check_binop(Sema *s, Node *n) {
 
     // ★ 繰り返し（"ab" * 3 / [0] * 3）だけは **両辺の型が違います**。
     //   左が str か list、右が int という組み合わせだけを認めます。
-    //   ⚠️ 3 * "ab"（左右が逆）は認めません。「何を何回」の順を固定して、
+    //   注意: 3 * "ab"（左右が逆）は認めません。「何を何回」の順を固定して、
     //     読むときに迷わないようにします。
     if (n->op == OP_MUL && (l->kind == TY_STR || l->kind == TY_LIST) &&
         r->kind == TY_INT)
@@ -1300,7 +1300,7 @@ static void narrow_restore(NarrowSet *ns);
 // and / or は両辺が bool のみ（言語仕様 4.4）。
 // Python と違い int を真偽値として扱いません（truthiness を採用しない）。
 //
-// 🤔 なぜ「最後に評価した値」を返さないのか
+// なぜ「最後に評価した値」を返さないのか
 //   1 and "hello" のような式の型が一意に決まらなくなるからです。
 //   bool に固定すれば and / or の型は常に bool です。
 static Type *check_logical(Sema *s, Node *n) {
@@ -1312,7 +1312,7 @@ static Type *check_logical(Sema *s, Node *n) {
     //     a is not None and a.v == 0   ← and の rhs は lhs が真のときだけ見る
     //     a is None     or  a.v == 0   ← or  の rhs は lhs が偽のときだけ見る
     //
-    // ⚠️ 抜けたら必ず戻します（15.5 節と同じ「入る前に変えて、抜けたら戻す」）。
+    // 注意: 抜けたら必ず戻します（15.5 節と同じ「入る前に変えて、抜けたら戻す」）。
     NarrowSet sc = {0};
     narrow_apply(s, n->lhs, n->op == OP_AND, &sc);
     Type *r = check_expr(s, n->rhs);
@@ -1370,7 +1370,7 @@ static Type *check_tuple(Sema *s, Node *n) {
 
 // xs[a:b] / s[a:b]
 //
-// ⚠️ **新しい値を作ります**（借用ではありません）。借用のスライスは
+// 注意: **新しい値を作ります**（借用ではありません）。借用のスライスは
 //   「元より長生きしないこと」の検査が要るためで、仕様 §6 の方針に従い
 //   まず複製する形だけを入れました。
 static Type *check_slice(Sema *s, Node *n) {
@@ -1402,22 +1402,22 @@ static Type *check_slice(Sema *s, Node *n) {
 // ★ 右辺の型で意味が変わります。
 //     list[T] … 要素に等しいものがあるか（== と同じ比べ方）
 //     str     … 部分文字列として含まれるか
-//   ⚠️ dict には使えません（d.has(k) を使ってください）。鍵と値のどちらを
+//   注意: dict には使えません（d.has(k) を使ってください）。鍵と値のどちらを
 //     見るのかが記号から読み取れないためです。
 static Type *check_in(Sema *s, Node *n) {
     Type *l = check_expr(s, n->lhs);
     Type *r = check_expr(s, n->rhs);
 
     // ★ `k in d` は `d.__contains__(k)` に読み替えます。
-    //   ⚠️ ここだけは **右辺の型**で決まります（入れ物のほうが決めます）。
+    //   注意: ここだけは **右辺の型**で決まります（入れ物のほうが決めます）。
     //     Python の `__contains__` と同じで、`in` は「入れ物に聞く」演算子です。
-    //   ⚠️ `not in` は結果を反転させます（ND_UNARY の not で包みます）。
+    //   注意: `not in` は結果を反転させます（ND_UNARY の not で包みます）。
     if (r->kind == TY_CLASS && r->cls && class_has_method(r->cls, "__contains__")) {
         Node *obj = n->rhs;   // 入れ物
         Node *arg = n->lhs;   // 探すもの
         arg->next = NULL;
 
-        // ⚠️ ノードの中身を丸ごと写すと、式の並び（実引数の next）が
+        // 注意: ノードの中身を丸ごと写すと、式の並び（実引数の next）が
         //   壊れます。**その場で作り替えます。**
         if (n->op == OP_IN) {
             n->kind = ND_METHOD;
@@ -1487,7 +1487,7 @@ static Type *check_in(Sema *s, Node *n) {
 }
 
 // 三項演算子 a if c else b
-// ⚠️ 名前は check_ternary。check_cond は「文の条件式」用に既にあります。
+// 注意: 名前は check_ternary。check_cond は「文の条件式」用に既にあります。
 static Type *check_ternary(Sema *s, Node *n) {
     Type *c = check_expr(s, n->lhs);
     if (c->kind != TY_BOOL)
@@ -1563,7 +1563,7 @@ static Type *check_var(Sema *s, Node *n) {
 
     // ★ 契約（A-29）：ensures の式の中の 'result' は**戻り値そのもの**です。
     //
-    // ⚠️ 局所変数のほうが先です。`result` という名前の変数を持っている
+    // 注意: 局所変数のほうが先です。`result` という名前の変数を持っている
     //   コードを壊さないためです（この処理系自身がそうしています）。
     if (!v && s->ensures_depth > 0 && strcmp(n->name, "result") == 0) {
         Type *ret = s->cur_func ? s->cur_func->ret : NULL;
@@ -1583,7 +1583,7 @@ static Type *check_var(Sema *s, Node *n) {
 
     // ★ 変数に無ければ **関数を探します**。関数の名前を
     //   そのまま値として書けるようにするためです（f を渡す）。
-    //   ⚠️ 変数が先です。同名の局所変数があればそちらが勝ちます。
+    //   注意: 変数が先です。同名の局所変数があればそちらが勝ちます。
     if (!v) {
         FuncSig *f = lookup_func(s, n->name);
         if (f) {
@@ -1678,7 +1678,7 @@ static void check_vardecl(Sema *s, Node *n) {
     //
     // ★ type_ref が NULL なら「コンパイラが作った宣言」（for の脱糖）。
     //   初期化式の型をそのまま使います。
-    // ⚠️ 利用者が書く宣言では parser が必ず type_ref を作るので、
+    // 注意: 利用者が書く宣言では parser が必ず type_ref を作るので、
     //    「型注釈は必須」（言語仕様 3.3）は破られません。
     //    言語仕様 5.5 も「ループ変数は型注釈不要（要素型から決まる）」としています。
     Type *declared = NULL;
@@ -1765,7 +1765,7 @@ static void check_assign(Sema *s, Node *n) {
     if (target->kind == ND_INDEX) {
         // ★ クラスへの代入は __setitem__ に読み替えます。
         //   m[i, j] = v  →  m.__setitem__(i, j, v)
-        //   ⚠️ 読み替えるのは**代入文そのもの**です（値まで実引数にするため）。
+        //   注意: 読み替えるのは**代入文そのもの**です（値まで実引数にするため）。
         Type *ot = check_expr(s, target->lhs);
         if (ot->kind == TY_CLASS && ot->cls) {
             if (!class_has_method(ot->cls, "__setitem__"))
@@ -1781,7 +1781,7 @@ static void check_assign(Sema *s, Node *n) {
             n->rhs->next = NULL;
             last->next = n->rhs;      // 最後の実引数は「代入する値」
 
-            // ⚠️ **代入文のノードそのもの**を呼び出しにします。
+            // 注意: **代入文のノードそのもの**を呼び出しにします。
             //   （文の並び next を壊さないよう、入れ替えではなく上書きです。）
             n->kind = ND_METHOD;
             n->tok = target->tok;
@@ -1796,14 +1796,14 @@ static void check_assign(Sema *s, Node *n) {
         Type *et = check_index_expr(s, target);
         target->type = et;
 
-        // ⚠️ タプルの要素には代入できません
+        // 注意: タプルの要素には代入できません
         if (ot->kind == TY_TUPLE)
             error_at_hint(target->tok,
                           "タプルは作ったら変わりません（新しいタプルを作って"
                           "ください）",
                           "タプルの要素には代入できません");
 
-        // ⚠️ str は不変（immutable）なので s[0] = "x" は書けません（言語仕様 3.1）
+        // 注意: str は不変（immutable）なので s[0] = "x" は書けません（言語仕様 3.1）
         if (target->lhs->type->kind == TY_STR)
             error_at_hint(target->tok,
                           "str は不変（immutable）です。新しい文字列を作ってください",
@@ -1918,7 +1918,7 @@ static void check_cond(Sema *s, const char *where, Node *stmt_node, Node *cond) 
 // 実装は「入る前に変えて、抜けたら戻す」だけです。スコープと同じ形で、
 // C の呼び出しスタックがそのまま絞り込みのスタックになります。
 //
-// ⚠️ 絞れるのはローカル変数だけです（15.5 節）。
+// 注意: 絞れるのはローカル変数だけです（15.5 節）。
 //   ・グローバル変数 … 呼んだ関数の中で書き換えられるかもしれない
 //   ・フィールド     … node.next を絞ると「その間 node.next が変わらないこと」を
 //                      保証しなければならない。メソッド呼び出し 1 つで壊れる
@@ -1960,14 +1960,14 @@ static void narrow_apply(Sema *s, Node *cond, bool positive, NarrowSet *ns) {
         //         return 0
         //     # ← ここでは b も c も None ではない
         //
-        // ⚠️ 「成り立つ側」の or は相変わらず絞れません（どちらか一方しか保証されない）。
+        // 注意: 「成り立つ側」の or は相変わらず絞れません（どちらか一方しか保証されない）。
         narrow_apply(s, cond->lhs, false, ns);
         narrow_apply(s, cond->rhs, false, ns);
     }
 }
 
 static void narrow_restore(NarrowSet *ns) {
-    // ⚠️ 必ず戻します。戻し忘れると、if の外でも絞られたままになります。
+    // 注意: 必ず戻します。戻し忘れると、if の外でも絞られたままになります。
     for (int i = 0; i < ns->n; i++) ns->vars[i]->type = ns->saved[i];
     ns->n = 0;
 }
@@ -1986,7 +1986,7 @@ static bool always_returns(Node *n);
 //   成り立っている」だけの判断です。到達可能性の検査（
 //   always_returns）を、そのまま絞り込みに再利用しています。
 //
-// ⚠️ 関数本体もブロックも同じ関数を通します。片方だけに入れると、
+// 注意: 関数本体もブロックも同じ関数を通します。片方だけに入れると、
 //    「関数の直下では効くのに if の中では効かない」という説明できない差が出ます。
 static void check_stmt_list(Sema *s, Node *first) {
     NarrowSet guard = {0};
@@ -2013,7 +2013,7 @@ static void check_block(Sema *s, Node *n) {
 //   sema は「型が合う候補があるか」を、codegen は「どの C 関数を呼ぶか」を
 //   同じ表から引きます。
 //
-// 🤔 なぜ print だけオーバーロードを許すのか（言語仕様 7 節）
+// なぜ print だけオーバーロードを許すのか（言語仕様 7 節）
 //   ユーザー定義関数のオーバーロードは許しません（名前解決が複雑になる）。
 //   組み込みは表を引くだけで解決できるので、「言語機能」ではなく
 //   「表のエントリ」として扱えます。実装が増えません。
@@ -2030,12 +2030,12 @@ const Builtin BUILTINS[] = {
     {"str", TY_FLOAT, TY_STR, "pl_str_from_float"},
     // ★ str(str) は複製を返します。f-string が中身の型を
     //   知らずに str(...) で包めるようにするためです。
-    //   ⚠️ 同じポインタを返すと、--drop のときに二重解放になります。
+    //   注意: 同じポインタを返すと、--drop のときに二重解放になります。
     {"str", TY_STR, TY_STR, "pl_str_copy"},
     {"int", TY_STR, TY_INT, "pl_str_to_int"},
     // ★ float(str)。CSV を読むのに要ります（正しく丸めます）
     {"float", TY_STR, TY_FLOAT, "pl_str_to_float"},
-    // int ↔ float。⚠️ 暗黙変換はしないので、必ずここを通します。
+    // int ↔ float。注意: 暗黙変換はしないので、必ずここを通します。
     {"int", TY_FLOAT, TY_INT, "pl_int_from_float"},
     {"float", TY_INT, TY_FLOAT, "pl_float_from_int"},
     {"ord", TY_STR, TY_INT, "pl_ord"},
@@ -2043,23 +2043,23 @@ const Builtin BUILTINS[] = {
     {"exit", TY_INT, TY_NONE, "pl_exit"},
     {"panic", TY_STR, TY_NONE, "pl_panic"},
     // ★ 借りたものを保存したいときの逃げ道（決定 D8）。
-    //   ⚠️ いまは str だけです。list[T] の複製は要素の所有まで考える必要が
+    //   注意: いまは str だけです。list[T] の複製は要素の所有まで考える必要が
     //      あるので、`rc[T]`と一緒に見直します。
     // ★ Python で最も使う組み込みを足しました。
-    //   ⚠️ min / max は **2 引数**の表では表せない（引数 2 個）ので、
+    //   注意: min / max は **2 引数**の表では表せない（引数 2 個）ので、
     //     ここではなく check_call で特別扱いします。
     {"abs", TY_INT, TY_INT, "pl_iabs"},
     {"abs", TY_FLOAT, TY_FLOAT, "pl_fabs"},
     {"sum", TY_LIST, TY_INT, "pl_list_sum"},
     // ★ ハッシュ。**単相化のおかげで**、ジェネリックなコードの中で
     //   hash(k) と書けます（K が確定してから型検査されるため）。
-    //   ⚠️ クラスを鍵にすると、ここで「使えません」と言われます。
+    //   注意: クラスを鍵にすると、ここで「使えません」と言われます。
     {"hash", TY_STR, TY_INT, "pl_hash_str"},
     {"hash", TY_INT, TY_INT, "pl_hash_i64"},
     {"hash", TY_FLOAT, TY_INT, "pl_hash_f64"},
     {"hash", TY_BOOL, TY_INT, "pl_hash_i64"},
     // ★ input(プロンプト) — Python と同じ形。
-    //   ⚠️ EOF では panic します。読めないかもしれない場面では
+    //   注意: EOF では panic します。読めないかもしれない場面では
     //     io.read_line()（None が返る）を使ってください。
     {"input", TY_STR, TY_STR, "pl_input"},
     {"copy", TY_STR, TY_STR, "pl_str_copy"},
@@ -2067,7 +2067,7 @@ const Builtin BUILTINS[] = {
     //   ジェネリックなコードの中では T が int かもしれず、str のときだけ
     //   copy が要るのに T では書き分けられない、という行き止まりがありました
     //   （lib/set を書いていて見つけました）。
-    //   ⚠️ 実装名 "pl_copy_id" は codegen が**呼び出しを出さない印**です。
+    //   注意: 実装名 "pl_copy_id" は codegen が**呼び出しを出さない印**です。
     {"copy", TY_INT, TY_INT, "pl_copy_id"},
     {"copy", TY_FLOAT, TY_FLOAT, "pl_copy_id"},
     {"copy", TY_BOOL, TY_BOOL, "pl_copy_id"},
@@ -2113,7 +2113,7 @@ static Type *check_builtin_call(Sema *s, Node *n) {
     for (Node *a = n->args; a; a = a->next) nargs++;
 
     // ★ input() は引数なしでも書けます（Python と同じ）。
-    //   ⚠️ 引数を省いたときは、空のプロンプトを渡したことにします。
+    //   注意: 引数を省いたときは、空のプロンプトを渡したことにします。
     if (strcmp(n->name, "input") == 0 && nargs == 0) {
         n->args = new_str_node(n->tok, "", 0);
         n->args->type = ty_str;
@@ -2133,7 +2133,7 @@ static Type *check_builtin_call(Sema *s, Node *n) {
     Type *at = check_expr(s, n->args);
 
     // ★ print(xs) / str(xs) — list をそのまま表示できるようにします。
-    //   ⚠️ 要素の型ごとにランタイム関数を呼び分けるので、**要素が
+    //   注意: 要素の型ごとにランタイム関数を呼び分けるので、**要素が
     //     int / float / str / bool のときだけ**です。入れ子（list[list[int]]）は
     //     要素をさらに文字列にする手立てが要るので、ここで弾きます。
     if (at->kind == TY_LIST &&
@@ -2163,7 +2163,7 @@ static Type *check_builtin_call(Sema *s, Node *n) {
     //
     //       return move_out(self.out)   # self.out は空のリストになる
     //
-    // ⚠️ 戻り型は**引数と同じ型そのもの**です（list[rc[Token]] なら
+    // 注意: 戻り型は**引数と同じ型そのもの**です（list[rc[Token]] なら
     //   list[rc[Token]]）。BUILTINS の表は TypeKind しか持てないので、
     //   表引きの前にここで返します。
     if (strcmp(n->name, "move_out") == 0) {
@@ -2246,7 +2246,7 @@ static Type *check_list_lit(Sema *s, Node *n) {
         et = want->elem;
 
     // ★ 範囲型なら、要素も入れる前に確かめます（A-28）。
-    //   ⚠️ 並びの途中を差し替えるので、1 つ前を覚えながら進みます。
+    //   注意: 並びの途中を差し替えるので、1 つ前を覚えながら進みます。
     n->body = range_coerce(s, n->body, et);
 
     int i = 2;
@@ -2286,7 +2286,7 @@ static Type *check_list_lit(Sema *s, Node *n) {
 // ★ **式の位置に現れるので、構文解析での脱糖にできません**（for やカンマ代入
 //   との違い）。ここで型を決め、codegen がその場でループを組み立てます。
 //
-// ⚠️ 隠し宣言 3 つ（ループ変数 / 結果の list / 添字）は構文解析器が並べています。
+// 注意: 隠し宣言 3 つ（ループ変数 / 結果の list / 添字）は構文解析器が並べています。
 //   ここで型を入れて宣言し、**alloca の名前**を用意します。
 static Type *check_listcomp(Sema *s, Node *n) {
     Node *lv = n->body;          // ループ変数
@@ -2358,7 +2358,7 @@ static Type *check_index_expr(Sema *s, Node *n) {
     Type *ot = check_expr(s, n->lhs);
 
     // ★ クラスの添字は __getitem__ に読み替えます（m[i, j] を含む）。
-    //   ⚠️ 添字は **並び**なので、そのまま実引数のリストになります。
+    //   注意: 添字は **並び**なので、そのまま実引数のリストになります。
     if (ot->kind == TY_CLASS && ot->cls) {
         if (!class_has_method(ot->cls, "__getitem__"))
             error_at_hint(n->tok,
@@ -2374,7 +2374,7 @@ static Type *check_index_expr(Sema *s, Node *n) {
 
     // ★ タプルの添字 t[0]
     //
-    //   ⚠️ **添字は定数（整数リテラル）だけ**です。`(int, str)` の要素は
+    //   注意: **添字は定数（整数リテラル）だけ**です。`(int, str)` の要素は
     //     位置ごとに型が違うので、添字が実行時に決まると**式の型が決まりません**。
     if (ot->kind == TY_TUPLE) {
         if (n->rhs->next)
@@ -2451,7 +2451,7 @@ static ModuleSyms *dot_module(Sema *s, Node *n) {
     // ★ パッケージ（A-32）：`pkg.mod.f()` の左側は `pkg.mod` という
     //   **ドットを含む 1 つのモジュール名**です。
     //
-    // ⚠️ 変数のフィールド（`obj.field.f()`）と見分けが要ります。見分け方は
+    // 注意: 変数のフィールド（`obj.field.f()`）と見分けが要ります。見分け方は
     //   「いちばん左が変数として宣言されていないこと」＋「繋げた名前が
     //   import されていること」の 2 つです。import は明示的に書くものなので、
     //   両方を満たす形は 1 つしかありません。
@@ -2592,11 +2592,11 @@ static void check_can_fail(Sema *s, Node *n, FuncSig *f, const char *shown);
 //
 // ★ pi は仮引数の番号です。メソッド・生成は self があるので 1 から始まります。
 //
-// ⚠️ **rc[T] を own の仮引数へ渡すときは、呼び出し側が参照を 1 つ増やします**
+// 注意: **rc[T] を own の仮引数へ渡すときは、呼び出し側が参照を 1 つ増やします**
 //   （ast.h の arg_own_rc）。rc[T] は移動しないので、増やさないと
 //   受け取った側の「出口で手放す」だけが残り、二重解放になります。
 //
-// ⚠️ ここで arg_is_borrowed は**触りません**。あちらは「呼び出しのあとで
+// 注意: ここで arg_is_borrowed は**触りません**。あちらは「呼び出しのあとで
 //   一時値を解放してよいか」の旗で、既定（false＝解放しない）が安全側です。
 //   メソッドと生成では立てないままにしてあります（漏れるが、壊れない）。
 static void mark_arg_own_rc(Node *a, FuncSig *f, int pi) {
@@ -2685,7 +2685,7 @@ static Type *check_module_call(Sema *s, Node *n, ModuleSyms *ms) {
     FuncSig *f = lookup_func_in(ms, n->name);
 
     // ★ 他のモジュールのジェネリック関数も実体化します。
-    //   ⚠️ 実体はテンプレートのモジュールに作られるので、呼ぶ側から見ると
+    //   注意: 実体はテンプレートのモジュールに作られるので、呼ぶ側から見ると
     //     ふつうの「他モジュールの関数」になります。
     if (f && f->tmpl) f = instantiate_func(s, f, n);
 
@@ -2710,13 +2710,13 @@ static Type *check_module_call(Sema *s, Node *n, ModuleSyms *ms) {
 
 // ── scope: から途中で抜けることを禁じる ─────────────────
 //
-// 🤔 なぜ禁じるのか
+// なぜ禁じるのか
 //   scope: の出口には「まだ待っていないスレッドを全部 join する」という
 //   仕事があります。**途中から抜ける道があると、その仕事が飛びます。**
 //   飛ぶと、まだ走っているスレッドが借りている値の寿命が切れます
 //   — つまり scoped spawn の根拠そのものが崩れます。
 //
-// ⚠️ ループの中の break / continue は、そのループが scope: の**中**に
+// 注意: ループの中の break / continue は、そのループが scope: の**中**に
 //    あるなら問題ありません（外へは出ないため）。
 static void scope_escape(Sema *s, Node *n, int loop_depth, int try_depth) {
     for (; n; n = n->next) {
@@ -2732,7 +2732,7 @@ static void scope_escape(Sema *s, Node *n, int loop_depth, int try_depth) {
                 break;
             case ND_CALL:
             case ND_METHOD:
-                // ⚠️ 失敗しうる呼び出しは、捕まえないと外へ飛びます。
+                // 注意: 失敗しうる呼び出しは、捕まえないと外へ飛びます。
                 if (n->can_fail && try_depth == 0) what = "失敗しうる呼び出し";
                 break;
             default: break;
@@ -2752,7 +2752,7 @@ static void scope_escape(Sema *s, Node *n, int loop_depth, int try_depth) {
 
         int ld = loop_depth + (n->kind == ND_WHILE ? 1 : 0);
         int td = try_depth + (n->kind == ND_TRY ? 1 : 0);
-        // ⚠️ except 節の中は try の外です（そこで失敗すればさらに外へ飛ぶ）。
+        // 注意: except 節の中は try の外です（そこで失敗すればさらに外へ飛ぶ）。
         scope_escape(s, n->lhs, ld, td);
         scope_escape(s, n->rhs, ld, td);
         scope_escape(s, n->incr, ld, td);
@@ -2822,7 +2822,7 @@ static Type *check_method(Sema *s, Node *n) {
 
     // ── Thread[R].join() — 終わるまで待って戻り値を受け取る ──
     //
-    // ⚠️ join は所有を消費します（2 回 join できません）。それを保証するのは
+    // 注意: join は所有を消費します（2 回 join できません）。それを保証するのは
     //    ownck 側です（Thread[R] は移動する型として扱われます）。
     if (ot->kind == TY_THREAD) {
         if (strcmp(n->name, "join") != 0)
@@ -2953,7 +2953,7 @@ static Type *check_method(Sema *s, Node *n) {
         Type *at = check_expr(s, n->args);
         s->expected = NULL;
 
-        // ⚠️ ここでも代入互換の検査。list[list[int]] に list[str] を
+        // 注意: ここでも代入互換の検査。list[list[int]] に list[str] を
         //    append するのを弾くには、要素型の再帰比較が要ります。
         if (!type_assignable(at, ot->elem)) {
             Diag d = {0};
@@ -2992,7 +2992,7 @@ static Type *check_new(Sema *s, Node *n, Class *c) {
     //     d: Dict[str, int] = Dict()
     //                         ^^^^^^ ここには型引数を書きません
     //
-    // ⚠️ 左辺が無い場所（式の途中など）では決められないので、その旨を伝えます。
+    // 注意: 左辺が無い場所（式の途中など）では決められないので、その旨を伝えます。
     if (c->node && c->node->targs) {
         Type *want = s->expected;
         if (!want || want->kind != TY_CLASS ||
@@ -3166,7 +3166,7 @@ static Type *check_lowlevel_call(Sema *s, Node *n, const LowLevel *ll) {
 
 static Type *check_call(Sema *s, Node *n) {
     // ★ 名前が **関数型の変数**なら間接呼び出しです。
-    //   ⚠️ 変数を先に見ます。同名の関数があっても変数が勝ちます。
+    //   注意: 変数を先に見ます。同名の関数があっても変数が勝ちます。
     VarEntry *fv = lookup(s, n->name);
     if (fv && fv->type && fv->type->kind == TY_FN) {
         Type *ft = fv->type;
@@ -3208,7 +3208,7 @@ static Type *check_call(Sema *s, Node *n) {
 
     // ★ min / max。**2 引数**なので組み込みの表（1 引数）では
     //   表せません。ここで特別扱いします。
-    //   ⚠️ Python の min([1,2,3])（リストを渡す形）は入れていません。
+    //   注意: Python の min([1,2,3])（リストを渡す形）は入れていません。
     //     リストの最小は linalg.vmin を使ってください。
     if ((strcmp(n->name, "min") == 0 || strcmp(n->name, "max") == 0) &&
         !lookup_func(s, n->name)) {
@@ -3236,10 +3236,10 @@ static Type *check_call(Sema *s, Node *n) {
 
     // ★ wrap_add / wrap_sub / wrap_mul。
     //   **桁あふれを検査せず 2 の補数で折り返す**算術です。
-    //   ⚠️ 既定の + - * は桁あふれで panic します。折り返しを
+    //   注意: 既定の + - * は桁あふれで panic します。折り返しを
     //     「そういう計算だ」として使いたいところ（法 2⁶⁴ の線形合同法など）
     //     のための逃げ道で、**書いた人の意図が演算ごとに見えます。**
-    //   ⚠️ min / max と同じく 2 引数なので、組み込みの表では表せません。
+    //   注意: min / max と同じく 2 引数なので、組み込みの表では表せません。
     if (is_wrap_name(n->name) && !lookup_func(s, n->name)) {
         int nargs = 0;
         for (Node *a = n->args; a; a = a->next) nargs++;
@@ -3248,7 +3248,7 @@ static Type *check_call(Sema *s, Node *n) {
                           diag_fmt("%s は 2 個の引数を取ります", n->name));
         Type *a0 = check_expr(s, n->args);
         Type *a1 = check_expr(s, n->args->next);
-        // ⚠️ **問題のある側の引数**を指します（2 つとも int でないときは左から）
+        // 注意: **問題のある側の引数**を指します（2 つとも int でないときは左から）
         if (a0->kind != TY_INT)
             error_at_hint(n->args->tok,
                           "折り返す算術が使えるのは int だけです",
@@ -3435,13 +3435,13 @@ static Type *check_call_sig(Sema *s, Node *n, FuncSig *f, const char *what) {
 
     int i = 0;
     for (Node *a = n->args; a; a = a->next, i++) {
-        // ⚠️ 引数には期待型を渡しません。
+        // 注意: 引数には期待型を渡しません。
         //    move_out([]) の [] は「型注釈を書いてください」というエラーになります。
         Type *at = check_expr(s, a);
         // ★ codegen へ「この実引数は借用で渡す」と**分かっている**ことを伝えます。
         //   借用なら相手は所有権を受け取らないので、呼び出し後に一時値を
         //   解放できます（A-21e）。
-        // ⚠️ ここは check_call_sig＝**通常の関数**だけを通ります。メソッドは
+        // 注意: ここは check_call_sig＝**通常の関数**だけを通ります。メソッドは
         //   別経路なので旗が立たず、codegen は解放しません（安全側）。
         a->arg_is_borrowed = f->pmodes && f->pmodes[i] != PM_OWN;
         mark_arg_own_rc(a, f, i);
@@ -3631,7 +3631,7 @@ static void check_stmt(Sema *s, Node *n) {
             s->scope_depth++;
             check_block(s, n->body);
             s->scope_depth--;
-            // ⚠️ 検査は**型検査のあと**です。can_fail は検査中に付くためです。
+            // 注意: 検査は**型検査のあと**です。can_fail は検査中に付くためです。
             scope_escape(s, n->body, 0, 0);
             break;
 
@@ -3751,7 +3751,7 @@ static void check_stmt(Sema *s, Node *n) {
 
 // この while から抜ける break があるか。
 //
-// ⚠️ 入れ子のループの中には降りません。そこの break は内側のループのものです。
+// 注意: 入れ子のループの中には降りません。そこの break は内側のループのものです。
 //    if の中には降ります（break は条件付きで書くのが普通なので）。
 static bool has_break(Node *n) {
     if (!n) return false;
@@ -3788,10 +3788,10 @@ static bool never_returns_call(Node *n) {
 
 // この文を実行したら、必ず関数から抜けるか（型システム 6.1）。
 //
-// ⚠️ 保守的に判定します。「実際には到達しない」経路でも return を要求します。
+// 注意: 保守的に判定します。「実際には到達しない」経路でも return を要求します。
 //    コンパイラが人間より賢くなろうとすると必ず破綻します。
 //
-// 📖 codegen の e->terminated と同じことを、別の場所でやっています。
+// codegen の e->terminated と同じことを、別の場所でやっています。
 //    こちらは AST の上（構造を見る／ユーザーに教えるため）、
 //    あちらは命令列の上（出力を見る／正しい IR を出すため）。
 static bool always_returns(Node *n) {
@@ -3823,14 +3823,14 @@ static bool always_returns(Node *n) {
         case ND_TRY:
             // ★ try の中身と、**すべての** except が抜けるなら、この try は抜けます。
             //
-            //   ⚠️ else が無い if と同じ話です。1 つでも素通りする except が
+            //   注意: else が無い if と同じ話です。1 つでも素通りする except が
             //     あれば、そこから下へ落ちます。
             //
-            //   ⚠️ どの except にも当たらないエラーは呼び出し元へ伝播する
+            //   注意: どの except にも当たらないエラーは呼び出し元へ伝播する
             //     ので、**これも「抜ける」ほうに数えます**（伝播を except の
             //     漏れと混同しないこと）。
             //
-            //   📖 except の並びは els に next で繋がっています（if の else と
+            //   except の並びは els に next で繋がっています（if の else と
             //     違って複数あるので、リストとしてたどります）。
             if (!always_returns(n->body)) return false;
             for (Node *ex = n->els; ex; ex = ex->next)
@@ -3894,7 +3894,7 @@ static void declare_class(Sema *s, Node *n) {
 // フィールドを並べて、オフセットとサイズを決める。
 //
 // ★ docs/design/memory-model.md 5 節の表がそのまま実装になっています。
-//   ⚠️ 読み書きに offset は使いません（getelementptr に渡すのは index）。
+//   注意: 読み書きに offset は使いません（getelementptr に渡すのは index）。
 //      offset は「自分の計算が合っているか」を確かめるための値です。
 static int align_up(int offset, int align) {
     return (offset + align - 1) / align * align;
@@ -3904,7 +3904,7 @@ static void layout_class(Class *c) {
     // ★ インタフェースを 1 つでも実装するなら、**先頭に隠しフィールド**
     //   （vtable へのポインタ）を 1 つ置きます。これがあるおかげで、
     //   クラス → インタフェースの変換が「何もしない」で済みます。
-    //   ⚠️ 利用者から見える名前は付けません（フィールドの並びには入れない）。
+    //   注意: 利用者から見える名前は付けません（フィールドの並びには入れない）。
     int offset = c->impls ? 8 : 0;
     int max_align = c->impls ? 8 : 1;
     int index = c->impls ? 1 : 0;
@@ -4012,14 +4012,14 @@ static void declare_method(Sema *s, Class *c, Node *fn) {
 //   **`if` の中にしか代入が無い形がすり抜けていました**（仕様 15.6 の
 //   「ほぼ」の中身）。Ada / SPARK の definite assignment にあたる検査です。
 //
-// ⚠️ 保守的に見ます — ループの中の代入は「0 回かもしれない」ので数えません。
-//    ⚠️ ランタイム検査（pl_check_not_none）は**残します**。
+// 注意: 保守的に見ます — ループの中の代入は「0 回かもしれない」ので数えません。
+//    注意: ランタイム検査（pl_check_not_none）は**残します**。
 //    ここで見られるのは init の中だけで、`unsafe:` や `T | None` の
 //    絞り込み漏れまでは面倒を見られないためです（多層で受けます）。
 // この文（部分木）のどこかに return があるか。
 //
 // ★ 「代入せずに抜ける経路」を見つけるために使います。
-//   ⚠️ panic() / exit() は数えません。**戻らない**ので、そこから
+//   注意: panic() / exit() は数えません。**戻らない**ので、そこから
 //     オブジェクトが観測されることがないためです。
 static bool contains_return(Node *n) {
     if (!n) return false;
@@ -4036,7 +4036,7 @@ static bool definitely_assigns_stmt(Node *n, const char *fname);
 
 // 文の並びが「**どの経路でも**必ず self.<fname> に代入する」か。
 //
-// ⚠️ 途中に return がありうる文を見つけたら、そこで打ち切ります
+// 注意: 途中に return がありうる文を見つけたら、そこで打ち切ります
 //   （代入せずに出ていく経路があるということなので）。
 static bool definitely_assigns(Node *first, const char *fname) {
     for (Node *st = first; st; st = st->next) {
@@ -4065,7 +4065,7 @@ static bool definitely_assigns_stmt(Node *n, const char *fname) {
             return n->els && definitely_assigns_stmt(n->body, fname) &&
                    definitely_assigns_stmt(n->els, fname);
 
-        // ⚠️ ループは 0 回かもしれません（保守的に「代入しない」と見ます）。
+        // 注意: ループは 0 回かもしれません（保守的に「代入しない」と見ます）。
         case ND_WHILE:
             return false;
 
@@ -4128,7 +4128,7 @@ static void check_fields_initialized(Sema *s, Class *c) {
 //     - クラス → インタフェースの変換が **何もしないで済む**（同じポインタ）
 //   代わりに、インタフェースを実装するクラスは 8 バイト大きくなります。
 //
-// ⚠️ メソッドのスロット番号は **プログラム全体で一意**にします。
+// 注意: メソッドのスロット番号は **プログラム全体で一意**にします。
 //   1 つのクラスが複数のインタフェースを実装できるようにするためです
 //   （クラスごとの vtable は「全スロットぶんの配列」になります）。
 static void declare_iface(Sema *s, Node *n) {
@@ -4280,7 +4280,7 @@ static void declare_class_members(Sema *s, Node *n) {
 
     // ★ 実装するインタフェースを先に決めます。
     //   レイアウト（隠しフィールドの有無）がこれで変わるためです。
-    //   ⚠️ メソッドの照合は、メソッドを登録した**後**に行います。
+    //   注意: メソッドの照合は、メソッドを登録した**後**に行います。
     IfaceList *itail = NULL;
     for (Node *ir = n->ifaces; ir; ir = ir->next) {
         Iface *ifc = resolve_iface_ref(s, ir);
@@ -4343,7 +4343,7 @@ static void declare_class_members(Sema *s, Node *n) {
 
 // extern の引数と戻り値に使える型か。
 //
-// ⚠️ bool（i1）だけは通しません。C の _Bool との ABI が環境依存で、
+// 注意: bool（i1）だけは通しません。C の _Bool との ABI が環境依存で、
 //    「たまたま動く」形になりやすいためです。境界は狭く保ちます。
 static void check_extern_type(Type *t, Token *tok, const char *what) {
     if (t->kind != TY_BOOL) return;
@@ -4604,7 +4604,7 @@ static void declare_global(Sema *s, Node *n) {
         diag_fail(&d);
     }
 
-    // ⚠️ 初期化式はコンパイル時定数のみ（言語仕様 6.2 の v1 制限）。
+    // 注意: 初期化式はコンパイル時定数のみ（言語仕様 6.2 の v1 制限）。
     //    計算を許すと「どちらを先に初期化するか」という初期化順序問題が起きます。
     if (n->rhs->kind != ND_INT && n->rhs->kind != ND_BOOL &&
         n->rhs->kind != ND_STR && n->rhs->kind != ND_FLOAT) {
@@ -4672,10 +4672,10 @@ static void check_func(Sema *s, Node *n) {
 
     // ★ 契約は**本体の先頭**にしか置けません（A-29）。
     //
-    // 🤔 なぜ場所を縛るのか
+    // なぜ場所を縛るのか
     //   requires は入口で、ensures は出口で確かめます。途中に書けると
     //   「書いた場所と確かめる場所が違う」ことになり、読む人が誤解します。
-    //   ⚠️ 先頭に並べる限り、順序は自由です（requires と ensures を混ぜても
+    //   注意: 先頭に並べる限り、順序は自由です（requires と ensures を混ぜても
     //     かまいません）。
     {
         bool seen_other = false;
@@ -4793,7 +4793,7 @@ static void declare_module(Sema *s, Node *ast) {
 
     // 1b：フィールドとメソッド（型注釈に他のクラスを書ける）
     //
-    // ⚠️ **ジェネリックなテンプレートはここでは並べません。**
+    // 注意: **ジェネリックなテンプレートはここでは並べません。**
     //   K や V が何なのかまだ決まっていないので、フィールドの大きさも
     //   メソッドの型も決められません。実体ができたときに行います。
     for (Node *d = ast->body; d; d = d->next)
@@ -4815,12 +4815,12 @@ static void declare_module(Sema *s, Node *ast) {
 // モジュール 1 つぶんの本体を検査する（パス 2）
 static void check_module(Sema *s, Node *ast) {
     for (Node *d = ast->body; d; d = d->next) {
-        // ⚠️ extern は本体を持たないので検査するものがありません
-        // ⚠️ ジェネリックなテンプレートの本体は検査しません
+        // 注意: extern は本体を持たないので検査するものがありません
+        // 注意: ジェネリックなテンプレートの本体は検査しません
         if (d->kind == ND_FUNC) { if (d->body && !d->targs) check_func(s, d); }
         // メソッドの本体も、ふつうの関数とまったく同じ手順で検査します。
         // self はもう「型が入った引数」なので、特別扱いは 1 つも要りません。
-        // ⚠️ ジェネリックなテンプレートの本体は検査しません。
+        // 注意: ジェネリックなテンプレートの本体は検査しません。
         //   実体ができてから、その実体の本体を検査します。
         else if (d->kind == ND_CLASS && !d->targs)
             for (Node *m = d->body; m; m = m->next)
@@ -4870,7 +4870,7 @@ void sema_program(Module *mods, Module *entry) {
 
     // ★ パス 3：実体化したクラスの本体を検査する
     //
-    // ⚠️ 検査の途中で **さらに実体が増える**ことがあります
+    // 注意: 検査の途中で **さらに実体が増える**ことがあります
     //   （Dict[str, Box[int]] のように入れ子になっている場合）。
     //   増えなくなるまで繰り返します。
     while (s.pending) {

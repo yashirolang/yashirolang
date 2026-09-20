@@ -7,24 +7,24 @@
 #
 #   | 事柄 | 対応 |
 #   |---|---|
-#   | 要求行・応答行 | ✅ |
-#   | ヘッダ（大小を区別しない） | ✅ |
-#   | Content-Length の本体 | ✅ |
-#   | クエリ文字列 `?a=1&b=2` | ✅ |
-#   | パーセント符号化の復号 | ✅ |
-#   | keep-alive（1 本で何度も） | ✅ |
-#   | チャンク転送（受けるのも送られるのも） | ✅ A-23 |
-#   | クライアント（get / post / request） | ✅ A-23 |
-#   | 待ち時間 | ✅ A-23（`l.set_conn_timeout(ms)`） |
-#   | TLS（https） | ⬜ **はっきり断ります**（黙って平文で繋ぎません） |
-#   | 接続を貯めておく（keep-alive の使い回し） | ⬜ クライアントは毎回繋ぎます |
+#   | 要求行・応答行 | 済 |
+#   | ヘッダ（大小を区別しない） | 済 |
+#   | Content-Length の本体 | 済 |
+#   | クエリ文字列 `?a=1&b=2` | 済 |
+#   | パーセント符号化の復号 | 済 |
+#   | keep-alive（1 本で何度も） | 済 |
+#   | チャンク転送（受けるのも送られるのも） | A-23 |
+#   | クライアント（get / post / request） | A-23 |
+#   | 待ち時間 | A-23（`l.set_conn_timeout(ms)`） |
+#   | TLS（https） | まだ。**はっきり断ります**（黙って平文で繋ぎません） |
+#   | 接続を貯めておく（keep-alive の使い回し） | まだ。クライアントは毎回繋ぎます |
 #
 # ★ **投げるのは HttpError だけです。** 下の net が投げる NetError も
 #   ここで包み直すので、この層を使う人がソケットの話を知らずに済みます。
 #
-# ⚠️ **1 本ずつ順に捌きます。** 同時接続は spawn で自分で分けてください
+# 注意: **1 本ずつ順に捌きます。** 同時接続は spawn で自分で分けてください
 #   （この層は輪を回すだけで、スレッドの方針を決めません）。
-#   ⚠️ だからこそ**待ち時間が要ります** — 黙っている相手 1 つで輪が
+#   注意: だからこそ**待ち時間が要ります** — 黙っている相手 1 つで輪が
 #     止まり、他の客も全員待たされます（`l.set_conn_timeout(ms)`）。
 import dict
 import net
@@ -50,7 +50,7 @@ HEAD_END: str = "\r\n\r\n"
 class HttpError:
     message: str
     status: int
-    # 相手が閉じた。⚠️ **失敗ではありません** — 輪を終える合図です。
+    # 相手が閉じた。注意: **失敗ではありません** — 輪を終える合図です。
     # keep-alive の接続は、最後にはこれで終わります。
     eof: bool
     # 待ち時間を過ぎた（接続はまだ生きています）
@@ -126,14 +126,14 @@ class Response:
 
     # ヘッダを足す。
     #
-    # 🔒 **改行を取り除いてから入れます。** 取っ手が受け取った値を
+    # **改行を取り除いてから入れます。** 取っ手が受け取った値を
     #   そのままヘッダに入れることは、ふつうにあります。
     #
     #       r.set("location", req.param("url"))
     #
     #   その値に改行が混ざっていると、**送り手が好きなヘッダを足せます**
     #   （応答の分割。`\r\nSet-Cookie: admin=1` を入れられる）。
-    #   ⚠️ **取っ手を書く人に気をつけさせる形にはしません** — 気をつけ
+    #   注意: **取っ手を書く人に気をつけさせる形にはしません** — 気をつけ
     #     忘れたほうが穴になるなら、それは library 側の落ち度です。
     def set(mut self, name: str, value: str) -> None:
         self.headers.set(no_newline(lower(name)), no_newline(value))
@@ -145,7 +145,7 @@ class Response:
 
     # バイト列にする。
     #
-    # ⚠️ **Content-Length は必ず自分で入れます。** 入れ忘れると、相手は
+    # 注意: **Content-Length は必ず自分で入れます。** 入れ忘れると、相手は
     #   「接続が切れるまでが本体」と解釈します（keep-alive が壊れる）。
     def encode(mut self, keep: bool) -> str:
         parts: list[str] = []
@@ -163,7 +163,7 @@ class Response:
         ks: list[str] = self.headers.keys()
         for k in ks:
             parts.append(k + ": " + self.headers.get(k) + CRLF)
-        # ⚠️ **copy が要ります。** CRLF はグローバル、self.body は借りもので、
+        # 注意: **copy が要ります。** CRLF はグローバル、self.body は借りもので、
         #   そのまま入れると所有者が 2 つになります（E-BORROW-3/7）。
         parts.append(copy(CRLF))
         parts.append(copy(self.body))
@@ -191,7 +191,7 @@ def json(status: int, body: str) -> Response:
 
 # 接続から「必要なぶんだけ」読む道具。
 #
-# ⚠️ **recv の切れ目は、要求の切れ目ではありません。** 1 回の recv に
+# 注意: **recv の切れ目は、要求の切れ目ではありません。** 1 回の recv に
 #   要求が 2 本入っていることも、頭が途中で切れていることもあります。
 #   だから**読みすぎたぶんを貯めておき**、次に回します。
 #
@@ -230,7 +230,7 @@ class Reader:
 
     # sep が現れるまで読む。**sep の手前まで**を返し、sep ごと使い切ります。
     #
-    # ⚠️ limit を超えたら 413。上限が無いと、区切りを送ってこない相手
+    # 注意: limit を超えたら 413。上限が無いと、区切りを送ってこない相手
     #   1 つでメモリを使い切られます。
     def read_until(mut self, c: mut net.Conn, sep: str, limit: int) -> str raises HttpError:
         cut: int = strings.find(self.buf, sep)
@@ -250,7 +250,7 @@ class Reader:
 
     # **ちょうど** n バイト読む（足りなければ読み足します）。
     #
-    # ⚠️ 1 回ごとに繋げると、8 MiB の本体で**何百 MB も写す**ことに
+    # 注意: 1 回ごとに繋げると、8 MiB の本体で**何百 MB も写す**ことに
     #   なります（繋げるたびに全部を写すため）。list に貯めて最後に 1 回。
     def read_exact(mut self, c: mut net.Conn, n: int) -> str raises HttpError:
         if len(self.buf) >= n:
@@ -299,7 +299,7 @@ class Reader:
 
 # ── 解釈 ────────────────────────────────────────────────
 
-# 🔒 改行（CR / LF）を取り除く。
+# 改行（CR / LF）を取り除く。
 #
 # ★ **ヘッダに入れる前に必ず通します。** HTTP は改行で区切る形式なので、
 #   値の中の改行は「区切り」になってしまいます。ここを素通りさせると、
@@ -331,7 +331,7 @@ def lower(s: str) -> str:
 
 # 要求（頭 + 本体）を解釈する。
 #
-# ⚠️ **頭と本体の切れ目は呼び出し側が見つけます**（serve が読みながら探す）。
+# 注意: **頭と本体の切れ目は呼び出し側が見つけます**（serve が読みながら探す）。
 #   ここには「頭の全部（空行を含まない）」と「本体」を渡します。
 def parse_request(head: str, body: str) -> Request raises HttpError:
     r: Request = Request()
@@ -396,7 +396,7 @@ def decode(s: str) -> str:
 
 # 16 進の文字列を数にする（16 進でなければ -1）。
 #
-# ⚠️ チャンクの長さはこれで読みます。**受け取ったものは信用できない**ので、
+# 注意: チャンクの長さはこれで読みます。**受け取ったものは信用できない**ので、
 #   組み込みの int(s) のように落ちる読み方はしません。
 def hex_to_int(s: str) -> int:
     if len(s) == 0:
@@ -407,7 +407,7 @@ def hex_to_int(s: str) -> int:
         v: int = hex_val(strings.byte_at(s, i))
         if v < 0:
             return -1
-        # ⚠️ 長さの桁数に上限を置きます。置かないと、長い 16 進を
+        # 注意: 長さの桁数に上限を置きます。置かないと、長い 16 進を
         #   送りつけられて桁あふれの実行時エラーで落ちます。
         if n > 268435455:
             return -1
@@ -464,7 +464,7 @@ def reason(status: int) -> str:
         return "Not Found"
     if status == 405:
         return "Method Not Allowed"
-    # ⚠️ 408 は serve_conn が自分で送ります（黙っている相手を切るとき）。
+    # 注意: 408 は serve_conn が自分で送ります（黙っている相手を切るとき）。
     #   ここに無いと "Unknown" という応答行を送ることになります。
     if status == 408:
         return "Request Timeout"
@@ -491,13 +491,13 @@ def reason(status: int) -> str:
 #   「頭の終わりまで読む → 本体を読む」を繰り返します（本体の長さは
 #   Content-Length か、チャンク転送の区切りで決まります）。
 #
-# ⚠️ **recv の切れ目は要求の切れ目ではありません。** 1 回の recv に
+# 注意: **recv の切れ目は要求の切れ目ではありません。** 1 回の recv に
 #   要求が 2 本入っていることも、頭が途中で切れていることもあります。
 #   だから読んだぶんを貯めて、その中から切れ目を探します
 #   （その扱いは Reader 1 つに集めてあります）。
 #   （ここを「1 recv = 1 要求」と書くと、手元では通って実地で壊れます。）
 #
-# ⚠️ **待ち時間を決めていないと、黙っている相手 1 つで止まります。**
+# 注意: **待ち時間を決めていないと、黙っている相手 1 つで止まります。**
 #   `l.set_conn_timeout(ms)` を呼んでください（accept した接続に入ります）。
 def serve_conn(c: mut net.Conn, handler: fn(Request) -> Response) -> None:
     rd: Reader = Reader()
@@ -510,13 +510,13 @@ def serve_conn(c: mut net.Conn, handler: fn(Request) -> Response) -> None:
             #   接続は最後に必ずこうなるので、エラーを返そうとしません。
             if he.eof:
                 return
-            # ⚠️ 待ち時間切れも同じで、返す相手はもういないかもしれません。
+            # 注意: 待ち時間切れも同じで、返す相手はもういないかもしれません。
             #   ただし「何も送ってこない相手」を切るのはこちらの都合なので、
             #   408 を送ってから閉じます（送れなければ黙って閉じます）。
             if he.timed_out:
                 send_error(c, 408, "待っているあいだに何も来ませんでした")
                 return
-            # ⚠️ status が 0 なのは「返すものが無い」印です（相手が切った、
+            # 注意: status が 0 なのは「返すものが無い」印です（相手が切った、
             #   など）。**0 を状態番号として送ってはいけません** —
             #   "HTTP/1.1 0 Unknown" という壊れた応答行になります。
             if he.status <= 0:
@@ -547,7 +547,7 @@ def read_request(rd: mut Reader, c: mut net.Conn) -> Request raises HttpError:
     cl: str = req.header("content-length")
 
     if len(te) > 0:
-        # ⚠️ **両方あるものは断ります**（要求の密輸。RFC 9112 §6.1）。
+        # 注意: **両方あるものは断ります**（要求の密輸。RFC 9112 §6.1）。
         #   こちらが Transfer-Encoding を見て、間の機械が Content-Length を
         #   見ると、1 本の接続の上で**要求の切れ目がずれます**。
         if len(cl) > 0:
@@ -576,7 +576,7 @@ def read_request(rd: mut Reader, c: mut net.Conn) -> Request raises HttpError:
 #   （ログの垂れ流し、生成に時間のかかる応答）に使われます。
 #   A-22 では読めず 411 で断っていました。
 #
-# ⚠️ 合計にも上限をかけます。チャンクは 1 つずつは小さくても、
+# 注意: 合計にも上限をかけます。チャンクは 1 つずつは小さくても、
 #   **何個でも送れます**（上限が無いと、そこがそのまま穴になります）。
 def read_chunked(rd: mut Reader, c: mut net.Conn) -> str raises HttpError:
     parts: list[str] = []
@@ -604,7 +604,7 @@ def read_chunked(rd: mut Reader, c: mut net.Conn) -> str raises HttpError:
     #   あります。空行まで読み飛ばします（読まないと、次の要求の頭が
     #   ずれます）。
     #
-    # 🔒 **本数にも上限が要ります。** 「空行が来るまで」だけで回すと、
+    # **本数にも上限が要ります。** 「空行が来るまで」だけで回すと、
     #   `X: y\r\n` を送り続ける相手に**永久に付き合わされます**
     #   （1 本ずつは小さいので、長さの上限では止まりません）。
     trailers: int = 0
@@ -623,7 +623,7 @@ def read_chunked(rd: mut Reader, c: mut net.Conn) -> str raises HttpError:
 # ★ **同時接続は分けていません。** 1 本ずつです。同時に捌きたいときは
 #   serve_conn を spawn で呼ぶ輪を自分で書いてください——この層が
 #   スレッドの方針を決めてしまわないようにしています。
-# 🔒 serve が自分で立てる待ち受け口に入れる待ち時間。
+# serve が自分で立てる待ち受け口に入れる待ち時間。
 #
 # ★ **0（無期限）にはしません。** serve は待ち受け口を自分で作るので、
 #   呼び出し側には set_conn_timeout を呼ぶ機会がありません。既定が
@@ -646,7 +646,7 @@ def serve_on(l: mut net.Listener, handler: fn(Request) -> Response) -> None:
 # ★ **試験のためだけの機能ではありません。** 「1 本だけ受けて終わる」
 #   道具（開発用の一発サーバー、受け取りの確認）にそのまま使えます。
 #
-# ⚠️ **永久に回る輪は join できません。** 別スレッドで serve_on を回すと、
+# 注意: **永久に回る輪は join できません。** 別スレッドで serve_on を回すと、
 #   accept で待ち続けるのでスレッドが終わりません。数を決めて回せば、
 #   終わりが来ます（この言語のテストがそうしています）。
 def serve_n(l: mut net.Listener, handler: fn(Request) -> Response,
@@ -674,10 +674,10 @@ def send_error(c: mut net.Conn, status: int, msg: str) -> None:
 
 # 10 進の文字列を数にする（数でなければ -1）
 #
-# ⚠️ 組み込みの int(s) は数でないと**実行時エラーで落ちます**。
+# 注意: 組み込みの int(s) は数でないと**実行時エラーで落ちます**。
 #   受け取ったヘッダは信用できないので、ここで自分で読みます。
 #
-# 🔒 **桁数にも上限が要ります。** ここに上限が無いと、
+# **桁数にも上限が要ります。** ここに上限が無いと、
 #
 #       Content-Length: 99999999999999999999999
 #
@@ -685,7 +685,7 @@ def send_error(c: mut net.Conn, status: int, msg: str) -> None:
 #   検査するので、`n * 10` が
 #   **`runtime error: integer overflow in *`** になり、**プロセスごと**
 #   死ぬからです（要求 1 本で誰でも落とせる、ということです）。
-#   ⚠️ 上限は「掛けても溢れない」ところに置きます——
+#   注意: 上限は「掛けても溢れない」ところに置きます——
 #   9223372036854775807 ÷ 10 の切り捨てです。
 def to_int(s: str) -> int:
     if len(s) == 0:
@@ -709,7 +709,7 @@ def to_int(s: str) -> int:
 #   応答の入れ物は Response、チャンクの解き方も同じものです。
 #   「送る側と受ける側で別々に書いた解釈が食い違う」のを避けられます。
 #
-# ⚠️ **1 回の要求ごとに繋いで閉じます**（Connection: close）。接続を
+# 注意: **1 回の要求ごとに繋いで閉じます**（Connection: close）。接続を
 #   貯めておく仕組みはまだありません。何十回も叩くなら、net で自分で
 #   1 本の接続を持ち回ってください。
 
@@ -740,7 +740,7 @@ class Url:
 
 # "http://host:port/path?query" を分ける。
 #
-# ⚠️ **https は断ります。** TLS はまだありません。黙って http で繋ぐと
+# 注意: **https は断ります。** TLS はまだありません。黙って http で繋ぐと
 #   「暗号化されていると思って鍵を送る」ことになるので、はっきり止めます。
 #
 # ★ IPv6 の住所は角括弧で書きます（"http://[::1]:8080/"）。
@@ -748,10 +748,10 @@ class Url:
 def parse_url(u: str) -> Url raises HttpError:
     out: Url = Url()
 
-    # 🔒 **改行の混ざった URL は断ります。** 要求行にそのまま書くので、
+    # **改行の混ざった URL は断ります。** 要求行にそのまま書くので、
     #   通すと「取ってくる先」を決められる相手が**こちらの送る要求に
     #   好きなヘッダを足せます**（要求の分割）。
-    #   ⚠️ ここは取り除くのではなく断ります——URL は組み立てるものではなく
+    #   注意: ここは取り除くのではなく断ります——URL は組み立てるものではなく
     #     渡されるもので、壊れているなら黙って直すより教えるべきです。
     if strings.contains(u, "\r") or strings.contains(u, "\n"):
         raise HttpError("URL に改行が入っています", 0)
@@ -768,7 +768,7 @@ def parse_url(u: str) -> Url raises HttpError:
 
     rest: str = strings.substr(u, sep + 3, len(u) - sep - 3)
 
-    # ⚠️ **かけら（#のうしろ）は相手に送りません。** ブラウザの中だけの
+    # 注意: **かけら（#のうしろ）は相手に送りません。** ブラウザの中だけの
     #   印で、要求行に書くものではありません。
     hash_at: int = strings.find(rest, "#")
     if hash_at >= 0:
@@ -776,7 +776,7 @@ def parse_url(u: str) -> Url raises HttpError:
 
     # 住所の部分と、そのうしろ（経路）に切る。
     #
-    # ⚠️ **住所の終わりは "/" だけではありません。** "?" でも終わります
+    # 注意: **住所の終わりは "/" だけではありません。** "?" でも終わります
     #   （"http://h?x=1"）。"/" だけを探すと、問い合わせが名前の側に
     #   紛れ込んで「そんな相手はいません」になります。
     cut: int = strings.find(rest, "/")
@@ -800,7 +800,7 @@ def parse_url(u: str) -> Url raises HttpError:
     if len(authority) == 0:
         raise HttpError("相手の名前がありません: " + u, 0)
 
-    # ⚠️ user:pass@host はまだ読みません。**黙って捨てると認証が
+    # 注意: user:pass@host はまだ読みません。**黙って捨てると認証が
     #   効かないまま繋がってしまう**ので、断ります。
     if strings.contains(authority, "@"):
         raise HttpError("URL に利用者名を書く形にはまだ対応していません", 0)
@@ -859,15 +859,15 @@ def build_request(u: mut Url, method: str, headers: mut dict.Dict[str, str],
 
     ks: list[str] = headers.keys()
     for k in ks:
-        # ⚠️ 下で必ず入れるものは、二重にならないよう飛ばします
+        # 注意: 下で必ず入れるものは、二重にならないよう飛ばします
         lk: str = lower(k)
         if lk == "host" or lk == "content-length" or lk == "connection":
             continue
-        # 🔒 送るほうも同じです（Response.set と対）。中身を決められる
+        # 送るほうも同じです（Response.set と対）。中身を決められる
         #   相手がいる値——合言葉、利用者の入力——が入ることがあります。
         parts.append(no_newline(lk) + ": " + no_newline(headers.get(k)) + CRLF)
 
-    # ⚠️ **本体が無くても content-length を書きます。** 省くと相手によっては
+    # 注意: **本体が無くても content-length を書きます。** 省くと相手によっては
     #   「本体は接続が切れるまで」と解釈します。
     parts.append("content-length: " + str(len(body)) + CRLF)
     parts.append("connection: close" + CRLF)
@@ -879,7 +879,7 @@ def build_request(u: mut Url, method: str, headers: mut dict.Dict[str, str],
 # 応答を 1 本読む。
 #
 # ★ 本体の終わりの決め方は 3 つあります（RFC 9112 §6.3）。
-#   ⚠️ **順番が大事です。** チャンクが先で、Content-Length が後。
+#   注意: **順番が大事です。** チャンクが先で、Content-Length が後。
 #     逆にすると、両方書いてある応答で切れ目がずれます。
 #
 #     ① チャンク転送        → 0 のチャンクまで
@@ -942,7 +942,7 @@ def read_response(rd: mut Reader, c: mut net.Conn, method: str) -> Response rais
 
 # 本体が付かないと決まっている応答か（RFC 9112 §6.3）
 def no_body(status: int, method: str) -> bool:
-    # ⚠️ HEAD の応答は Content-Length を**書いてあっても本体が来ません**
+    # 注意: HEAD の応答は Content-Length を**書いてあっても本体が来ません**
     #   （「GET したらこうなる」という知らせだからです）。
     if lower(method) == "head":
         return True
@@ -965,7 +965,7 @@ def request(method: str, url: str, headers: mut dict.Dict[str, str],
     except net.NetError as ce:
         raise from_net(ce)
 
-    # ⚠️ **ここから先は、どの道を通っても閉じます。** 閉じ忘れると
+    # 注意: **ここから先は、どの道を通っても閉じます。** 閉じ忘れると
     #   fd が尽きます（クラスには「解放されるときの処理」がまだありません）。
     res: Response = Response(0, "")
     try:

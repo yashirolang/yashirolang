@@ -4,7 +4,7 @@
 #   関数名・検査の順序・診断の文言を C 版と揃えてあるので、
 #   エラーメッセージが食い違ったら diff で追えます。
 #
-# ⚠️ Type / Class / FuncSig / ModuleSyms は types にまとめてあります
+# 注意: Type / Class / FuncSig / ModuleSyms は types にまとめてあります
 #   （循環 import を禁止したため）。
 import strings
 import ast
@@ -16,15 +16,15 @@ import types
 
 # 組み込み関数の表（C 版 BUILTINS と同じ順序）。
 #
-# ⚠️ 本言語のグローバルにはリストを書けないので、
+# 注意: 本言語のグローバルにはリストを書けないので、
 #   Sema の init で 1 回だけ組み立てます（keywords と同じ）。
 # 実引数に「own の仮引数へ渡す rc[T] か」を書き写す（A-21 ⑬）。
 #
-# ⚠️ **rc[T] を own の仮引数へ渡すときは、呼び出し側が参照を 1 つ増やします**
+# 注意: **rc[T] を own の仮引数へ渡すときは、呼び出し側が参照を 1 つ増やします**
 #   （ast.Node.arg_own_rc）。rc[T] は移動しないので、増やさないと受け取った
 #   側の「出口で手放す」だけが残り、二重解放になります。
 #
-# ⚠️ arg_is_borrowed は**触りません**。あちらは既定（False＝解放しない）が
+# 注意: arg_is_borrowed は**触りません**。あちらは既定（False＝解放しない）が
 #   安全側なので、メソッドと生成では立てないままにしてあります。
 #   対になる定義: src/sema.c の mark_arg_own_rc
 def mark_arg_own_rc(arg: mut rc[ast.Node], f: rc[types.FuncSig], pi: int) -> None:
@@ -59,10 +59,10 @@ class Builtin:
 
 # ── ジェネリクス（単相化） ─────────────────────────────
 #
-# 型引数の束縛（K → str）。⚠️ タプルが無いので 2 本の list を並べて持ちます。
+# 型引数の束縛（K → str）。注意: タプルが無いので 2 本の list を並べて持ちます。
 # ★ **割り当て済みの IR 名の入れ物**。
 #
-#   ⚠️ `list[str]` を直接フィールドに置くと、実体化のたびの「退避して戻す」が
+#   注意: `list[str]` を直接フィールドに置くと、実体化のたびの「退避して戻す」が
 #     **借りたものをフィールドに保存**（E-BORROW-3）になります。
 #     `rc[UsedNames]` にすると共有として筋が通り、複製も起きません
 #     （`rc[list[str]]` とは書けないので、クラスで包みます）。
@@ -139,7 +139,7 @@ class Sema:
     tbind: rc[TBinds] | None          # 今有効な型引数の束縛
     pending: list[Instance]       # 本体をあとで検査する実体
     # ★ いま検査しているのが「どこで要求された実体か」。
-    #   ⚠️ テンプレートの中で出たエラーはライブラリの中の行を指すので、
+    #   注意: テンプレートの中で出たエラーはライブラリの中の行を指すので、
     #     使う側のどの行が発端かを添える。
     inst_site: rc[token.Token] | None
     inst_name: str
@@ -173,7 +173,7 @@ class Sema:
             Builtin("int", ast.TY_STR, ast.TY_INT, "pl_str_to_int"),
             # ★ float(str)。CSV を読むのに要ります
             Builtin("float", ast.TY_STR, ast.TY_FLOAT, "pl_str_to_float"),
-            # int ↔ float。⚠️ 暗黙変換はしないので必ずここを通す
+            # int ↔ float。注意: 暗黙変換はしないので必ずここを通す
             Builtin("int", ast.TY_FLOAT, ast.TY_INT, "pl_int_from_float"),
             Builtin("float", ast.TY_INT, ast.TY_FLOAT, "pl_float_from_int"),
             Builtin("ord", ast.TY_STR, ast.TY_INT, "pl_ord"),
@@ -192,12 +192,12 @@ class Sema:
             Builtin("hash", ast.TY_FLOAT, ast.TY_INT, "pl_hash_f64"),
             Builtin("hash", ast.TY_BOOL, ast.TY_INT, "pl_hash_i64"),
             # ★ input(プロンプト) — Python と同じ形。
-            #   ⚠️ EOF では panic する。読めないかもしれない場面では
+            #   注意: EOF では panic する。読めないかもしれない場面では
             #     io.read_line()（None が返る）を使うこと。
             Builtin("input", ast.TY_STR, ast.TY_STR, "pl_input"),
             Builtin("copy", ast.TY_STR, ast.TY_STR, "pl_str_copy"),
             # ★ 値型にも copy を許す（そのまま返すだけ）。
-            #   ⚠️ "pl_copy_id" は codegen が**呼び出しを出さない印**。
+            #   注意: "pl_copy_id" は codegen が**呼び出しを出さない印**。
             #   対になる定義: src/sema.c の BUILTINS
             Builtin("copy", ast.TY_INT, ast.TY_INT, "pl_copy_id"),
             Builtin("copy", ast.TY_FLOAT, ast.TY_FLOAT, "pl_copy_id"),
@@ -425,7 +425,7 @@ class Sema:
     # ── IR 名の割り当て ───────────────────────────────
 
     def name_used(self, name: str) -> bool:
-        # ⚠️ "entry" は予約する。LLVM はラベルとローカル値が
+        # 注意: "entry" は予約する。LLVM はラベルとローカル値が
         #   同じ名前空間にいるので、関数先頭の `entry:` と衝突します。
         if name == "entry":
             return True
@@ -550,7 +550,7 @@ class Sema:
         # ★ ジェネリックなクラス Box[T] → 実体に渡された型引数を見る。
         #   これが無いと、集合演算のような「自分で作った容器を受け取る関数」が
         #   1 つも書けない（def union[T](a: Set[T], b: Set[T])）。
-        # ⚠️ 突き合わせるのは**名前だけ**（モジュールは見ない）。
+        # 注意: 突き合わせるのは**名前だけ**（モジュールは見ない）。
         #   対になる定義: src/sema.c の unify_tparam
         if tr.targs is not None and actual.kind == ast.TY_CLASS:
             acls: rc[ast.Class] | None = actual.cls
@@ -587,7 +587,7 @@ class Sema:
 
     # 実体の名前を作る（Dict$str$int）
     #
-    # ⚠️ 型名をそのまま使うと '[' や ',' が混ざって IR の名前に使えない。
+    # 注意: 型名をそのまま使うと '[' や ',' が混ざって IR の名前に使えない。
     #   英数字と '.' 以外を '_' に潰す。
     def mangle_inst(self, base: str, args: list[rc[ast.Type]]) -> str:
         parts: list[str] = []
@@ -635,7 +635,7 @@ class Sema:
 
         # ★ テンプレートが定義されているモジュールに実体を作る。
         #   メソッドの本体はそのモジュールの名前しか参照しないため。
-        #   ⚠️ 型引数は **Type として**渡すので、名前解決は要らない。
+        #   注意: 型引数は **Type として**渡すので、名前解決は要らない。
         saved_mod: rc[types.ModuleSyms] = self.cur_syms()
         saved_scope: rc[types.Scope] | None = self.scope
         saved_tbind: rc[TBinds] | None = self.tbind
@@ -789,7 +789,7 @@ class Sema:
         # ── ptr[T]（生ポインタ。A-33）──
         #
         # ★ 中身に取れるのは int だけ（C 版 src/sema.c と同じ）。
-        #   ⚠️ こちらは**受け渡しだけ**を扱います（unsafe: の中の読み書きは
+        #   注意: こちらは**受け渡しだけ**を扱います（unsafe: の中の読み書きは
         #     C 版だけが持ちます）。C のライブラリへ配列の先頭を渡すために要ります。
         if tr.name == "ptr":
             if tr.lhs is None:
@@ -834,7 +834,7 @@ class Sema:
             return tt
 
         # ★ 型引数の名前（class Dict[K, V] の K）。
-        #   ⚠️ **クラス名より先に**引く。テンプレートを読む間だけ有効。
+        #   注意: **クラス名より先に**引く。テンプレートを読む間だけ有効。
         tb: rc[TBinds] | None = self.tbind
         if tb is not None:
             tv: rc[ast.Type] | None = tb.find(tr.name)
@@ -896,7 +896,7 @@ class Sema:
         if got.kind == ast.TY_CLASS and want.kind == ast.TY_CLASS:
             gc: rc[ast.Class] | None = got.cls
             wc: rc[ast.Class] | None = want.cls
-            # ⚠️ 'and' の左で絞った変数を、同じ条件式の右では使えません
+            # 注意: 'and' の左で絞った変数を、同じ条件式の右では使えません
             #    （絞り込みが効くのは本体から）。if を分けます。
             if gc is not None:
                 if wc is not None:
@@ -1000,13 +1000,13 @@ class Sema:
     #
     # ★ 右辺の型で意味が変わります。list[T] なら要素に等しいものがあるか、
     #   str なら部分文字列として含まれるか。
-    # ⚠️ dict には使えません（d.has(k) を使う）。
+    # 注意: dict には使えません（d.has(k) を使う）。
     def check_in(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
         l: rc[ast.Type] = self.check_expr(unwrap_node(n.lhs))
         r: rc[ast.Type] = self.check_expr(unwrap_node(n.rhs))
 
         # ★ `k in d` は `d.__contains__(k)` に読み替える。
-        #   ⚠️ ここだけは **右辺の型**で決まる（入れ物のほうが決める）。
+        #   注意: ここだけは **右辺の型**で決まる（入れ物のほうが決める）。
         #     Python の __contains__ と同じで、in は「入れ物に聞く」演算子。
         if r.kind == ast.TY_CLASS:
             cc: rc[ast.Class] = unwrap_class(r.cls)
@@ -1015,7 +1015,7 @@ class Sema:
                 arg: rc[ast.Node] = unwrap_node(n.lhs)   # 探すもの
                 arg.next = None
 
-                # ⚠️ ノードの中身を丸ごと写すと式の並び（実引数の next）が
+                # 注意: ノードの中身を丸ごと写すと式の並び（実引数の next）が
                 #   壊れる。**その場で作り替える。**
                 if n.op == ast.OP_IN:
                     n.kind = ast.ND_METHOD
@@ -1105,7 +1105,7 @@ class Sema:
                         "（どちらかを合わせてください）")
         return a
 
-    # xs[a:b] / s[a:b]。⚠️ **新しい値を作ります**（借用ではない）
+    # xs[a:b] / s[a:b]。注意: **新しい値を作ります**（借用ではない）
     # タプル式 a, b
     #
     # ★ 期待型（左辺や戻り型）が分かっていれば、それに合わせて要素を検査する。
@@ -1185,7 +1185,7 @@ class Sema:
     #   **`a.__add__(b)` に読み替える。** 読み替えるのは意味解析だけで、
     #   codegen と IR は 1 行も変えていない（ふつうのメソッド呼び出しになる）。
     #
-    # ⚠️ **反転（`__radd__`）は無い。** `2.0 * m` は書けない（`m * 2.0` と書く）。
+    # 注意: **反転（`__radd__`）は無い。** `2.0 * m` は書けない（`m * 2.0` と書く）。
     def op_method_name(self, op: int) -> str:
         if op == ast.OP_ADD:
             return "__add__"
@@ -1245,7 +1245,7 @@ class Sema:
         l: rc[ast.Type] = self.check_expr(lhs)
 
         # ★ 左辺がクラスなら、演算子は多重定義を探す。
-        #   ⚠️ 右辺はここでは検査しない。**メソッドの引数として**
+        #   注意: 右辺はここでは検査しない。**メソッドの引数として**
         #     check_class_method が検査する（2 回検査しないため）。
         if l.kind == ast.TY_CLASS:
             lc: rc[ast.Class] = unwrap_class(l.cls)
@@ -1277,7 +1277,7 @@ class Sema:
         r: rc[ast.Type] = self.check_expr(rhs)
 
         # ★ 繰り返し（"ab" * 3 / [0] * 3）だけは両辺の型が違う。
-        #   ⚠️ 3 * "ab"（左右が逆）は認めない（「何を何回」の順を固定する）
+        #   注意: 3 * "ab"（左右が逆）は認めない（「何を何回」の順を固定する）
         if n.op == ast.OP_MUL and r.kind == ast.TY_INT:
             if l.kind == ast.TY_STR or l.kind == ast.TY_LIST:
                 return l
@@ -1335,7 +1335,7 @@ class Sema:
         #     a is not None and a.v == 0   ← and の rhs は lhs が真のときだけ見る
         #     a is None     or  a.v == 0   ← or  の rhs は lhs が偽のときだけ見る
         #
-        # ⚠️ 抜けたら必ず戻す（15.5 節と同じ「入る前に変えて、抜けたら戻す」）。
+        # 注意: 抜けたら必ず戻す（15.5 節と同じ「入る前に変えて、抜けたら戻す」）。
         svars: list[rc[types.VarEntry]] = []
         stypes: list[rc[ast.Type]] = []
         self.narrow_apply(lhs, n.op == ast.OP_AND, svars, stypes)
@@ -1399,7 +1399,7 @@ class Sema:
         v: rc[types.VarEntry] | None = self.lookup(n.name)
 
         # ★ 契約（A-29）：ensures の式の中の 'result' は**戻り値そのもの**。
-        #   ⚠️ 局所変数のほうが先（result という名前の変数を壊さないため）。
+        #   注意: 局所変数のほうが先（result という名前の変数を壊さないため）。
         #   対になる定義: src/sema.c の check_var
         if v is None and self.ensures_depth > 0 and n.name == "result":
             cf: rc[types.FuncSig] | None = self.cur_func
@@ -1421,7 +1421,7 @@ class Sema:
             return ret
 
         # ★ 変数に無ければ **関数を探す**（関数の名前を値にする）
-        #   ⚠️ 変数が先。同名の局所変数があればそちらが勝つ。
+        #   注意: 変数が先。同名の局所変数があればそちらが勝つ。
         if v is None:
             fs: rc[types.FuncSig] | None = self.lookup_func(n.name)
             if fs is not None:
@@ -1516,7 +1516,7 @@ class Sema:
     # ★ 定数なら**コンパイル時に**断る。それ以外は ND_RANGECHK で包み、
     #   codegen が比較 2 つを出す。
     #
-    # ⚠️ 仮引数はここでは包まない。呼び出し側は 5 通りあるので、関数の入口で
+    # 注意: 仮引数はここでは包まない。呼び出し側は 5 通りあるので、関数の入口で
     #   1 回だけ確かめる（codegen の gen_func）。
     #   対になる定義: src/sema.c の range_coerce
     def range_coerce(mut self, val: rc[ast.Node] | None,
@@ -1621,7 +1621,7 @@ class Sema:
         if target.kind == ast.ND_INDEX:
             # ★ クラスへの代入は __setitem__ に読み替える。
             #   m[i, j] = v  →  m.__setitem__(i, j, v)
-            #   ⚠️ 読み替えるのは**代入文そのもの**（値まで実引数にするため）。
+            #   注意: 読み替えるのは**代入文そのもの**（値まで実引数にするため）。
             tobj: rc[ast.Type] = self.check_expr(unwrap_node(target.lhs))
             if tobj.kind == ast.TY_CLASS:
                 sc: rc[ast.Class] = unwrap_class(tobj.cls)
@@ -1640,7 +1640,7 @@ class Sema:
                 val.next = None
                 last.next = val          # 最後の実引数は「代入する値」
 
-                # ⚠️ **代入文のノードそのもの**を呼び出しにする
+                # 注意: **代入文のノードそのもの**を呼び出しにする
                 #   （文の並び next を壊さないよう、入れ替えではなく上書き）。
                 n.kind = ast.ND_METHOD
                 n.tok = target.tok
@@ -1654,14 +1654,14 @@ class Sema:
             et: rc[ast.Type] = self.check_index_expr(target)
             target.type = et
 
-            # ⚠️ タプルの要素には代入できない
+            # 注意: タプルの要素には代入できない
             if tobj.kind == ast.TY_TUPLE:
                 diag.error_at_hint(unwrap_tok(target.tok),
                                    "タプルは作ったら変わりません（新しいタプルを" +
                                    "作ってください）",
                                    "タプルの要素には代入できません")
 
-            # ⚠️ str は不変なので s[0] = "x" は書けない
+            # 注意: str は不変なので s[0] = "x" は書けない
             obj: rc[ast.Node] = unwrap_node(target.lhs)
             if unwrap_type(obj.type).kind == ast.TY_STR:
                 diag.error_at_hint(unwrap_tok(target.tok),
@@ -1789,7 +1789,7 @@ class Sema:
             #         return 0
             #     # ← ここでは b も c も None ではない
             #
-            # ⚠️ 「成り立つ側」の or は相変わらず絞れない（一方しか保証されない）。
+            # 注意: 「成り立つ側」の or は相変わらず絞れない（一方しか保証されない）。
             self.narrow_apply(c.lhs, False, saved, saved_types)
             self.narrow_apply(c.rhs, False, saved, saved_types)
 
@@ -1823,13 +1823,13 @@ class Sema:
 
     # ── scope: から途中で抜けることを禁じる ──────────────────
     #
-    # 🤔 なぜ禁じるのか
+    # なぜ禁じるのか
     #   scope: の出口には「まだ待っていないスレッドを全部 join する」という
     #   仕事がある。**途中から抜ける道があると、その仕事が飛ぶ。**
     #   飛ぶと、まだ走っているスレッドが借りている値の寿命が切れる
     #   — つまり scoped spawn の根拠そのものが崩れる。
     #
-    # ⚠️ ループの中の break / continue は、そのループが scope: の**中**に
+    # 注意: ループの中の break / continue は、そのループが scope: の**中**に
     #    あるなら問題ない（外へは出ないため）。
     def scope_escape(mut self, first: rc[ast.Node] | None, loop_depth: int,
                      try_depth: int) -> None:
@@ -1848,7 +1848,7 @@ class Sema:
                 if loop_depth == 0:
                     what = "continue"
             elif n.kind == ast.ND_CALL or n.kind == ast.ND_METHOD:
-                # ⚠️ 失敗しうる呼び出しは、捕まえないと外へ飛ぶ
+                # 注意: 失敗しうる呼び出しは、捕まえないと外へ飛ぶ
                 if n.can_fail and try_depth == 0:
                     what = "失敗しうる呼び出し"
             if len(what) > 0:
@@ -1871,7 +1871,7 @@ class Sema:
             self.scope_escape(n.incr, ld, td)
             self.scope_escape(n.body, ld, td)
             self.scope_escape(n.args, ld, td)
-            # ⚠️ except 節の中は try の外（そこで失敗すればさらに外へ飛ぶ）
+            # 注意: except 節の中は try の外（そこで失敗すればさらに外へ飛ぶ）
             etd: int = td
             if n.kind == ast.ND_TRY:
                 etd = try_depth
@@ -1894,7 +1894,7 @@ class Sema:
             self.scope_depth = self.scope_depth + 1
             self.check_block(unwrap_node(n.body))
             self.scope_depth = self.scope_depth - 1
-            # ⚠️ 検査は**型検査のあと**。can_fail は検査中に付くため。
+            # 注意: 検査は**型検査のあと**。can_fail は検査中に付くため。
             self.scope_escape(n.body, 0, 0)
         elif n.kind == ast.ND_REQUIRES or n.kind == ast.ND_ENSURES:
             # ★ 契約（A-29）。置ける場所は関数の本体の先頭だけ（check_func が見る）。
@@ -2054,7 +2054,7 @@ class Sema:
                 et: rc[ast.Type] | None = ex.type
                 if et is not None:
                     ec: rc[ast.Class] | None = et.cls
-                    # ⚠️ 'and' では絞り込みが効かないので、ガードを分けます（15.5 節）
+                    # 注意: 'and' では絞り込みが効かないので、ガードを分けます（15.5 節）
                     if ec is not None and ec == c:
                         t.can_fail = True
                         return True
@@ -2154,7 +2154,7 @@ class Sema:
         nargs: int = count_siblings(n.args)
 
         # ★ input() は引数なしでも書ける（Python と同じ）。
-        #   ⚠️ 引数を省いたときは、空のプロンプトを渡したことにする。
+        #   注意: 引数を省いたときは、空のプロンプトを渡したことにする。
         if n.name == "input" and nargs == 0:
             empty: rc[ast.Node] = ast.new_str_node(n.tok, "", 0)
             empty.type = self.ty_str()
@@ -2172,7 +2172,7 @@ class Sema:
         at: rc[ast.Type] = self.check_expr(arg)
 
         # ★ print(xs) / str(xs) — list をそのまま表示できるようにする。
-        #   ⚠️ 要素の型ごとにランタイム関数を呼び分けるので、**要素が
+        #   注意: 要素の型ごとにランタイム関数を呼び分けるので、**要素が
         #     int / float / str / bool のときだけ**。入れ子（list[list[int]]）は
         #     要素をさらに文字列にする手立てが要るので、ここで弾く。
         if at.kind == ast.TY_LIST and (n.name == "print" or n.name == "str"):
@@ -2199,7 +2199,7 @@ class Sema:
         #   「借用だ」と書く手段がありません**。呼ぶ側は所有として受け取り、
         #   自分でも解放するので、--drop すると二重解放になります。
         #
-        # ⚠️ 戻り型は**引数と同じ型そのもの**です。
+        # 注意: 戻り型は**引数と同じ型そのもの**です。
         #   対になる定義: src/sema.c の check_builtin_call
         if n.name == "move_out":
             is_place: bool = (arg.kind == ast.ND_FIELD or
@@ -2247,7 +2247,7 @@ class Sema:
         want: rc[ast.Type] | None = self.expected   # ★ 使う前に控える
 
         if n.body is None:
-            # ⚠️ 'or' では絞り込みが効かないので、判定を分けます
+            # 注意: 'or' では絞り込みが効かないので、判定を分けます
             want_is_list: bool = False
             if want is not None:
                 if want.kind == ast.TY_LIST:
@@ -2277,7 +2277,7 @@ class Sema:
                     et = welem
 
         # ★ 範囲型なら、要素も入れる前に確かめる（A-28）。
-        #   ⚠️ 並びの途中を差し替えるので、1 つ前を覚えながら進む。
+        #   注意: 並びの途中を差し替えるので、1 つ前を覚えながら進む。
         n.body = self.range_coerce(n.body, et)
         prev: rc[ast.Node] = unwrap_node(n.body)
 
@@ -2296,7 +2296,7 @@ class Sema:
                                 "最初の要素は '" + ast.type_name(et) + "' 型です",
                                 "リストの要素はすべて同じ型でなければなりません")
             # ★ A-28：差し替えたら、次の周回のために繋ぎ直す
-            #   ⚠️ 同じノードかどうかは**種別**で見ます（この言語には
+            #   注意: 同じノードかどうかは**種別**で見ます（この言語には
             #     参照の同一性を比べる書き方がありません）。包んだときだけ
             #     ND_RANGECHK に変わります。
             co: rc[ast.Node] = unwrap_node(self.range_coerce(e, et))
@@ -2316,7 +2316,7 @@ class Sema:
     # ★ **式の位置に現れるので、構文解析での脱糖にできない**（for やカンマ代入
     #   との違い）。ここで型を決め、codegen がその場でループを組み立てる。
     #
-    # ⚠️ 隠し宣言 3 つ（ループ変数 / 結果の list / 添字）は構文解析器が並べている。
+    # 注意: 隠し宣言 3 つ（ループ変数 / 結果の list / 添字）は構文解析器が並べている。
     #   ここで型を入れて宣言し、**alloca の名前**を用意する。
     def check_listcomp(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
         lv: rc[ast.Node] = unwrap_node(n.body)          # ループ変数
@@ -2386,7 +2386,7 @@ class Sema:
         ot: rc[ast.Type] = self.check_expr(obj)
 
         # ★ クラスの添字は __getitem__ に読み替える（m[i, j] を含む）。
-        #   ⚠️ 添字は **並び**なので、そのまま実引数のリストになる。
+        #   注意: 添字は **並び**なので、そのまま実引数のリストになる。
         if ot.kind == ast.TY_CLASS:
             gc: rc[ast.Class] = unwrap_class(ot.cls)
             if not self.class_has_method(gc, "__getitem__"):
@@ -2404,7 +2404,7 @@ class Sema:
 
         # ★ タプルの添字 t[0]
         #
-        #   ⚠️ **添字は定数（整数リテラル）だけ**。(int, str) の要素は位置ごとに
+        #   注意: **添字は定数（整数リテラル）だけ**。(int, str) の要素は位置ごとに
         #     型が違うので、添字が実行時に決まると**式の型が決まらない**。
         if ot.kind == ast.TY_TUPLE:
             if idx.next is not None:
@@ -2468,7 +2468,7 @@ class Sema:
         # ★ パッケージ（A-32）：`pkg.mod.f()` の左側は `pkg.mod` という
         #   **ドットを含む 1 つのモジュール名**。
         #
-        # ⚠️ 変数のフィールド（`obj.field.f()`）と見分けが要る。見分け方は
+        # 注意: 変数のフィールド（`obj.field.f()`）と見分けが要る。見分け方は
         #   「いちばん左が変数として宣言されていないこと」＋「繋げた名前が
         #   import されていること」の 2 つ。import は明示的に書くものなので、
         #   両方を満たす形は 1 つしかない。
@@ -2491,7 +2491,7 @@ class Sema:
             cur = unwrap_node(nxt)
         if not root_ok:
             return None
-        # ⚠️ 集めた順は右からなので、繋ぐときに逆に並べ直す
+        # 注意: 集めた順は右からなので、繋ぐときに逆に並べ直す
         if self.lookup(segs[len(segs) - 1]) is not None:
             return None            # 変数が先（13.5 節）
         parts: list[str] = []
@@ -2671,7 +2671,7 @@ class Sema:
             for q in ifc.methods:
                 if q.name == n.name:
                     found = True
-                    slot = q.slot + 0     # ⚠️ 借用ではなく値で受ける
+                    slot = q.slot + 0     # 注意: 借用ではなく値で受ける
                     sig2 = unwrap_node(q.sig)
             if not found:
                 diag.error_full(unwrap_tok(n.tok),
@@ -2717,7 +2717,7 @@ class Sema:
 
         # ── Thread[R].join() — 終わるまで待って戻り値を受け取る ──
         #
-        # ⚠️ join は所有を消費します（2 回 join できません）。それを保証するのは
+        # 注意: join は所有を消費します（2 回 join できません）。それを保証するのは
         #    所有権検査（C 版 ownck）です。
         if ot.kind == ast.TY_THREAD:
             if n.name != "join":
@@ -2884,7 +2884,7 @@ class Sema:
         f: rc[types.FuncSig] | None = self.lookup_func_in(ms, n.name)
 
         # ★ 他のモジュールのジェネリック関数も実体化する。
-        #   ⚠️ 実体はテンプレートのモジュールに作られるので、呼ぶ側から見ると
+        #   注意: 実体はテンプレートのモジュールに作られるので、呼ぶ側から見ると
         #     ふつうの「他モジュールの関数」になる。
         if f is not None and f.tmpl is not None:
             f = self.instantiate_func(f, n)
@@ -2989,7 +2989,7 @@ class Sema:
     # 関数呼び出しの検査（型システム 5.7 の順序）
     def check_call(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
         # ★ 名前が **関数型の変数**なら間接呼び出し
-        #   ⚠️ 変数を先に見る（同名の関数があっても変数が勝つ）
+        #   注意: 変数を先に見る（同名の関数があっても変数が勝つ）
         fv: rc[types.VarEntry] | None = self.lookup(n.name)
         if fv is not None and unwrap_type(fv.type).kind == ast.TY_FN:
             ftv: rc[ast.Type] = unwrap_type(fv.type)
@@ -3024,7 +3024,7 @@ class Sema:
             return ast.elem_of(ftv)
 
         # ★ min / max（2 引数なので組み込みの表では表せない）
-        #   ⚠️ Python の min([1,2,3]) は入れていない（linalg.vmin を使う）
+        #   注意: Python の min([1,2,3]) は入れていない（linalg.vmin を使う）
         if (n.name == "min" or n.name == "max") and self.lookup_func(n.name) is None:
             nm: int = count_siblings(n.args)
             if nm != 2:
@@ -3050,10 +3050,10 @@ class Sema:
 
         # ★ wrap_add / wrap_sub / wrap_mul。
         #   **桁あふれを検査せず 2 の補数で折り返す**算術。
-        #   ⚠️ 既定の + - * は桁あふれで panic する。折り返しを
+        #   注意: 既定の + - * は桁あふれで panic する。折り返しを
         #     「そういう計算だ」として使いたいところ（法 2⁶⁴ の線形合同法など）
         #     のための逃げ道で、**書いた人の意図が演算ごとに見える。**
-        #   ⚠️ min / max と同じく 2 引数なので、組み込みの表では表せない。
+        #   注意: min / max と同じく 2 引数なので、組み込みの表では表せない。
         if is_wrap_name(n.name) and self.lookup_func(n.name) is None:
             nargsw: int = count_siblings(n.args)
             if nargsw != 2:
@@ -3063,7 +3063,7 @@ class Sema:
             w0: rc[ast.Type] = self.check_expr(unwrap_node(n.args))
             w1n: rc[ast.Node] = unwrap_node(unwrap_node(n.args).next)
             w1: rc[ast.Type] = self.check_expr(w1n)
-            # ⚠️ **問題のある側の引数**を指す（2 つとも int でないときは左から）
+            # 注意: **問題のある側の引数**を指す（2 つとも int でないときは左から）
             if w0.kind != ast.TY_INT:
                 diag.error_at_hint(unwrap_tok(unwrap_node(n.args).tok),
                                    "折り返す算術が使えるのは int だけです",
@@ -3208,12 +3208,12 @@ class Sema:
         a: rc[ast.Node] | None = n.args
         while a is not None:
             arg: rc[ast.Node] = a
-            # ⚠️ 引数には期待型を渡さない
+            # 注意: 引数には期待型を渡さない
             at: rc[ast.Type] = self.check_expr(arg)
             # ★ codegen へ「この実引数は借用で渡すと**分かっている**」ことを
             #   伝えます。借用なら相手は所有権を受け取らないので、呼び出し後に
             #   一時値を解放できます（A-21e）。
-            # ⚠️ ここは check_call_sig ＝**通常の関数**だけを通ります。
+            # 注意: ここは check_call_sig ＝**通常の関数**だけを通ります。
             #   メソッドは別経路なので旗が立たず、解放しません（安全側）。
             if i < len(f.pmodes):
                 arg.arg_is_borrowed = f.pmodes[i] != ast.PM_OWN
@@ -3303,7 +3303,7 @@ class Sema:
 
     # この while から抜ける break があるか
     #
-    # ⚠️ 入れ子のループの中には降りない。そこの break は内側のループのもの。
+    # 注意: 入れ子のループの中には降りない。そこの break は内側のループのもの。
     #    if の中には降りる（break は条件付きで書くのが普通なので）。
     def has_break(self, n: rc[ast.Node] | None) -> bool:
         if n is None:
@@ -3379,14 +3379,14 @@ class Sema:
         if node.kind == ast.ND_TRY:
             # ★ try の中身と、**すべての** except が抜けるなら、この try は抜ける。
             #
-            #   ⚠️ else が無い if と同じ話。1 つでも素通りする except が
+            #   注意: else が無い if と同じ話。1 つでも素通りする except が
             #     あれば、そこから下へ落ちる。
             #
-            #   ⚠️ どの except にも当たらないエラーは呼び出し元へ伝播する
+            #   注意: どの except にも当たらないエラーは呼び出し元へ伝播する
             #     ので、**これも「抜ける」ほうに数える**（伝播を except の
             #     漏れと混同しないこと）。
             #
-            #   📖 except の並びは els に next で繋がっている（if の else と
+            #   except の並びは els に next で繋がっている（if の else と
             #     違って複数あるので、リストとしてたどる）。
             if not self.always_returns(node.body):
                 return False
@@ -3443,7 +3443,7 @@ class Sema:
         # ★ インタフェースを 1 つでも実装するなら、**先頭に隠しフィールド**
         #   （vtable へのポインタ）を 1 つ置く。おかげでクラス → インタフェースの
         #   変換が「何もしない」で済む。
-        #   ⚠️ codegen の gen_class_type と **並びを揃えること**。
+        #   注意: codegen の gen_class_type と **並びを揃えること**。
         offset: int = 0
         max_align: int = 1
         index: int = 0
@@ -3544,12 +3544,12 @@ class Sema:
     #   Ada / SPARK の definite assignment にあたる検査です。
     #   対になる定義: src/sema.c の definitely_assigns
     #
-    # ⚠️ ランタイム検査（pl_check_not_none）は**残します**。ここで見られるのは
+    # 注意: ランタイム検査（pl_check_not_none）は**残します**。ここで見られるのは
     #   init の中だけだからです（代入の**前に**読む形は残ります）。
 
     # この文（部分木）のどこかに return があるか。
     #
-    # ⚠️ panic() / exit() は数えません。**戻らない**ので、そこから
+    # 注意: panic() / exit() は数えません。**戻らない**ので、そこから
     #   オブジェクトが観測されることがないためです。
     def contains_return(self, n: rc[ast.Node] | None) -> bool:
         if n is None:
@@ -3575,7 +3575,7 @@ class Sema:
 
     # 文の並びが「どの経路でも必ず self.<fname> に代入する」か。
     #
-    # ⚠️ 途中に return がありうる文を見つけたら打ち切ります
+    # 注意: 途中に return がありうる文を見つけたら打ち切ります
     #   （代入せずに出ていく経路があるということなので）。
     def definitely_assigns(self, first: rc[ast.Node] | None, fname: str) -> bool:
         st: rc[ast.Node] | None = first
@@ -3613,7 +3613,7 @@ class Sema:
                 return False
             return self.definitely_assigns_stmt(node.els, fname)
 
-        # ⚠️ ループは 0 回かもしれません（保守的に「代入しない」と見ます）
+        # 注意: ループは 0 回かもしれません（保守的に「代入しない」と見ます）
         if node.kind == ast.ND_WHILE:
             return False
 
@@ -3679,7 +3679,7 @@ class Sema:
     #   という前提が全部崩れるため。おかげでクラス → インタフェースの変換が
     #   **何もしないで済む**（同じポインタ）。
     #
-    # ⚠️ メソッドのスロット番号は **プログラム全体で一意**。1 つのクラスが
+    # 注意: メソッドのスロット番号は **プログラム全体で一意**。1 つのクラスが
     #   複数のインタフェースを実装できるようにするため。
     def declare_iface(mut self, n: mut rc[ast.Node]) -> None:
         if self.lookup_iface(n.name) is not None or self.lookup_class(n.name) is not None:
@@ -3750,7 +3750,7 @@ class Sema:
                                 "' がありません",
                                 "'" + ifc.name + "' を実装すると宣言しています",
                                 unwrap_node(im.sig).tok, "このメソッドが必要です", "")
-                # ⚠️ ここには来ません（error_full は戻りません）。
+                # 注意: ここには来ません（error_full は戻りません）。
                 #   絞り込みを続けるために、型を合わせて返します。
                 return
 
@@ -3802,7 +3802,7 @@ class Sema:
 
         # ★ 実装するインタフェースを先に決める。
         #   レイアウト（隠しフィールドの有無）がこれで変わるため。
-        #   ⚠️ メソッドの照合は、メソッドを登録した**後**に行う。
+        #   注意: メソッドの照合は、メソッドを登録した**後**に行う。
         ir: rc[ast.Node] | None = n.ifaces
         while ir is not None:
             irn: rc[ast.Node] = ir
@@ -4088,7 +4088,7 @@ class Sema:
                             "ここで再宣言されています",
                             prev.decl_tok, "最初の宣言はここです", "")
 
-        # ⚠️ 初期化式はコンパイル時定数のみ（言語仕様 6.2 の v1 制限）
+        # 注意: 初期化式はコンパイル時定数のみ（言語仕様 6.2 の v1 制限）
         rhs: rc[ast.Node] = unwrap_node(n.rhs)
         if (rhs.kind != ast.ND_INT and rhs.kind != ast.ND_BOOL and
                 rhs.kind != ast.ND_STR and rhs.kind != ast.ND_FLOAT):
@@ -4264,7 +4264,7 @@ class Sema:
         d2: rc[ast.Node] | None = root.body
         while d2 is not None:
             n2: rc[ast.Node] = d2
-            # ⚠️ **ジェネリックなテンプレートはここでは並べない**。
+            # 注意: **ジェネリックなテンプレートはここでは並べない**。
             #   K や V が何なのかまだ決まっていないので、大きさが決められない。
             if n2.kind == ast.ND_CLASS and n2.targs is None:
                 self.declare_class_members(n2)
@@ -4285,11 +4285,11 @@ class Sema:
         while d is not None:
             n: rc[ast.Node] = d
             if n.kind == ast.ND_FUNC:
-                # ⚠️ extern は本体を持たない。
+                # 注意: extern は本体を持たない。
                 #   ジェネリックなテンプレートも検査しない。
                 if n.body is not None and n.targs is None:
                     self.check_func(n)
-            # ⚠️ ジェネリックなテンプレートの本体は検査しない。
+            # 注意: ジェネリックなテンプレートの本体は検査しない。
             #   実体ができてから、その実体の本体を検査する。
             elif n.kind == ast.ND_CLASS and n.targs is None:
                 m: rc[ast.Node] | None = n.body
@@ -4335,7 +4335,7 @@ def unwrap_cls(c: rc[ast.Class] | None) -> rc[ast.Class]:
 
 
 # 2 つのクラスが同じ定義かを比べる
-# ⚠️ 名前ではなく **定義そのもの**で比べます。
+# 注意: 名前ではなく **定義そのもの**で比べます。
 def same_class(a: rc[ast.Class], b: rc[ast.Class]) -> bool:
     return a == b
 
@@ -4369,15 +4369,15 @@ def sema_program(mods: rc[module.Module] | None, entry: rc[module.Module] | None
 
     # ★ パス 3：実体化したクラスの本体を検査する
     #
-    # ⚠️ 検査の途中で **さらに実体が増える**ことがある
+    # 注意: 検査の途中で **さらに実体が増える**ことがある
     #   （Dict[str, Box[int]] のように入れ子の場合）。増えなくなるまで繰り返す。
     while len(s.pending) > 0:
-        # ⚠️ move_out で**持ち主ごと**取り出します。ただの代入だと次の行の
+        # 注意: move_out で**持ち主ごと**取り出します。ただの代入だと次の行の
         #   `s.pending = []` が古いリストを解放し、batch が宙に浮きます
         #   （A-21f。--drop を既定にして stage1 が落ちて見つかりました）。
         batch: list[Instance] = move_out(s.pending)
         s.pending = []                  # ★ 先に外す（この回の分だけを処理する）
-        # ⚠️ **新しく積んだものから**処理する。C 版は連結リストの先頭に
+        # 注意: **新しく積んだものから**処理する。C 版は連結リストの先頭に
         #   足して先頭から辿るので、この向きでないと実体を出す順番が
         #   C 版とずれる（IR が 1 バイト単位で一致しなくなる）。
         k: int = len(batch) - 1
@@ -4450,7 +4450,7 @@ def mod_ast(ms: rc[types.ModuleSyms]) -> rc[ast.Node] | None:
 
 # try のスタックから最後の 1 つを外す。
 #
-# ⚠️ list には pop がまだ無いので、module と同じ手（作り直す）を使います。
+# 注意: list には pop がまだ無いので、module と同じ手（作り直す）を使います。
 def try_pop(xs: list[rc[ast.Node]]) -> list[rc[ast.Node]]:
     out: list[rc[ast.Node]] = []
     i: int = 0

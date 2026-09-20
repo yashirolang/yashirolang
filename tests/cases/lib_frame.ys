@@ -79,5 +79,5 @@ def main() -> int:
         parts3.append(str(int(gd.num("day")[i])) + "=" + str(gd.num("amt")[i]))
     print("数値の鍵: " + strings.join(parts3, " "))
 
-    # ⚠️ 型の取り違えが panic することは rt_frame_wrong_type で見ています
+    # 注意: 型の取り違えが panic することは rt_frame_wrong_type で見ています
     return 0

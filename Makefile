@@ -66,7 +66,7 @@ endif
 # 対になる定義: src/langinfo.h（C 版）/ lib/langinfo$(LANG_EXT)（この言語で書かれた側）
 # ★ 手で直さずに `tools/rename.sh` を使ってください（3 か所を一度に揃えます）。
 #
-# ⚠️ コードとシェルには名前を書かないこと（C は PLC_LANG_*、この言語は
+# 注意: コードとシェルには名前を書かないこと（C は PLC_LANG_*、この言語は
 #   langinfo、シェルは make -s print-LANG_* に訊きます）。書き漏れは
 #   `make check-naming` が見つけます。
 #   ★ 文書（docs/ と README.md）には**実際の名前を書きます**。読みやすさを
@@ -86,11 +86,11 @@ CFLAGS  += -DPLC_LANG_NAME='"$(LANG_NAME)"' \
 # ── ターゲット triple の自動取得 ──────────────────────────────
 # 生成する LLVM IR に書き込む triple。
 #
-# ⚠️ `clang -print-target-triple` を使ってはいけません。
+# 注意: `clang -print-target-triple` を使ってはいけません。
 #    macOS ではそれが返す値（x86_64-apple-darwin25.5.0）と、clang が実際に
 #    IR に書く値（x86_64-apple-macosx26.0.0）が異なり、警告の原因になります。
 #    「clang 自身に空の C ファイルの IR を吐かせて、そこから抜き出す」のが確実です。
-#    ⚠️ Windows には /dev/null が無いことがあるので、空ファイルを作って渡します。
+#    注意: Windows には /dev/null が無いことがあるので、空ファイルを作って渡します。
 HOST_TRIPLE := $(shell printf '' > .plc-empty.c 2>/dev/null; \
                  $(CLANG) -S -emit-llvm -x c .plc-empty.c -o - 2>/dev/null \
                  | sed -n 's/^target triple = "\(.*\)"$$/\1/p'; \
@@ -102,7 +102,7 @@ CFLAGS  += -DPLC_TARGET_TRIPLE='"$(HOST_TRIPLE)"'
 # ★ 配布物を Intel Mac と Apple Silicon の**両方で動かす**ための指定です。
 #   1 つの実行ファイルに 2 つの機械語を入れます（Mach-O の fat 形式）。
 #
-# ⚠️ **triple も 2 つ要ります。** 生成する IR に書く triple は
+# 注意: **triple も 2 つ要ります。** 生成する IR に書く triple は
 #    「いま動いている側」でなければならないのに、既定では
 #    ビルド時に 1 つだけ埋め込まれます。x86_64 の Mac で arm64 の
 #    triple を書いた IR を出すと、動かない実行ファイルができます。
@@ -142,24 +142,24 @@ LLVM_AS  := $(LLVM_BIN)/llvm-as
 #   core.c   … libc に依存しない核（ベアメタルでもリンクできる）
 #   hosted.c … PC 上で動かすときのフック実装 + ファイル入出力など
 #
-# ⚠️ コンパイラ本体（-O0 -g）とは目的が違うので -O2 でビルドします。
+# 注意: コンパイラ本体（-O0 -g）とは目的が違うので -O2 でビルドします。
 #    ランタイムは「ユーザーのプログラムの一部」として動くからです。
 RUNTIME_CORE := runtime/core.c
 RUNTIME_HOSTED := runtime/hosted.c
 
 # ★ 静的ライブラリ（.a）にまとめます。
-#   ⚠️ 以前は `ld -r`（部分リンク）でしたが、Windows では使えません。
+#   注意: 以前は `ld -r`（部分リンク）でしたが、Windows では使えません。
 #     `ar` はどの環境にもあり、clang のリンク行にそのまま渡せます。
 RUNTIME_OBJ := build/runtime.a
 AR ?= ar
 
 # ★ 生成したプログラムをリンクするのに使う clang（実行時に呼ぶ相手）。
-#   ⚠️ clang-18 のように名前が違う環境があるので、埋め込みつつ
+#   注意: clang-18 のように名前が違う環境があるので、埋め込みつつ
 #     環境変数 PLC_CLANG で上書きできるようにします。
 CFLAGS  += -DPLC_CLANG='"$(CLANG)"'
 
 # コンパイラにランタイムの場所を教える。
-# ⚠️ stage0 だけの割り切り（ビルドツリー内で完結すればよい）。
+# 注意: stage0 だけの割り切り（ビルドツリー内で完結すればよい）。
 CFLAGS  += -DPLC_RUNTIME_O='"$(abspath $(RUNTIME_OBJ))"'
 
 # ── 標準ライブラリ ───────────────────────────────────────────
@@ -177,13 +177,13 @@ TARGET  := build/$(LANG_CC)$(EXEEXT)
 # ★ **時間ではなく構造で見ます。** clang に -Rpass-missed=inline で
 #   直接聞くので、機械が変わっても答えは変わりません。
 #
-#   ⚠️ 外れの経路（範囲外・桁あふれ・None）の**呼び出し 1 つにつき約 25 点**
+#   注意: 外れの経路（範囲外・桁あふれ・None）の**呼び出し 1 つにつき約 25 点**
 #     かかります（規約 R13）。cost が threshold 以上になると畳まれません。
 #
 #   make inline-report … 表示するだけ（人が見る用）
 #   make inline-check  … 畳まれていなければ **落ちます**（CI 用）
 #
-# ⚠️ clang の指摘の文言が変わったら、この検査は「指摘なし＝合格」に倒れます。
+# 注意: clang の指摘の文言が変わったら、この検査は「指摘なし＝合格」に倒れます。
 #   見落とす側に倒れるので、番人としては安全側です。
 inline-report: $(TARGET) $(RUNTIME_OBJ)
 	@echo "── 使う clang"
@@ -194,7 +194,7 @@ inline-report: $(TARGET) $(RUNTIME_OBJ)
 	@./$(TARGET) -O2 --keep-ll tests/cases/linalg_matmul_perf$(LANG_EXT) -o build/inline/x >/dev/null 2>&1 || true
 	@out=$$($(CLANG) -O2 -Rpass-missed=inline build/inline/x.*.ll $(RUNTIME_OBJ) -o /dev/null 2>&1 | grep -E "linalg.Matrix.(get|set). not inlined into .linalg.matmul." | sort -u); \
 	if [ -n "$$out" ]; then \
-	  echo "  ⚠️ 畳まれていません（内側ループに呼び出しが残ります）"; \
+	  echo "  注意: 畳まれていません（内側ループに呼び出しが残ります）"; \
 	  echo "$$out" | sed "s/^/  /"; \
 	else \
 	  echo "  ★ 畳まれています（not inlined の指摘なし）"; \
@@ -205,7 +205,7 @@ inline-check: $(TARGET) $(RUNTIME_OBJ)
 	@./$(TARGET) -O2 --keep-ll tests/cases/linalg_matmul_perf$(LANG_EXT) -o build/inline/x >/dev/null 2>&1 || true
 	@out=$$($(CLANG) -O2 -Rpass-missed=inline build/inline/x.*.ll $(RUNTIME_OBJ) -o /dev/null 2>&1 | grep -E "linalg.Matrix.(get|set). not inlined into .linalg.matmul." | sort -u); \
 	if [ -n "$$out" ]; then \
-	  echo "⚠️ linalg.Matrix.get / set が畳まれていません（内側ループに呼び出しが残ります）"; \
+	  echo "注意: linalg.Matrix.get / set が畳まれていません（内側ループに呼び出しが残ります）"; \
 	  echo "$$out" | sed "s/^/  /"; \
 	  echo "  → 外れの経路の呼び出しを増やしていないか確かめてください（規約 R13）"; \
 	  exit 1; \
@@ -221,7 +221,7 @@ inline-check: $(TARGET) $(RUNTIME_OBJ)
 #   make own-report        … 種別ごと・ファイルごとの件数
 #   make own-report LIST=1 … 指摘そのものを全部出す
 #
-# ⚠️ **--warn-own が要ります**（A-24）。所有権の指摘は既定でエラーになり、
+# 注意: **--warn-own が要ります**（A-24）。所有権の指摘は既定でエラーになり、
 #   1 件目で止まるようになったので、数えるには警告へ落とし直します。
 own-report: $(RUNTIME_OBJ)
 	@mkdir -p build
@@ -267,7 +267,7 @@ build/%.o: src/%.c
 # ★ パッケージマネージャ自身も **この言語で書かれています**（tools/pm/）。だから作るには
 #   コンパイラが要ります。所有権の検査 3 つを全部エラーにして建てます
 #   （配って使うものなので、警告のまま出さないため）。
-# ⚠️ ディレクトリ名（tools/pm）とターゲット名（make pm）は**わざと名前非依存**です。
+# 注意: ディレクトリ名（tools/pm）とターゲット名（make pm）は**わざと名前非依存**です。
 #   実行ファイル名だけが $(LANG_PM) で決まります。
 PM      := build/$(LANG_PM)$(EXEEXT)
 PM_SRCS := $(wildcard tools/pm/*$(LANG_EXT))
@@ -290,7 +290,7 @@ pm-test: $(PM)
 # ★ 測るのは **C 版コンパイラ（src/*.c）**です。本体と**同じ CFLAGS** に
 #   計装の 2 つを足して建て、テストを全部通してから llvm-cov に集計させます。
 #   （同じ定義で建てないと「別のコード」を測ることになります）
-# ⚠️ 本言語で書かれた側（selfhost/ lib/）はこの方法では測れません。
+# 注意: 本言語で書かれた側（selfhost/ lib/）はこの方法では測れません。
 #   言語に計装の仕組みが無いためです。tests/stdlib_usage.sh が別に数えます。
 COV_DIR := build/cov
 COV_CC  := $(COV_DIR)/$(LANG_CC)$(EXEEXT)
@@ -390,7 +390,7 @@ KDIR       := build/kernel
 #   外れたら `prover was wrong (this is a compiler bug)` で止まるので、
 #   **解析の誤りが利用者ではなく私たちに返ってきます**。
 #
-# ⚠️ IR の形そのものを見るケース（# EXACT-IR:）は飛ばします。
+# 注意: IR の形そのものを見るケース（# EXACT-IR:）は飛ばします。
 #   「検査が消えたこと」を見る試験は、この設定と必ずぶつかるためです。
 .PHONY: prove-verify prove-report
 prove-verify: $(TARGET) $(RUNTIME_OBJ)

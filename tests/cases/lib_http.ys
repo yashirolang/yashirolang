@@ -39,7 +39,7 @@ def server(fd: int) -> int:
     return 0
 
 # ★ 待ち時間を決めた待ち受け口（A-23）。
-#   ⚠️ **これが無いと、繋いだきり黙っている相手 1 つで輪が止まります。**
+#   注意: **これが無いと、繋いだきり黙っている相手 1 つで輪が止まります。**
 #     serve_n は 1 本ずつ順に捌くので、他の客も全員待たされます。
 def slow_server(fd: int) -> int:
     l: net.Listener = net.Listener(fd, 0)
@@ -55,7 +55,7 @@ def once(port: int, msg: str) -> str raises net.NetError:
     c.close()
     return got
 
-# ⚠️ **copy が要ります。** 要素はリストのものなので、そのまま返すと
+# 注意: **copy が要ります。** 要素はリストのものなので、そのまま返すと
 #   関数の出口でリストごと解放され、返した先が宙に浮きます
 #   （最初に書き忘れて、コンパイラに E-BORROW-8 で教わりました）。
 def line0(s: str) -> str:
@@ -96,7 +96,7 @@ def main() -> int:
                "GET /echo HTTP/1.1\r\nContent-Length: 1\r\nConnection: close\r\n\r\nb")
         both: str = k.recv_all()
         k.close()
-        # ⚠️ 応答は **本体のあとに空行が来ません**。だから
+        # 注意: 応答は **本体のあとに空行が来ません**。だから
         #   "\r\n\r\n" で切ると「1 本目の本体 + 2 本目の頭」が 1 つの
         #   かたまりになります（ここを勘違いして書き直しました）。
         n: int = len(strings.split(both, "HTTP/1.1 200 OK")) - 1
@@ -112,7 +112,7 @@ def main() -> int:
                              "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n")
         print("チャンク転送: " + body_of(r5))
 
-        # ⚠️ 最後の 0 のうしろには**後付けのヘッダ**が来ることがあります。
+        # 注意: 最後の 0 のうしろには**後付けのヘッダ**が来ることがあります。
         #   読み飛ばさないと、次の要求の頭がずれます。
         r6: str = once(port, "POST /len HTTP/1.1\r\nHost: x\r\n" +
                              "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n" +

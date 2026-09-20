@@ -30,7 +30,7 @@ def main() -> int:
     print(f"{n} + 1 = {n + 1}")
     print(f"float={f} bool={b}")
     print(f"len={len(xs)} first={xs[0]} field={p.x}")
-    # ⚠️ 近似値は丸めてから（str(float) は最短の往復表記です）
+    # 注意: 近似値は丸めてから（str(float) は最短の往復表記です）
     print(f"式も書ける: {math.round_to(math.sqrt(2.0), 6)}")
     print(f"波括弧 {{ }} はこう")
     print(f"")

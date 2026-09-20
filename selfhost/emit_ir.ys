@@ -3,7 +3,7 @@
 #   ./build/stage1-codegen [--no-overflow-check] [-g] foo<拡張子>
 #
 # ★ C 版の `-S` と**バイト単位で同じ出力**を目指します。
-#   ⚠️ だから C 版が受け取る「IR の中身を変えるオプション」は、
+#   注意: だから C 版が受け取る「IR の中身を変えるオプション」は、
 #     ここでも受け取れる必要があります（--no-overflow-check）。
 import io
 import sys
@@ -21,15 +21,15 @@ def main() -> int:
         print("使い方: stage1-codegen <入力" + langinfo.ext() + ">")
         return 1
 
-    # ⚠️ 引数の形は C 版に合わせます（オプションは入力ファイルより前）。
+    # 注意: 引数の形は C 版に合わせます（オプションは入力ファイルより前）。
     path: str = ""
     no_ovf: bool = False
     # ★ -g（A-30）も「IR の中身を変えるオプション」なので、ここでも受け取ります。
-    #   ⚠️ 受け取らないと、tests/selfhost.sh の突き合わせで C 版だけが
+    #   注意: 受け取らないと、tests/selfhost.sh の突き合わせで C 版だけが
     #     デバッグ情報を出し、毎回食い違います（実際にそうなりました）。
     debug: bool = False
     # ★ 証明（A-34）も IR を変えるので、ここでも受け取ります。
-    #   ⚠️ 受け取らないと tests/selfhost.sh の突き合わせで毎回食い違います。
+    #   注意: 受け取らないと tests/selfhost.sh の突き合わせで毎回食い違います。
     no_prove: bool = False
     verify_prove: bool = False
     # ★ 解放（drop）は**既定で入れる**（A-21 ⑬。C 版 src/main.c と対）
@@ -57,7 +57,7 @@ def main() -> int:
               langinfo.ext() + ">")
         return 1
 
-    # ⚠️ target triple はビルド時に埋め込めない（プリプロセッサが無い）ので、
+    # 注意: target triple はビルド時に埋め込めない（プリプロセッサが無い）ので、
     #   環境変数から受け取ります。PLC_LIB_DIR と同じ手です。
     triple: str = sys.getenv("PLC_TARGET_TRIPLE")
 

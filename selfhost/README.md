@@ -8,16 +8,16 @@
 
 | C 版 | セルフホスト版 | 状態 |
 |---|---|---|
-| `src/lexer.h` | `selfhost/token` | ✅ |
-| `src/lexer.c` | `selfhost/lexer` | ✅ |
-| `src/parser.c` | `selfhost/parser` | ✅ |
-| `src/ast.c` | `selfhost/ast` | ✅ |
-| `src/sema.c` | `selfhost/sema` | ✅ |
-| `src/diag.c` | `selfhost/diag` | ✅ |
-| `src/types.c` | `selfhost/ast` に同居 | ✅ |
-| `src/module.c` | `selfhost/module` | ✅ |
-| `src/codegen.c` | `selfhost/codegen` | ✅ |
-| `src/main.c` | `selfhost/main` | ✅ |
+| `src/lexer.h` | `selfhost/token` | 済 |
+| `src/lexer.c` | `selfhost/lexer` | 済 |
+| `src/parser.c` | `selfhost/parser` | 済 |
+| `src/ast.c` | `selfhost/ast` | 済 |
+| `src/sema.c` | `selfhost/sema` | 済 |
+| `src/diag.c` | `selfhost/diag` | 済 |
+| `src/types.c` | `selfhost/ast` に同居 | 済 |
+| `src/module.c` | `selfhost/module` | 済 |
+| `src/codegen.c` | `selfhost/codegen` | 済 |
+| `src/main.c` | `selfhost/main` | 済 |
 
 ## 検証方法
 

@@ -1,10 +1,10 @@
 # prove — 区間解析で実行時検査を消す（A-34 段 1・2）
 #
 # ★ 対になる定義: src/prove.c
-#   ⚠️ **1 つでも判断が食い違うと、2 実装の IR がずれて make test が落ちます。**
+#   注意: **1 つでも判断が食い違うと、2 実装の IR がずれて make test が落ちます。**
 #     式の形まで C 版と揃えてあります（特に桁あふれの判定）。
 #
-# 🤔 道具は 1 つだけ：**区間**（この値は lo 以上 hi 以下）。
+# 道具は 1 つだけ：**区間**（この値は lo 以上 hi 以下）。
 #   SMT ソルバもループ不変条件も使いません。証明したい性質のほとんどは、
 #   型（範囲型 A-28）と契約（A-29）と所有権（A-24）が先に言っています。
 import ast
@@ -17,7 +17,7 @@ def iv_max() -> int:
     return 9223372036854775807
 
 def iv_min() -> int:
-    # ⚠️ -9223372036854775808 とは書けません（先に正の数として読まれるため）
+    # 注意: -9223372036854775808 とは書けません（先に正の数として読まれるため）
     return -9223372036854775807 - 1
 
 
@@ -74,17 +74,17 @@ def mul_ovf(a: int, b: int) -> bool:
 
 # ★ **端が溢れたら、そこで止める（飽和）**。⊤ には落とさない。
 #
-# 🔒 **なぜこれが健全なのか。** 桁あふれの検査が残っているから。
+# **なぜこれが健全なのか。** 桁あふれの検査が残っているから。
 #   `i + 1` が本当に溢れるなら、そこで**実行が止まる**（折り返さない）。
 #   つまり「この先へ進んだ」のなら結果は必ず表せる範囲に収まっている。
 #   溢れる側の端を最大値／最小値で止めるのは、**進めた場合の値の集合**を
 #   正しく覆う。
 #
-#   ⚠️ **だから `--no-overflow-check` のときはこれをしない**（SAT_MODE）。
+#   注意: **だから `--no-overflow-check` のときはこれをしない**（SAT_MODE）。
 #     検査が無ければ本当に折り返し、`i` が負になりうる。そのまま
 #     「0 以上」と信じると、添字の検査を誤って消す。
 #
-#   ⚠️ 堂々巡りにはならない。`i = i + 1` 自身の検査は「端が溢れた」＝
+#   注意: 堂々巡りにはならない。`i = i + 1` 自身の検査は「端が溢れた」＝
 #     示せなかった側に入るので**消えずに残る**。残った検査が上の理屈を
 #     支える、という順序。
 #   対になる定義: src/prove.c の sat_mode / add_sat / iv_add
@@ -182,11 +182,11 @@ def iv_join(a: Iv, b: Iv) -> Iv:
 # ── 環境 ───────────────────────────────────────────────────
 #
 # ★ 変数ごとの区間と、1 つだけの関係（「この変数は、この list の長さより
-#   小さい」）。⚠️ 表は**出現順の並び**です（2 実装で同じ結果になるように）。
+#   小さい」）。注意: 表は**出現順の並び**です（2 実装で同じ結果になるように）。
 #
 # その鍵の**下のフィールド**かどうか（"%self" に対する "%self.toks"）。
 #
-# ⚠️ **ここが要点です。** `self` を渡した先で `self.toks.append(...)` を
+# 注意: **ここが要点です。** `self` を渡した先で `self.toks.append(...)` を
 #   されると `i < len(self.toks)` は崩れます。`%self` を落とすときに
 #   `%self.toks` も落とさないと、**消してはいけない検査を消します**。
 #   対になる定義: src/prove.c の key_under
@@ -201,10 +201,10 @@ class Env:
     lt: list[str]       # 関係。"" なら無し
     # ★ 「この 2 つの list は長さが同じ」（eq_a[i] と eq_b[i] が 1 組）
     #
-    #   ⚠️ 区間でも lt でも言えない関係。これが無いと、
+    #   注意: 区間でも lt でも言えない関係。これが無いと、
     #   `if len(a) != len(b): return` で守った後の `a[i]` と `b[i]` のうち
     #   **片方しか**検査を消せない。
-    #   ⚠️ 推移律は取らない（a==b と b==c から a==c は出さない）。
+    #   注意: 推移律は取らない（a==b と b==c から a==c は出さない）。
     #   対になる定義: src/prove.c の LenEq
     eq_a: list[str]
     eq_b: list[str]
@@ -217,7 +217,7 @@ class Env:
         self.eq_a = []
         self.eq_b = []
 
-    # この組をすでに持っているか（⚠️ **向きは問わない**）
+    # この組をすでに持っているか（注意: **向きは問わない**）
     def leneq_has(self, x: str, y: str) -> bool:
         if len(x) == 0 or len(y) == 0:
             return False
@@ -281,7 +281,7 @@ class Env:
             i = i + 1
         return -1
 
-    # ⚠️ グローバル（@ で始まる）は追いません。他の関数が書き換えられるためです。
+    # 注意: グローバル（@ で始まる）は追いません。他の関数が書き換えられるためです。
     def is_global(self, name: str) -> bool:
         return strings.startswith(name, "@")
 
@@ -392,7 +392,7 @@ class Env:
 
     # 中身を丸ごと入れ替える（C 版の `*env = other;` にあたる）
     #
-    # ⚠️ list そのものは copy できないので、1 つずつ写します。
+    # 注意: list そのものは copy できないので、1 つずつ写します。
     def assign_from(mut self, other: Env) -> None:
         self.names = []
         self.lo = []
@@ -482,13 +482,13 @@ class Prove:
     ens: list[rc[EnsRec]]      # いま検査している関数の ensures
     # ★ **印を立ててよい回か。**
     #
-    # 🔒 ここが安全の要。ループの不動点は、入口を**少しずつ広げながら**
+    # ここが安全の要。ループの不動点は、入口を**少しずつ広げながら**
     #   何周も本体を歩く。途中の回の入口は**まだ狭い**（＝楽観的）ので、
     #   その環境で印を立てると、**消してはいけない検査を消す**。
     #   例: `while i < n: s = s + i * 1000000000000`
     #     1 周目の入口は i ∈ [0, 0] なので「桁あふれしない」と見えるが、
     #     広げ切った入口は i ∈ [0, ∞) で、実際には折り返す。
-    #   ⚠️ 印は**入口が決まってからの最後の 1 周だけ**で立てる。
+    #   注意: 印は**入口が決まってからの最後の 1 周だけ**で立てる。
     #   対になる定義: src/prove.c の Prove.mark
     mark: bool
 
@@ -615,7 +615,7 @@ def eval_iv(env: mut Env, n: rc[ast.Node] | None) -> Iv:
                 return Iv(a.lo >> b.lo, a.hi >> b.lo)
             return iv_top()
         if nn.op == ast.OP_MOD:
-            # ⚠️ Python と同じ切り下げなので、b > 0 なら結果は [0, b-1]
+            # 注意: Python と同じ切り下げなので、b > 0 なら結果は [0, b-1]
             if b.lo > 0:
                 return Iv(0, b.hi - 1)
             return iv_top()
@@ -875,14 +875,14 @@ def kill_mut_args(env: mut Env, n: rc[ast.Node]) -> None:
         a = an.next
     if n.kind == ast.ND_METHOD:
         env.kill(place_key(n.lhs))
-    # ⚠️ グローバルは誰でも触れるので、指していた関係を落とします
+    # 注意: グローバルは誰でも触れるので、指していた関係を落とします
     env.kill_global_rels()
 
 
-# ⚠️ **要素を渡すこと（f(xs[i])）では list を落としません。**
+# 注意: **要素を渡すこと（f(xs[i])）では list を落としません。**
 #   渡っているのは要素で、list そのものではありません。長さを変えるには
 #   list を `mut` で渡すか、list のメソッドを呼ぶ必要があります（所有権検査
-#   がそれを保証しています）。⚠️ ここを落としていたせいで、**関係が消えない
+#   がそれを保証しています）。注意: ここを落としていたせいで、**関係が消えない
 #   はずの場所で 499 件消えていました**（計測して分かりました）。
 
 
@@ -899,10 +899,10 @@ def walk_expr(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
         #   ① 両方 0 以上（切り下げ＝切り捨てになる。Python と LLVM の差）
         #   ② 除数が **コンパイル時に決まっている正の数**
         #
-        # 🤔 なぜ ② が要るのか（測って決めました）
+        # なぜ ② が要るのか（測って決めました）
         #   除数が定数なら、LLVM が掛け算とシフトに置き換えます
         #   （20,000,000 回の `i % 7` が **93 ms → 26 ms**）。
-        #   ⚠️ **定数でないときは、命令にすると逆に遅くなりました**
+        #   注意: **定数でないときは、命令にすると逆に遅くなりました**
         #     （105 ms 対 66 ms）。64 ビットの除算命令が重く、ランタイムの
         #     呼び出しと変わらないためです。速くならない最適化は入れません。
         if is_int_node(nn) and (nn.op == ast.OP_FLOORDIV or
@@ -922,7 +922,7 @@ def walk_expr(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
             a: Iv = eval_iv(env, nn.lhs)
             b: Iv = eval_iv(env, nn.rhs)
             # ★ **どの端でも溢れなかった**ときだけ消す。
-            #   ⚠️ 飽和した区間（端が止まっただけ）では消せない。
+            #   注意: 飽和した区間（端が止まっただけ）では消せない。
             #     消さずに残すからこそ、飽和が健全でいられる。
             exact: bool = False
             if nn.op == ast.OP_ADD:
@@ -947,7 +947,7 @@ def walk_expr(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
 
     if nn.kind == ast.ND_LOGICAL:
         walk_expr(pr, env, nn.lhs)
-        # ⚠️ 右側は評価されないことがあるので、区間は触らない
+        # 注意: 右側は評価されないことがあるので、区間は触らない
         walk_expr(pr, env, nn.rhs)
         return
 
@@ -984,7 +984,7 @@ def walk_expr(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
                 if k >= 0 and len(env.lt[k]) > 0:
                     if env.lt[k] == lk or env.leneq_has(env.lt[k], lk):
                         inb = True
-        # ⚠️ list のときだけ消す（str の添字は取り出し方が違う）
+        # 注意: list のときだけ消す（str の添字は取り出し方が違う）
         is_list: bool = False
         if nn.lhs is not None:
             lt2: rc[ast.Type] | None = node_of(nn.lhs).type
@@ -1008,7 +1008,7 @@ def walk_expr(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
             an2: rc[ast.Node] = a2
             walk_expr(pr, env, an2)
             a2 = an2.next
-        # ⚠️ 呼び出しの後は、渡したものについて分かっていたことを落とす
+        # 注意: 呼び出しの後は、渡したものについて分かっていたことを落とす
         kill_mut_args(env, nn)
         return
 
@@ -1027,7 +1027,7 @@ def walk_expr(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
 
 # 本体に break / continue があるか（ループの道が増えるかどうか）
 #
-# ⚠️ 内側のループの break は、そのループのものなので数えない。
+# 注意: 内側のループの break は、そのループのものなので数えない。
 def has_jump(n: rc[ast.Node] | None) -> bool:
     cur: rc[ast.Node] | None = n
     while cur is not None:
@@ -1077,7 +1077,7 @@ def kill_assigned(env: mut Env, n: rc[ast.Node] | None) -> None:
 #
 # ★ これが分かると `if len(a) != len(b): return` の**後ろ**で
 #   「長さは同じ」と言える（then 側は合流に混ぜない）。
-#   ⚠️ 分からないときは False を返す（混ぜる＝安全側）。
+#   注意: 分からないときは False を返す（混ぜる＝安全側）。
 #   対になる定義: src/prove.c の always_exits
 def always_exits(first: rc[ast.Node] | None) -> bool:
     s: rc[ast.Node] | None = first
@@ -1177,7 +1177,7 @@ def walk_stmt(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
         elif else_out and not then_out:
             env.assign_from(then_e)
         else:
-            # ⚠️ 両方抜けるときもここに来る（この先は届かないのでどちらでも
+            # 注意: 両方抜けるときもここに来る（この先は届かないのでどちらでも
             #   構わない）。合流は「両方で言えること」だけ。
             then_e.join(else_e)
             env.assign_from(then_e)
@@ -1185,14 +1185,14 @@ def walk_stmt(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
 
     if nn.kind == ast.ND_WHILE:
         # ★ ループの入口で成り立つことを求める。
-        #   ⚠️ break / continue があると本体が 1 本道でなくなるので、
+        #   注意: break / continue があると本体が 1 本道でなくなるので、
         #     そのときは保守的な入口（本体で書き換わるものを全部忘れる）を使う。
         #     さらに、不動点も「本当に動かないか」を最後に確かめる。
         jump: bool = has_jump(nn.body)
         in_: Env = env.copy_of()
         ok: bool = False
-        # 🔒 **不動点を探している間は印を立てない**（入口がまだ狭い＝楽観的
-        #   なので、ここで消すと消しすぎる）。⚠️ 内側のループも自分の探索中
+        # **不動点を探している間は印を立てない**（入口がまだ狭い＝楽観的
+        #   なので、ここで消すと消しすぎる）。注意: 内側のループも自分の探索中
         #   だけ止めるので、元の値に戻す。
         mark_save: bool = pr.mark
         pr.mark = False
@@ -1238,7 +1238,7 @@ def walk_stmt(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
         if nn.incr is not None:
             walk_stmt(pr, body2, nn.incr)
 
-        # ⚠️ break で抜けたなら条件は偽とは限らない
+        # 注意: break で抜けたなら条件は偽とは限らない
         if not jump:
             narrow(in_, nn.lhs, False)
         env.assign_from(in_)
@@ -1275,7 +1275,7 @@ def walk_stmt(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
         return
 
     if nn.kind == ast.ND_ENSURES:
-        # ⚠️ ここ（関数の先頭）では確かめない。**return の場所**で確かめる。
+        # 注意: ここ（関数の先頭）では確かめない。**return の場所**で確かめる。
         walk_expr(pr, env, nn.lhs)
         return
 
@@ -1286,7 +1286,7 @@ def walk_stmt(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
             exn: rc[ast.Node] = ex
             walk_stmt(pr, env, exn.body)
             ex = exn.next
-        # ⚠️ try の後は「どこで抜けたか」が分からないので全部忘れる
+        # 注意: try の後は「どこで抜けたか」が分からないので全部忘れる
         env.names = []
         env.lo = []
         env.hi = []
@@ -1294,7 +1294,7 @@ def walk_stmt(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
         return
 
     if nn.kind == ast.ND_SCOPE:
-        # ⚠️ unsafe: はセルフホスト版に無いので、ここでは scope: だけ見ます
+        # 注意: unsafe: はセルフホスト版に無いので、ここでは scope: だけ見ます
         #   （C 版 src/prove.c は両方）。
         walk_stmt(pr, env, nn.body)
         return
@@ -1363,13 +1363,13 @@ def node_type_is_none(t: rc[ast.Type]) -> bool:
 
 # 全モジュールを解析して、AST に「検査を出さなくてよい」印を立てる
 #
-# ⚠️ 2 つの実装で**同じ印**が立たなければならない（IR が食い違うため）。
-# ⚠️ no_ovf_mode … `--no-overflow-check` が付いているか。付いていると整数が
+# 注意: 2 つの実装で**同じ印**が立たなければならない（IR が食い違うため）。
+# 注意: no_ovf_mode … `--no-overflow-check` が付いているか。付いていると整数が
 #   **折り返す**ので、区間を飽和させる理屈が崩れる（SAT_MODE を見ること）。
 #   示せる量は減るが、**消しすぎるよりはるかにまし**。
 def prove_program(mods: rc[module.Module] | None, no_ovf_mode: bool) -> Stats:
     SAT_MODE = not no_ovf_mode
-    # ⚠️ 数え上げは**このスコープで持ちます**。Prove の中の Stats を返すと
+    # 注意: 数え上げは**このスコープで持ちます**。Prove の中の Stats を返すと
     #   借りものを返すことになります（E-BORROW-8）。
     pr: Prove = Prove(Stats())
     m: rc[module.Module] | None = mods

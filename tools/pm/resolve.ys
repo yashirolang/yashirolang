@@ -151,7 +151,7 @@ def resolve(root: manifest.Manifest) -> list[Sel]:
 
 # 名前順に並べた**添字**を返す。
 #
-# ⚠️ list[Sel] を並べ替えて返すと「借用した値をリストに保存できません」
+# 注意: list[Sel] を並べ替えて返すと「借用した値をリストに保存できません」
 #   （E-BORROW-3）になります。添字だけを返せば所有権は動きません。
 def order(sels: list[Sel]) -> list[int]:
     out: list[int] = []

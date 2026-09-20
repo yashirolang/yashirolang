@@ -6,10 +6,10 @@
 #
 #     123.45  →  units = 12345, scale = 2
 #
-# ⚠️ 単位数は int（64 ビット）です。桁があふれたら**止まります**
+# 注意: 単位数は int（64 ビット）です。桁があふれたら**止まります**
 #   （この言語は整数の桁あふれを既定で検査します）。黙って壊れません。
 #
-# ⚠️ **割り算だけは桁を書かせます**（`/` を多重定義していません）。
+# 注意: **割り算だけは桁を書かせます**（`/` を多重定義していません）。
 #   1 / 3 に「正しい答え」は無く、どこで丸めるかは呼ぶ側が決めることだからです。
 import strings
 
@@ -92,7 +92,7 @@ class Decimal:
         return Decimal(a.units - b.units, s)
 
     # ★ 掛け算の桁数は**足し算**になります（正確）。
-    #   ⚠️ 上限を超えるときは止めます（黙って丸めません）。
+    #   注意: 上限を超えるときは止めます（黙って丸めません）。
     def __mul__(self, other: Decimal) -> Decimal:
         s: int = self.scale + other.scale
         if s > MAX_SCALE:
@@ -120,7 +120,7 @@ class Decimal:
 
     # ── 比べる ────────────────────────────────────────────
     #
-    # ⚠️ 桁数が違っても同じ値なら等しい（1.5 == 1.50）。
+    # 注意: 桁数が違っても同じ値なら等しい（1.5 == 1.50）。
     def cmp(self, other: Decimal) -> int:
         s: int = max(self.scale, other.scale)
         a: Decimal = self.rescale(s, DOWN)
@@ -171,7 +171,7 @@ class Decimal:
             return "-" + out
         return out
 
-    # ⚠️ **float への変換は最後の手段です**（ここで誤差が入ります）。
+    # 注意: **float への変換は最後の手段です**（ここで誤差が入ります）。
     #   図を描くときなど、表示のためだけに使ってください。
     def to_float(self) -> float:
         return float(self.units) / float(pow10(self.scale))
@@ -225,7 +225,7 @@ def from_int(n: int, scale: int) -> Decimal:
 
 # 文字列から作る（"123.45" / "-0.07" / "42"）
 #
-# ⚠️ **読めない文字列では None を返します**（黙って 0 にしません）。
+# 注意: **読めない文字列では None を返します**（黙って 0 にしません）。
 #   ★ float は経由しません（経由した時点で誤差が入ります）。
 def parse(s: str) -> Decimal | None:
     if len(s) == 0:

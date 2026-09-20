@@ -7,7 +7,7 @@
 # ★ **外部のライブラリは要りません。** ソケット（net）と HTTP（http）は
 #   標準で付いてきます。値の埋め込みは lib/json を使います。
 #
-# ⚠️ 1 本ずつ順に捌きます。同時に捌きたいときは serve_conn を spawn する
+# 注意: 1 本ずつ順に捌きます。同時に捌きたいときは serve_conn を spawn する
 #   輪を自分で書いてください（docs/reference/net.md §3.4）。
 import http
 import json
@@ -15,7 +15,7 @@ import net
 import strings
 import sys
 
-# ⚠️ グローバルに書けるのはリテラルだけなので、組み立ては関数の中で。
+# 注意: グローバルに書けるのはリテラルだけなので、組み立ては関数の中で。
 def page() -> str:
     return ("<!doctype html><meta charset=\"utf-8\">" +
             "<h1>うごいています</h1><ul>" +

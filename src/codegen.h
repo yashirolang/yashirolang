@@ -17,7 +17,7 @@
 //                  他のモジュールでは NULL（C の main を出すのは入口だけ）。
 //   drop         : 解放（drop）を挿入するか（--drop）。
 //
-// ⚠️ drop = false のときの出力は v1 と 1 バイトも変わりません。
+// 注意: drop = false のときの出力は v1 と 1 バイトも変わりません。
 //    既存コード（selfhost/ / lib/）はまだ v1 の参照セマンティクス前提なので、
 //    移行を終えるまで、解放は **opt-in** にしてあります（決定 D16）。
 //   triple       : 生成する IR の target triple（--target / pragma target）

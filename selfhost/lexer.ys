@@ -5,7 +5,7 @@
 #   出力が食い違ったときに「どちらが違うか」を diff で追えます。
 #   docs/design/self-hosting.md 6 節
 #
-# ⚠️ ポインタが無いので、C 版の `const char *p` は `pos: int`（添字）です。
+# 注意: ポインタが無いので、C 版の `const char *p` は `pos: int`（添字）です。
 #   トークンが指すソースの範囲も、部分文字列として複製して持ちます。
 import io
 import strings
@@ -36,7 +36,7 @@ B_LOWER_F: int = 102
 B_UPPER_E: int = 69
 
 # エスケープのヒント（C 版とまったく同じ文字列）。
-# ⚠️ バックスラッシュだらけなので、定数にして 1 か所に閉じ込めます。
+# 注意: バックスラッシュだらけなので、定数にして 1 か所に閉じ込めます。
 ESCAPE_HINT: str = "使えるのは \\n \\t \\r \\0 \\\\ \\\" \\' です。バックスラッシュそのものを書くには \\\\ とします"
 
 # 16 進 2 桁（大文字）。C 版の "%02X" にあたる
@@ -139,7 +139,7 @@ class Lexer:
 
     # インデント幅のスタック。常に先頭は 0（トップレベル）
     #
-    # ⚠️ 本言語の list には pop がありません（append だけ）。
+    # 注意: 本言語の list には pop がありません（append だけ）。
     #   C 版が固定長配列 + 長さで持っていたのと同じ形にします。
     #   indent_len より後ろの要素は「使われていない古い値」です。
     indent_stack: list[int]
@@ -284,13 +284,13 @@ class Lexer:
                 self.pos = self.pos + 1
                 continue
             d: int = digit_value(self.at())
-            # ⚠️ C 版は strtoll + errno。ここは自分で検出する。
+            # 注意: C 版は strtoll + errno。ここは自分で検出する。
             if v > (9223372036854775807 - d) // base:
                 overflow = True
             # ★ あふれると分かったら**積むのをやめる**。
             #   以前は積み続けて 2 の補数で折り返していたが、
             #   いまは `*` が桁あふれで panic する。
-            #   ⚠️ あふれた時点で v は使わない（下で overflow を見て失敗させる）。
+            #   注意: あふれた時点で v は使わない（下で overflow を見て失敗させる）。
             if not overflow:
                 v = v * base + d
             n = n + 1
@@ -307,7 +307,7 @@ class Lexer:
                            "基数 " + str(base) + " で使える数字は " + valid + " です")
         # ── 浮動小数点リテラルか？（10 進のときだけ）──
         #
-        # ⚠️ **'.' の後に数字があるときだけ** float にします（C 版と同じ）。
+        # 注意: **'.' の後に数字があるときだけ** float にします（C 版と同じ）。
         #    `1.` を float にすると `1.foo` と区別できなくなるためです。
         if base == 10:
             mant: str = strings.substr(self.source.text, start, self.pos - start)
@@ -396,7 +396,7 @@ class Lexer:
 
             return width
 
-        # ⚠️ ここには来ません（上の while は True で回っています）。
+        # 注意: ここには来ません（上の while は True で回っています）。
         #   stage0 の到達可能性検査は「while True は抜けない」を判定しないので、
         #   番人の return が要ります（v1 の割り切り。src/sema.c の always_returns）。
         return -1
@@ -415,12 +415,12 @@ class Lexer:
         top: int = self.indent_top()
 
         if width > top:
-            # ⚠️ 「4 段深くなったから INDENT 4 個」ではない。1 段 = 1 個。
+            # 注意: 「4 段深くなったから INDENT 4 個」ではない。1 段 = 1 個。
             if self.indent_len >= MAX_INDENT_DEPTH:
                 self.fail(self.pos, "インデントが深すぎます（最大 " +
                           str(MAX_INDENT_DEPTH - 1) + " 段）")
             self.indent_push(width)
-            # ⚠️ self.push は self を可変借用します。同じ呼び出しの中で
+            # 注意: self.push は self を可変借用します。同じ呼び出しの中で
             #   self.pos を読むと「可変と共有を同時」になるので、先に読みます。
             at_in: int = self.pos
             self.push(token.TK_INDENT, at_in, "")
@@ -452,7 +452,7 @@ class Lexer:
         if self.is_keyword(raw):
             kind = token.TK_KEYWORD
 
-        # ⚠️ push は raw を預かる（複製する）ので、ここでも使うなら
+        # 注意: push は raw を預かる（複製する）ので、ここでも使うなら
         #   長さを**先に**取っておきます（str は共有できません）。
         rlen: int = len(raw)
         t: rc[token.Token] = self.push(kind, start, raw)
@@ -476,7 +476,7 @@ class Lexer:
         while True:
             c: int = self.at()
 
-            # ⚠️ 行をまたがない（エラー位置が遠くなるため）
+            # 注意: 行をまたがない（エラー位置が遠くなるため）
             if c == B_NUL or c == B_LF:
                 self.fail_span(start, start + 1, "文字列が閉じられていません",
                                "文字列は同じ行の中で閉じてください")
@@ -528,7 +528,7 @@ class Lexer:
                     if op == "(" or op == "[":
                         self.paren_depth = self.paren_depth + 1
                     elif op == ")" or op == "]":
-                        # ⚠️ 負にしない（対応しない ')' は構文解析器が報告する）
+                        # 注意: 負にしない（対応しない ')' は構文解析器が報告する）
                         if self.paren_depth > 0:
                             self.paren_depth = self.paren_depth - 1
 
@@ -586,7 +586,7 @@ class Lexer:
                     self.read_string_kind(True)
                     continue
 
-            # ⚠️ 数値より後に判定する（順序を C 版と揃える）
+            # 注意: 数値より後に判定する（順序を C 版と揃える）
             if is_ident_start(self.at()):
                 self.read_ident()
                 continue
@@ -621,7 +621,7 @@ class Lexer:
 
         self.push(token.TK_EOF, end_loc, "")
         # ★ move_out で「持っていく」（self.out は空のリストになる）。
-        #   ⚠️ そのまま return self.out と書くと、呼び出し側は所有として
+        #   注意: そのまま return self.out と書くと、呼び出し側は所有として
         #     受け取るのに Lexer 側も解放するので、--drop で二重解放でした
         #     （docs/roadmap.md A-21d）。
         return move_out(self.out)
@@ -634,7 +634,7 @@ def tokenize(file: str, src: str) -> list[rc[token.Token]]:
 
 # ソースファイルを読む。**C 版の src/util.c :: read_file と対になります。**
 #
-# ⚠️ 言語仕様 2.1 は「`\r\n` は読み込み時に `\n` に正規化する」と決めています。
+# 注意: 言語仕様 2.1 は「`\r\n` は読み込み時に `\n` に正規化する」と決めています。
 #   C 版はこれを read_file の中でやっていましたが、こちら側は io.read_file を
 #   そのまま呼んでいたため、**Windows で checkout した CRLF のソースが
 #   stage1 でだけ字句エラーになっていました**（`解釈できない文字です (0x0D)`）。

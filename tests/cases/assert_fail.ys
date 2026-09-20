@@ -1,7 +1,7 @@
 # OUTPUT: 
 # EXIT: 1
 # assert が破れたら panic（終了コード 1）
-#   ⚠️ Python の -O のような「assert を消す」切り替えは入れていません
+#   注意: Python の -O のような「assert を消す」切り替えは入れていません
 def main() -> int:
     assert 1 == 2, "こわれた"
     return 0

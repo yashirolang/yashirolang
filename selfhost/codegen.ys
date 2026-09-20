@@ -15,7 +15,7 @@ import types
 
 
 # ── 別名解析（TBAA）のタグ。 ─────────────────────────────
-# ⚠️ 番号は C 版（src/codegen.c の TBAA_*）と**必ず同じ**にすること。
+# 注意: 番号は C 版（src/codegen.c の TBAA_*）と**必ず同じ**にすること。
 #   2 実装が 1 バイト違わない IR を出す約束（ロードマップ §4-5）。
 TBAA_NONE: str = ""
 TBAA_FIELD: str = ", !tbaa !4"
@@ -24,16 +24,16 @@ TBAA_LISTELEM: str = ", !tbaa !6"
 
 # ★ グローバル変数にもタグを付ける（当初の宿題②）。
 #
-# 🤔 なぜ付けるのか
+# なぜ付けるのか
 #   `while i < N:` の N がグローバルだと、LLVM は「本体の書き込みが N を
 #   書き換えるかもしれない」と見て**毎回読み直す**。するとループ回数が
 #   不定になり（uncountable loop）、ベクトル化できない。
 #   実測：512³ の行列積で 109 ms → 53 ms。
 #
-# ⚠️ 健全性：グローバルは .data にあり、pl_alloc が返すヒープのオブジェクト
+# 注意: 健全性：グローバルは .data にあり、pl_alloc が返すヒープのオブジェクト
 #   （field / listhdr / listelem）とは**決して重ならない**。
-#   ⚠️ グローバルどうしは同じタグなので互いに別名かもしれない（安全側）。
-#   ⚠️ unsafe: の生ポインタはタグ無しのまま（タグ無しは何とでも別名）。
+#   注意: グローバルどうしは同じタグなので互いに別名かもしれない（安全側）。
+#   注意: unsafe: の生ポインタはタグ無しのまま（タグ無しは何とでも別名）。
 TBAA_GLOBAL: str = ", !tbaa !8"
 
 
@@ -106,7 +106,7 @@ class Emitter:
 
     # ── 証明（A-34）──
     #
-    # ⚠️ verify_prove なら「消せる」と判断した検査を**残す**。外れたら
+    # 注意: verify_prove なら「消せる」と判断した検査を**残す**。外れたら
     #   証明器の誤りとして報告する（解析の誤りを CI で捕まえるため）。
     verify_prove: bool
     verify_kind: str        # "" なら普通の検査
@@ -174,7 +174,7 @@ class Emitter:
     ast_body: rc[ast.Node] | None
 
     # ── 添字の中で貯めた「あふれの旗」（空文字列なら無し）──
-    # ⚠️ C 版（src/codegen.c）は out 引数で渡しています。この言語に
+    # 注意: C 版（src/codegen.c）は out 引数で渡しています。この言語に
     #   out 引数が無いのでフィールドにしていますが、**出す IR は同じ**です。
     ovf_flag: str
     last_ovf: str            # gen_arith_ovf が作った直近の旗
@@ -258,7 +258,7 @@ class Emitter:
     def bool_type(self) -> rc[ast.Type]:
         return rc(ast.Type(ast.TY_BOOL))
 
-    # ⚠️ 名前に '.' を入れる（利用者の変数と衝突しないため）
+    # 注意: 名前に '.' を入れる（利用者の変数と衝突しないため）
     def new_tmp(mut self) -> str:
         t: str = "%t." + str(self.tmp_counter)
         self.tmp_counter = self.tmp_counter + 1
@@ -307,7 +307,7 @@ class Emitter:
         return "i64"
 
     # メモリ（alloca / load / store）としての LLVM 型
-    # ⚠️ 規約 R5：bool はメモリ上 i8
+    # 注意: 規約 R5：bool はメモリ上 i8
     def llvm_mem_type(self, t: rc[ast.Type]) -> str:
         if t.kind == ast.TY_INT:
             return "i64"
@@ -341,7 +341,7 @@ class Emitter:
         return "i64"
 
     # 二項演算子に対応する LLVM 命令
-    # ⚠️ int は符号付きなので 's' の付く命令を使う（sdiv / ashr）
+    # 注意: int は符号付きなので 's' の付く命令を使う（sdiv / ashr）
     # ★ float は別命令（fadd など）。整数の add とはビット列の意味が違う。
     def llvm_binop_f(self, op: int) -> str:
         if op == ast.OP_ADD:
@@ -359,7 +359,7 @@ class Emitter:
     def fcmp_pred(self, op: int) -> str:
         if op == ast.OP_EQ:
             return "oeq"
-        # ⚠️ '!=' だけ unordered（une）。a != b は「a == b ではない」なので、
+        # 注意: '!=' だけ unordered（une）。a != b は「a == b ではない」なので、
         #    NaN が絡むと True でなければならない（x != x が NaN の判定）
         if op == ast.OP_NE:
             return "une"
@@ -395,7 +395,7 @@ class Emitter:
         return "add"
 
     # 比較演算子に対応する icmp の述語
-    # ⚠️ i1 の符号付き比較は逆になるので、bool は符号なしを使う
+    # 注意: i1 の符号付き比較は逆になるので、bool は符号なしを使う
     def icmp_pred(self, op: int, operand_type: rc[ast.Type]) -> str:
         sign: bool = operand_type.kind == ast.TY_INT
         if op == ast.OP_EQ:
@@ -436,10 +436,10 @@ class Emitter:
     #   健全性：pl_list_new はヘッダと要素配列を**別々に確保**し、
     #   クラスのオブジェクトもまた別の確保なので、決して重ならない。
     #
-    # ⚠️ **タグを付けないアクセスは「何とでも別名かもしれない」**と扱われる。
+    # 注意: **タグを付けないアクセスは「何とでも別名かもしれない」**と扱われる。
     #   ローカル変数・グローバル・文字列・unsafe: の生ポインタ・extern には
     #   付けない（付けないほうが安全側）。
-    #   ⚠️ 番号は C 版（src/codegen.c の TBAA_*）と同じにすること。
+    #   注意: 番号は C 版（src/codegen.c の TBAA_*）と同じにすること。
 
     def gen_load_tb(mut self, ty: rc[ast.Type], ptr: str, tb: str) -> str:
         t: str = self.new_tmp()
@@ -501,7 +501,7 @@ class Emitter:
     # ── 文字列リテラル ─────────────────────────────────
 
     # IR の文字列に 1 バイト出力する
-    # ⚠️ ASCII 印字可能文字以外はすべて \XX にする
+    # 注意: ASCII 印字可能文字以外はすべて \XX にする
     def emit_ir_byte(self, parts: mut list[str], c: int) -> None:
         if c >= 32 and c < 127 and c != 34 and c != 92:
             parts.append(chr(c))
@@ -514,7 +514,7 @@ class Emitter:
             s: rc[StrLit] = sl
             if s.bytes_ == bytes_:
                 # ★ copy で返す。StrLit は同じラベルを持ち続けるので take は使えません。
-                #   ⚠️ そのまま return s.label と書くと、呼び出し側が所有として
+                #   注意: そのまま return s.label と書くと、呼び出し側が所有として
                 #     解放し、次の intern_str が解放済みを読みます
                 #     （docs/roadmap.md A-21d と同じ形）。
                 return copy(s.label)
@@ -529,7 +529,7 @@ class Emitter:
         #   リテラルは .rodata にあるので、解放しようとすると落ちるためです
         #   （runtime/core.c の PL_STR_STATIC を参照）。
         #
-        # ⚠️ 印を立てるのは --drop のときだけです。既定の出力を 1 バイトも
+        # 注意: 印を立てるのは --drop のときだけです。既定の出力を 1 バイトも
         #   変えないため。対になる定義: src/codegen.c の intern_str
         hdr: int = n
         if self.drop:
@@ -568,7 +568,7 @@ class Emitter:
             self.emit("  " + r + " = zext i1 " + v + " to i64\n")
             return r
         if t.kind == ast.TY_FLOAT:
-            # ⚠️ fptosi ではない。**ビットをそのまま**運ぶ。
+            # 注意: fptosi ではない。**ビットをそのまま**運ぶ。
             self.emit("  " + r + " = bitcast double " + v + " to i64\n")
             return r
         self.emit("  " + r + " = ptrtoint ptr " + v + " to i64\n")
@@ -592,7 +592,7 @@ class Emitter:
     #
     # ★ シグネチャごとに 1 つだけ作る（同じ形の関数が何本 spawn されても 1 つ）。
     #
-    # 🤔 なぜ thunk が要るのか
+    # なぜ thunk が要るのか
     #   「全部 i64 として直接呼べばいい」ように見えるが、**呼び出し規約は
     #   型で決まる**。float は整数と別のレジスタで渡され、None を返す関数には
     #   戻り値レジスタが無い。型を偽って呼ぶと、その 2 つで静かに壊れる。
@@ -681,7 +681,7 @@ class Emitter:
     # gen_expr の約束：
     #   「式を評価する命令列を fn に出力し、結果が入っている場所の名前を返す」
     #
-    # ⚠️ 値を返さない式（void の呼び出し）は "" を返します。
+    # 注意: 値を返さない式（void の呼び出し）は "" を返します。
     #   C 版は NULL を返しますが、本言語では str の None を避けて空文字列に
     #   しました（**呼び出し側は結果を使わないと分かっている**場所だけです）。
 
@@ -756,7 +756,7 @@ class Emitter:
 
         if n.kind == ast.ND_VAR:
             # ★ ガードの計算中は、誘導変数を「両端の値」に読み替える。
-            #   ⚠️ 添字の式をもう一度そのまま生成するので、置き換えは
+            #   注意: 添字の式をもう一度そのまま生成するので、置き換えは
             #     ここ 1 か所で足りる（式の形を分解する必要がない）。
             if len(self.subst_ir) > 0 and n.ir_name == self.subst_ir:
                 return copy(self.subst_val)
@@ -768,7 +768,7 @@ class Emitter:
             vv: str = self.gen_load(type_of(n), n.ir_name)
             # ★ ここで所有権が移ったなら、スロットに null を書きます。
             #   これが drop フラグの代わりです（設計 §6.3。決定 D17）。
-            #   ⚠️ 書かないと、移動したはずの値をスコープ終端でもう一度
+            #   注意: 書かないと、移動したはずの値をスコープ終端でもう一度
             #     解放してしまいます（二重解放）。
             #   対になる定義: src/codegen.c の ND_VAR
             if self.drop and n.moved_out and not n.is_global:
@@ -815,7 +815,7 @@ class Emitter:
         self.emit_label(end_l)
         return self.gen_load(nt, res)
 
-    # 探索関数に渡す形にする。⚠️ float は **double のまま**（数値として比べる）
+    # 探索関数に渡す形にする。注意: float は **double のまま**（数値として比べる）
     def elem_to_slot_cmp(mut self, elem: rc[ast.Type], v: str) -> str:
         if elem.kind != ast.TY_BOOL:
             return copy(v)
@@ -953,7 +953,7 @@ class Emitter:
         return t
 
     def gen_binop(mut self, n: rc[ast.Node]) -> str:
-        # ★ in / not in。⚠️ **左右をここで評価してはいけない**
+        # ★ in / not in。注意: **左右をここで評価してはいけない**
         #   （渡す形が要素の型で変わるので gen_in の中で作る）
         if n.op == ast.OP_IN or n.op == ast.OP_NOTIN:
             return self.gen_in(n)
@@ -976,7 +976,7 @@ class Emitter:
         r: str = self.gen_expr(rhs)
         t: str = self.new_tmp()
 
-        # ⚠️ オペランドの型は「結果の型」ではない（比較の結果は bool）
+        # 注意: オペランドの型は「結果の型」ではない（比較の結果は bool）
         ot: rc[ast.Type] = type_of(lhs)
 
         # ★ 繰り返しと list の連結（新しい値を作る）
@@ -1008,7 +1008,7 @@ class Emitter:
                 self.drop_temp(lhs, l)   # A-21e
                 self.drop_temp(node_of(n.rhs), r)
                 return t
-            # ⚠️ 比較は「内容」で行う（言語仕様 4.3）
+            # 注意: 比較は「内容」で行う（言語仕様 4.3）
             self.declare_rt("i64 @pl_str_cmp(ptr, ptr)")
             c: str = self.new_tmp()
             self.emit("  " + c + " = call i64 @pl_str_cmp(ptr " + l + ", ptr " +
@@ -1021,7 +1021,7 @@ class Emitter:
             return t
 
         # ★ float の '**' はランタイムの pl_fpow に落とす。
-        #   ⚠️ libc の pow は使えない（ベアメタルで動く必要があるため）。
+        #   注意: libc の pow は使えない（ベアメタルで動く必要があるため）。
         if n.op == ast.OP_POW and ot.kind == ast.TY_FLOAT:
             self.declare_rt("double @pl_fpow(double, double)")
             self.emit("  " + t + " = call double @pl_fpow(double " + l +
@@ -1065,7 +1065,7 @@ class Emitter:
                       " double " + l + ", " + r + "\n")
         else:
             # ★ int の + - * は桁あふれを検査する。
-            #   ⚠️ 意図的に折り返したいときは wrap_add / wrap_sub / wrap_mul
+            #   注意: 意図的に折り返したいときは wrap_add / wrap_sub / wrap_mul
             #     を使う（そちらは gen_call で出す）。
             intr: str = ""
             # ★ 証明（A-34）が「折り返さない」と示した計算は検査を出さない
@@ -1101,7 +1101,7 @@ class Emitter:
             # ★ float には専用の否定命令 fneg がある（符号ビットの反転）
             self.emit("  " + t + " = fneg double " + v + "\n")
         elif n.op == ast.OP_NEG:
-            # ⚠️ LLVM に整数の neg 命令は無い。0 からの減算で表す
+            # 注意: LLVM に整数の neg 命令は無い。0 からの減算で表す
             # ★ -(-9223372036854775808) は表せないので検査する
             if not self.no_ovf:
                 return self.gen_checked_arith("ssub", "0", v, 3)
@@ -1116,11 +1116,11 @@ class Emitter:
 
     # ── 短絡評価（規約 6.6）────────────────────────────────
     #
-    # 🤔 なぜ phi を使わないのか（規約 R3）
+    # なぜ phi を使わないのか（規約 R3）
     #   alloca に置いて最後に読む方式なら「どのブロックから来たか」を
     #   覚えなくて済みます。mem2reg が phi に変換してくれます。
     def gen_logical(mut self, n: rc[ast.Node]) -> str:
-        # ⚠️ 番号は最初に 1 回だけ確保する
+        # 注意: 番号は最初に 1 回だけ確保する
         id_: int = self.label_counter
         self.label_counter = self.label_counter + 1
 
@@ -1172,7 +1172,7 @@ class Emitter:
 
     # 要素の値を「ランタイムに渡す形」にする（bool は i64 に広げる）
     # ★ float はビットパターンのまま i64 のスロットに入れる（list の作りを
-    #   変えずに済む）。⚠️ 数値変換（sitofp）ではなく bitcast。
+    #   変えずに済む）。注意: 数値変換（sitofp）ではなく bitcast。
     def elem_to_slot(mut self, elem: rc[ast.Type], v: str) -> str:
         if elem.kind == ast.TY_FLOAT:
             tf: str = self.new_tmp()
@@ -1212,7 +1212,7 @@ class Emitter:
         el: rc[ast.Node] | None = n.body
         while el is not None:
             e: rc[ast.Node] = el
-            # ⚠️ **maybe_retain が要ります。** 場所から読んだ rc[T] をリストに
+            # 注意: **maybe_retain が要ります。** 場所から読んだ rc[T] をリストに
             #    入れると参照が 1 つ増えます。増やさずに入れると、リストの
             #    解放だけが効いて早すぎる解放になります（A-26）。
             #    対になる定義: src/codegen.c の gen_list_lit
@@ -1230,7 +1230,7 @@ class Emitter:
     #   三項演算子や and / or の右側に書かれたときに「評価されないはずのもの」を
     #   評価してしまうため。
     #
-    # ⚠️ 隠し変数の alloca は collect_allocas が n.body から拾っている。
+    # 注意: 隠し変数の alloca は collect_allocas が n.body から拾っている。
     #   ここでは名前を使うだけ。
     def gen_listcomp(mut self, n: rc[ast.Node]) -> str:
         lv: rc[ast.Node] = node_of(n.body)       # ループ変数
@@ -1258,7 +1258,7 @@ class Emitter:
             push = "pl_list_push_ptr"
         self.declare_rt("void @" + push + "(ptr, " + sty + ")")
 
-        # ⚠️ 対象（list）と range の端は **ループの外で 1 回だけ**評価する
+        # 注意: 対象（list）と range の端は **ループの外で 1 回だけ**評価する
         it: str = ""
         stop: str = ""
         if n.args is not None:
@@ -1308,7 +1308,7 @@ class Emitter:
             self.emit_cond_br(c, keep_l, next_l)
             self.emit_label(keep_l)
 
-        # ⚠️ リテラルと同じ理由で retain が要ります（A-26）。
+        # 注意: リテラルと同じ理由で retain が要ります（A-26）。
         val: str = self.elem_to_slot(elem, self.maybe_retain(node_of(n.lhs),
                                                              self.gen_expr(node_of(n.lhs))))
         lst2: str = self.new_tmp()
@@ -1320,7 +1320,7 @@ class Emitter:
         i2: str = self.new_tmp()
         self.emit("  " + i2 + " = load i64, ptr " + ix.ir_name + "\n")
         i3: str = self.new_tmp()
-        # ⚠️ ここは桁あふれ検査を出さない（長さ／終端までしか進まないため）
+        # 注意: ここは桁あふれ検査を出さない（長さ／終端までしか進まないため）
         stepv: int = 1
         if n.args is not None:
             stepv = n.ival
@@ -1336,7 +1336,7 @@ class Emitter:
 
     # None の検査を IR に展開する。
     #
-    # ⚠️ クラス型のフィールドは NULL から始まる（12.6 節）。
+    # 注意: クラス型のフィールドは NULL から始まる（12.6 節）。
     #   NULL 参照を segfault ではなく親切なメッセージに変えるための検査。
     #
     # ★ もとは pl_check_not_none への**呼び出し 1 回**だった。
@@ -1368,7 +1368,7 @@ class Emitter:
 
     # ── 添字を IR に展開する ──────────────────────
     #
-    # ⚠️ ここがこの言語の最大のボトルネックだった。
+    # 注意: ここがこの言語の最大のボトルネックだった。
     #   xs[i] はもともと pl_list_len / pl_norm_index / pl_list_get_* の
     #   **関数呼び出し 3 回**だった。ランタイムは runtime.a として
     #   別にリンクされ、LTO を使っていないので -O2 でも
@@ -1395,14 +1395,14 @@ class Emitter:
     # ★ 当たりの経路は llvm.*.with.overflow 1 命令 ＋ 予測の当たる分岐だけ。
     #   実測で 2.4%（整数ループ 2000 万回が 166 → 170 ms）。
     #
-    # ⚠️ 外れの経路の pl_overflow_fail は **noreturn cold**。cold が無いと
+    # 注意: 外れの経路の pl_overflow_fail は **noreturn cold**。cold が無いと
     #   この分岐の費用が囲む関数のインライン化の見積りに入る。
     #
     # op は pl_overflow_fail に渡す番号（0:+ 1:- 2:* 3:単項-）。
     # ★ ここは「値と、あふれた旗（i1）を作る」だけ。**分岐は出さない。**
     #   分岐まで出す形（gen_checked_arith）と、旗だけ受け取って範囲検査に
     #   相乗りさせる形（gen_index_expr）の 2 通りに使い分ける。
-    #   ⚠️ 旗は self.last_ovf に置く（この言語に out 引数が無いため）。
+    #   注意: 旗は self.last_ovf に置く（この言語に out 引数が無いため）。
     def gen_arith_ovf(mut self, intr: str, l: str, r: str) -> str:
         self.declare_rt("{i64, i1} @llvm." + intr +
                         ".with.overflow.i64(i64, i64)")
@@ -1457,7 +1457,7 @@ class Emitter:
     # ── 契約（事前条件・事後条件。A-29）の検査 ──────────────
     #
     # ★ 出るのは **条件の式と分岐 1 つ**だけ（assert と同じ形）。
-    # ⚠️ メッセージは**コンパイル時に組み立てて**大域定数に置く。
+    # 注意: メッセージは**コンパイル時に組み立てて**大域定数に置く。
     #   対になる定義: src/codegen.c の gen_contract_check
     # ── デバッグ情報（A-30）──────────────────────────────
     #
@@ -1493,7 +1493,7 @@ class Emitter:
     #     str                 → char へのポインタ（デバッガが "..." で出す）
     #     list / クラス / rc  → 構造体へのポインタ（中身を開いて見られる）
     #
-    #   ⚠️ **参照型はポインタのまま**にする。`p xs` は番地を出し、`p *xs` で
+    #   注意: **参照型はポインタのまま**にする。`p xs` は番地を出し、`p *xs` で
     #     中身が出る。デリファレンスして見せると `T | None` が None のときに
     #     「読めません」しか出せなくなる。
     #
@@ -1535,7 +1535,7 @@ class Emitter:
                                 " = !DIDerivedType(tag: DW_TAG_pointer_type, " +
                                 "baseType: !" + str(base) + ", size: 64)\n")
         else:
-            # ⚠️ baseType は省けない（LLVM が missing required field で止まる）。
+            # 注意: baseType は省けない（LLVM が missing required field で止まる）。
             #   「何を指すか分からないポインタ」は baseType: null と書く。
             self.dbgmeta.append("!" + str(id_) +
                                 " = !DIDerivedType(tag: DW_TAG_pointer_type, " +
@@ -1575,7 +1575,7 @@ class Emitter:
 
     # list の 1 要素ぶんの型
     #
-    # ⚠️ list の要素は**どの型でも 8 バイト**（runtime/core.c）。bool だけは
+    # 注意: list の要素は**どの型でも 8 バイト**（runtime/core.c）。bool だけは
     #   変数の箱の中では 1 バイトなので、そのまま書くと `xs[1]` がとなりの
     #   要素を読む。8 バイトの int として出す。
     #
@@ -1604,7 +1604,7 @@ class Emitter:
         if t.kind == ast.TY_OPT:
             return self.dbg_type_of(t.elem)
 
-        # 引くための名前。⚠️ クラスは**モジュール修飾した名前**で区別する
+        # 引くための名前。注意: クラスは**モジュール修飾した名前**で区別する
         #   （別のモジュールに同じ名前のクラスがある）。
         key: str = ast.type_name(t)
         if t.kind == ast.TY_CLASS and t.cls is not None:
@@ -1638,7 +1638,7 @@ class Emitter:
         # ★ 値が指すのは「バイト列の先頭」で、そこは NUL 終端（長さは 8 バイト
         #   手前。runtime/core.c）。char へのポインタだと書いておけば、
         #   デバッガがそのまま "hello" と出す。
-        # ⚠️ もとの型の名前は "char" にする。「文字列として出してよい」と
+        # 注意: もとの型の名前は "char" にする。「文字列として出してよい」と
         #   判断する手がかりがここだから（"u8" では番地しか出なかった）。
         if t.kind == ast.TY_STR:
             ch: int = self.dbg_basic("b:char", "char", 8, "DW_ATE_signed_char")
@@ -1650,7 +1650,7 @@ class Emitter:
         # ── list[T] ──
         #   PlList { void *data; long long len; long long cap; }（runtime/core.c）
         if t.kind == ast.TY_LIST:
-            # ⚠️ 先に番号を取り、**中身を作る前に**表へ入れる。
+            # 注意: 先に番号を取り、**中身を作る前に**表へ入れる。
             #   list[Node] のように自分を含む型で無限に回らないため。
             lsid: int = self.dbg_id()
             lpid: int = self.dbg_id()
@@ -1775,7 +1775,7 @@ class Emitter:
 
         # ── 中身をまだ書いていないもの ──
         #   タプル・関数・インタフェース・Thread[R]・mutex[T]。
-        #   ⚠️ 番地だけが出る。型の名前は付くので、`p x` が「何も知らない
+        #   注意: 番地だけが出る。型の名前は付くので、`p x` が「何も知らない
         #     ポインタ」になることはない。
         vp: int = self.dbg_ptr_to("*void", 0)
         vtd: int = self.dbg_typedef(key, vp)
@@ -1792,7 +1792,7 @@ class Emitter:
     # ★ 置いてある場所は **alloca した箱**（規約 R8 で引数も箱に写すので、
     #   引数もローカル変数もまったく同じ扱いで済む）。
     #
-    # ⚠️ 脱糖が作る隠し変数（for.ix.0 / comp.res.0）は出さない。利用者が
+    # 注意: 脱糖が作る隠し変数（for.ix.0 / comp.res.0）は出さない。利用者が
     #   書いていない名前なので、変数一覧に出ると邪魔になる。見分けは
     #   「名前に '.' が入っているか」（識別子には入らない）。
     def dbg_local(mut self, name: str, ir_name: str, t: rc[ast.Type] | None,
@@ -1830,11 +1830,11 @@ class Emitter:
 
     # fn の start 以降に出した**命令の行**へ `!dbg` を付けて回る
     #
-    # 🤔 なぜ後から付けるのか
+    # なぜ後から付けるのか
     #   命令を出す場所は数百か所ある。そのすべてに行の印を渡して回ると、
     #   本筋（何を出すか）が印の受け渡しで埋まる。
     #
-    # ⚠️ 付けないもの：ラベル行（行頭が空白でない）・空行・すでに `!dbg` がある行
+    # 注意: 付けないもの：ラベル行（行頭が空白でない）・空行・すでに `!dbg` がある行
     def dbg_annotate(mut self, start: int) -> None:
         if not self.dbg or self.dbg_fn == 0:
             return
@@ -1877,7 +1877,7 @@ class Emitter:
 
     def gen_prove_fail(mut self) -> None:
         self.declare_rt("void @pl_prove_fail(ptr) noreturn cold")
-        # ⚠️ intern_str は self を可変で借りるので、先に写しておきます
+        # 注意: intern_str は self を可変で借りるので、先に写しておきます
         #   （同じ式の中で self.verify_kind を共有借用すると E-BORROW-5）。
         kind: str = copy(self.verify_kind)
         lab: str = self.intern_str(kind)
@@ -1937,7 +1937,7 @@ class Emitter:
         st: rc[ast.Node] | None = node_of(f.body).body
         while st is not None:
             sn: rc[ast.Node] = st
-            # ⚠️ 契約は本体の先頭に並んでいる（sema が保証）。
+            # 注意: 契約は本体の先頭に並んでいる（sema が保証）。
             if sn.kind != ast.ND_REQUIRES and sn.kind != ast.ND_ENSURES:
                 st = None
             else:
@@ -1970,16 +1970,16 @@ class Emitter:
 
     # ★ float の 0 除算を検査する。
     #
-    #   ⚠️ 整数の `//` と `%` は 0 除算で panic するのに、`1.0 / 0.0` は
+    #   注意: 整数の `//` と `%` は 0 除算で panic するのに、`1.0 / 0.0` は
     #     inf になっていた。**同じ「割る」で挙動が違う**のは穴なので、
     #     Python と同じく両方 panic に揃えた。
     #
-    #   ⚠️ 規約 R13：外れの経路の**呼び出し**が 1 つ増える（約 25 点）。
+    #   注意: 規約 R13：外れの経路の**呼び出し**が 1 つ増える（約 25 点）。
     #     費用は測りました（float 除算が主のループで +9.8%）。
     def gen_checked_fdiv(mut self, l: str, r: str) -> str:
         self.declare_rt("void @pl_fdiv_zero_fail() noreturn cold")
         z: str = self.new_tmp()
-        # ⚠️ oeq を使う。-0.0 も 0.0 と等しく、割れば ±inf になるため。
+        # 注意: oeq を使う。-0.0 も 0.0 と等しく、割れば ±inf になるため。
         #   NaN で割るのは NaN なので、ここでは止めない（0 だけを見る）。
         self.emit("  " + z + " = fcmp oeq double " + r + ", 0.000000e+00\n")
 
@@ -2035,7 +2035,7 @@ class Emitter:
         #   「全反復ぶんの添字が 0 以上・長さ未満」を確かめてあるので、
         #   ここでは検査も**負の添字の正規化も**出さない。
         #
-        # 🤔 正規化（select）を消すのが要点。検査だけ消しても
+        # 正規化（select）を消すのが要点。検査だけ消しても
         #   アドレスが `data + idx + (idx<0 ? len : 0)` のままで、
         #   LLVM から見ると添字が 1 ずつ進むと分からず、ベクトル化できない。
         if self.nobc:
@@ -2094,7 +2094,7 @@ class Emitter:
         else:
             self.emit("  call void @pl_index_fail(i64 " + idx + ", i64 " + ln +
                       ", i64 " + ovf_arg + ")\n")
-        # ⚠️ pl_index_fail は戻ってこない。unreachable を置かないと
+        # 注意: pl_index_fail は戻ってこない。unreachable を置かないと
         #   LLVM は「戻るかも」と見て、検査をループ外へ出せなくなる。
         self.emit("  unreachable\n")
         self.terminated = True
@@ -2121,9 +2121,9 @@ class Emitter:
     #   「範囲内 かつ あふれていない」を 1 回だけ分岐する。失敗の呼び出しは
     #   **もともと 1 つある pl_index_fail だけ**になり、分岐も呼び出しも増えない。
     #
-    #   ⚠️ **健全性**：折り返した添字がたまたま範囲内に入っても、旗が
+    #   注意: **健全性**：折り返した添字がたまたま範囲内に入っても、旗が
     #     立っているので必ず失敗する（gen_index_addr の and）。
-    #   ⚠️ **意味の違いが 1 つ**：あふれた時点ではなく添字の計算が終わった
+    #   注意: **意味の違いが 1 つ**：あふれた時点ではなく添字の計算が終わった
     #     時点で止まる。xs[a * b + f()] は a * b があふれても f() が呼ばれる。
     #
     # 旗は self.ovf_flag に貯まる（呼ぶ前に "" にしておくこと）。
@@ -2134,7 +2134,7 @@ class Emitter:
             if lt.kind == ast.TY_INT:
                 intr = self.ovf_intr(n.op)
 
-        # ⚠️ 単項 - も同じ扱い（-INT_MIN があふれる）
+        # 注意: 単項 - も同じ扱い（-INT_MIN があふれる）
         neg: bool = False
         if n.kind == ast.ND_UNARY and n.op == ast.OP_NEG and not self.no_ovf:
             nt: rc[ast.Type] = type_of(n)
@@ -2166,7 +2166,7 @@ class Emitter:
         obj_node: rc[ast.Node] = node_of(n.lhs)
         ot: rc[ast.Type] = type_of(obj_node)
         obj: str = self.gen_expr(obj_node)
-        # ⚠️ 入れ子（xs[ys[i * 2]]）に備えて、貯め場所を退避してから使う
+        # 注意: 入れ子（xs[ys[i * 2]]）に備えて、貯め場所を退避してから使う
         #
         # ★ move_out で「持っていく」こと（docs/roadmap.md A-21f）。
         #   借用のまま saved に置くと、次の `self.ovf_flag = ...` が
@@ -2181,7 +2181,7 @@ class Emitter:
         # ★ こちらは 1 文字の str を**新しく作る**ので、どのみち確保が
         #   入る。展開しても利かないので従来どおり呼び出す。
         if ot.kind == ast.TY_STR:
-            # ⚠️ str の添字は pl_norm_index / pl_str_index に任せるので、
+            # 注意: str の添字は pl_norm_index / pl_str_index に任せるので、
             #   相乗りさせる範囲検査がここには無い。旗が立っていたら
             #   ここで 1 回だけ分岐して報告する。
             if ovf != "":
@@ -2230,7 +2230,7 @@ class Emitter:
         obj_node: rc[ast.Node] = node_of(target.lhs)
         elem: rc[ast.Type] = ast.elem_of(type_of(obj_node))
         obj: str = self.gen_expr(obj_node)
-        # ⚠️ move_out で**持ち主ごと**退避します（A-21f）。ただの代入だと
+        # 注意: move_out で**持ち主ごと**退避します（A-21f）。ただの代入だと
         #   次の行の `self.ovf_flag = ""` が古い文字列を解放し、saved が
         #   宙に浮きます。取り出したあとの self.ovf_flag は "" です。
         saved: str = move_out(self.ovf_flag)
@@ -2240,7 +2240,7 @@ class Emitter:
         self.ovf_flag = saved
 
         sty: str = self.slot_ty(elem)
-        # ⚠️ 代入側は負の添字を正規化しない。
+        # 注意: 代入側は負の添字を正規化しない。
         #   pl_list_set_* を呼んでいたころからそうだった（xs[-1] = v は panic）。
         #   ここで変えると意味が変わるので、振る舞いはそのままにする。
         saved_nobc3: bool = self.nobc
@@ -2266,10 +2266,10 @@ class Emitter:
         a: rc[ast.Node] | None = args
         while a is not None:
             arg: rc[ast.Node] = a
-            # ⚠️ 内側の呼び出しに、外側の控えを触らせないこと。
+            # 注意: 内側の呼び出しに、外側の控えを触らせないこと。
             #   f(g(x)) のとき、g の emit_call が f の控えまで解放してしまい、
             #   **まだ渡していない値**が消えます。
-            #   ⚠️ move_out で**持ち主ごと**退避します。ただの代入だと控えの
+            #   注意: move_out で**持ち主ごと**退避します。ただの代入だと控えの
             #     実体を self と saved_* が二重に持ち、解放が二度走ります。
             saved_n: list[rc[ast.Node]] = move_out(self.pending_nodes)
             saved_v: list[str] = move_out(self.pending_vals)
@@ -2287,7 +2287,7 @@ class Emitter:
                 sep = ""
             vals.append(sep + self.llvm_type(type_of(arg)) + " " + v)
             atypes.append(sep + self.llvm_type(type_of(arg)))
-            # ⚠️ 入れるのは「借用で渡す」と**分かっている**実引数だけです。
+            # 注意: 入れるのは「借用で渡す」と**分かっている**実引数だけです。
             #   own なら所有権が相手に移るので解放してはいけません。
             if self.drop and arg.arg_is_borrowed and self.is_owned_temp(arg):
                 self.pending_nodes.append(arg)
@@ -2329,7 +2329,7 @@ class Emitter:
             tag: str = self.load_tag(slot)
             bad: str = self.new_tmp()
             self.emit("  " + bad + " = icmp ne i64 " + tag + ", 0\n")
-            # ⚠️ 解放が有効なら、失敗の経路でも「抜けるスコープ」を解放します。
+            # 注意: 解放が有効なら、失敗の経路でも「抜けるスコープ」を解放します。
             #   分岐の辺には命令を置けないので、専用のブロックを 1 つ挟みます。
             if self.drop:
                 fail_l: str = "call.fail." + str(cid)
@@ -2355,19 +2355,19 @@ class Emitter:
                 self.terminated = True
             self.emit_label(ok_l)
         # ★ 実引数の一時値をここで解放します（A-21e）。
-        #   ⚠️ **呼び出しを出し終えてから**です。gen_args の直後に解放すると、
+        #   注意: **呼び出しを出し終えてから**です。gen_args の直後に解放すると、
         #     まだ渡していない値を解放してしまいます。
         self.flush_pending_temps(n)
         return t
 
     # 控えておいた一時値を解放して、控えを空にする（A-21e）。
     #
-    # ⚠️ **戻り値が借りものの呼び出しでは解放しません。**
+    # 注意: **戻り値が借りものの呼び出しでは解放しません。**
     #   `def pick(a: str) -> str: return a` のように引数をそのまま返す関数だと、
     #   戻り値が実引数と**同じ実体**です。呼び出し後に実引数を解放すると、
     #   受け取ったばかりの戻り値が消えます。
     def flush_pending_temps(mut self, call: rc[ast.Node]) -> None:
-        # ⚠️ move_out で**持ち主ごと**取り出します（A-21f）。ただの代入だと
+        # 注意: move_out で**持ち主ごと**取り出します（A-21f）。ただの代入だと
         #   下の 2 行が古いリストを解放し、nodes / vals が宙に浮きます。
         nodes: list[rc[ast.Node]] = move_out(self.pending_nodes)
         vals: list[str] = move_out(self.pending_vals)
@@ -2375,7 +2375,7 @@ class Emitter:
         self.pending_vals = []
         if call.binds_borrow:
             return          # 漏れるが、壊れない
-        # ⚠️ **後ろからたどります。** C 版は連結リストの先頭に足して前から
+        # 注意: **後ろからたどります。** C 版は連結リストの先頭に足して前から
         #   たどるので、結果は「引数の逆順」です。こちらは末尾に足すので、
         #   同じ順序にするには後ろから回します（IR がバイト単位で一致する
         #   ことが条件なので、順序も合わせる必要があります）。
@@ -2436,7 +2436,7 @@ class Emitter:
 
         # ★ インタフェース越しの呼び出し。
         #   ① 実体の先頭から vtable を読む ② スロットの関数ポインタを読む ③ 呼ぶ
-        #   ⚠️ 呼び先はコンパイル時には決まらない（実行時の型で決まる）。
+        #   注意: 呼び先はコンパイル時には決まらない（実行時の型で決まる）。
         if n.is_iface_call:
             iobj: str = self.gen_expr(obj_node)
             iok: str = self.gen_not_none(iobj)
@@ -2583,9 +2583,9 @@ class Emitter:
     #
     # ★ 増やすのは「場所から読んだ参照を、別の場所に置く」ときだけです。
     #   rc(...) や関数の戻り値は**新しい参照**なので、そのまま置けます。
-    # ⚠️ retain と release は対です。解放を挿さない（--drop 無し）ときは、
+    # 注意: retain と release は対です。解放を挿さない（--drop 無し）ときは、
     #   どちらも出しません（数が合わなくなるより、何もしないほうが安全）。
-    # ⚠️ **`rc[T] | None` も数えます。** ここを TY_RC だけで見ていたので、
+    # 注意: **`rc[T] | None` も数えます。** ここを TY_RC だけで見ていたので、
     #   nullable な rc を共有すると数が足りず、--drop で早すぎる解放でした。
     #   対になる定義: src/codegen.c の maybe_retain / ty_is_rc_shared
     # 値 1 つを解放する（一時値・上書きされる古い値など）
@@ -2597,7 +2597,7 @@ class Emitter:
     #   まま pl_str_concat に渡され、**誰も解放しません**。束縛すれば解放
     #   されるので、式の途中に現れる一時値だけが漏れていました。
     #
-    # ⚠️ **所有権が移る場所では呼んではいけません。** xs.append(str(i)) は
+    # 注意: **所有権が移る場所では呼んではいけません。** xs.append(str(i)) は
     #   リストが所有権を受け取るので、ここで解放すると二重解放になります。
     #   対になる定義: src/codegen.c の is_owned_temp / drop_temp
     def is_owned_temp(self, n: rc[ast.Node]) -> bool:
@@ -2631,7 +2631,7 @@ class Emitter:
             return ast.elem_of(t).kind == ast.TY_RC
         return False
 
-    # ⚠️ val は **own** で受け取ります。素通しで返す経路があるので、借用で
+    # 注意: val は **own** で受け取ります。素通しで返す経路があるので、借用で
     #   受けると「借りものを返す」ことになり、呼び出し側と二重に解放されます。
     # 参照を 1 つ増やす（場所かどうかを問わない）
     #   対になる定義: src/codegen.c の force_retain
@@ -2673,11 +2673,11 @@ class Emitter:
         c: rc[ast.Class] = class_of(cty.cls)
         obj: str = self.deref_rc(ot0, self.gen_expr(obj_node))
 
-        # ⚠️ クラス型のフィールドは NULL から始まる（12.6 節）
+        # 注意: クラス型のフィールドは NULL から始まる（12.6 節）
         # ★ 検査を IR に展開する（規約 R10 の例外。理由は gen_not_none）
         ok: str = self.gen_not_none(obj)
 
-        # ⚠️ 第 1 インデックスは常に 0（「Token の配列の何個目か」）
+        # 注意: 第 1 インデックスは常に 0（「Token の配列の何個目か」）
         t: str = self.new_tmp()
         self.emit("  " + t + " = getelementptr %" + self.class_type(c) +
                   ".type, ptr " + ok + ", i32 0, i32 " +
@@ -2698,7 +2698,7 @@ class Emitter:
 
     def gen_field(mut self, n: rc[ast.Node]) -> str:
         # ★ math.sin のように他モジュールの関数を値として使う場合。
-        #   ⚠️ 呼ぶわけではないので **declare だけ**出して、ラベルを値にする。
+        #   注意: 呼ぶわけではないので **declare だけ**出して、ラベルを値にする。
         if n.is_func_ref:
             ftt: rc[ast.Type] = type_of(n)
             ps: list[str] = []
@@ -2724,11 +2724,11 @@ class Emitter:
     #   インタフェース・メソッドのスロット数」ぶんの関数ポインタの配列で、
     #   そのクラスが実装しているスロットだけが埋まり、残りは null。
     #
-    # 🤔 なぜスロットを全体で一意にするのか
+    # なぜスロットを全体で一意にするのか
     #   1 つのクラスが複数のインタフェースを実装できるようにするため。
     #   インタフェースごとに 0 から振ると、呼ぶ側（インタフェースしか
     #   知らない）がどの表のどこを見ればよいか決められない。
-    #   ⚠️ 代わりに表は疎になる。
+    #   注意: 代わりに表は疎になる。
     def gen_vtable(mut self, c: rc[ast.Class]) -> None:
         if len(c.impls) == 0:
             return
@@ -2769,7 +2769,7 @@ class Emitter:
         self.emit("  " + obj + " = call ptr @pl_alloc(i64 " + str(c.size) + ")\n")
 
         # ★ インタフェースを実装するなら、先頭に vtable を入れる。
-        #   ⚠️ ここを忘れると、インタフェース越しの呼び出しが null を呼ぶ。
+        #   注意: ここを忘れると、インタフェース越しの呼び出しが null を呼ぶ。
         if len(c.impls) > 0:
             self.gen_vtable(c)
             vp: str = self.new_tmp()
@@ -2813,7 +2813,7 @@ class Emitter:
 
     # クラスの型定義を出す：%lexer.Token.type = type { i64, ptr }
     #
-    # ⚠️ LLVM の型定義はモジュールローカル。import したクラスを使う
+    # 注意: LLVM の型定義はモジュールローカル。import したクラスを使う
     #   モジュールにも、同じ定義を書き直す必要があります（13.7 節）。
     def gen_class_type(mut self, c: rc[ast.Class]) -> None:
         i: int = 0
@@ -2827,7 +2827,7 @@ class Emitter:
         parts.append("%" + c.ir_name + ".type = type { ")
         first: bool = True
         # ★ インタフェースを実装するなら、先頭に vtable へのポインタ。
-        #   ⚠️ sema の layout_class と **並びを揃えること**（ずれると全部壊れる）。
+        #   注意: sema の layout_class と **並びを揃えること**（ずれると全部壊れる）。
         if len(c.impls) > 0:
             parts.append("ptr")
             first = False
@@ -2866,7 +2866,7 @@ class Emitter:
     #   ② 所有型のフィールドを宣言順に解放する
     #   ③ インスタンス自身を解放する
     #
-    # ⚠️ 自分自身を含むクラス（連結リストなど）では再帰します。
+    # 注意: 自分自身を含むクラス（連結リストなど）では再帰します。
     def gen_class_drop(mut self, c: rc[ast.Class]) -> str:
         key: str = "class:" + c.ir_name
         hit: str = self.drop_fn_cached(key)
@@ -2900,7 +2900,7 @@ class Emitter:
             f = fld.next
 
         if len(dtor_ir) > 0:
-            # ⚠️ 別モジュールのクラスなら declare が要る。自分のモジュールの
+            # 注意: 別モジュールのクラスなら declare が要る。自分のモジュールの
             #   クラスに declare を出すと「再定義」で落ちる。
             d: rc[ast.Node] | None = self.ast_body
             while d is not None:
@@ -3002,7 +3002,7 @@ class Emitter:
     # 対になる定義: src/codegen.c の is_droppable / scope_add /
     #   emit_scope_drops / emit_drops_until / emit_drop_slot。
     #
-    # ⚠️ 借りものを束縛している変数（`t = xs[i]` や for のループ変数）は
+    # 注意: 借りものを束縛している変数（`t = xs[i]` や for のループ変数）は
     #   **所有していない**ので解放しません。ownck が印を付けています。
     def is_droppable(self, decl: rc[ast.Node]) -> bool:
         if decl.is_global or decl.binds_borrow:
@@ -3035,7 +3035,7 @@ class Emitter:
 
     # スコープ 1 つぶんの解放を出す（宣言と逆順。設計 §6.1）
     #
-    # ⚠️ ents は末尾に足しているので、**後ろから**たどると宣言の逆順になります
+    # 注意: ents は末尾に足しているので、**後ろから**たどると宣言の逆順になります
     #   （C 版は先頭に足して前からたどる。出る順序は同じ）。
     def emit_scope_drops(mut self, sc: rc[ScopeCtx]) -> None:
         i: int = len(sc.ents) - 1
@@ -3074,7 +3074,7 @@ class Emitter:
         cond: str = self.gen_expr(node_of(n.lhs))
         # else が無ければ else ブロックを作らず、直接 end へ分岐する
         #
-        # ⚠️ `target = end_l` と別名を作ると、str は共有できないので
+        # 注意: `target = end_l` と別名を作ると、str は共有できないので
         #   「移動」になります（rc[str] はありません）。**作り直して**渡します。
         target: str = "if.end." + str(id_)
         if n.els is not None:
@@ -3083,7 +3083,7 @@ class Emitter:
 
         self.emit_label(then_l)
         self.gen_stmt(node_of(n.body))
-        # ⚠️ then 節が break / continue で終わっていたら既に終端済み
+        # 注意: then 節が break / continue で終わっていたら既に終端済み
         if not self.terminated:
             self.emit_br(end_l)
 
@@ -3103,7 +3103,7 @@ class Emitter:
         body_l: str = "while.body." + str(id_)
         end_l: str = "while.end." + str(id_)
 
-        # ⚠️ 条件ブロックに「入る」ための br が必要（規約 6.4）
+        # 注意: 条件ブロックに「入る」ための br が必要（規約 6.4）
         self.emit_br(cond_l)
 
         self.emit_label(cond_l)
@@ -3111,7 +3111,7 @@ class Emitter:
         self.emit_cond_br(cond, body_l, end_l)
 
         # ★ 増分があるなら continue の飛び先は「増分ブロック」
-        # ⚠️ LoopCtx に預ける文字列は**作り直します**（str は共有できません）
+        # 注意: LoopCtx に預ける文字列は**作り直します**（str は共有できません）
         incr_l: str = "for.incr." + str(id_)
         cont_l: str = "while.cond." + str(id_)
         if n.incr is not None:
@@ -3140,7 +3140,7 @@ class Emitter:
 
     # ループが版分けできるなら誘導変数の IR 名を返す（できなければ ""）
     #
-    # ⚠️ **かつてここは「--drop なら版分けしない」で始まっていました**
+    # 注意: **かつてここは「--drop なら版分けしない」で始まっていました**
     #    （理由は「本体を 2 回出すと解放の記録が二重になる」）。0.16.0 で
     #    --drop が既定になった結果、**版分けが既定で丸ごと死んでいました**。
     #    512³ の行列積（平坦な list[float]）が 36.6 ms → 357.5 ms です。
@@ -3231,7 +3231,7 @@ class Emitter:
                 return ""
             if vz_assigns(n.body, root.ir_name):
                 return ""
-        # ⚠️ 上限に len(xs) を使っているなら、その xs も不変であること
+        # 注意: 上限に len(xs) を使っているなら、その xs も不変であること
         if big_l.kind == ast.ND_CALL:
             lr: rc[ast.Node] = node_of(big_l.args)
             while lr.kind == ast.ND_FIELD:
@@ -3247,7 +3247,7 @@ class Emitter:
                     acc: str) -> str:
         self.subst_ir = copy(iv)
         self.subst_val = copy(val)
-        # ⚠️ 入れ子（xs[ys[i * 2]]）に備えて、貯め場所を退避してから使う。
+        # 注意: 入れ子（xs[ys[i * 2]]）に備えて、貯め場所を退避してから使う。
         #   ★ copy が要ります（借りたものはフィールドに戻せません。E-BORROW-3）。
         saved: str = copy(self.ovf_flag)
         self.ovf_flag = ""
@@ -3262,7 +3262,7 @@ class Emitter:
         inb: str = self.new_tmp()
         self.emit("  " + inb + " = icmp ult i64 " + idx + ", " + ln + "\n")
 
-        # ⚠️ 両端の計算で桁あふれしたら、ガードを落として遅い側へ行かせる
+        # 注意: 両端の計算で桁あふれしたら、ガードを落として遅い側へ行かせる
         #    （そちらが正しい位置で正しく panic する）
         cur: str = copy(inb)
         if ovf != "":
@@ -3343,8 +3343,8 @@ class Emitter:
     #   条件 `i < len` から `i <u len` が常に真だと導いて**検査を消す**。
     #   実測：3000000 要素の総和 10 回が 51 → 18 ms。
     #
-    # ⚠️ list の長さはヘッダのオフセット 8（PlList { ptr data; i64 len; i64 cap }）。
-    # ⚠️ str の長さは**ポインタの 8 バイト手前**。最上位側の 1 ビットが
+    # 注意: list の長さはヘッダのオフセット 8（PlList { ptr data; i64 len; i64 cap }）。
+    # 注意: str の長さは**ポインタの 8 バイト手前**。最上位側の 1 ビットが
     #   「静的な文字列か」の印なので落とす（runtime/core.c の PL_STR_STATIC）。
     def gen_len(mut self, n: rc[ast.Node], at: rc[ast.Type]) -> str:
         obj: str = self.gen_expr(node_of(n.args))
@@ -3362,7 +3362,7 @@ class Emitter:
         self.emit("  " + raw + " = load i64, ptr " + p2 + "\n")
         t2: str = self.new_tmp()
         self.emit("  " + t2 + " = and i64 " + raw + ", -4611686018427387905\n")
-        # ⚠️ 解放は**長さを読み終えてから**です。先に解放すると読めません。
+        # 注意: 解放は**長さを読み終えてから**です。先に解放すると読めません。
         self.drop_temp(node_of(n.args), obj)   # A-21e: len(作ったばかりの文字列)
         return t2
 
@@ -3381,7 +3381,7 @@ class Emitter:
         if n.builtin == "pl_copy_id":
             return self.gen_expr(arg_node)
 
-        # ⚠️ bool は C 側で long long で受け取るので、境界で i64 に広げる
+        # 注意: bool は C 側で long long で受け取るので、境界で i64 に広げる
         argty: str = self.llvm_type(at)
         if at.kind == ast.TY_BOOL:
             argty = "i64"
@@ -3399,10 +3399,10 @@ class Emitter:
         #     ② panic までに並ぶ文字列連結を「メモリを書くかもしれない呼び出し」
         #        として扱い、**ループ内の load を外に持ち上げられなくなる**
         #   の 2 つが起きる。
-        #   ⚠️ ②「linalg.Matrix.check の self.rows / self.cols / self.data が
+        #   注意: ②「linalg.Matrix.check の self.rows / self.cols / self.data が
         #     ループ外に出せない」と当初は書いていたが、**間違いだった**。
         #     測ったところ、あの遅さの原因はインライン化のほう。
-        #   ⚠️ sema の never_returns_call と対になっている。片方だけ変えないこと。
+        #   注意: sema の never_returns_call と対になっている。片方だけ変えないこと。
         nr: str = ""
         if n.builtin == "pl_panic" or n.builtin == "pl_exit":
             nr = " noreturn cold"
@@ -3421,7 +3421,7 @@ class Emitter:
         t: str = self.new_tmp()
         self.emit("  " + t + " = call " + self.llvm_type(rt) + " @" + n.builtin +
                   "(" + argty + " " + v + ")\n")
-        # ⚠️ 組み込みはどれも**借りて読むだけ**です（所有権を受け取りません）。
+        # 注意: 組み込みはどれも**借りて読むだけ**です（所有権を受け取りません）。
         #   だから引数が一時値なら、呼び終わったところで解放できます（A-21e）。
         self.drop_temp(node_of(n.args), v)
         return t
@@ -3516,7 +3516,7 @@ class Emitter:
     #   中身は**オフセット 16 の load 1 つ**（PlRc { i64 strong; i64 borrow;
     #   ptr value }。runtime/core.c）。
     #
-    # ⚠️ **null の検査は外さない**（方針 §0-②）。移動済みのスロットは null に
+    # 注意: **null の検査は外さない**（方針 §0-②）。移動済みのスロットは null に
     #   なるので（決定 D17）、黙って隣を読むわけにはいかない。
     def deref_rc(mut self, t: rc[ast.Type], v: str) -> str:
         if t.kind != ast.TY_RC:
@@ -3549,7 +3549,7 @@ class Emitter:
         # ★ wrap_add / wrap_sub / wrap_mul。
         #   **桁あふれを検査せず 2 の補数で折り返す。**
         #   法 2⁶⁴ の計算（線形合同法など）を書くための逃げ道。
-        #   ⚠️ min / max と同じく 2 引数なので、組み込みの表では表せない。
+        #   注意: min / max と同じく 2 引数なので、組み込みの表では表せない。
         if n.is_wrap:
             wa: str = self.gen_expr(node_of(n.args))
             wb: str = self.gen_expr(node_of(node_of(n.args).next))
@@ -3593,7 +3593,7 @@ class Emitter:
         #     ② 空の値を作る        … str なら ""、list なら新しい空リスト
         #     ③ その場所へ書き戻す  … 場所は有効なまま残る
         #
-        # ⚠️ **retain も release も出しません。** 参照の数は動いていません
+        # 注意: **retain も release も出しません。** 参照の数は動いていません
         #   （持ち主が「場所」から「呼び出し側」へ移っただけです）。
         #   対になる定義: src/codegen.c の is_move_out
         if n.is_move_out:
@@ -3639,16 +3639,16 @@ class Emitter:
             return self.gen_new(n)     # ★ インスタンス生成
 
         # ★ 関数ポインタ越しの呼び出し。
-        #   ⚠️ LLVM では呼び先がラベルでもレジスタでも書き方が同じなので、
+        #   注意: LLVM では呼び先がラベルでもレジスタでも書き方が同じなので、
         #     箱から読んだ値をそのまま置くだけ。declare も要らない。
-        #   ⚠️ **ptr として読むこと**（i64 で読むと呼び先が整数になる）。
+        #   注意: **ptr として読むこと**（i64 で読むと呼び先が整数になる）。
         if n.is_indirect:
             fp: str = self.new_tmp()
             self.emit("  " + fp + " = load ptr, ptr " + n.ir_name + "\n")
             iargs: list[str] = []
             itypes: list[str] = []
             self.gen_args(n.args, iargs, itypes, True)
-            # ⚠️ gen_args は **区切りを要素に埋め込む**ので、
+            # 注意: gen_args は **区切りを要素に埋め込む**ので、
             #    ここは "" で連結すること（", " だと二重になる）
             ia: str = strings.join(iargs, "")
             if type_of(n).kind == ast.TY_NONE:
@@ -3669,7 +3669,7 @@ class Emitter:
             if nabuf < 1:
                 nabuf = 1
 
-            # ★ 引数は i64 の配列にして渡す。⚠️ この箱は entry ブロックの
+            # ★ 引数は i64 の配列にして渡す。注意: この箱は entry ブロックの
             #   alloca（規約 R1）。ランタイムが**写しを取ってから**スレッドを
             #   作るので、呼び出しのあいだだけ生きていれば足りる。
             sbuf: str = self.new_tmp()
@@ -3774,13 +3774,13 @@ class Emitter:
 
         # ★ scope: ブロック（A-18 の scoped spawn）。
         #   入口で枠を開き、出口で「まだ待っていないスレッド」を全部 join する。
-        #   ⚠️ 途中から抜ける道（return / break / continue / 失敗の伝播）は
+        #   注意: 途中から抜ける道（return / break / continue / 失敗の伝播）は
         #     sema が禁じているので、出口はここ 1 か所だけ。
         if n.kind == ast.ND_SCOPE:
             self.declare_rt("void @pl_scope_begin()")
             self.declare_rt("void @pl_scope_end()")
             self.emit("  call void @pl_scope_begin()\n")
-            # ⚠️ ND_BLOCK を呼ばずに自分で展開する。**join を解放より先に**
+            # 注意: ND_BLOCK を呼ばずに自分で展開する。**join を解放より先に**
             #   行う必要があるため（スレッドがこのブロックの局所変数を
             #   借りていることがある）。
             sc68: rc[ScopeCtx] = rc(ScopeCtx(self.scope))
@@ -3814,18 +3814,18 @@ class Emitter:
             if n.lhs is None:
                 # ★ 値を返さない関数でも ensures は確かめる（A-29）
                 self.gen_ensures("")
-                # ⚠️ 解放は ret の**直前**に出す（抜けるスコープを全部）
+                # 注意: 解放は ret の**直前**に出す（抜けるスコープを全部）
                 self.emit_drops_until(None)
                 self.emit("  ret void\n")      # 規約 R9
             else:
                 val: rc[ast.Node] = node_of(n.lhs)
-                # ⚠️ rc[T] を返すときは参照を 1 つ増やす（呼び出し側のぶん）。
+                # 注意: rc[T] を返すときは参照を 1 つ増やす（呼び出し側のぶん）。
                 #   （対になる定義: src/codegen.c の ND_RETURN の maybe_retain）
                 v2: str = self.maybe_retain(val, self.gen_expr(val))
                 # ★ 契約（A-29）：**解放の前に**確かめる。
-                #   ⚠️ 順序が逆だと、ensures の式が解放済みの値を読む。
+                #   注意: 順序が逆だと、ensures の式が解放済みの値を読む。
                 self.gen_ensures(v2)
-                # ⚠️ 返す値を**先に**作ってから解放する（解放してから読めない）
+                # 注意: 返す値を**先に**作ってから解放する（解放してから読めない）
                 self.emit_drops_until(None)
                 self.emit("  ret " + self.llvm_type(type_of(val)) + " " + v2 +
                           "\n")
@@ -3912,11 +3912,11 @@ class Emitter:
             if catcher >= 0:
                 self.store_err(self.err_slot(), n.err_tag, obj)
                 # ★ 捕まえる try まで、抜けるスコープを解放します。
-                # ⚠️ emit_drops_until も self を可変借用するので、先に読みます
+                # 注意: emit_drops_until も self を可変借用するので、先に読みます
                 if self.drop:
                     upto: rc[ScopeCtx] | None = self.try_scopes[catcher]
                     self.emit_drops_until(upto)
-                # ⚠️ emit_br は self を可変借用するので、先に読みます
+                # 注意: emit_br は self を可変借用するので、先に読みます
                 catch_l: str = copy(self.try_labels[catcher])
                 self.emit_br(catch_l)
             else:
@@ -3974,7 +3974,7 @@ class Emitter:
             # ★ 版分けの速い側では、誘導変数の増分の桁あふれ検査を
             #   外す。`v < L` のあいだ回るので、v が最後に取る値は L で、
             #   L は i64 に収まっている（＝あふれない）。
-            #   ⚠️ 外すのは**この 1 本だけ**。本体の他の足し算は今までどおり。
+            #   注意: 外すのは**この 1 本だけ**。本体の他の足し算は今までどおり。
             saved_ovf67: bool = self.no_ovf
             tgt0: rc[ast.Node] = node_of(n.lhs)
             if self.nobc and len(self.iv_ir) > 0 and tgt0.kind == ast.ND_VAR:
@@ -3986,16 +3986,16 @@ class Emitter:
 
             # ★ 入れ替える前に、古い値を解放します。
             #   `s = s + "!"` のような上書きは、解放しないと漏れます。
-            #   ⚠️ 借りものを束縛している変数（ownck が印を付けた）は
+            #   注意: 借りものを束縛している変数（ownck が印を付けた）は
             #     所有者ではないので触りません。
             #   対になる定義: src/codegen.c の ND_ASSIGN
             if self.drop and not n.binds_borrow:
-                # ⚠️ グローバル（@g.x）は「プログラムが終わるまで生きる場所」
+                # 注意: グローバル（@g.x）は「プログラムが終わるまで生きる場所」
                 #   なので、ここでは触りません（解放するのは所有者だけ）。
                 if target.kind == ast.ND_VAR and strings.startswith(target.ir_name, "%"):
                     self.emit_drop_value(type_of(n),
                                          self.gen_load(type_of(n), target.ir_name))
-                # ⚠️ 対象を 2 回評価しないこと。古い値を読むために
+                # 注意: 対象を 2 回評価しないこと。古い値を読むために
                 #   gen_field_ptr をもう一度通すので、対象が単純な変数の
                 #   ときだけに限ります（xs[f()].g = v で f が 2 回走るのを防ぐ）。
                 elif target.kind == ast.ND_FIELD and len(target.mod_name) == 0:
@@ -4029,7 +4029,7 @@ class Emitter:
         # 式文
         #
         # ★ 捨てられる一時値（呼び出しの戻り値）を解放します。
-        #   ⚠️ 借用を返す関数（仕様 §4.5）の戻り値は所有していません。
+        #   注意: 借用を返す関数（仕様 §4.5）の戻り値は所有していません。
         #   対になる定義: src/codegen.c の gen_stmt の既定枝
         ev: str = self.gen_expr(n)
         if self.drop and not n.binds_borrow:
@@ -4045,12 +4045,12 @@ class Emitter:
             return
         node: rc[ast.Node] = n
 
-        # ⚠️ グローバル変数は alloca しない
+        # 注意: グローバル変数は alloca しない
         if node.kind == ast.ND_VARDECL and not node.is_global:
             self.allocas.append("  " + node.ir_name + " = alloca " +
                                 self.llvm_mem_type(type_of(node)) + "\n")
             # ★ デバッグ情報（A-35）：箱を作ったついでに「名前と型」を書く。
-            #   ⚠️ 箱を作る場所と印を付ける場所を分けると、必ずどちらかが
+            #   注意: 箱を作る場所と印を付ける場所を分けると、必ずどちらかが
             #     先に増えて食い違う。**同じ 1 か所**に置く。
             self.dbg_local(node.name, node.ir_name, node.type,
                            tok_line(node.tok), 0)
@@ -4073,7 +4073,7 @@ class Emitter:
             self.dbg_local(node.name, node.ir_name, node.type,
                            tok_line(node.tok), 0)
 
-        # ⚠️ except の並びは next で繋がっている（2 番目以降をここでたどる）
+        # 注意: except の並びは next で繋がっている（2 番目以降をここでたどる）
         if node.kind == ast.ND_TRY and node.els is not None:
             ex: rc[ast.Node] | None = node_of(node.els).next
             while ex is not None:
@@ -4116,7 +4116,7 @@ class Emitter:
         #   の形で出るのは、この型と、下で出す !DILocalVariable(arg: N) が
         #   揃っているから。
         #
-        # ⚠️ types の**先頭は戻り値**で、None（void）は `null` と書く。
+        # 注意: types の**先頭は戻り値**で、None（void）は `null` と書く。
         #   失敗しうる関数が余分に取るエラー出力（%err.out）は書かない。
         self.dbg_fn = 0
         self.dbg_loc = 0
@@ -4188,7 +4188,7 @@ class Emitter:
 
         # ★ 範囲型の仮引数は、**関数の入口で 1 回だけ**確かめる（A-28）。
         #
-        # 🤔 なぜ呼び出し側ではないのか
+        # なぜ呼び出し側ではないのか
         #   呼び出しの経路は 5 通り（ふつうの呼び出し・メソッド・生成・
         #   関数ポインタ越し・spawn）あり、どれか 1 つ書き忘れると
         #   **そこだけ検査が外れる**。入口なら 1 か所で全部を守れる。
@@ -4203,7 +4203,7 @@ class Emitter:
             pr = pp.next
 
         # ★ 契約（A-29）：requires は**関数の入口**で確かめる。
-        #   ⚠️ 範囲型の引数の検査（A-28）より後（まず型、次に契約）。
+        #   注意: 範囲型の引数の検査（A-28）より後（まず型、次に契約）。
         self.fn_node = n
         cst: rc[ast.Node] | None = node_of(n.body).body
         while cst is not None:
@@ -4249,12 +4249,12 @@ class Emitter:
         # ④ 終端されていなければ終端する（規約 R6）
         if not self.terminated:
             # ★ 契約（A-29）：**最後まで落ちてくる出口**でも ensures を確かめる。
-            #   ⚠️ 忘れると、return を書かない None の関数だけ事後条件が
+            #   注意: 忘れると、return を書かない None の関数だけ事後条件が
             #     すり抜ける（出口は return だけではない）。
             if type_of(n).kind == ast.TY_NONE:
                 self.gen_ensures("")
             # ★ 関数の出口。引数のスコープ（own で受け取ったもの）を解放します。
-            #   ⚠️ これが無いと `def init(self, s: own str)` の s が漏れます。
+            #   注意: これが無いと `def init(self, s: own str)` の s が漏れます。
             if self.drop:
                 self.emit_scope_drops(params_sc)
             if type_of(n).kind == ast.TY_NONE:
@@ -4317,7 +4317,7 @@ class Emitter:
 
     # C の main を出力する（ir-conventions.md 7 節の方式 A）
     #
-    # ⚠️ これを出すのは入口モジュールだけ
+    # 注意: これを出すのは入口モジュールだけ
     def gen_c_main(mut self, main_ir_name: str) -> None:
         self.tmp_counter = 0
 
@@ -4366,13 +4366,13 @@ def codegen(mod: rc[module.Module], main_ir_name: str, triple: str,
     e.header.append("; Generated by " + langinfo.cc() + "\n")
     e.header.append("source_filename = \"" + mod.path + "\"\n")
 
-    # ⚠️ 規約 R11：target triple は必ず出力する
+    # 注意: 規約 R11：target triple は必ず出力する
     if len(triple) > 0:
         e.header.append("target triple = \"" + triple + "\"\n")
 
     # ★ デバッグ情報（A-30）：モジュールに 1 組だけ要るものを先に作る。
-    #   ⚠️ 関数より**先**に作る（番号の振り方が 2 実装で同じになるため）。
-    #   ⚠️ 共有の !DISubroutineType は A-35 で無くなった（関数ごとに本物の
+    #   注意: 関数より**先**に作る（番号の振り方が 2 実装で同じになるため）。
+    #   注意: 共有の !DISubroutineType は A-35 で無くなった（関数ごとに本物の
     #     型を出すようになったため）。
     if e.dbg:
         e.dbg_file = e.dbg_id()
@@ -4389,7 +4389,7 @@ def codegen(mod: rc[module.Module], main_ir_name: str, triple: str,
     d: rc[ast.Node] | None = root.body
     while d is not None:
         n: rc[ast.Node] = d
-        # ⚠️ ジェネリックなテンプレートは出さない。
+        # 注意: ジェネリックなテンプレートは出さない。
         #   K や V が何なのか決まっていないので、構造体の形が作れない。
         #   出すのは実体（Box$int など）だけ。
         if n.kind == ast.ND_CLASS and n.targs is None:
@@ -4424,7 +4424,7 @@ def codegen(mod: rc[module.Module], main_ir_name: str, triple: str,
                 e.declare_extern(e.llvm_type(type_of(n3)), n3.name,
                                  strings.join(atypes, ""))
             elif n3.targs is None:
-                # ⚠️ ジェネリックなテンプレートは出さない
+                # 注意: ジェネリックなテンプレートは出さない
                 e.gen_func(n3)
         elif n3.kind == ast.ND_CLASS and n3.targs is None:
             m: rc[ast.Node] | None = n3.body
@@ -4435,13 +4435,13 @@ def codegen(mod: rc[module.Module], main_ir_name: str, triple: str,
                 m = mm.next
         d3 = n3.next
 
-    # ⚠️ C の main を出すのは入口モジュールだけ
+    # 注意: C の main を出すのは入口モジュールだけ
     if len(main_ir_name) > 0:
         e.gen_c_main(main_ir_name)
 
     # バッファを規定の順に連結する
     #
-    # ⚠️ 順番は C 版（src/codegen.c）と**同じでなければいけません**。
+    # 注意: 順番は C 版（src/codegen.c）と**同じでなければいけません**。
     #   dropdefs（@drop.* の定義）は body の後・thunkdefs の前です。
     out: list[str] = []
     out.append(strings.join(e.header, ""))
@@ -4451,7 +4451,7 @@ def codegen(mod: rc[module.Module], main_ir_name: str, triple: str,
     out.append(strings.join(e.dropdefs, ""))
     out.append(strings.join(e.thunkdefs, ""))
     # ⑥ 別名解析（TBAA）の型タグ。
-    #   ⚠️ 番号は固定。**2 実装が同じ IR を出す**ため、使っていなくても
+    #   注意: 番号は固定。**2 実装が同じ IR を出す**ため、使っていなくても
     #     常にこの 7 行を出す。
     out.append("\n!0 = !{!\"" + langinfo.name() + "\"}\n")
     out.append("!1 = !{!\"field\", !0}\n")
@@ -4464,7 +4464,7 @@ def codegen(mod: rc[module.Module], main_ir_name: str, triple: str,
     out.append("!8 = !{!7, !7, i64 0}\n")
 
     # ★ デバッグ情報（A-30）。-g のときだけ出る。
-    #   ⚠️ 「Debug Info Version」を書かないと clang が metadata を丸ごと捨てる。
+    #   注意: 「Debug Info Version」を書かないと clang が metadata を丸ごと捨てる。
     if e.dbg:
         flags1: int = e.dbg_id()
         flags2: int = e.dbg_id()
@@ -4486,7 +4486,7 @@ def hex2(v: int) -> str:
 
 # 位置情報（デバッグ情報を出すのに要る。A-30）
 #
-# ⚠️ ownck / sema の後なので、式にも文にも必ずトークンが付いています。
+# 注意: ownck / sema の後なので、式にも文にも必ずトークンが付いています。
 def tok_of(n: rc[ast.Node]) -> rc[token.Token]:
     t: rc[token.Token] | None = n.tok
     if t is None:
@@ -4581,7 +4581,7 @@ def loop_of(l: rc[LoopCtx] | None) -> rc[LoopCtx]:
 
 # ── 添字の範囲をループの外で 1 回だけ確かめる（loop versioning）──
 #
-# 🤔 なぜこれを入れたか
+# なぜこれを入れたか
 #   平坦な list[float] の三重ループ（512×512 の行列積）を測ったら、
 #   **境界検査が 4 倍**の費用だった（365 ms → 89 ms）。当初の
 #   「外しても 1.5 倍」は list[list[float]] での数字で、平坦な配列では桁が違う。
@@ -4594,14 +4594,14 @@ def loop_of(l: rc[LoopCtx] | None) -> rc[LoopCtx]:
 #     if 全部の添字が両端で範囲内:  検査なしの版（ここがベクトル化される）
 #     else:                        今までどおりの版（診断もそのまま）
 #
-# ⚠️ **診断は変わらない。** 範囲外になるループは今までどおり、ちょうどその
+# 注意: **診断は変わらない。** 範囲外になるループは今までどおり、ちょうどその
 #    反復で、同じメッセージで止まる。
 #
 # ★ 両端だけ見れば足りるのは、添字が誘導変数について**アフィン**（A*v + B）
 #   だから。アフィンなら単調なので、途中の値は必ず両端のあいだに入る。
 #   だから v が 1 回しか現れない形に限る。
 #
-# ⚠️ **C 版 src/codegen.c の vz_* と 1 対 1 に対応させること。**
+# 注意: **C 版 src/codegen.c の vz_* と 1 対 1 に対応させること。**
 #   出す IR が 1 バイトでも違うと tests/selfhost.sh が落ちる。
 
 VZ_MAX_SITES: int = 16
@@ -4663,7 +4663,7 @@ def vz_assigns(n: rc[ast.Node] | None, ir: str) -> bool:
 
 # 式に出てくる変数（誘導変数を除く）が、この本体で書き換わらないか
 #
-# ⚠️ **これが無いと健全性が壊れる。** 例えば
+# 注意: **これが無いと健全性が壊れる。** 例えば
 #
 #     while j < n:
 #         s = s + xs[k]
@@ -4693,9 +4693,9 @@ def vz_count(n: rc[ast.Node] | None, ir: str) -> int:
 
 # 版分けしてよい本体か
 #
-# ⚠️ **呼び出しがあってはいけない。** 呼んだ先が list に append すれば長さが
+# 注意: **呼び出しがあってはいけない。** 呼んだ先が list に append すれば長さが
 #    変わり、入口で確かめた前提が崩れる。
-# ⚠️ 入れ子のループ・break / continue / return も外す。
+# 注意: 入れ子のループ・break / continue / return も外す。
 def vz_body_ok(n: rc[ast.Node] | None) -> bool:
     q: rc[ast.Node] | None = n
     while q is not None:
@@ -4726,11 +4726,11 @@ def vz_node_ok(c: rc[ast.Node]) -> bool:
     if k == ast.ND_LOGICAL:
         return vz_body_ok(c.lhs) and vz_body_ok(c.rhs)
     if k == ast.ND_UNARY:
-        # ⚠️ 単項マイナスは int だと桁あふれ検査（分岐）が出るが、
+        # 注意: 単項マイナスは int だと桁あふれ検査（分岐）が出るが、
         #    正しさには関わらない（速い側でも検査は残る）。
         return vz_body_ok(c.lhs)
     if k == ast.ND_BINOP:
-        # ⚠️ ** // % は実体がランタイム関数の呼び出し。str / list の + * も同じ。
+        # 注意: ** // % は実体がランタイム関数の呼び出し。str / list の + * も同じ。
         if c.op == ast.OP_IN or c.op == ast.OP_NOTIN or c.op == ast.OP_POW:
             return False
         if c.op == ast.OP_FLOORDIV or c.op == ast.OP_MOD:
@@ -4740,13 +4740,13 @@ def vz_node_ok(c: rc[ast.Node]) -> bool:
             return False
         return vz_body_ok(c.lhs) and vz_body_ok(c.rhs)
     if k == ast.ND_INDEX:
-        # ⚠️ str の添字はランタイム関数を呼ぶ（pl_str_index）
+        # 注意: str の添字はランタイム関数を呼ぶ（pl_str_index）
         ot: rc[ast.Type] = type_of(node_of(c.lhs))
         if ot.kind == ast.TY_STR:
             return False
         return vz_body_ok(c.lhs) and vz_body_ok(c.rhs)
     if k == ast.ND_ASSIGN:
-        # ⚠️ フィールドやリスト変数への代入は外す。代入されると
+        # 注意: フィールドやリスト変数への代入は外す。代入されると
         #    「入口で見た list と同じものか」が言えなくなる。
         tg: rc[ast.Node] = node_of(c.lhs)
         if tg.kind == ast.ND_FIELD:

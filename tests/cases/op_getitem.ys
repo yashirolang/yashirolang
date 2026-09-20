@@ -5,7 +5,7 @@
 # OUTPUT: 7
 # EXIT: 0
 # 2 次元の添字 m[i, j] と、その代入・複合代入
-#   ⚠️ m[i, j] += v は「対象も添字も 1 回だけ」評価します（脱糖）。
+#   注意: m[i, j] += v は「対象も添字も 1 回だけ」評価します（脱糖）。
 class Mat:
     cols: int
     data: list[float]

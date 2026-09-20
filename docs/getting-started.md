@@ -16,7 +16,7 @@ yashirolang を入れて、最初のプログラムを動かすところまで�
 | macOS | `xcode-select --install`（Apple clang で足ります） |
 | Windows | [MSYS2](https://www.msys2.org/) の MINGW64 シェルで<br>`pacman -S mingw-w64-x86_64-clang mingw-w64-x86_64-lld make diffutils grep coreutils` |
 
-> ⚠️ Windows は MSYS2（または WSL）の上で使ってください。ビルドとテストが bash と make に依存しています。
+> 注意: Windows は MSYS2（または WSL）の上で使ってください。ビルドとテストが bash と make に依存しています。
 > WSL なら Linux の手順がそのまま使えます。
 
 そのうえで、次のどちらかを選びます。

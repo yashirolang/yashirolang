@@ -51,15 +51,15 @@ static const char *clang_cmd(void) {
     return PLC_CLANG;
 }
 
-// 🔒 clang へ渡す道を確かめる（シェルに解釈される字が無いか）。
+// clang へ渡す道を確かめる（シェルに解釈される字が無いか）。
 //
-// ⚠️ **リンクは system() でシェルを通ります。** 道は "…" で囲んでいますが、
+// 注意: **リンクは system() でシェルを通ります。** 道は "…" で囲んでいますが、
 //   POSIX の sh は**二重引用符の中でも** `$` ・ ` ・ `\` を解釈します。
 //   囲んであるから安全、ではありません。実際、
 //
 //       <コンパイラ> a<拡張子> -o 'out$(touch X)x'
 //
-//   は touch を実行しました。⚠️ `-o` は自分で打つものなので自分で自分を
+//   は touch を実行しました。注意: `-o` は自分で打つものなので自分で自分を
 //   撃つだけですが、**道を組み立てるのが人とは限りません**
 //   （書き出し先を設定から作る作業手順書や、雛形から作る仕組み）。
 //
@@ -68,7 +68,7 @@ static const char *clang_cmd(void) {
 //   そこが次の穴になります。使えなくなるのは、道に入れないほうがよい字
 //   だけです。
 //
-//   ⚠️ `\` は Windows の区切り文字なので、そちらでは通します
+//   注意: `\` は Windows の区切り文字なので、そちらでは通します
 //     （cmd.exe は `\` を逃がし字として扱いません）。
 //     `%` は逆に cmd.exe だけが展開します。
 static void check_shell_safe(const char *path, const char *what) {
@@ -113,7 +113,7 @@ static void usage(int status) {
             "  --keep-ll       実行ファイル生成後も .ll を残す\n"
             "  --check         型検査までで止める（エラーが無ければ何も出さない）\n"
             "  --warn-own      所有権の指摘を警告に落とす（既定はエラー）\n"
-            "                  ⚠️ 0.17 以前の既定です。逃げ道であって、\n"
+            "                  注意: 0.17 以前の既定です。逃げ道であって、\n"
             "                  これを付けたコードは安全性を保証しません\n"
             "  --deny-move     移動済みの値の使用をエラーにする（既定）\n"
             "  --deny-borrow   借用した値の保存・返却をエラーにする（既定）\n"
@@ -139,7 +139,7 @@ static void usage(int status) {
             "                  パッケージマネージャ " PLC_LANG_PM " が使います\n"
             "  -c              リンクせずオブジェクト（.o）を出す\n"
             "  -j <N>          clang を同時に何本走らせるか（既定: コア数）\n"
-            "                  ⚠️ 出来上がる実行ファイルは並列度で変わりません\n"
+            "                  注意: 出来上がる実行ファイルは並列度で変わりません\n"
             "  --target=<t>    生成する IR の target triple を指定する\n"
             "                  （例: --target=riscv64-unknown-elf）\n"
             "  -O0|-O1|-O2|-O3 clang に渡す最適化レベル（既定: -O0）\n"
@@ -232,7 +232,7 @@ static Options parse_args(int argc, char **argv) {
 
         if (strcmp(a, "-o") == 0) {
             if (i + 1 >= argc) error("-o の後に出力ファイル名が必要です");
-            // 🔒 clang へはシェル経由で渡ります。中間の .ll の名前も
+            // clang へはシェル経由で渡ります。中間の .ll の名前も
             //   ここから作るので、**入口で 1 回**確かめれば足ります。
             check_shell_safe(argv[i + 1], "出力ファイル名");
             o.output = argv[++i];
@@ -247,7 +247,7 @@ static Options parse_args(int argc, char **argv) {
         if (strcmp(a, "--check") == 0) { o.stage = STAGE_CHECK; continue; }
         // ★ 所有権の検査（ownck）を警告に落とす逃げ道。
         //
-        // ⚠️ **後に書いたほうが勝ちます**（--drop / --no-drop と同じ規則）。
+        // 注意: **後に書いたほうが勝ちます**（--drop / --no-drop と同じ規則）。
         //   --warn-own --deny-move なら「移動だけエラー」に戻せるので、
         //   古いコードを検査ごとに直していけます（決定 D12 の意図はこちら側へ）。
         if (strcmp(a, "--warn-own") == 0) {
@@ -263,7 +263,7 @@ static Options parse_args(int argc, char **argv) {
         if (strcmp(a, "--deny-store-borrow") == 0) { o.deny_store_borrow = 1; continue; }
         // ★ 解放（drop）の挿入。**既定で入ります**（A-21 ⑬）。
         //
-        // ⚠️ **後に書いたほうが勝ちます**（--drop --no-drop なら入れない）。
+        // 注意: **後に書いたほうが勝ちます**（--drop --no-drop なら入れない）。
         //   既定を解放ありに変えるとき（A-21 ⑨）、逃げ道として --no-drop が要ります。
         //   診断を見せるためのテスト（warn_* など）は、危険な書き方をわざとして
         //   いるので解放すると壊れます。そこに付けるのが --no-drop です。
@@ -276,7 +276,7 @@ static Options parse_args(int argc, char **argv) {
 
         // ── 証明（A-34）──
         //
-        // ⚠️ --verify-prove は「消せる」と判断した検査を**残したまま**、
+        // 注意: --verify-prove は「消せる」と判断した検査を**残したまま**、
         //   外れたら専用の診断で止めます。CI でこちらを回せば、解析の誤りが
         //   利用者ではなく私たちに返ってきます。
         if (strcmp(a, "--no-prove") == 0) { o.no_prove = 1; continue; }
@@ -289,7 +289,7 @@ static Options parse_args(int argc, char **argv) {
         //   そのまま渡します。extern で宣言した関数の実体が、標準ライブラリの
         //   外（BLAS や自前の .o）にあるときに要ります。
         //
-        // 🔒 シェル経由で渡るので、`-o` と同じように**入口で 1 回**確かめます。
+        // シェル経由で渡るので、`-o` と同じように**入口で 1 回**確かめます。
         if ((strncmp(a, "-l", 2) == 0 || strncmp(a, "-L", 2) == 0) && a[2]) {
             check_shell_safe(a, "リンクの指定");
             o.link = xrealloc_ptrs(o.link, o.nlink);
@@ -308,7 +308,7 @@ static Options parse_args(int argc, char **argv) {
         // ★ ベアメタル向け。リンクは自分でやるので -c で止める。
         if (strcmp(a, "-c") == 0) { o.emit_obj = 1; continue; }
         // ★ モジュールごとの clang を何本同時に走らせるか。
-        //   ⚠️ 出来上がる実行ファイルは並列度によって変わりません。
+        //   注意: 出来上がる実行ファイルは並列度によって変わりません。
         if (strncmp(a, "-j", 2) == 0 && a[2] != '\0') {
             o.jobs = atoi(a + 2);
             if (o.jobs < 0) error("-j には 0 以上を指定してください: %s", a);
@@ -367,7 +367,7 @@ static Options parse_args(int argc, char **argv) {
 //      <prefix>/lib/plc/runtime.a
 //      <prefix>/lib/plc/lib/*
 //
-// ⚠️ ③ が無いと、ビルドした場所を動かした瞬間に動かなくなります。
+// 注意: ③ が無いと、ビルドした場所を動かした瞬間に動かなくなります。
 //    「ダウンロードして展開したら動く」ためには、この規則が要ります。
 static bool file_exists(const char *path) {
     FILE *fp = fopen(path, "rb");
@@ -430,19 +430,19 @@ static char *ll_path_for(const char *output, const char *mod_name) {
 
 // ── モジュールごとの clang を並列に走らせる ─────────────────
 //
-// 🤔 なぜここが効くのか
+// なぜここが効くのか
 //   このコンパイラの仕事は、実測で **前段（字句〜意味解析〜IR 生成）が 5%、
 //   clang が 95%** です（セルフホスト版一式で 0.17s 対 2.9s）。
 //   つまり**コンパイラ自身をスレッド化しても意味がなく**、
 //   「clang の呼び出しを並べる」だけで頭打ちまで行きます。
 //
-//   ⚠️ 0.13.0 までは **1 つの clang に .ll を全部渡していました**。clang は
+//   注意: 0.13.0 までは **1 つの clang に .ll を全部渡していました**。clang は
 //     入力を順番に処理するので、コアが 12 あっても 1 つしか回りません。
 //
 // ★ 上限はモジュール 1 本の時間です（selfhost なら sema の 0.95 秒）。
 //   そこから先を詰めるには、大きいモジュールを分割することになります。
 //
-// ⚠️ **スレッド + system() では速くなりませんでした。** macOS の system() は
+// 注意: **スレッド + system() では速くなりませんでした。** macOS の system() は
 //    シグナル処理を守るためにグローバルなロックを取るので、何本のスレッドから
 //    呼んでも 1 本ずつしか走りません（最初にそう書いて、実測で気づきました）。
 //    だから**プロセスを直接起こします**（posix_spawn）。スレッドが要らなく
@@ -456,7 +456,7 @@ typedef struct {
 
 // 全部の仕事を走らせる。1 つでも失敗したら 0 以外を返す。
 //
-// ⚠️ **Windows では逐次のまま**です。cmd.exe には & による並行実行が無く、
+// 注意: **Windows では逐次のまま**です。cmd.exe には & による並行実行が無く、
 //    並べるなら Win32 の API を別に書くことになります。
 //    ここは「効かないだけで、壊れない」ほうを選びました。
 static int run_jobs(CcJob *jobs, int njobs, int want) {
@@ -483,7 +483,7 @@ static int run_jobs(CcJob *jobs, int njobs, int want) {
                             (char *)jobs[started].cmd, NULL};
             pid_t pid;
             if (posix_spawn(&pid, "/bin/sh", NULL, NULL, argv, environ) != 0) {
-                // ⚠️ 起こせなかったら、その場で自分が走ります（落とさない）。
+                // 注意: 起こせなかったら、その場で自分が走ります（落とさない）。
                 jobs[started].rc = system(jobs[started].cmd);
                 done++;
             } else {
@@ -524,7 +524,7 @@ int main(int argc, char **argv) {
 
     // ── ①② 字句解析・構文解析だけを見たいとき（入口ファイルのみ）──
     //
-    // ⚠️ --dump-tokens / --dump-ast は import をたどりません。
+    // 注意: --dump-tokens / --dump-ast は import をたどりません。
     //    「1 ファイルの中身を確かめる」道具だからです。
     if (opt.stage == STAGE_DUMP_TOKENS || opt.stage == STAGE_DUMP_AST) {
         char *src = read_file(opt.input);
@@ -533,7 +533,7 @@ int main(int argc, char **argv) {
             dump_tokens(toks);
             return 0;
         }
-        // ⚠️ --dump-ast は sema の前に出します。
+        // 注意: --dump-ast は sema の前に出します。
         //    構文解析だけを独立して確認したいためです（型エラーがあっても木は見たい）。
         dump_ast(parse(toks));
         return 0;
@@ -583,7 +583,7 @@ int main(int argc, char **argv) {
     //   「stage1（セルフホスト版）にはまだ ownck が無いので --check の出力を
     //   突き合わせられない」ことが理由でした。0.16.0 で ownck を
     //   セルフホスト版へ移したので、その理由は無くなっています。
-    //   ⚠️ 直すまで 2 実装の --check は食い違っていました
+    //   注意: 直すまで 2 実装の --check は食い違っていました
     //   （stage1 だけが E-MOVE-1 を出し、--check --deny-move で 1 を返す）。
     //   ★ --check は編集中のコードを見る入口（将来の LSP）でもあるので、
     //     ここで所有権の指摘が落ちると、その先で全部落ちます。
@@ -593,8 +593,8 @@ int main(int argc, char **argv) {
     //
     // ★ 区間解析で「必ず成り立つ」と示せた実行時検査に印を立てます。
     //   codegen はその印を見て検査を出しません。
-    //   ⚠️ --no-prove なら 1 つも消しません（比べるための逃げ道）。
-    //   ⚠️ --verify-prove なら印は立てたまま検査を**残し**、外れたら
+    //   注意: --no-prove なら 1 つも消しません（比べるための逃げ道）。
+    //   注意: --verify-prove なら印は立てたまま検査を**残し**、外れたら
     //     専用の診断で止めます（解析の誤りを私たち側に返すため）。
     if (!opt.no_prove) {
         ProveStats ps = {0};
@@ -640,7 +640,7 @@ int main(int argc, char **argv) {
     // ★ ベアメタルでは、リンクはこちらの仕事ではありません。
     //   リンカスクリプトを渡すのも、起動アセンブリを混ぜるのも利用者側です。
     //
-    // ⚠️ いまは 1 モジュールだけ対応します。import を含むカーネルは、
+    // 注意: いまは 1 モジュールだけ対応します。import を含むカーネルは、
     //    モジュールごとに .o を作って自分でリンクしてください。
     if (opt.emit_obj) {
         if (mods->next)
@@ -652,7 +652,7 @@ int main(int argc, char **argv) {
         // ★ RISC-V などは Apple の clang が対応していないことがあるので、
         //   PLC_CLANG で使う clang を差し替えられるようにします。
         const char *cc = clang_cmd();
-        // ⚠️ 引用は "…" にします。Windows の system() は cmd.exe を通すので、
+        // 注意: 引用は "…" にします。Windows の system() は cmd.exe を通すので、
         //    '…' は引用符として扱われません（POSIX の sh は "…" も理解します）。
         sb_printf(&oc, "%s %s -Wno-override-module -c \"%s\" -o \"%s\"", cc,
                   opt.opt_level, entry->ll_path, opt.output);
@@ -690,7 +690,7 @@ int main(int argc, char **argv) {
     //   clang は入力を順番に処理するので、**コアが 12 あっても 1 つしか
     //   回りません**。分ければそのまま並列になります（実測 4.21s → 1.41s）。
     //
-    //   ⚠️ 出来上がる実行ファイルは変わりません。clang は元々、複数の .ll を
+    //   注意: 出来上がる実行ファイルは変わりません。clang は元々、複数の .ll を
     //     渡されても 1 本ずつ独立にコンパイルしていました（LTO ではありません）。
     int nmods = 0;
     for (Module *m = mods; m; m = m->next) nmods++;
@@ -726,7 +726,7 @@ int main(int argc, char **argv) {
         // ★ スレッド（A-18）。ランタイムが pthread を使うので、
         //   POSIX ではリンク時に -pthread が要ります（新しめの glibc は libc に
         //   入っていますが、古い環境と *BSD では明示しないと undefined になります）。
-        //   ⚠️ Windows のスレッドは kernel32 にあるので、何も足しません。
+        //   注意: Windows のスレッドは kernel32 にあるので、何も足しません。
 #ifndef _WIN32
         sb_printf(&cmd, " -pthread");
 #else
@@ -745,21 +745,21 @@ int main(int argc, char **argv) {
         //   「どの .o にあるか」の地図だけが入ります（デバッグマップ）。
         //   こちらは .o を片付けてしまうので、そのままではデバッガが
         //   行を出せません。dsymutil で <出力>.dSYM にまとめてから消します。
-        //   ⚠️ Linux / Windows は実行ファイルに直接入るので、何もしません。
-        // ⚠️ triple は「指定が無ければ NULL」です。ここで既定を補わないと、
+        //   注意: Linux / Windows は実行ファイルに直接入るので、何もしません。
+        // 注意: triple は「指定が無ければ NULL」です。ここで既定を補わないと、
         //   ふつうに使ったとき（指定なし）に dsymutil が走りません。
         const char *eff_triple = triple ? triple : PLC_TARGET_TRIPLE;
         if (rc == 0 && opt.debug && strstr(eff_triple, "apple")) {
             StrBuf dsym;
             sb_init(&dsym);
             sb_printf(&dsym, "dsymutil \"%s\" 2>/dev/null", out_path);
-            // ⚠️ 失敗しても止めません（dsymutil が無い環境でも実行ファイルは
+            // 注意: 失敗しても止めません（dsymutil が無い環境でも実行ファイルは
             //   できています。デバッグ情報が無いだけです）。
             (void)system(sb_str(&dsym));
         }
     }
 
-    // ⚠️ .o は成否によらず片付けます（.ll は失敗時だけ残します。下記）。
+    // 注意: .o は成否によらず片付けます（.ll は失敗時だけ残します。下記）。
     for (int i = 0; i < nmods; i++) unlink(objs[i]);
 
     if (rc != 0) {

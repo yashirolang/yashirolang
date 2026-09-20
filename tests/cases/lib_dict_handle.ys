@@ -1,7 +1,7 @@
 # OUTPUT: 20
 # OUTPUT: -1
 # 値に「list の添字」を入れる使い方
-#   ⚠️ **ジェネリクスで不要になりました**（dict.Dict[str, Symbol]
+#   注意: **ジェネリクスで不要になりました**（dict.Dict[str, Symbol]
 #     が書けます。lib_dict_generic を参照）。この形も動き続けることを
 #     確かめるために残しています。
 import dict

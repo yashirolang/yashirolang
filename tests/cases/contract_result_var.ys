@@ -2,7 +2,7 @@
 # OUTPUT: 4
 # EXIT: 0
 # A-29: 'result' が特別なのは **ensures の式の中だけ**です。
-#   ⚠️ ふつうの変数名としての result は今までどおり使えます
+#   注意: ふつうの変数名としての result は今までどおり使えます
 #     （この処理系自身が何か所も使っています）。
 def twice(x: int) -> int:
     ensures result >= 0

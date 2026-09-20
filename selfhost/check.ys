@@ -25,7 +25,7 @@ def main() -> int:
     # ── ④ 所有権の検査 ──
     #
     # ★ C 版の `--check` が ownck まで通すので、ここも通します。
-    #   ⚠️ **既定はエラーです**（A-24）。指摘があれば終了コードは 1 になり、
+    #   注意: **既定はエラーです**（A-24）。指摘があれば終了コードは 1 になり、
     #   C 版の `--check` と揃います（この入口は --warn-own を取りません）。
     oopt: ownck.Options = ownck.Options()
     ownck.ownck_program(mods, oopt)

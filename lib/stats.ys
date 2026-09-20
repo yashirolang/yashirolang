@@ -2,7 +2,7 @@
 #
 # ★ 入力はすべて `list[float]` です。
 #
-# ⚠️ **標本と母集団の区別**に注意してください。Python と同じ命名にしてあります。
+# 注意: **標本と母集団の区別**に注意してください。Python と同じ命名にしてあります。
 #     variance / stdev   … 標本（n-1 で割る。手元のデータが「全体からの抜き取り」）
 #     pvariance / pstdev … 母集団（n で割る。手元のデータが「全体そのもの」）
 #   どちらを使うべきかはデータの性質で決まります。既定はありません。
@@ -22,7 +22,7 @@ def mean(a: list[float]) -> float:
     need_data(a, 1, "mean")
     return linalg.vsum(a) / float(len(a))
 
-# 中央値。⚠️ **元のデータは並べ替えません**（複製してから並べ替えます）
+# 中央値。注意: **元のデータは並べ替えません**（複製してから並べ替えます）
 def median(a: list[float]) -> float:
     need_data(a, 1, "median")
     s: list[float] = sorted(a)
@@ -66,7 +66,7 @@ def pvariance(a: list[float]) -> float:
 
 # 標本分散（n-1 で割る）
 #
-# 🤔 なぜ n-1 なのか
+# なぜ n-1 なのか
 #   平均を「データから」求めた時点で自由度が 1 減っています。n で割ると
 #   ばらつきを**小さく見積もりすぎる**（偏る）ので、n-1 で補正します。
 def variance(a: list[float]) -> float:
@@ -90,7 +90,7 @@ def stdev(a: list[float]) -> float:
 # 昇順に並べ替えた**複製**を返す
 #
 # ★ マージソート。挿入ソートと違って n log n で、要素数が増えても崩れません。
-# ⚠️ **元のリストは壊しません。** 並べ替えたい側が複製を作る手間を省くと、
+# 注意: **元のリストは壊しません。** 並べ替えたい側が複製を作る手間を省くと、
 #   「渡しただけなのに壊れた」という事故が起きるためです。
 def sorted(a: list[float]) -> list[float]:
     if len(a) <= 1:
@@ -128,7 +128,7 @@ def merge_by(x: list[float], y: list[float],
     i: int = 0
     j: int = 0
     while i < len(x) and j < len(y):
-        # ⚠️ **not less(y, x)** で比べます。less(x, y) だと同じ値のときに
+        # 注意: **not less(y, x)** で比べます。less(x, y) だと同じ値のときに
         #   右を先に取ってしまい、安定でなくなります。
         if not less(y[j], x[i]):
             out.append(x[i])
@@ -181,7 +181,7 @@ def quantile(a: list[float], q: float) -> float:
 
 # 最頻値に近いもの：出現回数が最多の値（同数なら小さいほう）
 #
-# ⚠️ 浮動小数点数の「等しい」は危ういので、**完全一致**で数えます。
+# 注意: 浮動小数点数の「等しい」は危ういので、**完全一致**で数えます。
 #   連続量に使うものではありません（度数分布を使ってください）。
 def mode(a: list[float]) -> float:
     need_data(a, 1, "mode")

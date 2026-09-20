@@ -91,7 +91,7 @@ def main() -> int:
     print("bar rects: " + str(count_of(bsvg, "fill=\"#1f5fd0\"") - 1))
 
     # 上向きの棒の下端と、下向きの棒の上端が同じ y（＝ 0 の線）
-    #   ⚠️ 数値は書き込みません。**出た SVG から読み取って**突き合わせます。
+    #   注意: 数値は書き込みません。**出た SVG から読み取って**突き合わせます。
     #   0 本目の <rect x="…"> は枠、1 本目から棒です
     up_bottom: float = rect_attr(bsvg, 1, "y=\"") + rect_attr(bsvg, 1, "height=\"")
     down_top: float = rect_attr(bsvg, 2, "y=\"")

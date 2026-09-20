@@ -148,7 +148,7 @@ def parse_args(args: list[str]) -> Options:
             if i + 1 >= len(args):
                 panic("-o の後に出力ファイル名が必要です")
             i = i + 1
-            # 🔒 clang へはシェル経由で渡ります。中間の .ll の名前も
+            # clang へはシェル経由で渡ります。中間の .ll の名前も
             #   ここから作るので、**入口で 1 回**確かめれば足ります。
             check_shell_safe(args[i], "出力ファイル名")
             o.output = copy(args[i])
@@ -211,7 +211,7 @@ def parse_args(args: list[str]) -> Options:
         # ── C のライブラリを繋ぐ（A-33）──
         #
         # ★ -l / -L / -framework を**リンクのときだけ** clang へそのまま渡す。
-        # 🔒 シェル経由なので、-o と同じように入口で 1 回確かめる。
+        # シェル経由なので、-o と同じように入口で 1 回確かめる。
         #   対になる定義: src/main.c の parse_args
         elif len(a) > 2 and (strings.startswith(a, "-l") or
                              strings.startswith(a, "-L")):
@@ -253,7 +253,7 @@ def ll_path_for(output: str, mod_name: str) -> str:
     return output + "." + mod_name + ".ll"
 
 
-# ⚠️ C 版はビルド時に埋め込む値（-DPLC_TARGET_TRIPLE / -DPLC_RUNTIME_O）を、
+# 注意: C 版はビルド時に埋め込む値（-DPLC_TARGET_TRIPLE / -DPLC_RUNTIME_O）を、
 #   stage1 は環境変数から受け取ります。C 版も同じ環境変数を先に見るので、
 #   両者は同じ規則で動きます（PLC_LIB_DIR と同じ手）。
 def target_triple() -> str:
@@ -276,10 +276,10 @@ def clang_cmd() -> str:
     return "clang"
 
 
-# 🔒 clang へ渡す道を確かめる（シェルに解釈される字が無いか）。
+# clang へ渡す道を確かめる（シェルに解釈される字が無いか）。
 #   対になる定義: src/main.c :: check_shell_safe
 #
-# ⚠️ **リンクはシェルを通ります。** 道は "…" で囲んでいますが、POSIX の
+# 注意: **リンクはシェルを通ります。** 道は "…" で囲んでいますが、POSIX の
 #   sh は**二重引用符の中でも** `$` ・ ` ・ `\` を解釈します。囲んで
 #   あるから安全、ではありません。
 #
@@ -287,7 +287,7 @@ def clang_cmd() -> str:
 #   cmd.exe で違い、両方に効く「正しい囲み方」を書こうとすると、
 #   そこが次の穴になります。
 #
-#   ⚠️ `\` は Windows の区切り文字なので、そちらでは通します。
+#   注意: `\` は Windows の区切り文字なので、そちらでは通します。
 #     `%` は逆に cmd.exe だけが展開します。
 def check_shell_safe(path: str, what: str) -> None:
     windows: bool = strings.contains(target_triple(), "windows")
@@ -317,19 +317,19 @@ def runtime_o() -> str:
 
 # ── モジュールごとの clang を並列に走らせる ──────────────────
 #
-# 🤔 なぜここが効くのか
+# なぜここが効くのか
 #   このコンパイラの仕事は、実測で **前段（字句〜意味解析〜IR 生成）が 5%、
 #   clang が 95%** です。つまり**コンパイラ自身をスレッド化しても意味がなく**、
 #   「clang の呼び出しを並べる」だけで頭打ちまで行きます。
 #
-#   ⚠️ 0.13.0 までは **1 つの clang に .ll を全部渡していました**。clang は
+#   注意: 0.13.0 までは **1 つの clang に .ll を全部渡していました**。clang は
 #     入力を順番に処理するので、コアが 12 あっても 1 つしか回りません。
 #
-# ⚠️ **spawn（スレッド）から sys.run を呼ぶ形では速くなりません。** macOS の
+# 注意: **spawn（スレッド）から sys.run を呼ぶ形では速くなりません。** macOS の
 #    system() はグローバルなロックを取るので、何本のスレッドから呼んでも
 #    1 本ずつしか走りません。だから sys.start_shell でプロセスを直接起こします。
 #
-# ⚠️ Windows では start_shell が -1 を返すので、その場で sys.run に落ちます
+# 注意: Windows では start_shell が -1 を返すので、その場で sys.run に落ちます
 #    （効かないだけで、壊れません）。C 版 src/main.c の run_jobs と対。
 def run_jobs(cmds: list[str], want: int) -> int:
     n: int = want
@@ -372,7 +372,7 @@ def main() -> int:
 
     # ── ①② 字句解析・構文解析だけを見たいとき（入口ファイルのみ）──
     #
-    # ⚠️ --dump-tokens / --dump-ast は import をたどりません。
+    # 注意: --dump-tokens / --dump-ast は import をたどりません。
     #    「1 ファイルの中身を確かめる」道具だからです。
     if opt.stage == STAGE_DUMP_TOKENS or opt.stage == STAGE_DUMP_AST:
         src: str = lexer.read_source(opt.input_)
@@ -476,12 +476,12 @@ def main() -> int:
     if strings.contains(triple, "windows") and not strings.contains(out_path, "."):
         out_path = out_path + ".exe"
 
-    # ⚠️ 引用は "…" にします。Windows の system() は cmd.exe を通すので、
+    # 注意: 引用は "…" にします。Windows の system() は cmd.exe を通すので、
     #    '…' は引用符として扱われず、そのままファイル名の一部になります
     #    （POSIX の sh は "…" も理解するので、これで両方に効きます）。
     #
     # ★ **モジュールごとに .o を作ってからリンク**します。
-    #   ⚠️ 出来上がる実行ファイルは変わりません。clang は元々、複数の .ll を
+    #   注意: 出来上がる実行ファイルは変わりません。clang は元々、複数の .ll を
     #     渡されても 1 本ずつ独立にコンパイルしていました（LTO ではありません）。
     cmds: list[str] = []
     objs: list[str] = []
@@ -489,7 +489,7 @@ def main() -> int:
     while m2 is not None:
         mm2: rc[module.Module] = m2
         obj: str = opt.output + "." + mm2.name + ".o"
-        # ⚠️ append は所有を持っていくので、**先にコマンドを組み立てます**
+        # 注意: append は所有を持っていくので、**先にコマンドを組み立てます**
         #   （逆にすると E-MOVE-1「移動済みの値 'obj' を使っています」）。
         # ★ -g のときは clang にも渡す（DWARF を実際に作らせるため。A-30）
         gflag: str = ""
@@ -514,7 +514,7 @@ def main() -> int:
         parts.append(" \"" + runtime_o() + "\"")
         # ★ スレッド（A-18）。ランタイムが pthread を使うので、
         #   POSIX ではリンク時に -pthread が要る。
-        # ⚠️ Windows のスレッドは kernel32 にあるので何も足さない。
+        # 注意: Windows のスレッドは kernel32 にあるので何も足さない。
         if not strings.contains(triple, "windows"):
             parts.append(" -pthread")
         else:
@@ -530,13 +530,13 @@ def main() -> int:
         # ★ macOS では DWARF が **.o の中に残り**、実行ファイルには
         #   「どの .o にあるか」の地図だけが入る（デバッグマップ）。
         #   こちらは .o を片付けるので、dsymutil で <出力>.dSYM にまとめる。
-        #   ⚠️ Linux / Windows は実行ファイルに直接入るので何もしない。
+        #   注意: Linux / Windows は実行ファイルに直接入るので何もしない。
         #   対になる定義: src/main.c の dsymutil
         if rc == 0 and opt.debug and strings.contains(triple, "apple"):
-            # ⚠️ 失敗しても止めない（dsymutil が無くても実行ファイルはできている）
+            # 注意: 失敗しても止めない（dsymutil が無くても実行ファイルはできている）
             sys.run("dsymutil \"" + out_path + "\" 2>/dev/null")
 
-    # ⚠️ .o は成否によらず片付けます（.ll は失敗時だけ残します。下記）。
+    # 注意: .o は成否によらず片付けます（.ll は失敗時だけ残します。下記）。
     for ob2 in objs:
         io.remove(ob2)
     if rc != 0:

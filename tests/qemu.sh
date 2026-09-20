@@ -4,7 +4,7 @@
 # ★ QEMU の virt マシンでカーネルを起動し、**シリアルに出た文字列**を確かめます。
 #   「動いた気がする」ではなく、出力で判定できるようにするのが目的です。
 #
-# ⚠️ 必要なもの: qemu-system-riscv64 / riscv64-elf-ld / Homebrew の LLVM。
+# 注意: 必要なもの: qemu-system-riscv64 / riscv64-elf-ld / Homebrew の LLVM。
 #    無い環境では **スキップ**して緑にします（この本は macOS 以外でも読まれるため）。
 set -u
 

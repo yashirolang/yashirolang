@@ -6,7 +6,7 @@
 #
 # ★ どれも str(i) や連結の結果が**どこにも束縛されない**まま使われます。
 #   束縛すればスコープ終端で解放されますが、式の途中の値には持ち主がいません。
-#   ⚠️ このファイルは tests/drop_asan.sh が --drop + AddressSanitizer で
+#   注意: このファイルは tests/drop_asan.sh が --drop + AddressSanitizer で
 #     動かすので、解放しすぎ（二重解放）もここで捕まります。
 def borrow(s: str) -> int:
     return len(s)
@@ -27,7 +27,7 @@ def main() -> int:
     # ④ 借用で受け取るユーザ関数へ渡す
     total = total + borrow("z" + str(1))
 
-    # ⑤ 所有権が移る先（append）。⚠️ ここで解放すると二重解放になる
+    # ⑤ 所有権が移る先（append）。注意: ここで解放すると二重解放になる
     xs: list[str] = []
     xs.append("k" + str(3))
     total = total + len(xs)

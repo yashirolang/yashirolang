@@ -1,6 +1,6 @@
 # ERROR: 並べられるのは 8 個までです
 # 隠し変数の数には上限があります（C 版が 8 個の配列で持つため）
-#   ⚠️ 上限は 2 つの実装で同じにしてあります（src/parser.c と selfhost/parser）。
+#   注意: 上限は 2 つの実装で同じにしてあります（src/parser.c と selfhost/parser）。
 def main() -> int:
     a: int = 1
     b: int = 2

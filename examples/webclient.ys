@@ -4,7 +4,7 @@
 #
 # ★ **外部のライブラリは要りません。** curl も要りません。
 #
-# ⚠️ **https はまだ繋げません**（TLS が未実装）。http:// だけです。
+# 注意: **https はまだ繋げません**（TLS が未実装）。http:// だけです。
 #   黙って暗号化なしで繋ぐと危ないので、http にはっきり断らせています。
 import http
 import strings
@@ -28,7 +28,7 @@ def main() -> int:
         print("────────")
         print(res.body)
     except http.HttpError as e:
-        # ⚠️ **繋がらない・名前が引けない・応答が壊れている**の
+        # 注意: **繋がらない・名前が引けない・応答が壊れている**の
         #   どれもここに来ます（http は HttpError だけを投げます）。
         print("取ってこられません: " + e.message)
         if e.timed_out:

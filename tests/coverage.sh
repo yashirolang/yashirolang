@@ -5,7 +5,7 @@
 #   clang のソースベース計測（-fprofile-instr-generate -fcoverage-mapping）で
 #   計装した処理系を建て、テストを全部通してから llvm-cov に集計させます。
 #
-# ⚠️ 本言語で書かれた側（selfhost/ と lib/）は**この方法では測れません**。
+# 注意: 本言語で書かれた側（selfhost/ と lib/）は**この方法では測れません**。
 #   本言語自身に計装の仕組みが無いからです（ロードマップ B-2）。
 #   代わりに tests/stdlib_usage.sh が「標準ライブラリのどの関数が
 #   テストから呼ばれているか」を静的に数えます。
@@ -62,7 +62,7 @@ PLC_CC="$CC_BIN" "$ROOT/tests/run_tests.sh" > "$COV/tests.log" 2>&1
 rc=$?
 tail -2 "$COV/tests.log" | sed 's/^/  /'
 if [ $rc -ne 0 ]; then
-    echo "  ⚠️ テストが落ちています（カバレッジの数字は参考値です）"
+    echo "  注意: テストが落ちています（カバレッジの数字は参考値です）"
 fi
 
 # ── オプションの巡回 ────────────────────────────────────────

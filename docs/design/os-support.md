@@ -44,7 +44,7 @@ pragma target "x86_64-unknown-none"
 
 | プロファイル | 既定 | ランタイム | 禁止されるもの |
 |---|---|---|---|
-| `hosted` | ✅ | `libpl_hosted`（libc あり） | なし |
+| `hosted` | 済 | `libpl_hosted`（libc あり） | なし |
 | `freestanding` | | `libpl_core`（libc なし） | `print`, `io.*`, `sys.*`, 既定の確保器 |
 
 `freestanding` でコンパイルすると、禁止された組み込みを使った時点で
@@ -69,7 +69,7 @@ extern void  pl_hook_free(void *p);
 extern _Noreturn void pl_hook_panic(const char *msg);
 ```
 
-**⚠️ `runtime/runtime.c` に新しい関数を足すときは
+**注意: `runtime/runtime.c` に新しい関数を足すときは
 「これは core か hosted か」を意識して書きます**（drop の実装は core 側）。
 
 ---
@@ -168,7 +168,7 @@ pragma profile freestanding
 | MSYS2（mingw-w64） | 同上（mingw-w64 が持っています） |
 | どれも無いとき | `timespec_get`（あれば）→ `time(NULL)`（秒の精度） |
 
-> **⚠️ 「C11 の標準だからどこにでもある」は成り立ちません。**
+> **注意: 「C11 の標準だからどこにでもある」は成り立ちません。**
 > `timespec_get` / `TIME_UTC` は C11 で標準になりましたが、**MSYS2 の clang は
 > `-std=c11` でも持っていません**（CI の Windows ジョブが
 > 「call to undeclared function 'timespec_get'」で見つけました）。

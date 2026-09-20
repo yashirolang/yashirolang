@@ -1,7 +1,7 @@
 # ERROR: error: フィールド 'next' は init で代入されていません
 # ERROR: このフィールドは None から始まってしまいます
-# 🔒 A-27: **どの経路でも代入するか**を見ます（definite assignment）。
-#   ⚠️ 0.17 までは「init のどこかに self.next = ... と書いてあるか」だけを
+# A-27: **どの経路でも代入するか**を見ます（definite assignment）。
+#   注意: 0.17 までは「init のどこかに self.next = ... と書いてあるか」だけを
 #     見ていたので、この形（`if` の中にしか代入が無い）は素通りしていました。
 #     Ada / SPARK が既定で持っている検査にあたります。
 class N:

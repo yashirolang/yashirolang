@@ -90,7 +90,7 @@ static int is_wide_cp(unsigned cp) {
 
 // s の先頭 1 文字を調べる。*bytes にバイト長を入れ、表示幅を返す。
 //
-// ⚠️ 不正なバイト列でも必ず前進する（*bytes >= 1）ようにします。
+// 注意: 不正なバイト列でも必ず前進する（*bytes >= 1）ようにします。
 //    さもないと無限ループになります。エラー表示中に固まるのは最悪です。
 static int utf8_char(const char *s, int *bytes) {
     unsigned char c = (unsigned char)s[0];
@@ -177,7 +177,7 @@ static void render_block(const DiagLabel *lb, int gw) {
     fprintf(stderr, "%*s | ", gw + 1, "");
 
     // ★ キャレットの手前は「表示幅」ぶんの空白を送る（全角は 2 個）
-    // ⚠️ タブはタブで送ると、端末上の桁が元の行とそろいます。
+    // 注意: タブはタブで送ると、端末上の桁が元の行とそろいます。
     for (int i = 0; i < off;) {
         if (ls[i] == '\t') {
             fputc('\t', stderr);
@@ -221,7 +221,7 @@ void diag_emit(const Diag *d) {
 
     // ③ 関連する位置（別ブロックとして note: で出す）
     //
-    // 🤔 なぜ 1 つのブロックに 2 本の下線をまとめないのか
+    // なぜ 1 つのブロックに 2 本の下線をまとめないのか
     //    rustc は同じ行なら 1 ブロックに複数ラベルを描きますが、
     //    「同じ行か / 別の行か」「ラベルが重なるか」で場合分けが増え、
     //    描画コードが一気に複雑になります。

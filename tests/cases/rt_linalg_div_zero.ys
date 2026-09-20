@@ -1,7 +1,7 @@
 # EXIT: 1
 # ライブラリは「どこで 0 で割ったか」を言います
 #
-#   ⚠️ ランタイムの "float division by zero" だけでは場所が分かりません。
+#   注意: ランタイムの "float division by zero" だけでは場所が分かりません。
 #     lib 側で先に確かめて、何番目の要素かを言うようにしています。
 import linalg
 

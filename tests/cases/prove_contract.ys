@@ -3,7 +3,7 @@
 # IR-NOT: ensures of half
 # A-34 段 2: `requires` は**通った後の事実**になります。
 #   ★ x >= 0 が分かるので、`ensures result >= 0` はコンパイル時に片付きます。
-#   ⚠️ 示せなかった契約は今までどおり実行時に確かめます（赤にはしません）。
+#   注意: 示せなかった契約は今までどおり実行時に確かめます（赤にはしません）。
 def half(x: int) -> int:
     requires x >= 0
     ensures result >= 0

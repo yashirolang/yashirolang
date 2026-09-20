@@ -26,7 +26,7 @@ LANG_PM="$(make -s -C "$ROOT" print-LANG_PM)"
 POC="$ROOT/build/$LANG_CC"
 [ -x "$POC" ] || POC="$POC.exe"
 export PLC_RUNTIME_O="$ROOT/build/runtime.a"
-# ⚠️ stage1（セルフホスト版）は標準ライブラリの場所を**実行時に**環境変数で読みます
+# 注意: stage1（セルフホスト版）は標準ライブラリの場所を**実行時に**環境変数で読みます
 #   （C 版はビルド時に埋め込み）。これが無いと import io で即座に失敗します。
 export PLC_LIB_DIR="$ROOT/lib"
 REPS=${BENCH_REPS:-3}
@@ -42,7 +42,7 @@ fi
 
 
 # 表示幅で左詰めする（日本語は 2 桁ぶんの幅を取る）。
-# ⚠️ printf の %-30s は**バイト数**で数えるので、日本語が入ると崩れます。
+# 注意: printf の %-30s は**バイト数**で数えるので、日本語が入ると崩れます。
 #   LC_ALL=C の awk（バイト単位）で「ASCII は 1、それ以外は 3 バイトで 2 桁」と数えます。
 pad() {
     LC_ALL=C awk -v s="$1" -v w="$2" 'BEGIN{
@@ -75,7 +75,7 @@ measure() {
         t=$(printf '%s\n' "$out" | awk '/^TIME_MS/{print $2}')
         r=$(printf '%s\n' "$out" | awk '/^RESULT/{print $2}')
         [ -n "$t" ] || { printf '  %s %10s\n' "$(pad "$name" 34)" "（TIME_MS 無し）"; return; }
-        # ⚠️ 負の TIME_MS は「その処理系が入っていない」の合図です（numpy など）
+        # 注意: 負の TIME_MS は「その処理系が入っていない」の合図です（numpy など）
         case "$t" in -*) printf '  %s %10s\n' "$(pad "$name" 34)" "（なし）"; return;; esac
         best=$(awk -v a="$t" -v b="$best" 'BEGIN{print (b=="" || a+0<b+0) ? a : b}')
         res="$r"
@@ -99,7 +99,7 @@ set_base() {
 
 # 答え合わせ（RESULT が分母のものと一致しているか）
 #
-# ⚠️ 表記は言語ごとに違います（C の printf %f は "65440.873640"、
+# 注意: 表記は言語ごとに違います（C の printf %f は "65440.873640"、
 #   本言語の str(float) は "65440.87364"）。**数として**比べます。
 #   相対誤差 1e-9 まで許します（浮動小数の足す順序は同じなので、本来は一致します）。
 check() {
@@ -134,7 +134,7 @@ for f in loop fp mat; do
     "$POC" -O0 $f$EXT -o $OUT/${f}_po_O0
     "$POC" -O2 $f$EXT -o $OUT/${f}_po_O2
     "$POC" -O2 --no-overflow-check $f$EXT -o $OUT/${f}_po_O2_noovf
-    # ⚠️ Rust は既定（-O）だと**桁あふれを検査しません**。本言語は検査するので、
+    # 注意: Rust は既定（-O）だと**桁あふれを検査しません**。本言語は検査するので、
     #   条件を揃えた -C overflow-checks=on の版も作ります。
     if command -v rustc >/dev/null 2>&1; then
         (cd "$OUT" && rustc -O -o ${f}_rs ../$f.rs 2>/dev/null
@@ -219,7 +219,7 @@ fi
 
 if want compile; then
 echo ""
-echo "═══ コンパイルの速さ（⚠️ どれもプロセスの起動を含みます）═══"
+echo "═══ コンパイルの速さ（注意: どれもプロセスの起動を含みます）═══"
 echo "  ★ このコンパイラは LLVM IR のテキストを出すところまでが自分の仕事で、"
 echo "    最適化とリンクは clang に任せます。-S は「自分の仕事だけ」の時間です。"
 tstart "$LANG_CC -S mat${EXT}（46 行）" "$POC" -S mat$EXT
@@ -231,7 +231,7 @@ fi
 
 if want selfhost; then
 echo ""
-echo "═══ 自己コンパイル（型検査まで。⚠️ 起動時間を含みます）═══"
+echo "═══ 自己コンパイル（型検査まで。注意: 起動時間を含みます）═══"
 tstart "C 版 stage0" "$POC" --check "$ROOT/selfhost/main$EXT"
 if [ -x "$ROOT/build/stage1" ]; then
     tstart "セルフホスト版 stage1" "$ROOT/build/stage1" --check "$ROOT/selfhost/main$EXT"
@@ -241,4 +241,4 @@ fi
 fi
 
 echo ""
-[ $FAIL -eq 0 ] && echo "答えはすべて一致しました。" || echo "⚠️ 答えの食い違いがあります。"
+[ $FAIL -eq 0 ] && echo "答えはすべて一致しました。" || echo "注意: 答えの食い違いがあります。"

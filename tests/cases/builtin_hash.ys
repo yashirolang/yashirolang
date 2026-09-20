@@ -7,7 +7,7 @@
 # hash 組み込み
 #   ★ **単相化のおかげで**、ジェネリックなコードの中で hash(k) と書けます
 #     （K が確定してから型検査されるため）。dict がこれを使っています。
-#   ⚠️ FNV-1a。暗号用ではありません。
+#   注意: FNV-1a。暗号用ではありません。
 def main() -> int:
     print(hash("abc") == hash("abc"))
     print(hash("abc") != hash("abd"))

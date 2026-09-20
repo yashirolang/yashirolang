@@ -39,7 +39,7 @@ echo "  ────────────────────────
 for f in "$ROOT"/lib/*$EXT; do
     mod="$(basename "$f" "$EXT")"
     # 公開している関数（トップレベルの def。extern と _ 始まりは除く）
-    # ⚠️ ジェネリック（def f[T](…)）も拾うので [.*] を挟めるようにします
+    # 注意: ジェネリック（def f[T](…)）も拾うので [.*] を挟めるようにします
     funcs="$(sed -n 's/^def \([a-zA-Z][a-zA-Z0-9_]*\)\(\[[^]]*\]\)\{0,1\}(.*/\1/p' \
              "$f" | sort -u)"
     [ -n "$funcs" ] || continue
@@ -78,5 +78,5 @@ pct=0
 [ "$total" -eq 0 ] || pct=$(( used * 100 / total ))
 printf "  %-12s %6d %6d  %3d%%\n" "合計" "$total" "$used" "$pct"
 echo ""
-echo "⚠️ メソッド（x.foo()）は数えていません。呼ばれる型が静的に追えないためです。"
+echo "注意: メソッド（x.foo()）は数えていません。呼ばれる型が静的に追えないためです。"
 [ "$show_missing" -eq 1 ] || echo "   未使用の一覧: tests/stdlib_usage.sh --missing"

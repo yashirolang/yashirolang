@@ -5,7 +5,7 @@
 #
 #   Python の set との違い:
 #     ・リテラル {1, 2} は書けません（`s: Set[int] = Set()` を作って add します）
-#       ⚠️ 型引数は**左辺の注釈**が渡します。`Set[int]()` とは書けません
+#       注意: 型引数は**左辺の注釈**が渡します。`Set[int]()` とは書けません
 #         （ジェネリクスの決まり。dict.Dict と同じです）
 #     ・`in` は `s.has(x)` か `x in s`（__contains__ を持っています）
 #     ・和・積・差はメソッド（`|` `&` `-` の多重定義は入れていません。
@@ -41,7 +41,7 @@ class Set[T]:
     def remove(mut self, x: T) -> bool:
         return self.d.remove(x)
 
-    # 中身を並べる。⚠️ **並びは入れた順ではありません**（表の並びです）
+    # 中身を並べる。注意: **並びは入れた順ではありません**（表の並びです）
     def items(mut self) -> list[T]:
         return self.d.keys()
 

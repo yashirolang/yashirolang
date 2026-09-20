@@ -3,7 +3,7 @@
 # OUTPUT: hello!
 # EXIT: 0
 # 所有しているリストから読んだ要素を、own 引数へ渡すと所有者が 2 つになります。
-# ⚠️ **誤検出ではありません** — --drop を付けると xs の drop と b の drop が
+# 注意: **誤検出ではありません** — --drop を付けると xs の drop と b の drop が
 #   同じ文字列を 2 回解放します（AddressSanitizer が heap-use-after-free と言う）。
 #
 # ★ この形は長らく**診断が出ていませんでした**（docs/roadmap.md A-21c）。

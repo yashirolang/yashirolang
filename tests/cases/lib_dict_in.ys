@@ -6,7 +6,7 @@
 # OUTPUT: 2
 # EXIT: 0
 # 'in' の多重定義（__contains__）
-#   ⚠️ 'in' だけは **右辺（入れ物）の型**で決まります。
+#   注意: 'in' だけは **右辺（入れ物）の型**で決まります。
 #     Python の __contains__ と同じ考え方です。
 import dict
 

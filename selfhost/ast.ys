@@ -4,7 +4,7 @@
 #   種別の値と順序は C 版に揃えます（C 版を見ながら 1 つずつ確認するため）。
 #
 # 方針は C 版と同じ「全部入り構造体」（docs/design/architecture.md 3.2）。
-# ⚠️ 子ノードはほぼ全部 `rc[Node] | None` になります。C 版で NULL だったものを
+# 注意: 子ノードはほぼ全部 `rc[Node] | None` になります。C 版で NULL だったものを
 #    本言語で表す唯一の方法だからです。
 import strings
 import token
@@ -20,7 +20,7 @@ TY_OPT: int = 6      # T | None
 TY_NULL: int = 7     # None リテラルの型（変数の型にはならない）
 TY_RC: int = 8       # rc[T]（共有所有）
 # ★ 生ポインタ（A-33 で受け渡しだけ移植）。
-#   ⚠️ 中身を触る操作（unsafe: の中の読み書き）は C 版だけが持ちます。
+#   注意: 中身を触る操作（unsafe: の中の読み書き）は C 版だけが持ちます。
 #     こちらは「C のライブラリへ渡す・受け取る」ためだけに扱います。
 TY_PTR: int = 9      # ptr[T] → ptr
 TY_FLOAT: int = 10   # float → double
@@ -33,7 +33,7 @@ TY_THREAD: int = 14  # Thread[R] → ptr（ランタイムの PlThread への不
 TY_MUTEX: int = 15   # mutex[T]  → ptr（ランタイムの PlMutex への不透明な参照）
 
 # ★ プログラム全体のインタフェース・メソッド数（vtable の長さ）。
-#   ⚠️ sema が数え、codegen が読みます（codegen の引数を増やさないための割り切り）。
+#   注意: sema が数え、codegen が読みます（codegen の引数を増やさないための割り切り）。
 IFACE_SLOTS: int = 0
 
 
@@ -145,7 +145,7 @@ class Class:
         self.targs_of = []
 # ── プリミティブ型のシングルトン ────────────────────────────
 #
-# ⚠️ 本言語のグローバル変数の初期化式はコンパイル時定数だけなので、
+# 注意: 本言語のグローバル変数の初期化式はコンパイル時定数だけなので、
 #   C 版のように起動時の関数（types_init）で作ることができません。
 #   代わりに「1 個だけ作って持ち回る」入れ物を用意します。
 class Prims:
@@ -277,7 +277,7 @@ def type_equal(a: rc[Type], b: rc[Type]) -> bool:
     return True
 
 # ★ インタフェースも「同じ定義か」で比べる
-# ⚠️ 'T | None' 同士は == で比べられないので、先に絞り込みます
+# 注意: 'T | None' 同士は == で比べられないので、先に絞り込みます
 def same_iface(a: rc[Type], b: rc[Type]) -> bool:
     ia: rc[Iface] | None = a.iface
     ib: rc[Iface] | None = b.iface
@@ -290,7 +290,7 @@ def same_iface(a: rc[Type], b: rc[Type]) -> bool:
 def same_class(a: rc[Type], b: rc[Type]) -> bool:
     ca: rc[Class] | None = a.cls
     cb: rc[Class] | None = b.cls
-    # ⚠️ 'or' では絞り込みが効かないので、ガード節を 2 本に分けます（15.5 節）
+    # 注意: 'or' では絞り込みが効かないので、ガード節を 2 本に分けます（15.5 節）
     if ca is None:
         return False
     if cb is None:
@@ -303,7 +303,7 @@ def type_assignable(from_: rc[Type], to: rc[Type]) -> bool:
         return True
 
     # ★ クラス → インタフェース（実装していれば代入できる）。
-    #   ⚠️ **値の変換は起きない。** vtable へのポインタはオブジェクトの
+    #   注意: **値の変換は起きない。** vtable へのポインタはオブジェクトの
     #     先頭に入っているので、ポインタはそのまま。
     if to.kind == TY_IFACE and from_.kind == TY_CLASS:
         c: rc[Class] | None = from_.cls
@@ -432,7 +432,7 @@ ND_NONE: int = 28
 ND_TRY: int = 29     # try 文    → body, els（except の並び）
 ND_EXCEPT: int = 30  # except 節 → type_ref, name（as の名前）, body
 ND_RAISE: int = 31   # raise 文  → lhs
-# ⚠️ 32 / 33 は ND_UNSAFE / ND_PRAGMA（C 版だけが持つ低レベル文）。
+# 注意: 32 / 33 は ND_UNSAFE / ND_PRAGMA（C 版だけが持つ低レベル文）。
 ND_FLOAT: int = 34   # 浮動小数点リテラル → sval（正規化済みの文字列）
 ND_COND: int = 35    # 三項演算子 a if c else b → lhs（条件）, rhs（真）, els（偽）
 ND_SLICE: int = 36   # xs[a:b] → lhs, rhs（開始）, els（終端）
@@ -462,7 +462,7 @@ ND_RANGECHK: int = 43
 ND_REQUIRES: int = 44   # requires <式> … 関数の入口で確かめる
 ND_ENSURES: int = 45    # ensures  <式> … return のたびに確かめる
 # ★ ensures の中でだけ使える名前 'result'（戻り値そのもの）。
-#   ⚠️ 箱（alloca）は作らない。**いま返そうとしている値**を指すだけ。
+#   注意: 箱（alloca）は作らない。**いま返そうとしている値**を指すだけ。
 ND_RESULT: int = 46
 
 # ── 仮引数の受け取り方（C 版 ParamMode と同じ順序・同じ値）──
@@ -507,7 +507,7 @@ OP_NEG: int = 22
 OP_POS: int = 23
 OP_BITNOT: int = 24
 OP_NOT: int = 25
-# ★ 所属の検査。⚠️ is_compare は OP_EQ〜OP_GE の連続に
+# ★ 所属の検査。注意: is_compare は OP_EQ〜OP_GE の連続に
 #   依存しているので、**末尾に**足すこと
 OP_IN: int = 26      # x in xs
 OP_NOTIN: int = 27   # x not in xs
@@ -648,7 +648,7 @@ class Node:
     #   埋まります（解放の挿入がこの印に従います）。
     #   対になる定義: src/ast.h の binds_borrow / moved_out
     # ★ この実引数は「借用」の仮引数へ渡されると **分かっている** か（A-21e）。
-    #   ⚠️ **既定（False）が安全側**です。分からない経路では解放しません。
+    #   注意: **既定（False）が安全側**です。分からない経路では解放しません。
     #   対になる定義: src/ast.h の arg_is_borrowed
     arg_is_borrowed: bool
     # ★ この実引数は「own の仮引数」へ渡す rc[T] か（A-21 ⑬）。
@@ -682,13 +682,13 @@ class Node:
     type_ref: rc[Node] | None   # 型注釈の木
 
     # ── エラー処理 ──
-    # ⚠️ 'raises' はキーワードなのでフィールド名に使えません（C 版は raises）。
+    # 注意: 'raises' はキーワードなのでフィールド名に使えません（C 版は raises）。
     err_types: rc[Node] | None  # ND_FUNC : raises 節の型注釈の並び
     can_fail: bool       # ND_CALL / ND_METHOD : 呼び出し先が raises 関数か
     err_tag: int         # ND_EXCEPT / ND_RAISE : エラー型の ID
 
     # ★ wrap_add / wrap_sub / wrap_mul（桁あふれを検査しない算術）。
-    #   ⚠️ 旗は**末尾に足す**（列挙値と同じ理由。C 版と揃えるため）。
+    #   注意: 旗は**末尾に足す**（列挙値と同じ理由。C 版と揃えるため）。
     is_wrap: bool
 
     # 兄弟（文のリスト・引数リストは next で繋ぐ）
@@ -1054,7 +1054,7 @@ def dump_ast(root: rc[Node] | None) -> None:
 # ★ 単相化は「テンプレートの木を丸ごと複製して、型引数を置き換える」だけ。
 #   置き換えは sema が「型引数の束縛」で行うので、ここでは**複製だけ**。
 #
-# ⚠️ **sema が埋める欄（type / ir_name / cls / builtin）は写しません。**
+# 注意: **sema が埋める欄（type / ir_name / cls / builtin）は写しません。**
 #   写すとテンプレートを検査したときの結果が実体に混入します。
 def ast_clone(n: rc[Node] | None) -> rc[Node] | None:
     if n is None:

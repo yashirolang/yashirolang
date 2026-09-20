@@ -2,7 +2,7 @@
 #
 # ★ C 版の src/sema.c 前半（rc[FuncSig] / rc[VarEntry] / rc[Scope] / rc[ModuleSyms]）にあたります。
 #
-# ⚠️ Type / Class / Field は **ast** に置きました。C 版では types.h と ast.h に
+# 注意: Type / Class / Field は **ast** に置きました。C 版では types.h と ast.h に
 #   分かれていますが、本言語は**循環 import を禁止している**ため
 #   （判断 150）、Node ↔ Type ↔ Class を相互に参照させるには
 #   同じモジュールに置くしかありません。

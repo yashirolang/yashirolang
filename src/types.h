@@ -39,7 +39,7 @@ typedef enum {
     //   触れるのは unsafe: の中だけです。
     TY_PTR,   // ptr[T] → ptr
 
-    // ⚠️ 追加は**末尾に**。selfhost/ast が値を明示しているので、
+    // 注意: 追加は**末尾に**。selfhost/ast が値を明示しているので、
     //    途中に足すと 2 つの実装で番号がずれます。
     TY_FLOAT, // float → double（IEEE 754 倍精度）
     TY_FN,    // fn(A, B) -> C → ptr（関数へのポインタ）
@@ -83,7 +83,7 @@ struct Type {
     //
     // ★ **kind は TY_INT のままです。** 表現も i64 のままで、変わるのは
     //   「入れるときに範囲を確かめる」ことだけです（Ada の部分型と同じ考え）。
-    //   ⚠️ 別の kind にすると、codegen と型検査にある `kind == TY_INT` の
+    //   注意: 別の kind にすると、codegen と型検査にある `kind == TY_INT` の
     //     判定を全部書き換えることになり、**書き忘れた場所が静かに壊れます**。
     //     名前が付いているかどうか（name != NULL）で見分けます。
     long long lo, hi;   // name != NULL のときだけ意味を持つ（両端を含む）
@@ -95,7 +95,7 @@ struct Type {
 
 // ★ プリミティブ型はシングルトン（起動時に 1 個だけ作る）。
 //
-// 🤔 なぜシングルトンにするのか
+// なぜシングルトンにするのか
 //   `int` 型のオブジェクトを毎回 xmalloc するのは無駄です。
 //   1 個だけ作ってポインタを共有すれば、確保が減るうえに
 //   「プリミティブ型どうしの比較はポインタ比較で済む」という利点も得られます。
@@ -128,7 +128,7 @@ Type *type_from_name(const char *name);
 Type *type_from_kind(int kind);
 
 // list[T] を作る。
-// ⚠️ シングルトンではありません。書かれた場所ごとに新しく作られるので、
+// 注意: シングルトンではありません。書かれた場所ごとに新しく作られるので、
 //    型の比較は必ず type_equal() を通すこと。
 Type *type_list(Type *elem);
 
@@ -172,7 +172,7 @@ bool ty_is_range(Type *t);
 Type *type_class(char *name, struct Class *cls);
 Type *type_iface(char *name, struct Iface *i);
 // クラスがインタフェースを実装しているかを返す関数。
-// ⚠️ types.c は sema の表を知らないので、sema 側から差し込みます。
+// 注意: types.c は sema の表を知らないので、sema 側から差し込みます。
 extern bool (*class_implements_hook)(struct Class *c, struct Iface *i);
 
 // 値のバイト数とアラインメント（クラスのレイアウト計算に使う）。

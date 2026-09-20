@@ -17,7 +17,7 @@
 #   ★ **サーバーと同じ部品で書けているか**を確かめます。応答の読み取りは
 #     サーバー側の Reader とチャンクの解き方をそのまま使っています。
 #
-#   ⚠️ **本体の終わりの決め方 3 通りを全部通します**（Content-Length /
+#   注意: **本体の終わりの決め方 3 通りを全部通します**（Content-Length /
 #     チャンク / 本体なし）。ここを取り違えると「来ないものを待って
 #     止まる」形の不具合になり、試験では**固まって**現れます。
 import http
@@ -117,17 +117,17 @@ def main() -> int:
         u2: http.Url = http.parse_url("http://example.com")
         print("URL（経路なし）: " + u2.host + " " + str(u2.port) + " " + u2.target)
 
-        # ⚠️ 角括弧が無いと、住所の中のコロンとポートの前のコロンが
+        # 注意: 角括弧が無いと、住所の中のコロンとポートの前のコロンが
         #   見分けられません
         u3: http.Url = http.parse_url("http://[::1]:8080/x")
         print("URL（IPv6）: " + u3.host + " " + str(u3.port) + " " + u3.target)
 
-        # ⚠️ 住所の終わりは "/" だけではありません（"?" でも終わります）。
+        # 注意: 住所の終わりは "/" だけではありません（"?" でも終わります）。
         #   "/" だけを探すと、問い合わせが名前の側に紛れ込みます。
         u4: http.Url = http.parse_url("http://example.com?x=1")
         print("URL（問い合わせだけ）: " + u4.target)
 
-        # ⚠️ かけら（# のうしろ）は相手に送りません（ブラウザの中だけの印）。
+        # 注意: かけら（# のうしろ）は相手に送りません（ブラウザの中だけの印）。
         u5: http.Url = http.parse_url("http://example.com/a?x=1#frag")
         print("URL（かけらは送らない）: " + u5.target)
     except http.HttpError as he3:

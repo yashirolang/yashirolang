@@ -4,16 +4,16 @@
 #   `linalg` の `list[float]` 専用版しかなく、`list[int]` や `list[str]`
 #   には使えませんでした。
 #
-# ⚠️ 比較を伴うもの（max / min / sort / index_of）は `<` や `==` を使うので、
+# 注意: 比較を伴うもの（max / min / sort / index_of）は `<` や `==` を使うので、
 #   **それが定義された型**にしか使えません。クラスを渡すと、実体化した
 #   ときに「演算子が適用できません」と言われます（型制約が無いため）。
 #
-# ⚠️ 要素を返すもの（first / last / max_of）は **借用を返します**。
+# 注意: 要素を返すもの（first / last / max_of）は **借用を返します**。
 #   元のリストが生きているあいだだけ有効です。
 
 # ── 作る ────────────────────────────────────────────────────
 
-# ⚠️ **「n 個の x で埋める」は汎用には書けません。**
+# 注意: **「n 個の x で埋める」は汎用には書けません。**
 #   同じ値を n 個入れるには所有権が n 個要りますが、複製の手段が
 #   型ごとに違います（str は copy、クラスは自分で作る）。
 #   `list[int]` / `list[float]` なら `linalg.full` を、
@@ -24,7 +24,7 @@
 #           out.append(Node())
 
 # 逆順に見るための**添字の並び**
-# ⚠️ 要素そのものを並べ替えた複製は汎用には作れません（下の注意を参照）
+# 注意: 要素そのものを並べ替えた複製は汎用には作れません（下の注意を参照）
 def reversed_indices[T](xs: list[T]) -> list[int]:
     out: list[int] = []
     i: int = len(xs) - 1
@@ -69,7 +69,7 @@ def any_of[T](xs: list[T], pred: fn(T) -> bool) -> bool:
 
 # ── 取り出す ────────────────────────────────────────────────
 #
-# ⚠️ 空のときに返す値を呼び出し側から渡してもらいます。
+# 注意: 空のときに返す値を呼び出し側から渡してもらいます。
 #   `T | None` は class と str にしか付けられないので、汎用には使えません。
 
 def first_or[T](xs: list[T], default: own T) -> T:
@@ -82,7 +82,7 @@ def last_or[T](xs: list[T], default: own T) -> T:
         return default
     return xs[len(xs) - 1]
 
-# 最大・最小。⚠️ 空のリストは panic します（返す値が決められないため）
+# 最大・最小。注意: 空のリストは panic します（返す値が決められないため）
 def max_of[T](xs: list[T]) -> T:
     if len(xs) == 0:
         panic("lists.max_of: 空のリストです")
@@ -104,7 +104,7 @@ def min_of[T](xs: list[T]) -> T:
 
 # ── 作り変える ──────────────────────────────────────────────
 
-# ⚠️ **要素を「別のリストに移す」ものは汎用には書けません。**
+# 注意: **要素を「別のリストに移す」ものは汎用には書けません。**
 #
 #   filter / map / sorted のように「新しいリストに 1 つずつ入れる」形は、
 #   借りた要素を別の入れ物に保存することになり E-BORROW-3 になります。
@@ -116,7 +116,7 @@ def min_of[T](xs: list[T]) -> T:
 #       for i in lists.indices_where(xs, pred):
 #           use(xs[i])
 #
-#   ⚠️ 並べ替えも同じ理由で「順番（添字の並び）」を返します:
+#   注意: 並べ替えも同じ理由で「順番（添字の並び）」を返します:
 #
 #       for i in lists.sorted_indices(xs):
 #           print(xs[i])
@@ -150,7 +150,7 @@ def mmerge[T](xs: list[T], a: list[int], b: list[int]) -> list[int]:
     i: int = 0
     j: int = 0
     while i < len(a) and j < len(b):
-        # ⚠️ **not (b < a)** で比べます。同じ値のときに右を先に取ると
+        # 注意: **not (b < a)** で比べます。同じ値のときに右を先に取ると
         #   安定でなくなります。
         if not (xs[b[j]] < xs[a[i]]):
             out.append(a[i])

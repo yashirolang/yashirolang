@@ -1,7 +1,7 @@
 # STDIN: 0
 # EXIT: 1
 # A-29: 事前条件を破ると止まります（Ada の Constraint_Error にあたります）。
-#   ⚠️ 外すオプションはありません（範囲型と同じ理由）。
+#   注意: 外すオプションはありません（範囲型と同じ理由）。
 def divide(a: int, b: int) -> int:
     requires b != 0
     return a // b

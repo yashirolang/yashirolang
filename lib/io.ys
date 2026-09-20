@@ -4,7 +4,7 @@
 #   利用者は io.read_file を使い、pl_read_file を知りません。
 #   ランタイム側の名前が変わっても、直すのはここだけです。
 #
-# ⚠️ strings を import しています（mkdir_all がパスを分けるため）。
+# 注意: strings を import しています（mkdir_all がパスを分けるため）。
 #   strings は何も import しないので、循環にはなりません。
 import strings
 
@@ -32,7 +32,7 @@ def read_file(path: str) -> str:
 def write_file(path: str, text: str) -> None:
     pl_write_file(path, text)
 
-# ⚠️ bool は extern の境界を越えられないので、int で受けてここで bool にします
+# 注意: bool は extern の境界を越えられないので、int で受けてここで bool にします
 # ファイルを削除する（無ければ何もしない）
 def remove(path: str) -> None:
     pl_remove(path)
@@ -55,7 +55,7 @@ def exists(path: str) -> bool:
 
 # 1 行読む。**改行は含みません**。もう読めなければ None。
 #
-# ⚠️ 行末の '\r' は落とします（Windows で作った入力でも同じ結果になるように）。
+# 注意: 行末の '\r' は落とします（Windows で作った入力でも同じ結果になるように）。
 def read_line() -> str | None:
     return pl_read_line()
 
@@ -77,13 +77,13 @@ def is_dir(path: str) -> bool:
 
 # ディレクトリを 1 つ作る。**既にあれば True**（作り直しません）。
 #
-# ⚠️ 途中の親が無いときは失敗します。まとめて作るなら mkdir_all を使ってください。
+# 注意: 途中の親が無いときは失敗します。まとめて作るなら mkdir_all を使ってください。
 def mkdir(path: str) -> bool:
     return pl_mkdir(path) >= 0
 
 # 途中の親ごと作る（mkdir -p 相当）
 #
-# ⚠️ 区切りは "/" だけを見ます。Windows でも "/" が使えます
+# 注意: 区切りは "/" だけを見ます。Windows でも "/" が使えます
 #    （このコンパイラが扱うパスは全部 "/" 区切りです）。
 def mkdir_all(path: str) -> bool:
     if len(path) == 0:
@@ -113,7 +113,7 @@ def rmdir(path: str) -> bool:
 
 # 中身ごと消す（rm -rf 相当）。
 #
-# ⚠️ **シンボリックリンクの先はたどりません**（リンクそのものを消します）。
+# 注意: **シンボリックリンクの先はたどりません**（リンクそのものを消します）。
 #    たどると、指してある場所の中身まで消してしまうためです。
 def remove_all(path: str) -> bool:
     if not exists(path) and not is_dir(path):
@@ -136,7 +136,7 @@ def size(path: str) -> int:
 
 # ディレクトリの中身（名前だけ。"." と ".." は含みません）。
 #
-# ⚠️ **並びは OS 任せです。** 同じ結果が欲しいときは呼び出し側で整列してください。
-# ⚠️ 開けなかったときも空のリストです。区別したいときは先に is_dir を見てください。
+# 注意: **並びは OS 任せです。** 同じ結果が欲しいときは呼び出し側で整列してください。
+# 注意: 開けなかったときも空のリストです。区別したいときは先に is_dir を見てください。
 def listdir(path: str) -> list[str]:
     return pl_listdir(path)

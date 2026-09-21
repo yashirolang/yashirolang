@@ -170,16 +170,11 @@ class Listener:
     #   NetError の timed_out で分かるので、そこで終わりの合図を見て
     #   やめる、という形が書けます。
     #
-    # 注意: **macOS では効きません**（実測。2026-09-21）。ここが入れる
-    #   SO_RCVTIMEO は、Linux の accept には効きますが、**Darwin の accept は
-    #   見ません**。客が来なければ accept はそのまま待ち続けます。
-    #
-    #   ★ **「客が来なければ戻ってくる」輪を、これだけに頼って書かないで
-    #     ください。** 終わらせたい側から 1 本繋いで起こす、という形にすると
-    #     どの環境でも終わります（tests/cases/lib_http_client<ext> がその形です）。
-    #
-    #   注意: どの環境でも効くようにするには、accept の前に select / poll で
-    #     待つ作りが要ります。まだ入れていません。
+    # 注意: **0.29.1 まで macOS では効いていませんでした。** 待ち時間は
+    #   SO_RCVTIMEO で入れていますが、**それを accept に効かせるかは OS で
+    #   違います**（Linux は効かせ、Darwin は見ません）。いまはランタイムが
+    #   accept の前に自分で待つので、どの OS でも同じに戻ります。
+    #   番人: tests/cases/lib_net_accept_timeout<ext>
     #
     # 注意: **set_conn_timeout とは別ものです。** こちらは待ち受け口に、
     #   あちらは受け付けた接続に効きます。

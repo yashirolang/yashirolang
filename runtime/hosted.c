@@ -931,6 +931,7 @@ typedef int pl_socklen;
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <poll.h>         // accept の待ち時間（下の pl_sock_wait_accept）
 #include <sys/socket.h>
 #include <sys/time.h>     // struct timeval（SO_RCVTIMEO。A-23）
 #include <sys/types.h>
@@ -1157,8 +1158,81 @@ long long pl_sock_port(long long fd) {
     return (long long)ntohs(((struct sockaddr_in *)&a)->sin_port);
 }
 
+// 待ち時間が決まっていれば、その時間だけ「客が来るか」を待つ。
+//
+// ★ **なぜ accept の前に待つのか。**
+//   待ち時間は SO_RCVTIMEO で入れていますが、**これを accept に効かせるかは
+//   OS で違います**。Linux は効かせ、**Darwin（macOS）は見ません**。
+//   そのため macOS では「客が来なければ戻ってくる」輪が書けず、
+//   accept がそのまま待ち続けていました（2026-09-21 に実測で判明）。
+//
+//   ★ **どの OS でも同じ結果にするため、自分で待ちます。** 待ってから
+//     accept を呼べば、SO_RCVTIMEO を accept に効かせるかどうかに
+//     依存しなくなります。
+//
+// ★ **待ち時間は別に覚えません。** いま入っている SO_RCVTIMEO を
+//   読み返します。覚えると「setsockopt で入れた値」と「こちらが覚えた値」の
+//   2 つができ、必ずずれます。
+//
+// 戻り値:  1 … 客が来た（accept してよい）
+//          0 … 待ち時間を過ぎた
+//         -1 … 失敗
+//
+// 注意: POSIX では poll を使います。select の fd_set は FD_SETSIZE（多くは
+//   1024）までしか入らず、**fd がそれを超えると書き潰します**。Windows の
+//   fd_set は添字ではなく SOCKET の配列なので、そちらは select で構いません。
+static int pl_sock_wait_accept(int fd) {
+#ifdef _WIN32
+    DWORD ms = 0;
+    int n = (int)sizeof(ms);
+    if (getsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (char *)&ms, &n) != 0) return 1;
+    if (ms == 0) return 1;                    // 無期限
+    struct timeval tv;
+    tv.tv_sec = (long)(ms / 1000);
+    tv.tv_usec = (long)((ms % 1000) * 1000);
+    fd_set r;
+    FD_ZERO(&r);
+    FD_SET((SOCKET)fd, &r);
+    int rc = select(0, &r, NULL, NULL, &tv);
+    if (rc > 0) return 1;
+    return rc == 0 ? 0 : -1;
+#else
+    struct timeval tv;
+    pl_socklen n = (pl_socklen)sizeof(tv);
+    if (getsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, &n) != 0) return 1;
+    long long ms = (long long)tv.tv_sec * 1000 + (long long)tv.tv_usec / 1000;
+    if (ms <= 0) return 1;                    // 無期限
+    struct pollfd p;
+    p.fd = fd;
+    p.events = POLLIN;
+    p.revents = 0;
+    int rc;
+    // 注意: **合図（シグナル）で中断されたら待ち直します。** ここで
+    //   EINTR をそのまま失敗にすると、関係の無い合図 1 つでサーバーが
+    //   「時間切れ」でもないのに止まります。
+    do { rc = poll(&p, 1, (int)ms); } while (rc < 0 && errno == EINTR);
+    if (rc > 0) return 1;
+    return rc == 0 ? 0 : -1;
+#endif
+}
+
 // 1 本受け付ける（相手が来るまで待つ）。失敗すれば -1。
+//
+// ★ **待ち時間を決めてあれば、そこで戻ります**（Listener.set_timeout）。
+//   時間切れは NetError の timed_out で見分けられます。
 long long pl_sock_accept(long long fd) {
+    int w = pl_sock_wait_accept((int)fd);
+    if (w == 0) {
+        // ★ 待ち時間切れ。**失敗と分けます** — 「まだ来ていない」だけで、
+        //   待ち受け口は生きており、もう一度 accept できます。
+        g_sock_timeout = 1;
+        snprintf(g_sock_err, sizeof(g_sock_err), "accept: 待ち時間を過ぎました");
+        return -1;
+    }
+    if (w < 0) {
+        pl_sock_fail("accept", PL_SOCK_ERRNO);
+        return -1;
+    }
     int c = (int)accept((int)fd, NULL, NULL);
     if (c < 0) {
         pl_sock_fail("accept", PL_SOCK_ERRNO);

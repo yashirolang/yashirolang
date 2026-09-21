@@ -70,7 +70,7 @@ print(str(res.status) + " " + res.body)
 | `Conn.set_timeout(ms)` | 読み書きの待ち時間（**0 なら無期限**） |
 | `Conn.close()` | 閉じる（2 回呼んでもよい） |
 | `Listener.set_conn_timeout(ms)` | **これから** `accept` する接続の待ち時間 |
-| `Listener.set_timeout(ms)` | `accept` そのものの待ち時間（**macOS では効きません**。下を見てください） |
+| `Listener.set_timeout(ms)` | `accept` そのものの待ち時間（時間切れは `timed_out`） |
 
 **★ ポートに `0` を渡すと、OS が空いているポートを選びます。**
 選ばれた番号は `l.port` で読めます。
@@ -457,27 +457,10 @@ except net.NetError as e:
 | 相互 TLS（客にも証明書を求める） | まだ |
 | クライアント側の「この証明書を信じる」を `http.get` に渡す | まだ（`tls` の層で組み立ててください） |
 | `connect` の待ち時間 | まだ（`SO_RCVTIMEO` は繋がったあとにしか効きません） |
-| `accept` の待ち時間 | **macOS では効きません**（`Listener.set_timeout`。下を見てください） |
 | 接続を貯めておく（クライアント） | まだ（1 要求ごとに繋ぎ直します） |
 | UDP | まだ |
 | 多重化（`select` / `epoll`） | まだ（同時に捌くなら `spawn`） |
 | ベアメタル | **できません**（`runtime/hosted.c` だけが持っています） |
-
-**注意: `Listener.set_timeout` は macOS では効きません**（実測 2026-09-21）。
-入れているのは `SO_RCVTIMEO` で、**Linux の `accept` には効きますが Darwin の
-`accept` は見ません**。客が来なければ `accept` は待ち続けます。
-
-**★ 「客が来なければ戻ってくる」輪を、これだけに頼って書かないでください。**
-終わらせたい側から 1 本繋いで起こす形にすると、どの環境でも終わります。
-
-```python
-# 別のところから「もう終わり」を伝える
-w: net.Conn = net.connect("127.0.0.1", l.port)
-w.close()
-```
-
-どの環境でも効くようにするには、`accept` の前に `select` / `poll` で待つ作りが
-要ります。まだ入れていません。
 
 **注意: `connect` だけは区切れません。** `Conn.set_timeout` が決めるのは
 **繋がったあとの読み書き**です。返事の無い相手に繋ぎにいくと、OS が

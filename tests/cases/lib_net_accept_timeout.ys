@@ -1,0 +1,71 @@
+# OUTPUT: 客が来なければ戻る: True
+# OUTPUT: 時間切れと分かる: True
+# OUTPUT: そのあとも受け付けられる: True
+# OUTPUT: 無期限なら待つ（来た客を取れる）: True
+# EXIT: 0
+# accept の待ち時間（Listener.set_timeout）
+#
+#   ★ **ここが無いと「客が来なければ戻ってくる」輪が書けません。**
+#     終わりの合図を見てやめる、という形のサーバーが全部書けなくなります。
+#
+#   注意: **この試験は 2026-09-21 まで存在せず、機能は macOS で壊れていました。**
+#     待ち時間は SO_RCVTIMEO で入れていますが、**それを accept に効かせるかは
+#     OS で違います**（Linux は効かせ、Darwin は見ません）。CI が Linux でも
+#     回るので、片側だけ見ていると気づけない形です。
+#     いまは runtime 側が accept の前に自分で待つので、どの OS でも同じです。
+#
+#   注意: **時間切れは失敗と分けます。** 「まだ来ていない」だけで待ち受け口は
+#     生きており、もう一度 accept できます。ここを混ぜると、呼び出し側が
+#     「もう一度待つ／やめる」を選べません。
+import net
+import time
+
+
+def main() -> int:
+    try:
+        l: net.Listener = net.listen("127.0.0.1", 0)
+
+        # ── ① 客が来なければ戻ってくる ──
+        l.set_timeout(300)
+        t0: float = time.monotonic()
+        came_back: bool = False
+        timed: bool = False
+        try:
+            c0: net.Conn = l.accept()
+            print("繋がってしまった")
+            c0.close()
+        except net.NetError as e:
+            came_back = True
+            timed = e.timed_out
+
+        # 注意: **上限だけを見ます。** 「ちょうど 0.3 秒」を求めると、
+        #   機械の混み具合で落ちる試験になります。ここで言いたいのは
+        #   「**永久に待たない**」ことだけです。
+        took: float = time.monotonic() - t0
+        print("客が来なければ戻る: " + str(came_back and took < 5.0))
+        print("時間切れと分かる: " + str(timed))
+
+        # ── ② 時間切れのあとも、待ち受け口は生きている ──
+        c1: net.Conn = net.connect("127.0.0.1", l.port)
+        s1: net.Conn = l.accept()
+        print("そのあとも受け付けられる: True")
+        s1.close()
+        c1.close()
+
+        # ── ③ 0 を渡したら無期限（来た客はちゃんと取れる）──
+        #
+        #   注意: ここで「無期限だと戻ってこない」ことは試せません
+        #     （試すと試験が終わりません）。**無期限にしても壊れない**
+        #     ことだけを見ます。
+        l.set_timeout(0)
+        c2: net.Conn = net.connect("127.0.0.1", l.port)
+        s2: net.Conn = l.accept()
+        print("無期限なら待つ（来た客を取れる）: True")
+        s2.close()
+        c2.close()
+
+        l.close()
+    except net.NetError as e2:
+        print("NG: " + e2.message)
+        return 1
+    return 0

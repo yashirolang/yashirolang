@@ -37,6 +37,16 @@ extern char **environ;
 #define PLC_RUNTIME_O "build/runtime.a"
 #endif
 
+// ランタイムが外のライブラリを要るときの、リンクの指定（いまは TLS だけ）。
+//
+// ★ 既定は**空**です。TLS を有効にして建てたときだけ、Makefile が
+//   `-L… -lssl -lcrypto` を埋め込みます。有効にしていなければ
+//   リンク行は 1 文字も変わりません。
+// 対になる定義: Makefile :: TLS_LIBS / selfhost/main<ext> :: runtime_libs
+#ifndef PLC_RUNTIME_LIBS
+#define PLC_RUNTIME_LIBS ""
+#endif
+
 // 生成物をリンクするのに使う clang。
 // ★ clang-18 のように名前が違う環境があるので、ビルド時に埋め込み、
 //   環境変数 PLC_CLANG でも上書きできるようにします。
@@ -416,6 +426,18 @@ static const char *runtime_o(void) {
     return PLC_RUNTIME_O;  // 見つからないときは、埋め込んだ値でエラーを出させる
 }
 
+// ランタイムが要る外のライブラリ（環境変数 → ビルド時の埋め込み）。
+//
+// 注意: **囲まずにリンク行へ置きます**（`-L/x -lssl -lcrypto` のように
+//   複数の語だからです）。囲むと 1 つの道の名前として渡ってしまいます。
+//   環境変数で上書きできるのは PLC_CLANG / PLC_RUNTIME_O と同じ扱いで、
+//   どのみち環境変数を書ける相手は clang そのものを差し替えられます。
+static const char *runtime_libs(void) {
+    const char *env = getenv("PLC_RUNTIME_LIBS");
+    if (env) return env;
+    return PLC_RUNTIME_LIBS;
+}
+
 // 出力ファイル名とモジュール名から .ll のパスを作る。
 //   a.out + main  → a.out.main.ll
 //
@@ -723,6 +745,13 @@ int main(int argc, char **argv) {
         for (int i = 0; i < nmods; i++) sb_printf(&cmd, " \"%s\"", objs[i]);
         // ★ ランタイム（runtime/runtime.c をコンパイルしたもの）をリンクする。
         sb_printf(&cmd, " \"%s\"", runtime_o());
+        // ★ ランタイムが要る外のライブラリ（TLS を有効にしたときの OpenSSL）。
+        //   注意: **ランタイムの後**に置きます（後から来たものが先のものの
+        //   未解決を埋める、という並びのため）。
+        {
+            const char *libs = runtime_libs();
+            if (libs && libs[0]) sb_printf(&cmd, " %s", libs);
+        }
         // ★ スレッド（A-18）。ランタイムが pthread を使うので、
         //   POSIX ではリンク時に -pthread が要ります（新しめの glibc は libc に
         //   入っていますが、古い環境と *BSD では明示しないと undefined になります）。

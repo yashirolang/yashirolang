@@ -71,9 +71,13 @@ def main() -> int:
         print("NG(net): " + ne.message)
         return 1
 
-    # ④ 断る道（URL を組み立てずにエラーだけを作る）
+    # ④ 断る道（**繋がずに**エラーだけを作って、その解放を見る）
+    #
+    #   注意: **外には出ません。** 知らない仕組みの URL は parse_url が
+    #     繋ぐ前に断るので、通信できない場所でも結果が変わりません
+    #     （以前はここで example.com へ本当に繋いでいました）。
     try:
-        bad: http.Response = http.get("https://example.com/")
+        bad: http.Response = http.get("ftp://example.com/")
         print("断られた: False " + str(bad.status))
     except http.HttpError as e:
         print("断られた: " + str(len(e.message) > 0))

@@ -1,0 +1,240 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Copyright 2026 Shota Iwamoto
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# TLS のやり取りを一通り確かめる（tests/tls<sh> から呼ばれます）
+#
+#   ★ **外には一切出ません。** 自己署名の証明書を作って、自分で立てた
+#     サーバーに自分で繋ぎます。通信できない場所でも、相手の都合でも
+#     結果が変わりません。
+#
+#   ★ 確かめるのは 5 つで、**うち 3 つは「繋がらないこと」**です。
+#     暗号化の層で大事なのは「通ること」より「通ってはいけないものが
+#     通らないこと」だからです。
+#
+#       ① 信頼する証明書を渡せば通る（往復できる・TLS 1.2 以上である）
+#       ② **知らない証明書は断る**（OS の綴じ込みで自己署名に繋がない）
+#       ③ **名前が違えば断る**（証明書は localhost のもの）
+#       ④ **平文で待つ相手に TLS では繋がらない**
+#       ⑤ **TLS で待つ相手に平文では繋がらない**（https の上の http）
+#
+#   注意: この試験は tests/cases には置けません。証明書を先に作る必要があり、
+#     run_tests<sh> の「1 ファイル＝1 プログラム」に収まらないためです。
+#
+#   引数: argv[1] … 証明書の置き場（server.pem / server.key がある）
+import http
+import net
+import sys
+import tls
+
+
+def cert_path() -> str:
+    return sys.argv()[1] + "/server.pem"
+
+def key_path() -> str:
+    return sys.argv()[1] + "/server.key"
+
+
+# ── ① 素の TLS で往復する ──────────────────────────────
+
+# TLS で待ち受けて、来たものをそのまま返す（1 本だけ）
+def echo_server(fd: int) -> int:
+    try:
+        inner: net.Listener = net.Listener(fd, 0)
+        ctx: tls.Context = tls.server_context(cert_path(), key_path())
+        l: tls.Listener = tls.Listener(inner, ctx)
+        c: tls.Stream = l.accept()
+        c.set_timeout(5000)
+        got: str = c.recv(4096)
+        c.send("echo:" + got)
+        c.close()
+    except net.NetError as e:
+        # 注意: **黙ります。** ②と③は「客が断ってくる」試験なので、
+        #   サーバー側からはやり取りの失敗として見えます。ここで書くと、
+        #   2 つのスレッドの出力が混ざって順番が決まらなくなります。
+        #   ①が壊れたときは、客の側が「往復 NG」を出します。
+        return 0
+    return 0
+
+
+def roundtrip(port: int) -> None:
+    try:
+        ctx: tls.Context = tls.client_context()
+        # ★ **「検証を外す」ではなく「これを信じる」**と書きます。
+        #   自己署名を試す正しい道はこちらです。
+        ctx.set_ca_file(cert_path())
+        c: tls.Stream = tls.connect_with(ctx, "localhost", port)
+        ctx.close()
+        c.set_timeout(5000)
+        c.send("ping")
+        print("往復: " + c.recv(4096))
+        print("暗号化されている: " + str(c.secure()))
+        # ★ 版は 1.2 か 1.3 のはずです（1.1 以下は繋がりません）
+        v: str = c.version()
+        print("版: " + str(v == "TLSv1.2" or v == "TLSv1.3"))
+        c.close()
+    except net.NetError as e:
+        print("往復 NG: " + e.message)
+
+
+# ── ② 知らない証明書は断る ──────────────────────────────
+#
+# ★ **ここが通ってしまったら、検証は何もしていないということです。**
+#   OS の綴じ込みしか信じない文脈で、自己署名のサーバーに繋ぎます。
+def unknown_cert(port: int) -> None:
+    try:
+        c: tls.Stream = tls.connect("localhost", port)
+        c.close()
+        print("知らない証明書: 繋いでしまった")
+    except net.NetError as e:
+        print("知らない証明書: 断った")
+
+
+# ── ③ 名前が違えば断る ──────────────────────────────────
+#
+# ★ 証明書は localhost のものです。**同じ相手**に 127.0.0.1 として
+#   繋ぎに行くと、名前が合わないので断られなければなりません。
+#   注意: 「その証明書を信じる」と言ってあっても、**名前の照合は別**です。
+def wrong_name(port: int) -> None:
+    try:
+        ctx: tls.Context = tls.client_context()
+        ctx.set_ca_file(cert_path())
+        c: tls.Stream = tls.connect_with(ctx, "127.0.0.1", port)
+        ctx.close()
+        c.close()
+        print("名前が違う: 繋いでしまった")
+    except net.NetError as e:
+        print("名前が違う: 断った")
+
+
+# ── ④ 平文で待つ相手に TLS では繋がらない ────────────────
+def plain_server(fd: int) -> int:
+    try:
+        l: net.Listener = net.Listener(fd, 0)
+        c: net.Conn = l.accept()
+        c.set_timeout(2000)
+        c.recv(4096)
+        c.send("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+        c.close()
+    except net.NetError as e:
+        return 0
+    return 0
+
+
+def tls_to_plain(port: int) -> None:
+    try:
+        c: tls.Stream = tls.connect("localhost", port)
+        c.close()
+        print("平文の相手に TLS: 繋いでしまった")
+    except net.NetError as e:
+        print("平文の相手に TLS: 断った")
+
+
+# ── ⑤ https のサーバー（http の層ごと）────────────────────
+def https_server(fd: int) -> int:
+    try:
+        inner: net.Listener = net.Listener(fd, 0)
+        inner.set_conn_timeout(5000)
+        ctx: tls.Context = tls.server_context(cert_path(), key_path())
+        l: tls.Listener = tls.Listener(inner, ctx)
+        # ★ **2 本**捌きます。1 本目は平文で繋いでくる相手（断られます）、
+        #   2 本目が本物の https です。
+        http.serve_tls_n(l, handle, 2)
+    except net.NetError as e:
+        print("https_server NG: " + e.message)
+    return 0
+
+
+def handle(req: http.Request) -> http.Response:
+    return http.text(200, "secure " + req.path)
+
+
+def https_roundtrip(port: int) -> None:
+    # ★ まず**平文で**繋ぎます。TLS で待っている相手に http:// で繋いでも
+    #   成り立たないこと、そして**それでサーバーが終わらないこと**を
+    #   同時に確かめます（次の要求が通れば、続いているということです）。
+    try:
+        bad: http.Response = http.get("http://localhost:" + str(port) + "/x")
+        print("https の場所に http: 繋いでしまった " + str(bad.status))
+    except http.HttpError as e:
+        print("https の場所に http: 断った")
+
+    # 注意: 相手が自己署名なので、http の側にも「これを信じる」と伝える
+    #   必要があります。いまの http.get にその口はないので、TLS の層で
+    #   組み立てて、要求だけ http の部品に書かせます。
+    try:
+        ctx: tls.Context = tls.client_context()
+        ctx.set_ca_file(cert_path())
+        c: tls.Stream = tls.connect_with(ctx, "localhost", port)
+        ctx.close()
+        c.set_timeout(5000)
+        c.send("GET /hello HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
+        rd: http.Reader = http.Reader()
+        res: http.Response = http.read_response(rd, c, "GET")
+        print("https の往復: " + str(res.status) + " " + res.body)
+        c.close()
+    except net.NetError as e:
+        print("https の往復 NG: " + e.message)
+    except http.HttpError as he:
+        print("https の往復 NG: " + he.message)
+
+
+def main() -> int:
+    # 注意: **2 つの「走れない」を別の番号で返します。** 同じにすると、
+    #   引数を渡し忘れただけの実行が「TLS が入っていない」と読まれ、
+    #   試験が黙って飛ばされます。
+    if not tls.available():
+        print("TLS を組み込んでいません")
+        return 3
+    if sys.argc() < 2:
+        print("証明書の置き場を渡してください")
+        return 2
+
+    try:
+        # ① / ② / ③ は同じサーバーに繋ぎますが、**1 本ずつしか受けない**ので
+        #   それぞれに立て直します。
+        run_case(roundtrip)
+        run_case(unknown_cert)
+        run_case(wrong_name)
+
+        # ④ 平文で待つ相手
+        l4: net.Listener = net.listen("127.0.0.1", 0)
+        l4.set_timeout(3000)
+        t4: Thread[int] = spawn(plain_server, l4.fd)
+        tls_to_plain(l4.port)
+        t4.join()
+        l4.close()
+
+        # ⑤ https
+        l5: net.Listener = net.listen("127.0.0.1", 0)
+        l5.set_timeout(5000)
+        t5: Thread[int] = spawn(https_server, l5.fd)
+        https_roundtrip(l5.port)
+        t5.join()
+        l5.close()
+    except net.NetError as e:
+        print("NG: " + e.message)
+        return 1
+    return 0
+
+
+# TLS のサーバーを 1 本立てて、渡された確かめを走らせる
+def run_case(f: fn(int) -> None) -> None raises net.NetError:
+    l: net.Listener = net.listen("127.0.0.1", 0)
+    l.set_timeout(5000)
+    t: Thread[int] = spawn(echo_server, l.fd)
+    f(l.port)
+    t.join()
+    l.close()

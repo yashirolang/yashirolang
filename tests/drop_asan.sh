@@ -37,6 +37,24 @@ case "$(uname -s 2>/dev/null || echo unknown)" in
     MINGW*|MSYS*|CYGWIN*) LINK_LIBS="-lws2_32" ;;
 esac
 
+# ★ **ここは runtime.a を使わず、runtime/*.c を直接ビルドします**（下の
+#   clang の行）。ランタイムも ASan 付きで建てたいからです。つまり
+#   TLS の部分も自分で建てる必要があり、
+#     ・-DPL_TLS_OPENSSL と -I …  … これが無いと「断るだけの中身」が入り、
+#                                    tls<ext> の extern が未定義になります
+#     ・-lssl -lcrypto            … その中身が要求します
+#   の両方が要ります。
+#
+#   注意: **判子から読みます**（build/tls.stamp）。これは「ランタイムを
+#     実際にどう建てたか」の記録なので、いま make に TLS= を渡したかに
+#     左右されません（渡し忘れて「未定義のシンボル」で落ちる、が起きません）。
+#   対になる定義: Makefile :: TLS_STAMP（形式: TLS|リンクの指定|コンパイルの指定）
+TLS_CFLAGS=""
+if [ -f "$ROOT/build/tls.stamp" ]; then
+    LINK_LIBS="$LINK_LIBS $(cut -d'|' -f2 < "$ROOT/build/tls.stamp")"
+    TLS_CFLAGS="$(cut -d'|' -f3 < "$ROOT/build/tls.stamp")"
+fi
+
 DETECT_LEAKS=0
 if [ "${1:-}" = "--leaks" ]; then
     DETECT_LEAKS=1
@@ -90,7 +108,9 @@ for f in "${CASES[@]}"; do
     fi
 
     # ★ ランタイムも一緒に ASan でビルドする（解放するのはランタイム側なので）
-    if ! "$CLANG" -fsanitize=address -O0 "$TMP/$base.drop".*.ll "$ROOT/runtime/core.c" "$ROOT/runtime/hosted.c" \
+    if ! "$CLANG" -fsanitize=address -O0 "$TMP/$base.drop".*.ll \
+            "$ROOT/runtime/core.c" "$ROOT/runtime/hosted.c" \
+            $TLS_CFLAGS "$ROOT/runtime/tls.c" \
             $LINK_LIBS -o "$TMP/$base.asan" 2>"$TMP/$base.link"; then
         printf "  %sFAIL%s  %s（リンクに失敗）\n" "$C_NG" "$C_END" "$name"
         head -5 "$TMP/$base.link" | sed 's/^/          /'

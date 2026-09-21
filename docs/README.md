@@ -34,7 +34,7 @@ yashirolang hello.ys -o hello && ./hello
 | [reference/pkg.md](reference/pkg.md) | パッケージマネージャ `ysm` と `package.pkg` |
 | [reference/stdlib.md](reference/stdlib.md) | 標準ライブラリ（文字列・入出力・`dict` / `set` / `json`・数値計算・作図・表 …） |
 | [reference/numerics.md](reference/numerics.md) | 数値計算の手引き（numpy / scipy / matplotlib / pandas との対応表） |
-| [reference/net.md](reference/net.md) | ソケットと HTTP（サーバーとクライアント） |
+| [reference/net.md](reference/net.md) | ソケット・TLS・HTTP（サーバーとクライアント） |
 
 ## 決まりごと（仕様）
 
@@ -61,6 +61,7 @@ yashirolang hello.ys -o hello && ./hello
 | [design/error-handling.md](design/error-handling.md) | `raises` / `try` / `except` の実装 |
 | [design/concurrency.md](design/concurrency.md) | スレッド・`mutex[T]`・送出可能性の検査 |
 | [design/package-manager.md](design/package-manager.md) | レジストリを持たない設計・MVS・安全性 |
+| [design/tls.md](design/tls.md) | 暗号を自分で書かない理由・任意ビルド・ライセンスの整理 |
 | [design/os-support.md](design/os-support.md) | freestanding・`unsafe`・ベアメタル |
 | [design/self-hosting.md](design/self-hosting.md) | ブートストラップと不動点の検証 |
 | [design/naming.md](design/naming.md) | 言語名の扱いと改名の手順 |

@@ -1,0 +1,32 @@
+yashirolang
+Copyright 2026 Shota Iwamoto
+
+This product is licensed under the Apache License, Version 2.0.
+See the LICENSE file for the full terms.
+
+--------------------------------------------------------------------
+このリポジトリに含まれるコードについて
+--------------------------------------------------------------------
+このリポジトリのソースは、Apache License 2.0 で配布されます。
+
+--------------------------------------------------------------------
+任意で繋がる先について（TLS）
+--------------------------------------------------------------------
+
+`make TLS=1` で建てたときに限り、`runtime/tls.c` が **OpenSSL 3.x** に
+リンクします。
+
+    OpenSSL 3.0 以上  … Apache License 2.0
+                        https://www.openssl.org/source/license.html
+
+OpenSSL のソースはこのリポジトリに含まれていません（リンクするだけです）。
+OpenSSL 1.1.1 以前は旧 OpenSSL / SSLeay ライセンス（宣伝条項つき）で
+Apache-2.0 と両立しないため、`runtime/tls.c` がビルドの時点で断ります。
+
+既定のビルド（`make`）では OpenSSL に繋がりません。
+
+注意: **TLS を有効にして配る場合**、OpenSSL を静的に取り込むなら、その
+Apache-2.0 の条件（NOTICE の同梱など）をご自分の配布物について確かめて
+ください。動的リンクなら配布物には含まれません。
+
+判断の経緯は docs/design/tls.md にあります。

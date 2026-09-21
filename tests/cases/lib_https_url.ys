@@ -1,0 +1,59 @@
+# OUTPUT: https の既定の港: 443
+# OUTPUT: 港を書けばそちら: 8443
+# OUTPUT: 既定の港は Host に書かない: example.com
+# OUTPUT: 既定でない港は Host に書く: example.com:8443
+# OUTPUT: http の既定は今までどおり: 80 example.com
+# OUTPUT: 大文字でも読む: https
+# OUTPUT: 知らない仕組みは断る: True
+# OUTPUT: 平文には落ちない: True
+# EXIT: 0
+# https の住所の読み取り（TLS を組み込んでいなくても走ります）
+#
+#   ★ **ここは繋ぎません。** 繋がずに確かめられるところ——既定の港と
+#     Host ヘッダ——を固めておくためのものです。実際にやり取りするほうは
+#     tests/tls<sh> が見ます（自己署名の証明書を作って自分に繋ぎます）。
+#
+#   注意: **いちばん大事なのは最後の 1 行です。** https と書いた要求が
+#     平文の http に落ちないこと。落ちると、暗号化されていると思って
+#     合言葉を送る人が、そのまま平文で送ることになります。
+import dict
+import http
+
+
+def scheme_of(u: str) -> str:
+    try:
+        parsed: http.Url = http.parse_url(u)
+        return copy(parsed.scheme)
+    except http.HttpError as e:
+        return "断られた"
+
+
+def main() -> int:
+    try:
+        return run()
+    except http.HttpError as e:
+        print("ここには来ないはず: " + e.message)
+    return 1
+
+
+def run() -> int raises http.HttpError:
+    a: http.Url = http.parse_url("https://example.com/x")
+    print("https の既定の港: " + str(a.port))
+
+    b: http.Url = http.parse_url("https://example.com:8443/x")
+    print("港を書けばそちら: " + str(b.port))
+
+    print("既定の港は Host に書かない: " + http.host_header(a))
+    print("既定でない港は Host に書く: " + http.host_header(b))
+
+    c: http.Url = http.parse_url("http://example.com/x")
+    print("http の既定は今までどおり: " + str(c.port) + " " + http.host_header(c))
+
+    print("大文字でも読む: " + scheme_of("HTTPS://example.com/"))
+    print("知らない仕組みは断る: " + str(scheme_of("ftp://example.com/") == "断られた"))
+
+    # ★ **https と書いたら https のまま**です。TLS を組み込んでいない
+    #   ビルドでも、ここが "http" に変わることはありません
+    #   （繋げないときは繋ぐところで止まります）。
+    print("平文には落ちない: " + str(scheme_of("https://example.com/") == "https"))
+    return 0

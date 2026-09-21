@@ -29,6 +29,7 @@
 import dict
 import net
 import strings
+import tls
 
 # 受け取る要求の上限（頭でっかちな要求で潰されないため）
 MAX_HEAD: int = 65536
@@ -211,7 +212,7 @@ class Reader:
     # ★ 貯めずに**返します**。大きい本体を読むときは、1 回ごとに繋げると
     #   そのたびに全部を写すことになる（長さの 2 乗）ので、呼び出し側で
     #   list に貯めて最後に 1 回つなぎます。
-    def recv_one(mut self, c: mut net.Conn) -> str raises HttpError:
+    def recv_one(mut self, c: mut tls.Stream) -> str raises HttpError:
         more: str = ""
         try:
             more = c.recv(net.CHUNK)
@@ -225,14 +226,14 @@ class Reader:
     #
     # ★ 区切りを探しながら読むところ（頭）だけが使います。頭には上限
     #   （MAX_HEAD）があるので、ここは素直に繋げて構いません。
-    def fill(mut self, c: mut net.Conn) -> None raises HttpError:
+    def fill(mut self, c: mut tls.Stream) -> None raises HttpError:
         self.buf = self.buf + self.recv_one(c)
 
     # sep が現れるまで読む。**sep の手前まで**を返し、sep ごと使い切ります。
     #
     # 注意: limit を超えたら 413。上限が無いと、区切りを送ってこない相手
     #   1 つでメモリを使い切られます。
-    def read_until(mut self, c: mut net.Conn, sep: str, limit: int) -> str raises HttpError:
+    def read_until(mut self, c: mut tls.Stream, sep: str, limit: int) -> str raises HttpError:
         cut: int = strings.find(self.buf, sep)
         while cut < 0:
             if len(self.buf) > limit:
@@ -245,14 +246,14 @@ class Reader:
         return out
 
     # 1 行読む（CRLF まで。**改行は返しません**）
-    def read_line(mut self, c: mut net.Conn, limit: int) -> str raises HttpError:
+    def read_line(mut self, c: mut tls.Stream, limit: int) -> str raises HttpError:
         return self.read_until(c, CRLF, limit)
 
     # **ちょうど** n バイト読む（足りなければ読み足します）。
     #
     # 注意: 1 回ごとに繋げると、8 MiB の本体で**何百 MB も写す**ことに
     #   なります（繋げるたびに全部を写すため）。list に貯めて最後に 1 回。
-    def read_exact(mut self, c: mut net.Conn, n: int) -> str raises HttpError:
+    def read_exact(mut self, c: mut tls.Stream, n: int) -> str raises HttpError:
         if len(self.buf) >= n:
             out: str = strings.substr(self.buf, 0, n)
             self.buf = strings.substr(self.buf, n, len(self.buf) - n)
@@ -277,7 +278,7 @@ class Reader:
     #
     # ★ ここでの EOF は**終わりの合図**なので、失敗にしません
     #   （Content-Length もチャンクも無い応答は、これで終わりを知ります）。
-    def read_rest(mut self, c: mut net.Conn, limit: int) -> str raises HttpError:
+    def read_rest(mut self, c: mut tls.Stream, limit: int) -> str raises HttpError:
         parts: list[str] = []
         parts.append(copy(self.buf))
         have: int = len(self.buf)
@@ -499,7 +500,7 @@ def reason(status: int) -> str:
 #
 # 注意: **待ち時間を決めていないと、黙っている相手 1 つで止まります。**
 #   `l.set_conn_timeout(ms)` を呼んでください（accept した接続に入ります）。
-def serve_conn(c: mut net.Conn, handler: fn(Request) -> Response) -> None:
+def serve_conn(c: mut tls.Stream, handler: fn(Request) -> Response) -> None:
     rd: Reader = Reader()
     while True:
         req: Request = Request()
@@ -539,7 +540,7 @@ def serve_conn(c: mut net.Conn, handler: fn(Request) -> Response) -> None:
 # ★ 本体の長さの決め方は 2 つあり、**混ぜてはいけません**。
 #   Content-Length か、チャンク転送か。両方書いてある要求は、
 #   間に挟まる機械と解釈が食い違う（要求の密輸）ので断ります。
-def read_request(rd: mut Reader, c: mut net.Conn) -> Request raises HttpError:
+def read_request(rd: mut Reader, c: mut tls.Stream) -> Request raises HttpError:
     head: str = rd.read_until(c, HEAD_END, MAX_HEAD)
     req: Request = parse_request(head, "")
 
@@ -578,7 +579,7 @@ def read_request(rd: mut Reader, c: mut net.Conn) -> Request raises HttpError:
 #
 # 注意: 合計にも上限をかけます。チャンクは 1 つずつは小さくても、
 #   **何個でも送れます**（上限が無いと、そこがそのまま穴になります）。
-def read_chunked(rd: mut Reader, c: mut net.Conn) -> str raises HttpError:
+def read_chunked(rd: mut Reader, c: mut tls.Stream) -> str raises HttpError:
     parts: list[str] = []
     total: int = 0
     while True:
@@ -654,7 +655,11 @@ def serve_n(l: mut net.Listener, handler: fn(Request) -> Response,
     left: int = n
     while left != 0:
         try:
-            c: net.Conn = l.accept()
+            raw: net.Conn = l.accept()
+            # ★ 平文のまま Stream に包みます（暗号化はしません）。
+            #   こうしておくと、読み書きの側は「平文か TLS か」を
+            #   まったく気にせずに済みます。
+            c: tls.Stream = tls.plain(raw)
             serve_conn(c, handler)
             c.close()
         except net.NetError as e:
@@ -663,8 +668,53 @@ def serve_n(l: mut net.Listener, handler: fn(Request) -> Response,
             left = left - 1
 
 
+# ── https で待ち受ける ──────────────────────────────────
+#
+# ★ **捌く中身は平文とまったく同じです**（serve_conn をそのまま呼びます）。
+#   違うのは「受け付けたあとに TLS で包む」ところだけで、要求の解釈も
+#   応答の組み立ても 1 か所のままです。
+#
+# 注意: **http のつもりで繋いできた人がふつうに来ます**（港を舐めて回る相手、
+#   https の場所を http:// で開いた人）。その 1 人でサーバーが終わっては
+#   困るので、やり取りに失敗した客は**黙って切って次に進みます**。
+
+def serve_tls(host: str, port: int, cert_path: str, key_path: str,
+              handler: fn(Request) -> Response) -> None raises net.NetError:
+    l: tls.Listener = tls.listen(host, port, cert_path, key_path)
+    l.set_conn_timeout(DEFAULT_CONN_TIMEOUT_MS)
+    serve_tls_on(l, handler)
+
+# すでに開いてある待ち受け口で捌く。**戻ってきません。**
+def serve_tls_on(l: mut tls.Listener, handler: fn(Request) -> Response) -> None:
+    serve_tls_n(l, handler, -1)
+
+# 接続を n 本だけ捌いて戻る（n が負なら永久）。
+def serve_tls_n(l: mut tls.Listener, handler: fn(Request) -> Response,
+                n: int) -> None:
+    left: int = n
+    while left != 0:
+        raw: net.Conn = net.Conn(-1)
+        try:
+            raw = l.accept_plain()
+        except net.NetError as e:
+            return              # 待ち受け口が閉じられた
+
+        # ★ **ここから先の失敗は「その客」の失敗です。** 輪は続けます。
+        #   注意: 数えるのは**包めた客だけ**にはしません。数えてしまわないと、
+        #     TLS を話さない相手が続いたときに serve_tls_n(…, 1) が
+        #     いつまでも戻らなくなります。
+        try:
+            c: tls.Stream = l.secure(raw)
+            serve_conn(c, handler)
+            c.close()
+        except net.NetError as e2:
+            pass                # TLS を話さない客。切って次へ
+        if left > 0:
+            left = left - 1
+
+
 # 決まり文句の失敗応答（送れなくても何もしません）
-def send_error(c: mut net.Conn, status: int, msg: str) -> None:
+def send_error(c: mut tls.Stream, status: int, msg: str) -> None:
     r: Response = text(status, msg)
     try:
         c.send(r.encode(False))
@@ -740,8 +790,9 @@ class Url:
 
 # "http://host:port/path?query" を分ける。
 #
-# 注意: **https は断ります。** TLS はまだありません。黙って http で繋ぐと
-#   「暗号化されていると思って鍵を送る」ことになるので、はっきり止めます。
+# ★ **https も読みます**（既定のポートは 443）。実際に繋げるかどうかは
+#   TLS を組み込んで建てたかによりますが、それは繋ぐときに分かります。
+#   **ここで平文に落とすことは決してありません。**
 #
 # ★ IPv6 の住所は角括弧で書きます（"http://[::1]:8080/"）。
 #   括弧が無いと、住所の中のコロンとポート番号の前のコロンが見分けられません。
@@ -761,9 +812,8 @@ def parse_url(u: str) -> Url raises HttpError:
         raise HttpError("http:// から書いてください: " + u, 0)
     out.scheme = lower(strings.substr(u, 0, sep))
     if out.scheme == "https":
-        raise HttpError("https にはまだ対応していません（TLS が未実装です）" +
-                        "。http:// で繋いでよいなら、そう書いてください", 0)
-    if out.scheme != "http":
+        out.port = 443
+    elif out.scheme != "http":
         raise HttpError("知らない仕組みです: " + out.scheme, 0)
 
     rest: str = strings.substr(u, sep + 3, len(u) - sep - 3)
@@ -839,13 +889,20 @@ def parse_url(u: str) -> Url raises HttpError:
     return out
 
 
-# Host ヘッダに書く形（既定のポートなら番号を省きます）
+# Host ヘッダに書く形（既定のポートなら番号を省きます）。
+#
+# 注意: **既定の番号は仕組みで変わります**（http は 80、https は 443）。
+#   ここを 80 決め打ちにすると、https の要求に "host: example.com:443" と
+#   書くことになり、相手によっては別の場所として扱われます。
 def host_header(u: mut Url) -> str:
     h: str = u.host
     # IPv6 の住所は角括弧を付けて書きます
     if strings.contains(h, ":"):
         h = "[" + h + "]"
-    if u.port == 80:
+    default_port: int = 80
+    if u.scheme == "https":
+        default_port = 443
+    if u.port == default_port:
         return copy(h)
     return h + ":" + str(u.port)
 
@@ -885,7 +942,7 @@ def build_request(u: mut Url, method: str, headers: mut dict.Dict[str, str],
 #     ① チャンク転送        → 0 のチャンクまで
 #     ② Content-Length      → その数だけ
 #     ③ どちらも無い        → 相手が閉じるまで
-def read_response(rd: mut Reader, c: mut net.Conn, method: str) -> Response raises HttpError:
+def read_response(rd: mut Reader, c: mut tls.Stream, method: str) -> Response raises HttpError:
     head: str = rd.read_until(c, HEAD_END, MAX_HEAD)
     lines: list[str] = strings.split(head, CRLF)
     if len(lines) == 0 or len(lines[0]) == 0:
@@ -959,9 +1016,16 @@ def request(method: str, url: str, headers: mut dict.Dict[str, str],
             body: str, timeout_ms: int) -> Response raises HttpError:
     u: Url = parse_url(url)
 
-    c: net.Conn = net.Conn(-1)
+    # ★ **https なら TLS で繋ぎます。** 繋げないとき（TLS を組み込まずに
+    #   建てた、証明書が信用できない）は、ここで止まります。
+    #   注意: **平文に落とすことはありません。** 落とすと、暗号化された
+    #     と思って合言葉を送る人がそのまま平文で送ることになります。
+    c: tls.Stream = tls.Stream(net.Conn(-1), -1)
     try:
-        c = net.connect(u.host, u.port)
+        if u.scheme == "https":
+            c = tls.connect(u.host, u.port)
+        else:
+            c = tls.plain(net.connect(u.host, u.port))
     except net.NetError as ce:
         raise from_net(ce)
 

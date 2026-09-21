@@ -80,6 +80,18 @@ make                                  # → build/yashirolang
 ./build/yashirolang examples/fizzbuzz.ys -o fizzbuzz
 ```
 
+**★ 建てるのに要るのは clang だけです。** 外部のライブラリは使いません。
+
+唯一の例外が **TLS（https）** で、これだけは任意です。
+
+```bash
+make TLS=1                            # OpenSSL 3.0 以上（Apache-2.0）を使います
+```
+
+既定（`make`）では入りません。入れずに建てた処理系で `https://` に
+繋ごうとすると、**平文に落ちるのではなく**「TLS を組み込んでいません」と
+断られます。詳しくは [docs/design/tls.md](docs/design/tls.md)。
+
 ### PATH に入れる
 
 ```bash
@@ -220,4 +232,13 @@ import json               # 標準ライブラリ。名前はぶつかりませ�
 
 ## ライセンス
 
-**[Apache License 2.0](LICENSE)** — Copyright 2026 The yashirolang Authors.
+**[Apache License 2.0](LICENSE)** — Copyright 2026 Shota Iwamoto.
+
+著作権表示は [NOTICE](NOTICE) にもあります。**他所のソースを取り込んでいる
+場所はありません。**
+
+唯一の例外が **TLS** で、`make TLS=1` で建てたときだけ **OpenSSL 3.x**
+（Apache-2.0）に**リンクします**（ソースは含みません）。1.1.1 以前は旧
+OpenSSL / SSLeay ライセンスで Apache-2.0 と両立しないため、ビルドの時点で
+断ります。詳しくは [NOTICE](NOTICE) と
+[docs/design/tls.md](docs/design/tls.md)。

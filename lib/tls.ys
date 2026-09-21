@@ -1,0 +1,355 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Copyright 2026 Shota Iwamoto
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# ★ **このファイルのコードはすべて Apache-2.0 です。** 他所のソースは
+#   1 行も入っていません。ただし `make TLS=1` で建てた処理系では、この下の
+#   extern が **OpenSSL 3.x（Apache-2.0）** に繋がります。3.0 未満は
+#   旧 OpenSSL/SSLeay ライセンスで両立しないため、ビルドの時点で断ります
+#   （runtime/tls<c>）。詳しくは docs/design/tls<md>。
+
+# tls — 暗号化した通信（TLS）
+#
+# ★ **net の上に薄く乗る層です。** ソケットは net が持ち、ここは
+#   「その上で TLS を話す」だけを足します。閉じるのも今までどおり
+#   net.Conn の仕事です。
+#
+# ★ **暗号は自分では書いていません。** 中身は検証済みの実装
+#   （OpenSSL 3.x）で、この層がしているのは
+#     ① 失敗を NetError で返す（net と同じ作法に揃える）
+#     ② **危険な使い方を書けなくする**
+#   の 2 つです。
+#
+# ★ **既定のビルドには入っていません**（外のライブラリを黙って
+#   要求しないため）。使うには `make TLS=1` で建て直します。
+#   入っていないときは `tls.available()` が False を返し、connect は
+#   **はっきり断ります**（黙って平文には落ちません）。
+#
+# ★ 緩められない既定（ランタイムが決めています）
+#
+#   | 事柄 | 既定 |
+#   |---|---|
+#   | 最低版 | TLS 1.2 |
+#   | 相手の証明書 | **必ず検証します** |
+#   | 名前の照合 | **必ず行います** |
+#   | 圧縮・再ネゴシエーション | 切ります |
+#
+#   注意: **検証を外す口はありません。** 自己署名の証明書を試したいときは
+#     「検証を外す」のではなく `ctx.set_ca_file(…)` で
+#     **何を信じるか**を指定してください。名前の照合はそのまま効きます。
+#
+# 注意: **閉じるのは利用者の仕事です**（`c.close()`）。net.Conn と同じく、
+#   クラスに「解放されるときに呼ばれる処理」はまだありません。
+import net
+
+extern def pl_tls_available() -> int
+extern def pl_tls_client_ctx() -> int
+extern def pl_tls_server_ctx(cert: str, key: str) -> int
+extern def pl_tls_ctx_set_ca_file(ctx: int, path: str) -> int
+extern def pl_tls_ctx_close(ctx: int) -> None
+extern def pl_tls_connect(ctx: int, fd: int, host: str) -> int
+extern def pl_tls_accept(ctx: int, fd: int) -> int
+extern def pl_tls_send(h: int, s: str) -> int
+extern def pl_tls_recv(h: int, max: int) -> str | None
+extern def pl_tls_peer_name(h: int) -> str
+extern def pl_tls_version(h: int) -> str
+extern def pl_tls_close(h: int) -> None
+extern def pl_tls_error() -> str
+extern def pl_tls_timed_out() -> int
+
+
+# TLS を組み込んで建てたか。
+#
+# ★ **繋ぐ前に確かめる必要はありません**（繋げないときは connect が
+#   断ります）。これは「TLS が無ければ別の道を行く」と書きたいとき、
+#   たとえば試験を飛ばすときのためのものです。
+def available() -> bool:
+    return pl_tls_available() == 1
+
+
+# 失敗は **net.NetError で返します**。
+#
+# ★ TlsError を別に作りません。作ると、TLS で繋ぐ人が
+#   `except net.NetError` と `except tls.TlsError` を 2 つ書くことになり、
+#   しかも「どちらが飛ぶか」は繋ぎ方で変わります。**同じ層の失敗は
+#   同じ型**にしておくほうが、上（http）で包み直すのも 1 か所で済みます。
+def last_error() -> net.NetError:
+    e: net.NetError = net.NetError(pl_tls_error())
+    e.timed_out = pl_tls_timed_out() == 1
+    return e
+
+
+# ── 文脈（何を信じるか・何を名乗るか）────────────────────
+#
+# ★ **繋ぐたびに作らないでください。** 信頼する証明書を読み直すのは
+#   高くつきます。1 つ作って使い回すのがふつうの形です。
+class Context:
+    h: int
+
+    def init(self, h: int) -> None:
+        self.h = h
+
+    # 信頼する証明書を**このファイルだけ**にする（PEM）。
+    #
+    # ★ 自己署名の証明書を試すための道です。**「検証を外す」の代わり**に
+    #   置いてあります。名前の照合はそのまま効くので、証明書に書かれて
+    #   いない名前で繋げば、やはり断られます。
+    #
+    # 注意: これを呼ぶと **OS の綴じ込みは使われなくなります**。
+    #   本物の相手とも繋ぎたいなら、両方を 1 つのファイルに入れてください。
+    def set_ca_file(mut self, path: str) -> None raises net.NetError:
+        if self.h < 0:
+            raise net.NetError("閉じた TLS の文脈です")
+        if pl_tls_ctx_set_ca_file(self.h, path) < 0:
+            raise last_error()
+
+    # 閉じる（2 回呼んでもよい）
+    def close(mut self) -> None:
+        if self.h >= 0:
+            pl_tls_ctx_close(self.h)
+            self.h = -1
+
+
+# 取りに行く側の文脈を作る（信頼するのは OS の綴じ込み）
+def client_context() -> Context raises net.NetError:
+    h: int = pl_tls_client_ctx()
+    if h < 0:
+        raise last_error()
+    return Context(h)
+
+
+# 待ち受ける側の文脈を作る（証明書と秘密鍵は PEM のファイル）。
+#
+# 注意: cert には**中間証明書まで連ねたもの**を渡してください。
+#   自分の証明書だけを送ると、相手によっては連鎖をたどれず断られます。
+def server_context(cert_path: str, key_path: str) -> Context raises net.NetError:
+    h: int = pl_tls_server_ctx(cert_path, key_path)
+    if h < 0:
+        raise last_error()
+    return Context(h)
+
+
+# ── 1 本の接続（暗号化されていることも、されていないことも）──
+#
+# ★ **平文の接続も同じクラスで表します。** 上の層（http）は
+#   「いま TLS か平文か」を気にせず読み書きしたいのに、この言語の
+#   インタフェースは `raises` するメソッドを宣言できません
+#   （design/generics-and-interfaces<md> §2）。そこで**多態ではなく
+#   1 つのクラス**にして、中で分けます。
+#
+#   注意: だから `Stream` という名前です。「TLS の接続」ではありません。
+#     暗号化されているかは `s.secure()` で分かります。
+#
+# ★ **net.Conn と同じ顔をしています**（recv / send / set_timeout / close）。
+class Stream:
+    # 下のソケット。**このクラスのものです**（close で一緒に閉じます）。
+    sock: net.Conn
+    # TLS の手（**-1 なら平文**）
+    h: int
+    # まだ開いているか。
+    #   注意: h では代用できません（平文のときも -1 だからです）。
+    on: bool
+
+    def init(self, sock: own net.Conn, h: int) -> None:
+        self.sock = sock
+        self.h = h
+        self.on = True
+
+    # 暗号化されているか
+    def secure(self) -> bool:
+        return self.h >= 0
+
+    # 最大 max バイト読む。
+    #
+    # ★ 相手が閉じたときは **""**（空文字列）を返します（net.Conn と同じ）。
+    #
+    # 注意: TLS のとき、**閉じる合図（close_notify）なしに切られたのは
+    #   失敗として返します。** そこを「ふつうの終わり」と同じ扱いにすると、
+    #   通信を途中で切るだけで「全部受け取った」と思わせられます（切り詰め）。
+    def recv(mut self, max: int) -> str raises net.NetError:
+        if not self.on:
+            raise net.NetError("閉じた接続から読もうとしました")
+        if self.h < 0:
+            return self.sock.recv(max)
+        got: str | None = pl_tls_recv(self.h, max)
+        if got is None:
+            raise last_error()
+        return got
+
+    # 全部書く
+    def send(mut self, s: str) -> int raises net.NetError:
+        if not self.on:
+            raise net.NetError("閉じた接続へ書こうとしました")
+        if self.h < 0:
+            return self.sock.send(s)
+        n: int = pl_tls_send(self.h, s)
+        if n < 0:
+            raise last_error()
+        return n
+
+    # 読み書きの待ち時間を決める（ミリ秒。0 なら無期限）。
+    #
+    # ★ 効くのは**下のソケット**です。TLS は 1 回の recv のために
+    #   何度か読むことがあるので、**1 回の recv がこの時間で必ず
+    #   返るとは限りません**（待ち時間が積み重なることがあります）。
+    def set_timeout(mut self, ms: int) -> None raises net.NetError:
+        self.sock.set_timeout(ms)
+
+    # 相手の証明書に書かれている名前（平文なら ""）。
+    #
+    # 注意: **検証の代わりに使わないでください。** 検証はもう済んでいます。
+    def peer_name(mut self) -> str:
+        if self.h < 0:
+            return ""
+        return pl_tls_peer_name(self.h)
+
+    # 実際に使っている版（"TLSv1.3" など。平文なら ""）
+    def version(mut self) -> str:
+        if self.h < 0:
+            return ""
+        return pl_tls_version(self.h)
+
+    # 閉じる（2 回呼んでもよい）。
+    #
+    # ★ **順番が大事です。** 先に TLS を閉じて（相手に「終わり」を伝えて）、
+    #   それから下のソケットを閉じます。逆にすると合図が届きません。
+    def close(mut self) -> None:
+        if self.h >= 0:
+            pl_tls_close(self.h)
+            self.h = -1
+        self.sock.close()
+        self.on = False
+
+
+# 平文のソケットを、そのまま通す Stream にする。
+#
+# ★ **暗号化しません。** 上の層が「平文でも TLS でも同じように書く」ための
+#   ものです（http のサーバーがこれを使います）。
+def plain(c: own net.Conn) -> Stream:
+    return Stream(c, -1)
+
+
+# 繋ぎに行く。
+#
+# ★ **host は証明書の照合に使います。** 「繋ぐ先」と「誰だと確かめるか」を
+#   別々に渡せる形にはしていません。別々にできると、確かめる相手を
+#   取り違えた瞬間に検証が意味を失うためです。
+#
+# 注意: 失敗したときは下のソケットもここで閉じます（半端に開いたものを
+#   呼び出し側に渡しません）。
+def connect(host: str, port: int) -> Stream raises net.NetError:
+    ctx: Context = client_context()
+    # 注意: **try の外で宣言します。** try の中で宣言した名前は、
+    #   そのブロックの外からは見えません。
+    c: Stream = Stream(net.Conn(-1), -1)
+    try:
+        c = connect_with(ctx, host, port)
+    except net.NetError as e:
+        ctx.close()
+        raise e
+    # 注意: **文脈はここで閉じます。** 繋いだ接続が文脈への参照を 1 つ
+    #   持っているので、ここで閉じても中身は生きています（消えるのは
+    #   接続も閉じたときです）。使い回したい人は connect_with を使います。
+    ctx.close()
+    return c
+
+
+# 文脈を指定して繋ぎに行く（自己署名を試すときなど）
+def connect_with(ctx: mut Context, host: str, port: int) -> Stream raises net.NetError:
+    if ctx.h < 0:
+        raise net.NetError("閉じた TLS の文脈です")
+    sock: net.Conn = net.connect(host, port)
+    h: int = pl_tls_connect(ctx.h, sock.fd, host)
+    if h < 0:
+        e: net.NetError = last_error()
+        sock.close()
+        raise e
+    return Stream(sock, h)
+
+
+# ── 待ち受ける ──────────────────────────────────────────
+#
+# ★ net.Listener をそのまま使い、**受け付けたところで包みます**。
+#   待ち受け口そのものは暗号化と関係ないので、別のクラスにしません。
+class Listener:
+    inner: net.Listener
+    ctx: Context
+    port: int
+
+    def init(self, inner: own net.Listener, ctx: own Context) -> None:
+        # 注意: **港の番号を先に控えます。** 下の行で inner を渡してしまうと、
+        #   そのあとは inner から読めません（所有権が移るため）。
+        self.port = inner.port
+        self.inner = inner
+        self.ctx = ctx
+
+    # 1 本受け付けて TLS で包む（相手が来るまで待ちます）。
+    #
+    # 注意: **失敗の出どころが 2 つあります。** 待ち受け口そのもの
+    #   （閉じられた）と、その客（TLS を話さなかった）です。輪を回す側は
+    #   前者では止まり、後者では**次の客に進む**べきなので、分けて
+    #   扱いたいときは accept_plain と secure を順に呼んでください
+    #   （http.serve_tls_n がそうしています）。
+    def accept(mut self) -> Stream raises net.NetError:
+        sock: net.Conn = self.accept_plain()
+        return self.secure(sock)
+
+    # 1 本受け付ける（**まだ平文です**）。
+    #
+    # ★ ここで投げるのは**待ち受け口の失敗だけ**です。
+    def accept_plain(mut self) -> net.Conn raises net.NetError:
+        return self.inner.accept()
+
+    # 受け付けた接続を TLS で包む。
+    #
+    # ★ ここで投げるのは**その客との失敗だけ**です（TLS を話さない、
+    #   途中で切った、など）。港を舐めて回る相手や、https の場所に
+    #   http で繋いできた人がここに来ます——**ふつうに起きること**なので、
+    #   サーバーはこれで止まってはいけません。
+    #
+    # 注意: 失敗したときは、その接続をここで閉じます。
+    def secure(mut self, sock: own net.Conn) -> Stream raises net.NetError:
+        h: int = pl_tls_accept(self.ctx.h, sock.fd)
+        if h < 0:
+            e: net.NetError = last_error()
+            sock.close()
+            raise e
+        return Stream(sock, h)
+
+    # これから accept する接続の読み書きの待ち時間（ミリ秒）
+    def set_conn_timeout(mut self, ms: int) -> None:
+        self.inner.set_conn_timeout(ms)
+
+    # accept そのものの待ち時間（ミリ秒）
+    def set_timeout(mut self, ms: int) -> None raises net.NetError:
+        self.inner.set_timeout(ms)
+
+    def close(mut self) -> None:
+        self.inner.close()
+        self.ctx.close()
+
+
+# 待ち受ける（証明書と秘密鍵は PEM のファイル）。
+#
+# ★ port に 0 を渡すと OS が空いているポートを選びます（`l.port` で読めます）。
+def listen(host: str, port: int, cert_path: str, key_path: str) -> Listener raises net.NetError:
+    ctx: Context = server_context(cert_path, key_path)
+    l: net.Listener = net.Listener(-1, 0)
+    try:
+        l = net.listen(host, port)
+    except net.NetError as e:
+        ctx.close()
+        raise e
+    return Listener(l, ctx)

@@ -16,7 +16,7 @@
 | コンパイラのコマンド名 | `yashirolang` | する | `LANG_CC` |
 | パッケージマネージャのコマンド名 | `ysm` | する | `LANG_PM` |
 | リポジトリの URL | `https://github.com/yashirolang/yashirolang` | する | `LANG_REPO` |
-| 版番号 | `0.28.0` | — | `LANG_VERSION` |
+| 版番号 | `0.29.0` | — | `LANG_VERSION` |
 | C 側の内部マクロ接頭辞 | `PLC_LIB_DIR` | しない | 固定 |
 | ランタイム関数の接頭辞 | `pl_str_len` | しない | 固定 |
 | 環境変数 | `PLC_CC` `PLC_CACHE` | しない | 固定 |

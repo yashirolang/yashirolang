@@ -24,7 +24,8 @@
 #   `make check-naming` に「書き漏れ」として拾われてしまいます
 #   （実際、例に書いた名前へ改名する試験で引っかかりました）。
 #
-# ★ このスクリプトが置換するのは**文書（README.md と docs/**.md）だけ**です。
+# ★ このスクリプトが置換するのは**文書（README.md と docs/**.md）と NOTICE
+#   だけ**です。
 #   コードは langinfo 経由で名前を受け取るので、置換が要りません。やることは
 #   「① ファイル名の拡張子」「② 定義 3 か所」「③ 文書の置換」の 3 つです。
 #
@@ -143,16 +144,21 @@ p_set VERSION "$NEW_VERSION"
 
 echo "  Makefile / src/langinfo.h / $LANGINFO を揃えました"
 
-# ── ③ 文書（README.md と docs/**.md）の名前を書き換える ───────
+# ── ③ 文書（README.md と docs/**.md）と NOTICE の名前を書き換える ───
 #
 #   ★ 文書には**実際の名前が書いてあります**（読む人のため）。ここだけは
-#     置換します。注意: 置換するのは文書だけです。ソースやテストまで一括置換
+#     置換します。NOTICE も同じ扱いです——何に対する許諾なのかが読めなければ
+#     意味がないので、実際の名前を書いてあります
+#     （tools/check_naming<sh> も LICENSE と NOTICE を許しています）。
+#
+#   注意: 置換するのはそこだけです。ソースやテストまで一括置換
 #     すると、`Item("pen")` のような**ただの試験データ**を壊します
 #     （昔それで壊しました。だからコードは langinfo 経由で書いてあります）。
 #
 #   注意: 語の切れ目で探します（旧 PM 名が `pen` のとき `append` に当たるため）。
 doc_files() { find . -path ./.git -prune -o -path ./build -prune -o \
-                   \( -name 'README.md' -o -path './docs/*.md' \) -print; }
+                   \( -name 'README.md' -o -path './docs/*.md' \
+                      -o -path './NOTICE' \) -print; }
 doc_sub() { # 旧 新
     [ "$1" = "$2" ] && return 0
     O="$1" N="$2" perl -CSD -i -pe '
@@ -165,7 +171,7 @@ doc_sub "$OLD_REPO" "$NEW_REPO"
 doc_sub "$OLD_CC"   "$NEW_CC"
 doc_sub "$OLD_PM"   "$NEW_PM"
 doc_sub "$OLD_NAME" "$NEW_NAME"
-echo "  README.md と docs/ の名前を書き換えました"
+echo "  README.md と docs/ と NOTICE の名前を書き換えました"
 echo
 
 # ── ④ ほんとうに揃ったか確かめる ────────────────────────────

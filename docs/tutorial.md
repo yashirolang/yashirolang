@@ -484,7 +484,7 @@ def main() -> int:
 | `time` | 時刻と計測 |
 | `math` / `linalg` / `stats` / `random` / `numeric` / `complex` / `fft` / `physics` | 数値計算（→ [reference/numerics.md](reference/numerics.md)） |
 | `plot` / `frame` | 作図（SVG）と表形式データ（CSV・集計） |
-| `net` / `http` | ソケットと HTTP（→ [reference/net.md](reference/net.md)） |
+| `net` / `tls` / `http` | ソケット・TLS・HTTP（→ [reference/net.md](reference/net.md)） |
 | `decimal` / `bytes` | 十進固定小数点・固定幅のバイト並び |
 
 **すべて yashirolang で書かれています**（`lib/*.ys`）。一覧は [reference/stdlib.md](reference/stdlib.md) にあります。
@@ -854,6 +854,6 @@ $ ./wc examples/sample.txt
 | 所有権・エラー処理の正確な規則 | [spec/safety-spec.md](spec/safety-spec.md) |
 | 標準ライブラリの一覧 | [reference/stdlib.md](reference/stdlib.md) |
 | 数値計算（numpy / pandas との対応） | [reference/numerics.md](reference/numerics.md) |
-| ソケットと HTTP | [reference/net.md](reference/net.md) |
+| ソケット・TLS・HTTP | [reference/net.md](reference/net.md) |
 | パッケージの作り方・使い方 | [reference/pkg.md](reference/pkg.md) |
 | コンパイラの作り | [design/](design/) |

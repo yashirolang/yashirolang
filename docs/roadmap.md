@@ -52,7 +52,8 @@
 | 並行 | `spawn` / `join` / `mutex[T]` / `scope:` と、送出可能性の検査（`E-SEND-1`〜`4`） |
 | エラー処理 | `raises` / `try` / `except` / `raise`（アンワインドなし。戻り値検査） |
 | 低レベル | `unsafe:` ブロック・生ポインタ・volatile 読み書き・インライン `asm`・`extern`（C のライブラリを呼ぶ） |
-| 標準ライブラリ | 文字列・入出力・`dict` / `set` / `json` / `time` / 数値計算（`math` / `linalg` / `stats` / `random` / `complex` / `fft` / `physics`）・作図・表・`decimal` / `bytes`・ソケットと HTTP。**すべて yashirolang で記述** |
+| 標準ライブラリ | 文字列・入出力・`dict` / `set` / `json` / `time` / 数値計算（`math` / `linalg` / `stats` / `random` / `complex` / `fft` / `physics`）・作図・表・`decimal` / `bytes`・ソケットと HTTP と **TLS**。**すべて yashirolang で記述** |
+| TLS | `https` で取りに行く・待ち受ける。証明書の検証と名前の照合は**外せません**。注意: **既定のビルドには入りません**（`make TLS=1`。中身は OpenSSL 3 に任せます） |
 | 道具 | パッケージマネージャ `ysm`（レジストリ無し・git 直指し・MVS・ロック）／デバッグ情報（`-g`）／証明（`--prove-report`） |
 
 ### 処理系
@@ -90,6 +91,7 @@ Rust・Ada と並べた比較表は [README](../README.md#rustada-と比べた�
 - `--warn-own` を付けたとき（所有権の指摘が警告になります。**このコードは保証の外です**）
 - `rc[T]` の循環参照（解放されません。弱参照はまだありません）
 - SPARK のような**証明**。区間解析で「必ず成り立つ」検査を消すところまでです（SMT ソルバは入れません）
+- **TLS の暗号そのもの**。`lib/tls.ys` が保証するのは「危険な使い方を書けないこと」だけで、ハンドシェイクと証明書の検証は OpenSSL 3 のものです（[design/tls.md](design/tls.md)）
 
 ### 書きやすさの現在地
 
@@ -117,7 +119,7 @@ Rust・Ada と並べた比較表は [README](../README.md#rustada-と比べた�
 |---|---|
 | **正規表現** | ログ処理・入力検証 |
 | **日付時刻** | `time` はいま単調時計と実時刻だけです |
-| **TLS** | HTTP は平文だけです |
+| **クライアント側の keep-alive** | `http` は 1 要求ごとに繋ぎ直します |
 
 **ライブラリは言語を 1 行も変えずに足せます**（`json` / `set` / `decimal` がその実例です）。
 
@@ -153,3 +155,6 @@ Rust・Ada と並べた比較表は [README](../README.md#rustada-と比べた�
 | 継承 | インタフェースと合成で足ります |
 | SMT ソルバの同梱（SPARK 相当の証明） | 「clang だけで建つ」という約束が壊れます |
 | レジストリ（中央のパッケージ置き場） | 運営が要ります。git と `package.lock` で同じ保証を得ます |
+| TLS の自前実装 | 「安全な言語」の看板の下で、**いちばん危ない部分だけが未検証**になります（[design/tls.md](design/tls.md)） |
+| 証明書の検証を外す口 | 外した状態が本番に残ります。範囲外アクセスの検査に逃げ道を置いていないのと同じ扱いです |
+| TLS を既定のビルドに入れること | 「clang だけで建つ」が壊れます。SMT ソルバを同梱しないのと同じ理由です |

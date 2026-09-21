@@ -1,8 +1,13 @@
-# ソケットと HTTP
+# ソケット・TLS・HTTP
 
 **サーバーもクライアントも書けます。** `yashirolang` は TCP ソケットを標準で
 持っていて、その上に HTTP/1.1 の最小限が乗っています。外部のライブラリは
 要りません（`curl` も要りません）。
+
+**★ ただし TLS（`https`）だけは任意です。** 暗号を自分では書かず OpenSSL 3 に
+任せているので、`make TLS=1` で建てたときに入ります。入れずに建てた処理系で
+`https://` に繋ごうとすると、**平文に落ちるのではなく**断られます
+（[2.5 節](#25-tls--暗号化した通信)）。
 
 ```python
 import http
@@ -35,15 +40,18 @@ print(str(res.status) + " " + res.body)
 
 ---
 
-## 1. 層は 2 つです
+## 1. 層は 3 つです
 
 | 層 | 置き場 | 役割 |
 |---|---|---|
 | `net` | `lib/net.ys` | TCP ソケット。C との境界（`extern`）をここに閉じ込める |
+| `tls` | `lib/tls.ys` | その上で TLS を話す。**暗号は自分では書きません**（OpenSSL 3 に任せます） |
 | `http` | `lib/http.ys` | 要求の解釈・応答の組み立て・受付の輪。**C は 1 行もありません** |
 
-**★ `http` は `net` の上に乗るだけです。** 暗号化や別のプロトコルを足す
-ときも、`net` を差し替えれば済むようにしてあります。
+**★ `http` は `tls.Stream` を読み書きします。** `Stream` は「暗号化されて
+いることも、されていないこともある筒」で、平文の接続も同じクラスで
+表します。おかげで要求の解釈も応答の組み立ても **1 か所のまま**、
+`http` と `https` の両方が通ります。
 
 ---
 
@@ -62,7 +70,7 @@ print(str(res.status) + " " + res.body)
 | `Conn.set_timeout(ms)` | 読み書きの待ち時間（**0 なら無期限**） |
 | `Conn.close()` | 閉じる（2 回呼んでもよい） |
 | `Listener.set_conn_timeout(ms)` | **これから** `accept` する接続の待ち時間 |
-| `Listener.set_timeout(ms)` | `accept` そのものの待ち時間 |
+| `Listener.set_timeout(ms)` | `accept` そのものの待ち時間（**macOS では効きません**。下を見てください） |
 
 **★ ポートに `0` を渡すと、OS が空いているポートを選びます。**
 選ばれた番号は `l.port` で読めます。
@@ -101,6 +109,101 @@ while True:
 
 ---
 
+## 2.5 `tls` — 暗号化した通信
+
+**★ 既定のビルドには入っていません。** この処理系は「clang だけで建つ」を
+守るので、外のライブラリを黙って要求しません。TLS が要る人だけが
+こう建てます。
+
+```bash
+make TLS=1
+```
+
+入っているかは `tls.available()` で分かります。**入っていないときに
+黙って平文へ落ちることはありません** — 繋ごうとしたところで断られます。
+
+| 関数・メソッド | 意味 |
+|---|---|
+| `tls.available() -> bool` | TLS を組み込んで建てたか |
+| `tls.connect(host, port) -> Stream` | TLS で繋ぎに行く（OS の綴じ込みを信じる） |
+| `tls.listen(host, port, cert, key) -> Listener` | TLS で待ち受ける（PEM のファイル） |
+| `tls.plain(c: own net.Conn) -> Stream` | 平文の接続を**そのまま通す** `Stream` にする |
+| `tls.client_context() -> Context` | 取りに行く側の文脈（信じる証明書を差し替えたいとき） |
+| `tls.server_context(cert, key) -> Context` | 待ち受ける側の文脈 |
+| `tls.connect_with(ctx, host, port) -> Stream` | 文脈を指定して繋ぐ |
+| `Context.set_ca_file(path)` | **信じる証明書をこのファイルだけにする** |
+| `Listener.accept() -> Stream` | 1 本受け付けて TLS で包む |
+| `Listener.accept_plain() -> net.Conn` | 1 本受け付ける（まだ平文） |
+| `Listener.secure(c: own net.Conn) -> Stream` | 受け付けた接続を TLS で包む |
+| `Stream.recv(max)` / `send(s)` / `set_timeout(ms)` / `close()` | `net.Conn` と同じ顔 |
+| `Stream.secure() -> bool` | 暗号化されているか |
+| `Stream.version() -> str` | `"TLSv1.3"` など（平文なら `""`） |
+| `Stream.peer_name() -> str` | 相手の証明書に書かれている名前（記録と表示のため） |
+
+```python
+import tls
+
+def main() -> int:
+    try:
+        c: tls.Stream = tls.connect("example.com", 443)
+        c.set_timeout(5000)
+        c.send("GET / HTTP/1.1\r\nhost: example.com\r\nconnection: close\r\n\r\n")
+        print(c.version())                 # TLSv1.3
+        print(c.recv(4096))
+        c.close()
+    except net.NetError as e:
+        print("繋げません: " + e.message)
+        return 1
+    return 0
+```
+
+### 2.5.1 緩められない既定
+
+**★ 利用者が下げられません。** 安全側の設定を「既定は安全、必要なら外せる」
+にすると、外した状態が本番に残ります。
+
+| 事柄 | 既定 |
+|---|---|
+| 最低版 | TLS 1.2（1.0 / 1.1 / SSLv3 では繋ぎません） |
+| 相手の証明書 | **必ず検証します** |
+| 名前の照合 | **必ず行います**（証明書が誰のものかを確かめます） |
+| 部分ワイルドカード | 断ります（`w*.example.com` は通しません） |
+| 圧縮 | 切ります（CRIME） |
+| 再ネゴシエーション | 切ります |
+| SNI（相手に伝える名前） | 住所（IP）で繋ぐときは送りません（RFC 6066） |
+
+**注意: 検証を外す口はありません。** `insecure_skip_verify` に相当する
+ものは、`lib/tls.ys` にも `runtime/tls.c` にも置いていません。範囲外
+アクセスの検査に逃げ道を置いていないのと同じ考え方です。
+
+自己署名の証明書を試したいときは、**「検証を外す」のではなく
+「何を信じるか」を指定します**。
+
+```python
+ctx: tls.Context = tls.client_context()
+ctx.set_ca_file("my_ca.pem")              # これだけを信じる
+c: tls.Stream = tls.connect_with(ctx, "localhost", 8443)
+```
+
+**名前の照合はそのまま効きます。** 上の証明書が `localhost` のものなら、
+同じ相手に `127.0.0.1` として繋いでも断られます。
+
+### 2.5.2 失敗は `net.NetError` で返ります
+
+`TlsError` は作っていません。作ると TLS で繋ぐ人が `except net.NetError` と
+`except tls.TlsError` を 2 つ書くことになり、しかも**どちらが飛ぶかは
+繋ぎ方で変わります**。同じ層の失敗は同じ型にしておくほうが、上の `http` で
+包み直すのも 1 か所で済みます。`e.timed_out` も今までどおり使えます。
+
+### 2.5.3 閉じる合図
+
+**★ 相手が `close_notify` なしに切ったら、失敗として返します。** 「ふつうの
+終わり」と同じ扱いにすると、**通信を途中で切るだけで「全部受け取った」と
+思わせられます**（切り詰め）。`Content-Length` もチャンクも無い応答を
+`https` で受けると、ここに当たることがあります。
+
+---
+
 ## 3. `http` — HTTP/1.1
 
 ### 3.1 対応している範囲
@@ -116,12 +219,13 @@ while True:
 | チャンク転送 | 受けるのも、送られてくるのも |
 | クライアント（`get` / `post` / `request`） | 済 |
 | 待ち時間 | 済 |
-| TLS（https） | まだ（**はっきり断ります**） |
+| TLS（https） | 済（`make TLS=1` で建てたとき。取りに行くのも待ち受けるのも） |
 | 接続を貯めておく（クライアント側の keep-alive） | まだ（毎回繋ぎます） |
 
 **注意: 未対応のものは、黙って壊れるのではなく、はっきり断ります。**
-`https://` を `http.get` に渡すと、平文で繋ぎにいかずにエラーを返します
-（暗号化されていると思って鍵を送ってしまうのが、いちばん困るからです）。
+`https://` は **平文には落ちません**。TLS を組み込んでいないビルドでも、
+繋ごうとしたところで「組み込んでいません」と返ります（暗号化されて
+いると思って鍵を送ってしまうのが、いちばん困るからです）。
 
 **★ `http` が投げるのは `HttpError` だけです。** 下の `net` が投げる
 `NetError` も包み直すので、「HTTP を使いたいだけなのにソケットの
@@ -161,6 +265,21 @@ r.set("location", "/a")                 # ヘッダを足す
 | `http.serve_on(l, handler)` | 開いてある待ち受け口で捌く（同上） |
 | `http.serve_n(l, handler, n)` | **n 本だけ**捌いて戻る |
 | `http.serve_conn(c, handler)` | 1 本の接続を、閉じるまで捌く |
+| `http.serve_tls(host, port, cert, key, handler)` | **https で**待ち受けて捌く（同上） |
+| `http.serve_tls_on(l, handler)` | 開いてある TLS の待ち受け口で捌く |
+| `http.serve_tls_n(l, handler, n)` | **n 本だけ**捌いて戻る |
+
+**★ https でも捌く中身は同じです。** `serve_tls_*` は受け付けたあとに
+TLS で包むだけで、そこから先は `serve_conn` をそのまま呼びます。要求の
+解釈も応答の組み立ても 1 か所のままです。
+
+```python
+http.serve_tls("0.0.0.0", 8443, "server.pem", "server.key", handle)
+```
+
+**注意: https の場所に http で繋いでくる相手はふつうに来ます**（港を舐めて
+回る相手、`https://` を `http://` で開いた人）。`serve_tls_*` は
+**その客を黙って切って次に進みます** — 1 人でサーバーが終わっては困るからです。
 
 **注意: 永久に回る輪は `join` できません。** `spawn` で `serve_on` を回すと
 `accept` で待ち続けるのでスレッドが終わりません。数を決めて回すか、
@@ -206,8 +325,20 @@ print(res.body)
 貯めておく仕組みはまだありません。何十回も叩くなら `net` で 1 本の接続を
 自分で持ち回ってください。
 
-**注意: `https://` は断ります。** TLS がまだ無いので、平文で繋ぎにいくより
-エラーにするほうが安全です。
+**★ `https://` がそのまま通ります**（`make TLS=1` で建てたとき）。既定の
+ポートは 443 で、`Host` ヘッダにも書きません。証明書の検証と名前の照合は
+**必ず行います**（2.5 を見てください）。
+
+```python
+res: http.Response = http.get("https://example.com/")
+```
+
+**注意: 自己署名の相手には `http.get` では繋げません。** 「これを信じる」を
+伝える口が `http` 側にまだ無いためです。`tls.connect_with` で筒を作って、
+`http.read_response` に読ませてください（`tests/tls_probe.ys` がその形です）。
+
+**注意: TLS を組み込んでいないビルドでは `https://` は繋がりません。**
+`http://` に**落ちることはありません**。
 
 ヘッダを足したいときは `request` です。
 
@@ -286,7 +417,8 @@ except net.NetError as e:
 | `Content-Length` と `Transfer-Encoding` の同時指定を断る | 間に挟まる機械と要求の切れ目がずれ、**別人の要求を紛れ込ませられます** |
 | チャンクの合計と後付けヘッダの本数に上限を置く | 小さいものを送り続けられると**永久に付き合わされます** |
 | URL の改行を断る | こちらが**送る**要求に好きなヘッダを足されます |
-| `https://` を断る | 暗号化されていると思って**鍵を平文で送ります** |
+| `https://` を平文に落とさない | 暗号化されていると思って**鍵を平文で送ります** |
+| 証明書の検証を外す口を置かない | 外した状態が**本番に残ります**（この手の旗の事故はこれが定番です） |
 
 **注意: 待ち時間は忘れずに決めてください。** `http.serve` は自分で待ち受け口を
 作るので既定（30 秒）を入れてありますが、`net.listen` してから `serve_on` を
@@ -321,12 +453,31 @@ except net.NetError as e:
 | IPv6 | 入りました（名前が複数の住所を持つときは**順に試します**） |
 | チャンク転送 | 入りました |
 | タイムアウト | 入りました（**読み書きだけ**。下を見てください） |
-| TLS（https） | まだ。**黙って平文で繋がず、断ります** |
+| TLS（https） | 入りました（`make TLS=1`。**既定のビルドには入りません**） |
+| 相互 TLS（客にも証明書を求める） | まだ |
+| クライアント側の「この証明書を信じる」を `http.get` に渡す | まだ（`tls` の層で組み立ててください） |
 | `connect` の待ち時間 | まだ（`SO_RCVTIMEO` は繋がったあとにしか効きません） |
+| `accept` の待ち時間 | **macOS では効きません**（`Listener.set_timeout`。下を見てください） |
 | 接続を貯めておく（クライアント） | まだ（1 要求ごとに繋ぎ直します） |
 | UDP | まだ |
 | 多重化（`select` / `epoll`） | まだ（同時に捌くなら `spawn`） |
 | ベアメタル | **できません**（`runtime/hosted.c` だけが持っています） |
+
+**注意: `Listener.set_timeout` は macOS では効きません**（実測 2026-09-21）。
+入れているのは `SO_RCVTIMEO` で、**Linux の `accept` には効きますが Darwin の
+`accept` は見ません**。客が来なければ `accept` は待ち続けます。
+
+**★ 「客が来なければ戻ってくる」輪を、これだけに頼って書かないでください。**
+終わらせたい側から 1 本繋いで起こす形にすると、どの環境でも終わります。
+
+```python
+# 別のところから「もう終わり」を伝える
+w: net.Conn = net.connect("127.0.0.1", l.port)
+w.close()
+```
+
+どの環境でも効くようにするには、`accept` の前に `select` / `poll` で待つ作りが
+要ります。まだ入れていません。
 
 **注意: `connect` だけは区切れません。** `Conn.set_timeout` が決めるのは
 **繋がったあとの読み書き**です。返事の無い相手に繋ぎにいくと、OS が

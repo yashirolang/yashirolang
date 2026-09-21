@@ -44,6 +44,10 @@ allowed() {
         ./Makefile|./src/langinfo.h|"./lib/langinfo$EXT") return 0 ;;
         ./README.md|*/README.md)                          return 0 ;;
         ./docs/*.md|./docs/*/*.md)                        return 0 ;;
+        # ★ 権利まわりの書き物は**実際の名前を書きます**（文書と同じ理由）。
+        #   何に対する許諾なのかが読めなければ意味がありません。
+        #   注意: 改名するときは tools/rename<sh> がここも置換します。
+        ./LICENSE|./NOTICE)                               return 0 ;;
         *) return 1 ;;
     esac
 }

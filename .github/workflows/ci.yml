@@ -133,6 +133,49 @@ jobs:
           "./$d/bin/$cc" "t$ext" -o t
           ./t*
 
+  # ── TLS を有効にしたビルド ─────────────────────────────────
+  #
+  # ★ **別のジョブにしてあります。** TLS は任意で、既定のビルドには
+  #   入りません（[docs/design/tls.md]）。3 OS の matrix に混ぜると、
+  #   OpenSSL が無い環境のために分岐を書くことになります。
+  #
+  # ★ Linux だけで足ります。**この言語側のコードは OS で変わらず**、
+  #   変わるのは OpenSSL の在り処だけだからです。
+  #
+  # 注意: **既定のビルドが壊れていないことも、ここで一緒に見ます。**
+  #   TLS=0 と TLS=1 を行き来したときに建て直しが効くかは、判子
+  #   （build/tls.stamp）だけが支えているので、実際に往復させます。
+  tls:
+    name: TLS（Linux / OpenSSL 3）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 道具を入れる
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libssl-dev pkg-config
+
+      - name: OpenSSL の版を確かめる（3.0 以上でなければ意味がありません）
+        run: pkg-config --modversion openssl
+
+      - name: TLS ありで建てて、TLS のテストを回す
+        run: |
+          make -j"$(getconf _NPROCESSORS_ONLN)" TLS=1
+          make tls-test TLS=1
+
+      - name: TLS ありでテストを全部通す
+        run: make test TLS=1
+
+      # ★ **行き来して、どちらでも正しく建て直ることを見ます。**
+      #   ここが効かないと、「有効にしたはずなのに断られる」という
+      #   分かりにくい形で人がつまずきます。
+      - name: TLS なしに戻して、飛ばされることを確かめる
+        run: |
+          make -j"$(getconf _NPROCESSORS_ONLN)"
+          make tls-test 2>&1 | tee out.txt
+          grep -q skip out.txt
+
   # ── ベアメタル（RISC-V）の検証 ─────────────────────────────
   #
   # ★ カーネルの成果を、QEMU のシリアル出力で確かめます。

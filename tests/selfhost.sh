@@ -21,6 +21,20 @@ LINK_LIBS=""
 case "$(uname -s 2>/dev/null || echo unknown)" in
     MINGW*|MSYS*|CYGWIN*) LINK_LIBS="-lws2_32" ;;
 esac
+
+# ★ **ランタイムが外のライブラリを要ることがあります**（TLS を有効にして
+#   建てたときの OpenSSL）。ここは clang を自分で呼ぶので、コンパイラに
+#   埋め込んだ指定が効きません。
+#
+#   注意: **判子から読みます**（build/tls.stamp）。これは「runtime.a を
+#     実際にどう建てたか」の記録なので、いま make に TLS= を渡したかに
+#     左右されません（渡し忘れて「未定義のシンボル」で落ちる、が起きません）。
+#   対になる定義: Makefile :: TLS_STAMP（形式: TLS|リンクの指定|コンパイルの指定）
+#   注意: ここは runtime.a（tls<c> を建てたものが入っています）を使うので、
+#     要るのはリンクの指定だけです。
+if [ -f "$ROOT/build/tls.stamp" ]; then
+    LINK_LIBS="$LINK_LIBS $(cut -d'|' -f2 < "$ROOT/build/tls.stamp")"
+fi
 # ★ 実行ファイル名は Makefile の LANG_CC / LANG_PM が決めます。
 #   ここに名前を書き写すと改名のたびに直すことになるので、make に訊きます。
 LANG_CC="$(make -s -C "$ROOT" print-LANG_CC)"

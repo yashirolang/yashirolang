@@ -9,7 +9,7 @@
 # OUTPUT: URL（IPv6）: ::1 8080 /x
 # OUTPUT: URL（問い合わせだけ）: /?x=1
 # OUTPUT: URL（かけらは送らない）: /a?x=1
-# OUTPUT: https は断る: True
+# OUTPUT: https は平文に落ちない: True
 # OUTPUT: 繋がらない先: True
 # EXIT: 0
 # http のクライアント（A-23）
@@ -22,7 +22,6 @@
 #     止まる」形の不具合になり、試験では**固まって**現れます。
 import http
 import net
-import strings
 
 def handle(req: http.Request) -> http.Response:
     if req.path == "/":
@@ -60,6 +59,30 @@ def raw_server(fd: int) -> int:
     except net.NetError as e:
         print("raw_server NG: " + e.message)
     return 0
+
+
+# 平文で待つだけのサーバー。**https で繋がれても成り立たない**ことを
+#   確かめるための相手です。
+def plain_server(fd: int) -> int:
+    l: net.Listener = net.Listener(fd, 0)
+    try:
+        c: net.Conn = l.accept()
+        c.set_timeout(2000)
+        c.recv(4096)
+        c.send("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+        c.close()
+    except net.NetError as e:
+        return 0            # 誰も来なかった（TLS を組み込んでいないビルド）
+    return 0
+
+
+# https:// で繋いで、**繋がらないこと**を確かめる
+def downgrade_check(port: int) -> str:
+    try:
+        bad: http.Response = http.get("https://127.0.0.1:" + str(port) + "/")
+        return "繋いでしまった " + str(bad.status)
+    except http.HttpError as he:
+        return "True"
 
 
 def main() -> int:
@@ -134,13 +157,37 @@ def main() -> int:
         print("URL NG: " + he3.message)
         return 1
 
-    # ★ **https は黙って http で繋ぎません。** 暗号化されていると思って
-    #   鍵を送ってしまうので、はっきり断ります。
+    # ★ **https は黙って平文に落ちません。** 落ちると、暗号化されている
+    #   と思って合言葉を送る人が、そのまま平文で送ることになります。
+    #
+    #   注意: **平文で待っているだけの相手に https:// で繋いで確かめます。**
+    #     外に出ないので、通信できない場所でも、相手の都合でも結果が
+    #     変わりません（以前はここで example.com へ本当に繋いでいました）。
+    #
+    #   注意: TLS を組み込んでいないビルドでは「組み込んでいません」で、
+    #     組み込んであるビルドでは「やり取りに失敗」で断られます。
+    #     **どちらでも繋がらない**ことがここで言いたいことです。
     try:
-        bad: http.Response = http.get("https://example.com/")
-        print("https は断る: 繋いでしまった " + str(bad.status))
-    except http.HttpError as he4:
-        print("https は断る: " + str(strings.contains(he4.message, "TLS")))
+        l3: net.Listener = net.listen("127.0.0.1", 0)
+        t3: Thread[int] = spawn(plain_server, l3.fd)
+        print("https は平文に落ちない: " + downgrade_check(l3.port))
+
+        # ★ **必ず 1 本繋いで、待っている相手を起こします。**
+        #   TLS を組み込んでいないビルドでは、上の行が**繋ぎに行きません**
+        #   （文脈を作るところで断られます）。これが無いと accept が返らず、
+        #   下の join で永久に止まります。
+        #
+        #   注意: **待ち受け口の待ち時間では代用できません。**
+        #     `l3.set_timeout(…)` が入れる SO_RCVTIMEO は、macOS の
+        #     accept には効きません（実測。net<ext> の該当箇所を見てください）。
+        wake: net.Conn = net.connect("127.0.0.1", l3.port)
+        wake.close()
+
+        t3.join()
+        l3.close()
+    except net.NetError as ne4:
+        print("NG: " + ne4.message)
+        return 1
 
     # 誰もいないところへ（NetError ではなく **HttpError** で返る）
     dead: int = 0

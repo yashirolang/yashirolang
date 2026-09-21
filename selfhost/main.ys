@@ -314,6 +314,19 @@ def runtime_o() -> str:
     return "build/runtime.o"
 
 
+# ランタイムが要る外のライブラリ（TLS を有効にしたときの OpenSSL）。
+#
+# ★ C 版はビルド時に埋め込み（-DPLC_RUNTIME_LIBS）、こちらは環境変数から
+#   受け取ります（PLC_RUNTIME_O と同じ手）。**既定は空**なので、
+#   TLS を有効にしていなければリンク行は 1 文字も変わりません。
+#
+# 注意: **囲まずにリンク行へ置きます**（"-L/x -lssl -lcrypto" のように
+#   複数の語だからです）。囲むと 1 つの道の名前として渡ってしまいます。
+# 対になる定義: src/main.c :: runtime_libs
+def runtime_libs() -> str:
+    return sys.getenv("PLC_RUNTIME_LIBS")
+
+
 
 # ── モジュールごとの clang を並列に走らせる ──────────────────
 #
@@ -512,6 +525,12 @@ def main() -> int:
         for ob in objs:
             parts.append(" \"" + ob + "\"")
         parts.append(" \"" + runtime_o() + "\"")
+        # ★ ランタイムが要る外のライブラリ（TLS を有効にしたときの OpenSSL）。
+        #   注意: **ランタイムの後**に置く（後から来たものが先のものの
+        #   未解決を埋める、という並びのため）。
+        rlibs: str = runtime_libs()
+        if len(rlibs) > 0:
+            parts.append(" " + rlibs)
         # ★ スレッド（A-18）。ランタイムが pthread を使うので、
         #   POSIX ではリンク時に -pthread が要る。
         # 注意: Windows のスレッドは kernel32 にあるので何も足さない。

@@ -75,7 +75,7 @@ LANG_NAME := yashirolang
 LANG_EXT  := .ys
 LANG_CC   := yashirolang
 LANG_PM   := ysm
-LANG_VERSION := 0.28.0
+LANG_VERSION := 0.29.0
 LANG_REPO := https://github.com/yashirolang/yashirolang
 CFLAGS  += -DPLC_LANG_NAME='"$(LANG_NAME)"' \
            -DPLC_LANG_EXT='"$(LANG_EXT)"' \
@@ -146,6 +146,68 @@ LLVM_AS  := $(LLVM_BIN)/llvm-as
 #    ランタイムは「ユーザーのプログラムの一部」として動くからです。
 RUNTIME_CORE := runtime/core.c
 RUNTIME_HOSTED := runtime/hosted.c
+RUNTIME_TLS := runtime/tls.c
+
+# ── TLS（任意）──────────────────────────────────────────────
+#
+# ★ **既定では入りません。** この処理系は「clang だけで建つ」を守るので、
+#   外のライブラリを黙って要求しません。TLS が要る人だけが
+#
+#       make TLS=1
+#
+#   と書きます。TLS=0（既定）でも runtime/tls.c は常にコンパイルされ、
+#   「TLS を組み込まずに建てました」と断る中身が入ります。
+#   おかげで lib/tls を import しただけでリンクが落ちることがありません。
+#
+# ★ **OpenSSL 3.0 以上だけを受け付けます。** 1.1.1 以前は旧
+#   OpenSSL/SSLeay ライセンス（宣伝条項つき）で、このリポジトリの
+#   Apache-2.0 と両立しません。3.0 からは Apache-2.0 です。
+#   注意: 取り込みはしません（リンクするだけ）。ソースは 1 行も入りません。
+#
+# 注意: リンクに要る指定（-L… -lssl -lcrypto）は**コンパイラに埋め込みます**
+#   （PLC_RUNTIME_LIBS）。利用者のプログラムを建てるときに、
+#   毎回 --link で書かせないためです。
+TLS ?= 0
+TLS_CFLAGS :=
+TLS_LIBS :=
+TLS_STAMP := build/tls.stamp
+ifeq ($(TLS),1)
+  ifeq ($(shell pkg-config --exists 'openssl >= 3.0' 2>/dev/null && echo yes),yes)
+    TLS_CFLAGS := -DPL_TLS_OPENSSL $(shell pkg-config --cflags openssl)
+    TLS_LIBS := $(shell pkg-config --libs openssl)
+  else
+    $(error TLS=1 ですが OpenSSL 3.0 以上が見つかりません。\
+      Debian/Ubuntu: apt install libssl-dev / macOS: brew install openssl@3 \
+      （pkg-config が要ります）)
+  endif
+endif
+
+# ★ **TLS の指定が変わったら建て直します。**
+#   make が見るのは時刻だけなので、これが無いと `make` のあとの
+#   `make TLS=1` が「もう新しい」と判断して素通りし、
+#   「有効にしたはずなのに断られる」という分かりにくい形になります。
+#
+# 注意: **読み込みのときに書きます**（ルールにはしません）。ルールにすると
+#   「判子を更新する」と「それに依るものを建て直すか決める」が同じ実行の
+#   中で起き、どちらが先かに答えが左右されます。ここで確定させておけば、
+#   依存の判断はいつもの時刻比べだけで済みます。
+#
+# 注意: 中身が同じときは**触りません**（触ると全部が建て直しになります）。
+#
+# 注意: **何も建てない用の呼び出しでは書きません。** `make print-LANG_CC` は
+#   テストのシェルが実行ファイル名を訊くのに使っており、そこに TLS= が
+#   付くことはありません。素通しにすると、その 1 回で判子が「TLS なし」に
+#   戻り、**次の `make TLS=1` が丸ごと建て直し**になります。
+ifeq ($(filter print-% info clean uninstall,$(MAKECMDGOALS)),)
+#   形式: TLS|リンクの指定|コンパイルの指定
+#   ★ **コンパイルの指定まで残します。** tests/drop_asan<sh> は runtime.a では
+#     なく runtime/*<c> を直接コンパイルするので、-DPL_TLS_OPENSSL と
+#     -I が無いと tls<c> が「断るだけの中身」で入り、未定義のシンボルになります。
+$(shell mkdir -p build; \
+        printf '%s|%s|%s\n' '$(TLS)' '$(TLS_LIBS)' '$(TLS_CFLAGS)' > $(TLS_STAMP).new; \
+        cmp -s $(TLS_STAMP).new $(TLS_STAMP) 2>/dev/null \
+          && rm -f $(TLS_STAMP).new || mv $(TLS_STAMP).new $(TLS_STAMP))
+endif
 
 # ★ 静的ライブラリ（.a）にまとめます。
 #   注意: 以前は `ld -r`（部分リンク）でしたが、Windows では使えません。
@@ -161,6 +223,11 @@ CFLAGS  += -DPLC_CLANG='"$(CLANG)"'
 # コンパイラにランタイムの場所を教える。
 # 注意: stage0 だけの割り切り（ビルドツリー内で完結すればよい）。
 CFLAGS  += -DPLC_RUNTIME_O='"$(abspath $(RUNTIME_OBJ))"'
+
+# ★ ランタイムが外のライブラリを要るときの、リンクの指定（いまは TLS だけ）。
+#   TLS=0 のときは空なので、リンク行は 1 文字も変わりません。
+#   対になる定義: src/main.c :: runtime_libs / selfhost/main$(LANG_EXT) :: runtime_libs
+CFLAGS  += -DPLC_RUNTIME_LIBS='"$(TLS_LIBS)"'
 
 # ── 標準ライブラリ ───────────────────────────────────────────
 # import が探す 2 つ目の場所。本言語で書かれた lib/*$(LANG_EXT) があります。
@@ -248,15 +315,18 @@ $(TARGET): $(OBJS)
 # ★ 2 つを 1 つの静的ライブラリにまとめます。
 #   こうしておくと、コンパイラ側は「ランタイムは 1 本のファイル」という
 #   これまでの前提のままで済みます（.o でも .a でも clang に渡せます）。
-$(RUNTIME_OBJ): $(RUNTIME_CORE) $(RUNTIME_HOSTED) runtime/core.h
+$(RUNTIME_OBJ): $(RUNTIME_CORE) $(RUNTIME_HOSTED) $(RUNTIME_TLS) runtime/core.h $(TLS_STAMP)
 	@mkdir -p build
 	$(CC) $(RUNTIME_CFLAGS) -c $(RUNTIME_CORE) -o build/core.o
 	$(CC) $(RUNTIME_CFLAGS) -c $(RUNTIME_HOSTED) -o build/hosted.o
-	$(AR) rcs $@ build/core.o build/hosted.o
+	$(CC) $(RUNTIME_CFLAGS) $(TLS_CFLAGS) -c $(RUNTIME_TLS) -o build/tls.o
+	$(AR) rcs $@ build/core.o build/hosted.o build/tls.o
 
 # -MMD -MP でヘッダの依存関係を自動生成する。
 # これがないと、ヘッダを直したのに再ビルドされず不思議なバグに悩まされます。
-build/%.o: src/%.c
+# 注意: $(TLS_STAMP) に依るのは、PLC_RUNTIME_LIBS が CFLAGS に
+#   埋め込まれているからです（TLS の指定が変わったら建て直す）。
+build/%.o: src/%.c $(TLS_STAMP)
 	@mkdir -p build
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
@@ -316,6 +386,13 @@ test: $(TARGET) $(RUNTIME_OBJ) $(PM)
 	@tests/drop_asan.sh
 	@tests/selfhost.sh
 	@tests/pm.sh
+	@tests/tls.sh
+
+# TLS の受け入れテストだけ（自己署名の証明書を作って自分に繋ぎます）。
+#   注意: TLS を組み込んでいないビルドでは飛ばします（失敗ではありません）。
+.PHONY: tls-test
+tls-test: $(TARGET) $(RUNTIME_OBJ)
+	@tests/tls.sh
 
 # 1 ケースだけ実行: make test-one CASE=tests/cases/int_42$(LANG_EXT)
 test-one: $(TARGET) $(RUNTIME_OBJ)
@@ -340,6 +417,7 @@ bootstrap-test: bootstrap
 	@PLC_CC=$(abspath build/boot/stage2) \
 	 PLC_LIB_DIR=$(abspath lib) \
 	 PLC_RUNTIME_O=$(abspath $(RUNTIME_OBJ)) \
+	 PLC_RUNTIME_LIBS='$(TLS_LIBS)' \
 	 PLC_TARGET_TRIPLE=$(HOST_TRIPLE) \
 	 tests/run_tests.sh
 
@@ -469,7 +547,8 @@ install: all
 	cp $(TARGET) "$(DESTDIR)$(PREFIX)/bin/"
 	cp $(RUNTIME_OBJ) "$(DESTDIR)$(PREFIX)/lib/plc/"
 	cp lib/*$(LANG_EXT) "$(DESTDIR)$(PREFIX)/lib/plc/lib/"
-	cp LICENSE "$(DESTDIR)$(PREFIX)/lib/plc/"
+	@# ★ NOTICE も一緒に（Apache-2.0 §4(d)。make dist と同じ理由）。
+	cp LICENSE NOTICE "$(DESTDIR)$(PREFIX)/lib/plc/"
 	@$(MAKE) --no-print-directory $(PM)
 	cp $(PM) "$(DESTDIR)$(PREFIX)/bin/"
 	@echo "インストールしました: $(DESTDIR)$(PREFIX)/bin/$(LANG_CC)$(EXEEXT)"
@@ -487,7 +566,10 @@ dist: all $(PM)
 	cp $(TARGET) $(PM) build/dist/$(DIST_NAME)/bin/
 	cp $(RUNTIME_OBJ) build/dist/$(DIST_NAME)/lib/plc/
 	cp lib/*$(LANG_EXT) build/dist/$(DIST_NAME)/lib/plc/lib/
-	cp README.md LICENSE build/dist/$(DIST_NAME)/ 2>/dev/null || 	  cp README.md build/dist/$(DIST_NAME)/
+	@# ★ **NOTICE も必ず入れます。** Apache-2.0 §4(d) は「元の作品に NOTICE が
+	@#   あるなら、再配布物にも入れること」を求めます。ここで落とすと、
+	@#   配布物が許諾の条件を満たしません。
+	cp README.md LICENSE NOTICE build/dist/$(DIST_NAME)/
 	@echo "配布物: build/dist/$(DIST_NAME)"
 
 # ── 情報表示 ────────────────────────────────────────────────

@@ -1313,6 +1313,74 @@ static Node *block(Parser *p) {
 //   ND_ELIF のようなノードが不要になり、意味解析もコード生成も
 //   「if は 2 分岐」だけを扱えば済みます。
 //   複合代入（x += e → x = x + e）と同じ発想です。
+static Node *if_stmt(Parser *p);
+
+// ── 場合分け（A-37）──────────────────────────────────────
+//
+// match_stmt ::= "match" expr ":" NEWLINE INDENT case_clause+ DEDENT
+// case_clause ::= "case" (expr | "_") ":" NEWLINE block
+//
+// ★ **枝は if の連なりに落とします**（codegen が上から順に比べます）。
+//   新しい制御構造を IR に増やさないためです。
+//
+// ★ `case` は**予約語にしません**。「試験の 1 件」のような普通の名前で、
+//   予約語にすると既存のコードが壊れます。`match` の本体の中で、行の
+//   先頭に来たときだけ `case` として読みます（`scope` と同じ扱い）。
+//
+// 注意: **網羅の検査は sema の仕事です。** ここでは形だけを読みます
+//   （どの枝があるかは、型が決まらないと分かりません）。
+static Node *match_stmt(Parser *p) {
+    Token *kw = advance(p);  // "match"
+
+    Node *n = new_node(ND_MATCH, kw);
+    n->lhs = expr(p);
+
+    expect_colon(p, "match");
+    expect(p, TK_NEWLINE, "改行", "':' の後は改行して case を字下げしてください");
+    expect(p, TK_INDENT, "字下げされた case",
+           "case は字下げして書きます（スペース 4 個を推奨）");
+
+    Node head = {0};
+    Node *cur = &head;
+    while (peek(p)->kind != TK_DEDENT && peek(p)->kind != TK_EOF) {
+        Token *c = peek(p);
+        if (!(c->kind == TK_IDENT && strcmp(c->text, "case") == 0)) {
+            Diag d = {0};
+            d.message = "match の中に書けるのは case だけです";
+            d.primary.tok = c;
+            d.primary.label = "ここには case を書きます";
+            d.hint = "書き方は case <値>: です（どれにも当たらないときは case _:）";
+            diag_fail(&d);
+        }
+        advance(p);  // "case"
+
+        Node *cn = new_node(ND_CASE, c);
+        // ★ `case _` は「それ以外」。lhs を持ちません。
+        //   注意: `_` は名前ではなく**印**として読みます。束縛はしません
+        //     （束縛できるようにすると、中身つきの枝が入ったときに
+        //     「どこまでが名前でどこからが値か」が曖昧になります）。
+        Token *pat = peek(p);
+        if (pat->kind == TK_IDENT && strcmp(pat->text, "_") == 0 &&
+            tok_is(peek_at(p, 1), ":")) {
+            advance(p);
+        } else {
+            cn->lhs = expr(p);
+        }
+
+        expect_colon(p, "case");
+        cn->body = block(p);
+        cur->next = cn;
+        cur = cur->next;
+    }
+    expect(p, TK_DEDENT, "字下げの終わり", "match の本体が閉じていません");
+
+    if (!head.next)
+        error_at_hint(kw, "case を 1 つ以上書いてください",
+                      "空の match は書けません");
+    n->body = head.next;
+    return n;
+}
+
 static Node *if_stmt(Parser *p) {
     // 先頭は "if"（stmt から呼ばれたとき）か "elif"（自分自身から呼ばれたとき）。
     // どちらも「条件 ':' ブロック」という同じ構造なので、同じ関数で読めます。
@@ -1673,6 +1741,8 @@ static Node *stmt(Parser *p) {
 
     if (tok_is_kw(t, "if")) return if_stmt(p);
     if (tok_is_kw(t, "while")) return while_stmt(p);
+    // ★ match は v1 の時点で予約済みなので、そのまま見ます（A-37）。
+    if (tok_is_kw(t, "match")) return match_stmt(p);
     if (tok_is_kw(t, "for")) return for_stmt(p);
     if (tok_is_kw(t, "try")) return try_stmt(p);
 
@@ -2184,6 +2254,81 @@ static Node *iface_def(Parser *p) {
     return n;
 }
 
+// ── 列挙（A-37）──────────────────────────────────────────
+//
+// enum_def ::= "enum" IDENT ":" NEWLINE INDENT (IDENT NEWLINE)+ DEDENT
+//
+// ★ **枝は名前だけです**（中身は持ちません）。番号も書かせません——
+//   宣言した順に 0 から振ります。番号を書けるようにすると
+//   「番号を合わせるために枝を並べ替える」コードが生まれ、枝を足すのが
+//   怖い変更になります。外との数のやり取りが要るなら、それは変換関数の
+//   仕事で、型の仕事ではありません。
+//
+// ★ `enum` は**予約語にしません**（`scope` と同じ扱い）。ふつうの名前
+//   としても使えるので、`enum: int = 0` のようなグローバル変数を
+//   壊さないためです。`enum` の次が名前なら宣言、と文脈で決めます。
+static Node *enum_def(Parser *p) {
+    Token *kw = advance(p);  // "enum"
+
+    Token *name_tok = peek(p);
+    if (name_tok->kind != TK_IDENT)
+        error_at_hint(name_tok,
+                      "enum の後には名前を書きます（例: enum Color:）",
+                      "列挙の名前が必要です");
+    advance(p);
+
+    Node *n = new_node(ND_ENUM, kw);
+    n->name = name_tok->text;
+
+    expect_colon(p, "enum の宣言");
+    expect(p, TK_NEWLINE, "改行", "':' の後は改行して本体を字下げしてください");
+    expect(p, TK_INDENT, "字下げされた本体",
+           "列挙の枝は字下げして書きます（スペース 4 個を推奨）");
+
+    Node head = {0};
+    Node *cur = &head;
+    long long next_val = 0;
+    while (peek(p)->kind != TK_DEDENT && peek(p)->kind != TK_EOF) {
+        Token *v = peek(p);
+        if (v->kind != TK_IDENT) {
+            Diag d = {0};
+            d.message = "列挙に書けるのは枝の名前だけです";
+            d.primary.tok = v;
+            d.primary.label = "ここには名前を書きます";
+            d.hint = "1 行に 1 つ、名前だけを書きます（中身を持つ枝はまだありません）";
+            diag_fail(&d);
+        }
+        advance(p);
+
+        // 注意: **同じ名前の枝を断ります。** 通すと、あとに書いたほうが
+        //   決して選ばれない match ができ、それが黙って通ります。
+        for (Node *q = head.next; q; q = q->next)
+            if (strcmp(q->name, v->text) == 0) {
+                Diag d = {0};
+                d.message = diag_fmt("枝 '%s' が 2 回あります", v->text);
+                d.primary.tok = v;
+                d.primary.label = "2 つめの定義です";
+                d.related.tok = q->tok;
+                d.related.label = "最初の定義はここです";
+                diag_fail(&d);
+            }
+
+        Node *ev = new_node(ND_ENUMVAL, v);
+        ev->name = v->text;
+        ev->ival = next_val++;
+        cur->next = ev;
+        cur = cur->next;
+        expect(p, TK_NEWLINE, "改行", "枝は 1 行に 1 つ書きます");
+    }
+    expect(p, TK_DEDENT, "字下げの終わり", "列挙の本体が閉じていません");
+
+    if (!head.next)
+        error_at_hint(kw, "枝を 1 つ以上書いてください",
+                      "空の列挙は書けません");
+    n->body = head.next;
+    return n;
+}
+
 // field_decl ::= IDENT ":" type NEWLINE
 //
 // ★ 変数宣言（var_decl）とよく似ていますが、初期化式を取りません。
@@ -2575,6 +2720,18 @@ static Node *program(Parser *p) {
             cur->next = stmt(p);
             cur = cur->next;
             expect_newline(p);
+            continue;
+        }
+
+        // 列挙 ::= "enum" IDENT ":" NEWLINE ...
+        //
+        // 注意: **2 つ先まで見てから決めます。** 'enum' は予約語ではないので、
+        //    `enum: int = 0`（グローバル変数）と区別が要ります。
+        //    宣言なら次が名前、変数なら次が ':' です。
+        if (t->kind == TK_IDENT && strcmp(t->text, "enum") == 0 &&
+            peek_at(p, 1)->kind == TK_IDENT) {
+            cur->next = enum_def(p);
+            cur = cur->next;
             continue;
         }
 

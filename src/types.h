@@ -53,11 +53,27 @@ typedef enum {
     TY_THREAD,  // Thread[R] → ptr（ランタイムの PlThread への不透明なポインタ）
     TY_MUTEX,   // mutex[T]  → ptr（ランタイムの PlMutex への不透明なポインタ）
 
+    // ── 列挙（A-37）──
+    //
+    // ★ **表現は i64 です**（枝に 0, 1, 2 … を振るだけ）。vtable も
+    //   割り付けも増えません。「値はどれも 8 バイト」の前提に触りません。
+    //
+    // ★ **なぜ TY_INT に名前を付ける形（範囲型と同じ手）にしなかったか。**
+    //   範囲型は「int の一種」なので `kind == TY_INT` に混ざってよく、
+    //   むしろ混ざらないと算術が全部書けません。列挙は**逆**です——
+    //   `Color.Red + 1` や `if c == 3` を**通してはいけません**。
+    //   TY_INT にすると、既存の `kind == TY_INT` の判定が全部
+    //   「列挙も通す」意味になり、**書き忘れた場所が静かに通します**。
+    //   別の種類にしておけば、扱いを書き忘れた場所は
+    //   「型 'Color' は…」とエラーで止まります。
+    TY_ENUM,    // enum Color → i64
+
 } TypeKind;
 
 // クラス定義の実体は ast.h にあります（フィールドの並びとメソッドを持つため）。
 // ★ 型そのものは「どのクラスか」を指せれば十分なので、ここでは前方宣言だけ。
 struct Class;
+struct EnumDef;
 
 typedef struct Type Type;
 struct Type {
@@ -78,6 +94,7 @@ struct Type {
     char *name;         // クラス名（エラーメッセージ用）
     struct Class *cls;  // 定義への参照。★ 型の同一性はこのポインタで判定する
     struct Iface *iface;  // TY_IFACE のときの定義への参照
+    struct EnumDef *en;   // TY_ENUM のときの定義への参照（★ 型の同一性はこれ）
 
     // ── 範囲型（部分型。A-28）──
     //
@@ -126,6 +143,9 @@ Type *type_from_name(const char *name);
 
 // TypeKind からシングルトンを引く（組み込み関数の表で使う）
 Type *type_from_kind(int kind);
+
+// enum 型を作る（定義 1 つにつき 1 個。sema が作って覚えます）。
+Type *type_enum(const char *name, struct EnumDef *e);
 
 // list[T] を作る。
 // 注意: シングルトンではありません。書かれた場所ごとに新しく作られるので、

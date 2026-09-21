@@ -1,0 +1,16 @@
+# ERROR: 同じ値の case が 2 つあります
+# 同じ値の case は断ります（2 つめは決して選ばれないため。A-37）
+enum Color:
+    Red
+    Green
+
+def main() -> int:
+    c: Color = Color.Red
+    match c:
+        case Color.Red:
+            return 0
+        case Color.Red:
+            return 1
+        case Color.Green:
+            return 2
+    return 0

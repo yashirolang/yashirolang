@@ -301,6 +301,9 @@ class Emitter:
             return "ptr"          # mutex[T]
         if t.kind == ast.TY_PTR:
             return "ptr"          # ptr[T]（A-33：C のライブラリへ渡す）
+        # ★ 列挙はただの i64（枝に 0 から番号を振っただけ。A-37）
+        if t.kind == ast.TY_ENUM:
+            return "i64"
         if t.kind == ast.TY_NULL:
             return "ptr"
         panic("codegen: 未知の型です")
@@ -337,6 +340,9 @@ class Emitter:
             return "ptr"
         if t.kind == ast.TY_PTR:
             return "ptr"
+        # ★ 列挙はただの i64（A-37）
+        if t.kind == ast.TY_ENUM:
+            return "i64"
         panic("codegen: メモリ上の表現を持たない型です")
         return "i64"
 
@@ -3063,6 +3069,75 @@ class Emitter:
 
     # ── 制御構文（規約 6.3 / 6.4 / 6.5）────────────────────
 
+    # ── 場合分け（A-37）──────────────────────────────────
+    #
+    # ★ **比べる連なりに落とすだけ。** IR に新しい形は増やさない
+    #   （elif が if の連なりに落ちるのと同じ考え）。
+    #
+    # ★ **調べる式は 1 回しか評価しない。** `match f(x):` で f を case の数
+    #   だけ呼ぶと、副作用のある関数で答えが変わる。
+    #
+    # 注意: 箱（alloca）は作らない。値を SSA のレジスタに 1 つ置くだけ。
+    #   箱にすると、str を調べたときに「その箱は誰のものか」という所有権の
+    #   話が要るようになる——ここはただ比べるだけの場所。
+    #   対になる定義: src/codegen.c の gen_match
+    def gen_match(mut self, n: rc[ast.Node]) -> None:
+        id_: int = self.label_counter
+        self.label_counter = self.label_counter + 1
+
+        # ★ 先に 1 回だけ評価する
+        subj: str = self.gen_expr(node_of(n.lhs))
+        st: rc[ast.Type] | None = node_of(n.lhs).type
+        is_str: bool = st is not None and type_or_none(st).kind == ast.TY_STR
+
+        end_l: str = "match.end." + str(id_)
+
+        k: int = 0
+        c: rc[ast.Node] | None = n.body
+        while c is not None:
+            cc: rc[ast.Node] = c
+            if cc.lhs is None:
+                # `case _`（それ以外）。sema が「最後にしか置けない」ことを
+                # 確かめてあるので、ここは素通しで本体を出す。
+                self.gen_stmt(node_of(cc.body))
+                if not self.terminated:
+                    self.emit_br("match.end." + str(id_))
+                c = None
+            else:
+                body_l: str = "match.case." + str(id_) + "." + str(k)
+                next_l: str = "match.next." + str(id_) + "." + str(k)
+
+                want: str = self.gen_expr(node_of(cc.lhs))
+                cond: str = self.new_tmp()
+                if is_str:
+                    # 注意: 文字列は**内容**で比べる（言語仕様 4.3）
+                    self.declare_rt("i64 @pl_str_cmp(ptr, ptr)")
+                    cmpv: str = self.new_tmp()
+                    self.emit("  " + cmpv + " = call i64 @pl_str_cmp(ptr " +
+                              subj + ", ptr " + want + ")\n")
+                    self.emit("  " + cond + " = icmp eq i64 " + cmpv + ", 0\n")
+                else:
+                    self.emit("  " + cond + " = icmp eq i64 " + subj + ", " +
+                              want + "\n")
+                self.emit_cond_br(cond, body_l, next_l)
+
+                self.emit_label("match.case." + str(id_) + "." + str(k))
+                self.gen_stmt(node_of(cc.body))
+                if not self.terminated:
+                    self.emit_br("match.end." + str(id_))
+
+                self.emit_label("match.next." + str(id_) + "." + str(k))
+                k = k + 1
+                c = cc.next
+
+        # ★ どれにも当たらなかったときは、ここに落ちて終わる。列挙なら
+        #   sema が網羅を確かめてあり、int / str なら case _ があるので、
+        #   **実際には到達しない**。それでもブロックは要る（最後の
+        #   match.next が終端命令を持たなければならないため）。
+        if not self.terminated:
+            self.emit_br("match.end." + str(id_))
+        self.emit_label(end_l)
+
     def gen_if(mut self, n: rc[ast.Node]) -> None:
         id_: int = self.label_counter    # ★ 番号は最初に 1 回だけ確保する
         self.label_counter = self.label_counter + 1
@@ -3800,6 +3875,14 @@ class Emitter:
 
         if n.kind == ast.ND_IF:
             self.gen_if(n)
+            return ""
+
+        if n.kind == ast.ND_MATCH:
+            self.gen_match(n)
+            return ""
+
+        # ★ 列挙の宣言は実行時に何も出さない（枝はただの定数。A-37）
+        if n.kind == ast.ND_ENUM:
             return ""
 
         if n.kind == ast.ND_WHILE:

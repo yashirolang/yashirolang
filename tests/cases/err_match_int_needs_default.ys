@@ -1,0 +1,7 @@
+# ERROR: 'int' の match には case _ が要ります
+# int / str は値が無限にあるので、網羅を静的に示せません（A-37）
+def main() -> int:
+    match 1:
+        case 1:
+            return 0
+    return 0

@@ -1,0 +1,16 @@
+# ERROR: match に書いていない枝があります: Color.Green / Color.Blue
+# 枝の書き漏れはエラーです（A-37）
+#
+#   ★ **これがこの機能の本体です。** 枝を足したとき、直す場所をコンパイラに
+#     挙げさせるために入れました。
+enum Color:
+    Red
+    Green
+    Blue
+
+def main() -> int:
+    c: Color = Color.Red
+    match c:
+        case Color.Red:
+            return 1
+    return 0

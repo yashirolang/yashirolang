@@ -1,0 +1,12 @@
+# ERROR: 型 'Color' と 'int' に演算子 '+' は適用できません
+# 列挙は int と混ざりません（A-37）
+#
+#   ★ 範囲型とはここが逆です。範囲型は「int の一種」なので混ざるべきですが、
+#     列挙は混ざってはいけません。だから TY_ENUM を別の種類にしてあります。
+enum Color:
+    Red
+    Green
+
+def main() -> int:
+    c: Color = Color.Red
+    return c + 1

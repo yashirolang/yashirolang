@@ -232,6 +232,7 @@ static const char *llvm_type(Type *t) {
         case TY_PTR: return "ptr";    // ptr[T]（生ポインタ）
         case TY_THREAD: return "ptr"; // Thread[R]（PlThread への不透明な参照）
         case TY_MUTEX: return "ptr";  // mutex[T]（PlMutex への不透明な参照）
+        case TY_ENUM: return "i64";   // 列挙（枝に 0 から番号を振っただけ。A-37）
         case TY_NULL: return "ptr";   // None リテラル
         default: UNREACHABLE();
     }
@@ -258,6 +259,8 @@ static const char *llvm_mem_type(Type *t) {
         case TY_PTR: return "ptr";
         case TY_THREAD: return "ptr";
         case TY_MUTEX: return "ptr";
+        // ★ 列挙はただの i64 です（A-37）。枝に 0 から番号を振っただけ。
+        case TY_ENUM: return "i64";
         // 注意: TY_NONE はメモリ上の表現を持ちません。
         //    ここに来たら「None の変数を作ろうとしている」= コンパイラのバグ。
         default: UNREACHABLE();
@@ -3221,6 +3224,70 @@ static void gen_if(Emitter *e, Node *n) {
 }
 
 
+// ── 場合分け（A-37）──────────────────────────────────────
+//
+// ★ **比べる連なりに落とすだけです。** IR に新しい形は増やしません
+//   （elif が if の連なりに落ちるのと同じ考え）。
+//
+// ★ **調べる式は 1 回しか評価しません。** `match f(x):` で f を case の数
+//   だけ呼ぶと、副作用のある関数で答えが変わります。
+//
+// 注意: 箱（alloca）は作りません。値を SSA のレジスタに 1 つ置くだけです。
+//   箱にすると、str を調べたときに「その箱は誰のものか」という所有権の
+//   話が要るようになります——ここはただ比べるだけの場所です。
+static void gen_match(Emitter *e, Node *n) {
+    int id = e->label_counter++;
+
+    // ★ 先に 1 回だけ評価します。
+    char *subj = gen_expr(e, n->lhs);
+    bool is_str = n->lhs->type && n->lhs->type->kind == TY_STR;
+
+    char end_l[40];
+    snprintf(end_l, sizeof(end_l), "match.end.%d", id);
+
+    int k = 0;
+    for (Node *c = n->body; c; c = c->next, k++) {
+        if (!c->lhs) {
+            // `case _`（それ以外）。sema が「最後にしか置けない」ことを
+            // 確かめてあるので、ここは素通しで本体を出します。
+            gen_stmt(e, c->body);
+            if (!e->terminated) emit_br(e, end_l);
+            break;
+        }
+
+        char body_l[40], next_l[40];
+        snprintf(body_l, sizeof(body_l), "match.case.%d.%d", id, k);
+        snprintf(next_l, sizeof(next_l), "match.next.%d.%d", id, k);
+
+        char *want = gen_expr(e, c->lhs);
+        char *cond = new_tmp(e);
+        if (is_str) {
+            // 注意: 文字列は**内容**で比べます（言語仕様 4.3）。
+            declare_rt(e, "i64 @pl_str_cmp(ptr, ptr)");
+            char *cmp = new_tmp(e);
+            sb_printf(&e->fn, "  %s = call i64 @pl_str_cmp(ptr %s, ptr %s)\n",
+                      cmp, subj, want);
+            sb_printf(&e->fn, "  %s = icmp eq i64 %s, 0\n", cond, cmp);
+        } else {
+            sb_printf(&e->fn, "  %s = icmp eq i64 %s, %s\n", cond, subj, want);
+        }
+        emit_cond_br(e, cond, body_l, next_l);
+
+        emit_label(e, body_l);
+        gen_stmt(e, c->body);
+        if (!e->terminated) emit_br(e, end_l);
+
+        emit_label(e, next_l);
+    }
+
+    // ★ どれにも当たらなかったときは、ここに落ちて終わります。
+    //   列挙なら sema が網羅を確かめてあり、int / str なら case _ が
+    //   あるので、**実際には到達しません**。それでもブロックは要ります
+    //   （最後の match.next が終端命令を持たなければならないため）。
+    if (!e->terminated) emit_br(e, end_l);
+    emit_label(e, end_l);
+}
+
 // ── 添字の範囲をループの外で 1 回だけ確かめる（loop versioning）──
 //
 // なぜこれを入れたか
@@ -4280,7 +4347,10 @@ static char *gen_stmt_inner(Emitter *e, Node *n) {
         case ND_UNSAFE: return gen_stmt(e, n->body);
 
         case ND_IF: gen_if(e, n); return NULL;
+        case ND_MATCH: gen_match(e, n); return NULL;
         case ND_WHILE: gen_while(e, n); return NULL;
+        // ★ 列挙の宣言は実行時に何も出しません（枝はただの定数。A-37）
+        case ND_ENUM: return NULL;
 
         // ── try / except ──
         //

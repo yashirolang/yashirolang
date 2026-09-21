@@ -1,0 +1,102 @@
+# OUTPUT: 数 名前 記号
+# OUTPUT: ゼロ いち その他
+# OUTPUT: こんにちは hello ?
+# OUTPUT: 同じ枝: True / 違う枝: False
+# OUTPUT: 変数に入れて渡せる: 記号
+# OUTPUT: 枝を全部書けば case _ は要らない: 3
+# OUTPUT: 入れ子の match: 名前/いち
+# EXIT: 0
+# 列挙と場合分け（A-37）
+#
+#   ★ **枝は名前だけ**です（中身は持ちません）。表現は i64 で、宣言した順に
+#     0 から番号を振ります。
+#
+#   ★ 網羅の検査が本体です。枝を足したとき「直す場所をコンパイラに
+#     挙げさせる」ためにこの機能を入れました。**通ってはいけないもの**は
+#     err_enum_* / err_match_* が見ます。
+#
+#   注意: 列挙は int と**混ざりません**。`Tok.Int + 1` も `t == 0` も
+#     エラーになります（範囲型とはそこが逆です——範囲型は int の一種です）。
+enum Tok:
+    Int
+    Name
+    Punct
+
+
+def name_of(t: Tok) -> str:
+    match t:
+        case Tok.Int:
+            return "数"
+        case Tok.Name:
+            return "名前"
+        case Tok.Punct:
+            return "記号"
+    # 注意: ここには来ません（網羅してあるので）。この言語は「全部の経路で
+    #   return する」ことを求めるので、書いておきます。
+    return "?"
+
+
+# int の match。★ 値が無限にあるので case _ が要ります。
+def digit(b: int) -> str:
+    match b:
+        case 48:
+            return "ゼロ"
+        case 49:
+            return "いち"
+        case _:
+            return "その他"
+
+
+# str の match。★ 比べるのは**内容**です（言語仕様 4.3）。
+def greet(s: str) -> str:
+    match s:
+        case "ja":
+            return "こんにちは"
+        case "en":
+            return "hello"
+        case _:
+            return "?"
+
+
+# 枝を全部書いてあれば case _ は要らない（書くと「届かない」で断られます）
+def weight(t: Tok) -> int:
+    match t:
+        case Tok.Int:
+            return 1
+        case Tok.Name:
+            return 2
+        case Tok.Punct:
+            return 3
+    return 0
+
+
+def main() -> int:
+    print(name_of(Tok.Int) + " " + name_of(Tok.Name) + " " + name_of(Tok.Punct))
+    print(digit(48) + " " + digit(49) + " " + digit(50))
+    print(greet("ja") + " " + greet("en") + " " + greet("xx"))
+
+    # 列挙どうしは比べられます（int とは比べられません）
+    a: Tok = Tok.Name
+    print("同じ枝: " + str(a == Tok.Name) + " / 違う枝: " + str(a == Tok.Int))
+
+    # 変数に入れて関数へ渡せます（ただの i64 なので写しの心配はありません）
+    b: Tok = Tok.Punct
+    print("変数に入れて渡せる: " + name_of(b))
+
+    print("枝を全部書けば case _ は要らない: " + str(weight(Tok.Punct)))
+
+    # ★ 入れ子の match（ラベルがぶつからないことの確認）
+    out: str = ""
+    match a:
+        case Tok.Int:
+            out = "数"
+        case Tok.Name:
+            match 49:
+                case 49:
+                    out = "名前/いち"
+                case _:
+                    out = "名前/その他"
+        case Tok.Punct:
+            out = "記号"
+    print("入れ子の match: " + out)
+    return 0

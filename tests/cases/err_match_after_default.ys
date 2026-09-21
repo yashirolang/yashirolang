@@ -1,0 +1,9 @@
+# ERROR: この case は届きません
+# case _ より後ろの case は決して選ばれません（A-37）
+def main() -> int:
+    match 1:
+        case _:
+            return 0
+        case 1:
+            return 1
+    return 0

@@ -1468,6 +1468,9 @@ class Parser:
             return self.if_stmt()
         if t.is_kw("while"):
             return self.while_stmt()
+        # ★ match は v1 の時点で予約済みなので、そのまま見る（A-37）
+        if t.is_kw("match"):
+            return self.match_stmt()
         if t.is_kw("for"):
             return self.for_stmt()
         if t.is_kw("try"):
@@ -1836,6 +1839,137 @@ class Parser:
     #
     # ★ 「振る舞いだけ」を集めたもの。フィールドは持てない
     #   （持てるようにすると、それは継承になる）。
+    # ── 列挙（A-37）──────────────────────────────────────
+    #
+    # enum_def ::= "enum" IDENT ":" NEWLINE INDENT (IDENT NEWLINE)+ DEDENT
+    #
+    # ★ **枝は名前だけ**（中身は持たない）。番号も書かせず、宣言した順に
+    #   0 から振る。番号を書けるようにすると「番号を合わせるために枝を
+    #   並べ替える」コードが生まれ、枝を足すのが怖い変更になる。
+    #
+    # ★ `enum` は**予約語にしない**（`scope` と同じ扱い）。ふつうの名前
+    #   としても使えるので、`enum: int = 0` を壊さないため。
+    #   対になる定義: src/parser.c の enum_def
+    def enum_def(mut self) -> rc[ast.Node]:
+        kwe: rc[token.Token] = self.advance()   # "enum"
+
+        ne: rc[token.Token] = self.peek()
+        if ne.kind != token.TK_IDENT:
+            self.fail_hint(ne,
+                           "enum の後には名前を書きます（例: enum Color:）",
+                           "列挙の名前が必要です")
+        self.advance()
+
+        n3: rc[ast.Node] = ast.new_node(ast.ND_ENUM, kwe)
+        n3.name = copy(ne.text)
+
+        self.expect_colon("enum の宣言")
+        self.expect(token.TK_NEWLINE, "改行",
+                    "':' の後は改行して本体を字下げしてください")
+        self.expect(token.TK_INDENT, "字下げされた本体",
+                    "列挙の枝は字下げして書きます（スペース 4 個を推奨）")
+
+        head3: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, kwe)
+        cur3: rc[ast.Node] = head3
+        nextval: int = 0
+        while (self.peek().kind != token.TK_DEDENT and
+               self.peek().kind != token.TK_EOF):
+            v3: rc[token.Token] = self.peek()
+            if v3.kind != token.TK_IDENT:
+                self.fail_full(v3,
+                               "列挙に書けるのは枝の名前だけです",
+                               "ここには名前を書きます",
+                               "1 行に 1 つ、名前だけを書きます（中身を持つ枝はまだありません）")
+            self.advance()
+
+            # 注意: **同じ名前の枝を断る。** 通すと、あとに書いたほうが
+            #   決して選ばれない match ができ、それが黙って通る。
+            q3: rc[ast.Node] | None = head3.next
+            while q3 is not None:
+                if q3.name == v3.text:
+                    diag.error_full(v3, "枝 '" + v3.text + "' が 2 回あります",
+                                    "2 つめの定義です", q3.tok,
+                                    "最初の定義はここです", "")
+                q3 = q3.next
+
+            ev3: rc[ast.Node] = ast.new_node(ast.ND_ENUMVAL, v3)
+            ev3.name = copy(v3.text)
+            ev3.ival = nextval
+            nextval = nextval + 1
+            cur3.next = ev3
+            cur3 = ev3
+            self.expect(token.TK_NEWLINE, "改行", "枝は 1 行に 1 つ書きます")
+        self.expect(token.TK_DEDENT, "字下げの終わり",
+                    "列挙の本体が閉じていません")
+
+        if head3.next is None:
+            self.fail_hint(kwe, "枝を 1 つ以上書いてください",
+                           "空の列挙は書けません")
+        n3.body = head3.next
+        return n3
+
+    # ── 場合分け（A-37）──────────────────────────────────
+    #
+    # match_stmt ::= "match" expr ":" NEWLINE INDENT case_clause+ DEDENT
+    # case_clause ::= "case" (expr | "_") ":" NEWLINE block
+    #
+    # ★ **枝は if の連なりに落とす**（codegen が上から順に比べる）。
+    #   新しい制御構造を IR に増やさないため。
+    #
+    # ★ `case` は**予約語にしない**。「試験の 1 件」のような普通の名前で、
+    #   予約語にすると既存のコードが壊れる。match の本体の中で行の先頭に
+    #   来たときだけ `case` として読む（`scope` と同じ扱い）。
+    #
+    # 注意: **網羅の検査は sema の仕事**。ここでは形だけを読む。
+    #   対になる定義: src/parser.c の match_stmt
+    def match_stmt(mut self) -> rc[ast.Node]:
+        kwm: rc[token.Token] = self.advance()   # "match"
+
+        nm: rc[ast.Node] = ast.new_node(ast.ND_MATCH, kwm)
+        nm.lhs = self.expr()
+
+        self.expect_colon("match")
+        self.expect(token.TK_NEWLINE, "改行",
+                    "':' の後は改行して case を字下げしてください")
+        self.expect(token.TK_INDENT, "字下げされた case",
+                    "case は字下げして書きます（スペース 4 個を推奨）")
+
+        headm: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, kwm)
+        curm: rc[ast.Node] = headm
+        while (self.peek().kind != token.TK_DEDENT and
+               self.peek().kind != token.TK_EOF):
+            cm: rc[token.Token] = self.peek()
+            if not (cm.kind == token.TK_IDENT and cm.text == "case"):
+                self.fail_full(cm,
+                               "match の中に書けるのは case だけです",
+                               "ここには case を書きます",
+                               "書き方は case <値>: です（どれにも当たらないときは case _:）")
+            self.advance()      # "case"
+
+            cn: rc[ast.Node] = ast.new_node(ast.ND_CASE, cm)
+            # ★ `case _` は「それ以外」。lhs を持たない。
+            #   注意: `_` は名前ではなく**印**として読む。束縛はしない
+            #     （束縛できるようにすると、中身つきの枝が入ったときに
+            #     「どこまでが名前でどこからが値か」が曖昧になる）。
+            pm: rc[token.Token] = self.peek()
+            if pm.kind == token.TK_IDENT and pm.text == "_" and self.peek_at(1).is_punct(":"):
+                self.advance()
+            else:
+                cn.lhs = self.expr()
+
+            self.expect_colon("case")
+            cn.body = self.block()
+            curm.next = cn
+            curm = cn
+        self.expect(token.TK_DEDENT, "字下げの終わり",
+                    "match の本体が閉じていません")
+
+        if headm.next is None:
+            self.fail_hint(kwm, "case を 1 つ以上書いてください",
+                           "空の match は書けません")
+        nm.body = headm.next
+        return nm
+
     def iface_def(mut self) -> rc[ast.Node]:
         kw2: rc[token.Token] = self.advance()   # "interface"
 
@@ -2194,6 +2328,18 @@ class Parser:
                 ex: rc[ast.Node] = self.extern_def()
                 cur.next = ex
                 cur = ex
+                continue
+
+            # 列挙 ::= "enum" IDENT ":" NEWLINE ...（A-37）
+            #
+            # 注意: **2 つ先まで見てから決める。** 'enum' は予約語ではないので、
+            #    `enum: int = 0`（グローバル変数）と区別が要る。
+            #    宣言なら次が名前、変数なら次が ':'。
+            if (t.kind == token.TK_IDENT and t.text == "enum" and
+                    self.peek_at(1).kind == token.TK_IDENT):
+                ed: rc[ast.Node] = self.enum_def()
+                cur.next = ed
+                cur = ed
                 continue
 
             # 範囲型 ::= "type" IDENT "=" int range "(" INT "," INT ")" NEWLINE

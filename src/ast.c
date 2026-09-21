@@ -288,6 +288,32 @@ static void dump(Node *n, int depth) {
             printf(")\n");
             break;
 
+        // ★ 列挙と場合分け（A-37）。dump は 2 実装で 1 文字も違ってはいけません。
+        case ND_ENUM:
+            printf("(enum %s\n", n->name);
+            for (Node *v = n->body; v; v = v->next) dump(v, depth + 1);
+            for (int i = 0; i < depth; i++) printf("  ");
+            printf(")\n");
+            break;
+        case ND_ENUMVAL:
+            printf("(enumval %s %lld)\n", n->name, n->ival);
+            break;
+        case ND_MATCH:
+            printf("(match\n");
+            dump(n->lhs, depth + 1);
+            for (Node *c = n->body; c; c = c->next) dump(c, depth + 1);
+            for (int i = 0; i < depth; i++) printf("  ");
+            printf(")\n");
+            break;
+        case ND_CASE:
+            // 注意: `case _` は調べる式を持ちません（lhs が NULL）。
+            printf("(case\n");
+            if (n->lhs) dump(n->lhs, depth + 1);
+            dump(n->body, depth + 1);
+            for (int i = 0; i < depth; i++) printf("  ");
+            printf(")\n");
+            break;
+
         case ND_UNSAFE:
             printf("(unsafe\n");
             dump(n->body, depth + 1);

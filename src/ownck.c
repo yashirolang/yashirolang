@@ -1598,6 +1598,35 @@ static void stmt(Own *o, Flow *f, Node *n) {
             return;
         }
 
+        // ── 場合分け（A-37）──
+        //
+        // ★ **if の合流と同じ扱いです。** どの case も「入る前の状態」から
+        //   始まり、出たところで全部を合流させます。
+        //
+        //   注意: **調べる式は 1 回だけ使います**（codegen も 1 回しか
+        //     評価しません）。case の数だけ数えると、`match xs.pop():` の
+        //     ような形で「何度も移動した」と誤って言うことになります。
+        case ND_MATCH: {
+            use_expr(o, f, n->lhs);
+
+            Flow result = flow_copy(f);
+            bool first = true;
+            for (Node *c = n->body; c; c = c->next) {
+                Flow cf = flow_copy(f);
+                // 注意: case の値（Color.Red / 48 / "ja"）は**定数**なので、
+                //   use_expr に通す必要がありません（sema がそう縛っています）。
+                stmt(o, &cf, c->body);
+                if (first) { result = cf; first = false; }
+                else flow_join(&result, &cf);
+            }
+            *f = result;
+            return;
+        }
+
+        // ★ 列挙の宣言は実行時に何もしません（枝はただの定数。A-37）
+        case ND_ENUM:
+            return;
+
         case ND_WHILE:
             check_while(o, f, n);
             return;

@@ -112,6 +112,24 @@ typedef enum {
     //   注意: 箱（alloca）は作りません。**いま返そうとしている値**を指すだけです
     //   （箱を作ると、所有型の戻り値で解放の釣り合いが崩れます）。
     ND_RESULT,
+
+    // ── 列挙と場合分け（A-37）──
+    //
+    // ★ **中身を持つ枝はありません**（枝は名前だけ）。表現は i64 で、
+    //   0 から順に番号を振ります。中身つき（代数的データ型）は、
+    //   あとから枝に足しても既存のコードが壊れない形にしてあります。
+    //
+    //   enum Color:        → ND_ENUM   : name, body（ND_ENUMVAL の並び）, en
+    //       Red            → ND_ENUMVAL: name, ival（振った番号）
+    //       Green
+    //
+    //   match c:           → ND_MATCH  : lhs（調べる式）, body（ND_CASE の並び）
+    //       case Color.Red:→ ND_CASE   : lhs（型・値。`_` なら NULL）, body
+    //           ...
+    ND_ENUM,
+    ND_ENUMVAL,
+    ND_MATCH,
+    ND_CASE,
 } NodeKind;
 
 // 演算子の種類。
@@ -209,6 +227,31 @@ typedef struct IfaceList IfaceList;
 struct IfaceList {
     struct Iface *iface;
     IfaceList *next;
+};
+
+// enum の定義（A-37）。
+//
+// ★ 枝は**宣言した順**に 0 から番号を振ります。番号を書かせないのは、
+//   書けると「番号を合わせるために枝を並べ替える」コードが生まれ、
+//   枝の追加が怖い変更になるからです（この言語の enum は外との
+//   やり取りのための番号ではありません）。
+typedef struct EnumVal EnumVal;
+struct EnumVal {
+    char *name;
+    long long val;
+    Token *tok;
+    EnumVal *next;
+};
+
+typedef struct EnumDef EnumDef;
+struct EnumDef {
+    char *name;
+    Token *tok;
+    EnumVal *vals;
+    int nvals;
+    struct Type *type;          // この定義に対応する TY_ENUM（1 個だけ作る）
+    struct ModuleSyms *owner;
+    EnumDef *next;
 };
 
 typedef struct Iface Iface;
@@ -376,6 +419,11 @@ struct Node {
     //     ND_CLASS : 自分のクラス定義
     //     ND_CALL  : NULL でなければ「インスタンス生成」（Token(1, "x")）
     Class *cls;
+
+    // ★ 列挙の定義（A-37）。
+    //     ND_ENUM  : 自分の enum 定義
+    //     ND_MATCH : 調べる式が enum のとき、その定義（網羅検査で使う）
+    EnumDef *en;
 
     // ND_FIELD が指すフィールド（sema が解決する）
     Field *field;

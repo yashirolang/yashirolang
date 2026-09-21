@@ -326,6 +326,21 @@ class Sema:
     def lookup_iface(self, name: str) -> rc[ast.Iface] | None:
         return self.lookup_iface_in(self.cur_syms(), name)
 
+    # ── 列挙（A-37）の表 ──────────────────────────────────
+    #   対になる定義: src/sema.c の lookup_enum_in / lookup_enum
+    def lookup_enum_in(self, ms: rc[types.ModuleSyms],
+                       name: str) -> rc[ast.EnumDef] | None:
+        e: rc[ast.EnumDef] | None = ms.enums
+        while e is not None:
+            ee: rc[ast.EnumDef] = e
+            if ee.name == name:
+                return ee
+            e = ee.next
+        return None
+
+    def lookup_enum(self, name: str) -> rc[ast.EnumDef] | None:
+        return self.lookup_enum_in(self.cur_syms(), name)
+
     # ── 範囲型（部分型。A-28）の表 ────────────────────────
     #   対になる定義: src/sema.c の lookup_range_in / lookup_range
     def lookup_range_in(self, ms: rc[types.ModuleSyms],
@@ -719,6 +734,17 @@ class Sema:
                                        "' は要素型を取りません")
                 return unwrap_type(mrr.type)
 
+            # ★ 他のモジュールの列挙（A-37）
+            men: rc[ast.EnumDef] | None = self.lookup_enum_in(ms, tr.name)
+            if men is not None:
+                mene: rc[ast.EnumDef] = men
+                if tr.lhs is not None:
+                    diag.error_at_hint(unwrap_tok(tr.tok),
+                                       "列挙は要素型を取りません",
+                                       "型 '" + tr.mod_name + "." + tr.name +
+                                       "' は要素型を取りません")
+                return unwrap_type(mene.type)
+
             # ★ 他のモジュールのインタフェース
             mif: rc[ast.Iface] | None = self.lookup_iface_in(ms, tr.name)
             if mif is not None:
@@ -862,6 +888,16 @@ class Sema:
                                    "範囲型は要素型を取りません",
                                    "型 '" + tr.name + "' は要素型を取りません")
             return unwrap_type(rtt.type)
+
+        # ★ 列挙（A-37）。クラス名より先に引く
+        en1: rc[ast.EnumDef] | None = self.lookup_enum(tr.name)
+        if en1 is not None:
+            en1e: rc[ast.EnumDef] = en1
+            if tr.lhs is not None:
+                diag.error_at_hint(unwrap_tok(tr.tok),
+                                   "列挙は要素型を取りません",
+                                   "型 '" + tr.name + "' は要素型を取りません")
+            return unwrap_type(en1e.type)
 
         # ★ インタフェース名も型として書ける（list[Show] など）
         ifc1: rc[ast.Iface] | None = self.lookup_iface(tr.name)
@@ -1933,6 +1969,10 @@ class Sema:
                 self.narrow_apply(n.lhs, False, evars, etypes)
                 self.check_stmt(unwrap_node(n.els))
                 self.narrow_restore(evars, etypes)
+        elif n.kind == ast.ND_MATCH:
+            self.check_match(n)
+        elif n.kind == ast.ND_ENUM:
+            return                      # 宣言は登録済み（declare_enum）
         elif n.kind == ast.ND_WHILE:
             self.check_cond("while の条件", n, unwrap_node(n.lhs))
             self.loop_depth = self.loop_depth + 1
@@ -2559,7 +2599,62 @@ class Sema:
                         obj.tok, "この式は '" + ast.type_name(ot) + "' 型です",
                         hint)
 
+    # `Color.Red` を、型のついた定数に畳む（A-37）。
+    #
+    # ★ **ND_INT に書き換える。** 値はただの i64 なので、codegen に新しい形を
+    #   増やす必要がない。型だけ TY_ENUM にしておけば、`Color.Red + 1` は
+    #   「int と Color は混ざりません」で止まる。
+    #
+    # 戻り値: 畳めたら型、そうでなければ None（ふつうのフィールドとして続ける）
+    #   対になる定義: src/sema.c の fold_enum_value
+    def fold_enum_value(mut self, n: mut rc[ast.Node]) -> rc[ast.Type] | None:
+        lhs0: rc[ast.Node] = unwrap_node(n.lhs)
+        e0: rc[ast.EnumDef] | None = None
+
+        # `Color.Red` … 左が変数として宣言されていない名前で、列挙なら
+        if lhs0.kind == ast.ND_VAR and self.lookup(lhs0.name) is None:
+            e0 = self.lookup_enum(lhs0.name)
+
+        # `mod.Color.Red` … 左がモジュール修飾の列挙なら
+        if e0 is None and lhs0.kind == ast.ND_FIELD:
+            lm: rc[types.ModuleSyms] | None = self.dot_module(lhs0)
+            if lm is not None:
+                e0 = self.lookup_enum_in(unwrap_ms(lm), lhs0.name)
+        if e0 is None:
+            return None
+
+        ed: rc[ast.EnumDef] = e0
+        v0: rc[ast.EnumVal] | None = ed.find(n.name)
+        if v0 is None:
+            names: list[str] = []
+            q: rc[ast.EnumVal] | None = ed.vals
+            while q is not None:
+                qq: rc[ast.EnumVal] = q
+                names.append(copy(qq.name))
+                q = qq.next
+            diag.error_full(unwrap_tok(n.tok),
+                            "列挙 '" + ed.name + "' に枝 '" + n.name +
+                            "' はありません",
+                            "この枝は定義されていません",
+                            ed.tok, "列挙の定義はここです",
+                            "書ける枝は " + strings.join(names, " / ") + " です")
+        vv: rc[ast.EnumVal] = unwrap_enumval(v0)
+
+        # ★ ここで木を書き換える（畳み込み）
+        n.kind = ast.ND_INT
+        n.ival = vv.val
+        n.lhs = None
+        n.type = ed.type
+        n.en = ed
+        return ed.type
+
     def check_field(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
+        # ★ 列挙の枝はフィールドではない（A-37）。モジュール解決より先に見る
+        #   ——`Color.Red` の `Color` は変数でもモジュールでもないため。
+        fe: rc[ast.Type] | None = self.fold_enum_value(n)
+        if fe is not None:
+            return fe
+
         ms: rc[types.ModuleSyms] | None = self.dot_module(n)
         if ms is not None:
             return self.check_module_global(n, ms)
@@ -3267,6 +3362,143 @@ class Sema:
             vi = vn.next
         n.type = rt
 
+    # ── 場合分け（A-37）──────────────────────────────────
+    #
+    # ★ 見るのは 4 つ。
+    #     ① 調べる式の型（列挙 / int / str だけ）
+    #     ② どの case の値も同じ型か
+    #     ③ 同じ値を 2 回書いていないか
+    #     ④ **枝が全部あるか**（列挙）／ case _ があるか（int / str）
+    #
+    # ★ ④ が本体。枝を足したとき「直す場所をコンパイラに挙げさせる」ために
+    #   この機能を入れた。網羅を確かめないなら if の連なりと同じ。
+    #   対になる定義: src/sema.c の case ND_MATCH
+    def check_match(mut self, n: mut rc[ast.Node]) -> None:
+        subj: rc[ast.Node] = unwrap_node(n.lhs)
+        st: rc[ast.Type] = auto_deref(self.check_expr(subj))
+
+        is_enum: bool = st.kind == ast.TY_ENUM
+        if not is_enum and st.kind != ast.TY_INT and st.kind != ast.TY_STR:
+            diag.error_full(unwrap_tok(subj.tok),
+                            "'" + ast.type_name(st) + "' は match で調べられません",
+                            "ここに書けるのは 列挙 / int / str です", None, "",
+                            "クラスの場合分けはインタフェースで書きます（どの枝かを型が持ちます）")
+        if is_enum:
+            n.en = st.en
+
+        has_default: bool = False
+        default_at: rc[ast.Node] | None = None
+
+        c: rc[ast.Node] | None = n.body
+        while c is not None:
+            cc: rc[ast.Node] = c
+            if cc.lhs is None:
+                # ★ `case _`。**2 つ書けない**し、**最後でなければならない**
+                #   （後ろの case は決して選ばれないため）。
+                if has_default:
+                    diag.error_full(unwrap_tok(cc.tok),
+                                    "case _ が 2 つあります", "2 つめです",
+                                    unwrap_node(default_at).tok,
+                                    "最初の case _ はここです", "")
+                has_default = True
+                default_at = cc
+                if cc.next is not None:
+                    diag.error_at_hint(unwrap_tok(unwrap_node(cc.next).tok),
+                                       "case _ より後ろの case は決して選ばれません",
+                                       "この case は届きません")
+                self.check_block(unwrap_node(cc.body))
+                c = cc.next
+                continue
+
+            pat: rc[ast.Node] = unwrap_node(cc.lhs)
+            ct: rc[ast.Type] = self.check_expr(pat)
+            if not ast.type_equal(ct, st):
+                diag.error_full(unwrap_tok(pat.tok),
+                                "case の値の型が違います（'" + ast.type_name(st) +
+                                "' を調べているのに '" + ast.type_name(ct) + "' です）",
+                                "ここは '" + ast.type_name(ct) + "' です", None, "",
+                                "match は暗黙の変換をしません（言語全体と同じです）")
+
+            # ★ **値がコンパイル時に決まらないものは断る。** 変数を書ける
+            #   ようにすると、上から順に比べるだけの「if の連なり」と同じに
+            #   なり、網羅を確かめられない。
+            if pat.kind != ast.ND_INT and pat.kind != ast.ND_STR:
+                hint2: str = "リテラルを書いてください（変えられる値は if で比べます）"
+                if is_enum:
+                    hint2 = "列挙の枝（例: Color.Red）を書いてください"
+                diag.error_full(unwrap_tok(pat.tok),
+                                "case には決まった値を書きます",
+                                "ここはコンパイル時に決まりません", None, "", hint2)
+
+            # ★ 同じ値を 2 回書いていないか。通すと、2 つめは決して選ばれない
+            #   のに黙って通る。
+            q: rc[ast.Node] | None = n.body
+            while q is not None and q != cc:
+                qq: rc[ast.Node] = q
+                if qq.lhs is not None:
+                    qp: rc[ast.Node] = unwrap_node(qq.lhs)
+                    same: bool = False
+                    if pat.kind == ast.ND_INT:
+                        same = qp.kind == ast.ND_INT and qp.ival == pat.ival
+                    else:
+                        same = qp.kind == ast.ND_STR and qp.sval == pat.sval
+                    if same:
+                        diag.error_full(unwrap_tok(pat.tok),
+                                        "同じ値の case が 2 つあります",
+                                        "2 つめは決して選ばれません",
+                                        qp.tok, "最初の case はここです", "")
+                q = qq.next
+
+            self.check_block(unwrap_node(cc.body))
+            c = cc.next
+
+        # ── ④ 網羅 ──
+        if is_enum:
+            ed: rc[ast.EnumDef] = unwrap_enumdef(st.en)
+            if not has_default:
+                missing: list[str] = []
+                v: rc[ast.EnumVal] | None = ed.vals
+                while v is not None:
+                    vv: rc[ast.EnumVal] = v
+                    found: bool = False
+                    c2: rc[ast.Node] | None = n.body
+                    while c2 is not None:
+                        cc2: rc[ast.Node] = c2
+                        if cc2.lhs is not None and unwrap_node(cc2.lhs).ival == vv.val:
+                            found = True
+                        c2 = cc2.next
+                    if not found:
+                        missing.append(ed.name + "." + vv.name)
+                    v = vv.next
+                if len(missing) > 0:
+                    diag.error_full(unwrap_tok(n.tok),
+                                    "match に書いていない枝があります: " +
+                                    strings.join(missing, " / "),
+                                    "ここで全部の枝を扱ってください",
+                                    ed.tok, "列挙の定義はここです",
+                                    "どれにも当たらないときの動きが要るなら case _: を書いてください")
+            else:
+                # 枝を全部書いたうえでの case _ は届かない
+                ncase: int = 0
+                c3: rc[ast.Node] | None = n.body
+                while c3 is not None:
+                    cc3: rc[ast.Node] = c3
+                    if cc3.lhs is not None:
+                        ncase = ncase + 1
+                    c3 = cc3.next
+                if ncase == ed.nvals:
+                    diag.error_at_hint(unwrap_tok(unwrap_node(default_at).tok),
+                                       "枝を全部書いてあるので case _ は届きません",
+                                       "この case は選ばれません")
+        elif not has_default:
+            # ★ int / str は値が無限にあるので、網羅を静的に示せない。
+            #   **case _ を必須にする** — 無いと「どれにも当たらない」ときの
+            #   動きが書かれていないことになる。
+            diag.error_full(unwrap_tok(n.tok),
+                            "'" + ast.type_name(st) + "' の match には case _ が要ります",
+                            "どれにも当たらないときの動きがありません", None, "",
+                            "最後に case _: を書いてください（値が無限にあるので、全部を書き尽くせません）")
+
     def check_return(mut self, n: mut rc[ast.Node]) -> None:
         fn: rc[types.FuncSig] = unwrap_sig(self.cur_func)
         want: rc[ast.Type] = unwrap_type(fn.ret)
@@ -3375,6 +3607,27 @@ class Sema:
             if cond.kind != ast.ND_BOOL or cond.ival == 0:
                 return False
             return not self.has_break(node.body)
+
+        # ★ match は「どの case も抜けるなら」抜ける（A-37）。
+        #
+        #   注意: **これが無いと、全部の case で return しているのに
+        #     「値を返さない経路があります」と言われる**（try で同じ穴を
+        #     踏んだ。0.17.0 の記録を参照）。
+        #
+        #   注意: 素通りする経路が残っていないと言えるのは、**列挙で
+        #     網羅されている**か **case _ がある**ときだけ。
+        if node.kind == ast.ND_MATCH:
+            hasdef: bool = False
+            cm: rc[ast.Node] | None = node.body
+            while cm is not None:
+                ccm: rc[ast.Node] = cm
+                if not self.always_returns(ccm.body):
+                    return False
+                if ccm.lhs is None:
+                    hasdef = True
+                cm = ccm.next
+            # 列挙は網羅を強制済み（check_match）。int / str は case _ 必須。
+            return hasdef or node.en is not None
 
         if node.kind == ast.ND_TRY:
             # ★ try の中身と、**すべての** except が抜けるなら、この try は抜ける。
@@ -4205,6 +4458,56 @@ class Sema:
                                  "この失敗を受け取る相手がいません", None, "",
                                  "main の中で try で捕まえるか、panic で終わらせてください")
 
+    # 列挙を登録する（パス 1 のいちばん最初。A-37）
+    #
+    # ★ **範囲型やクラスより先に**登録する。クラスのフィールドやメソッドの
+    #   型注釈に列挙を書けるようにするため（列挙は何にも依存しない）。
+    #   対になる定義: src/sema.c の declare_enum
+    def declare_enum(mut self, n: mut rc[ast.Node]) -> None:
+        if self.type_from_name(n.name) is not None:
+            diag.error_at_hint(unwrap_tok(n.tok),
+                               "'" + n.name + "' は組み込みの型名です",
+                               "この名前は使えません")
+        old_e: rc[ast.EnumDef] | None = self.lookup_enum(n.name)
+        if old_e is not None:
+            olde: rc[ast.EnumDef] = old_e
+            diag.error_full(unwrap_tok(n.tok),
+                            "型 '" + n.name + "' はすでに定義されています",
+                            "同じ名前の列挙が 2 つあります",
+                            olde.tok, "最初の定義はここです", "")
+        if self.lookup_class(n.name) is not None:
+            diag.error_at_hint(unwrap_tok(n.tok),
+                               "クラスと同じ名前の列挙は作れません",
+                               "'" + n.name + "' はクラス名として使われています")
+        if self.lookup_range(n.name) is not None:
+            diag.error_at_hint(unwrap_tok(n.tok),
+                               "範囲型と同じ名前の列挙は作れません",
+                               "'" + n.name + "' は範囲型として使われています")
+
+        e: rc[ast.EnumDef] = rc(ast.EnumDef(n.name, n.tok))
+        ms0: rc[types.ModuleSyms] = self.cur_syms()
+        e.owner_name = copy(self.cur_mod().name)
+
+        # 枝を宣言した順に並べる（番号は parser が振ってある）
+        tail: rc[ast.EnumVal] | None = None
+        v: rc[ast.Node] | None = n.body
+        while v is not None:
+            nv: rc[ast.Node] = v
+            ev: rc[ast.EnumVal] = rc(ast.EnumVal(nv.name, nv.ival, nv.tok))
+            if tail is None:
+                e.vals = ev
+            else:
+                unwrap_enumval(tail).next = ev
+            tail = ev
+            e.nvals = e.nvals + 1
+            v = nv.next
+
+        e.type = ast.type_enum(e.name, e)
+        e.next = ms0.enums
+        ms0.enums = e
+        n.en = e
+        n.type = e.type
+
     # モジュール 1 つぶんの宣言を登録する（パス 1a / 1b / 1c）
     # 範囲型を登録する（パス 1 の最初。A-28）
     #
@@ -4238,7 +4541,15 @@ class Sema:
         n.type = ty
 
     def declare_module(mut self, root: mut rc[ast.Node]) -> None:
-        # ★ 範囲型を最初に登録する（クラスのフィールドにも書けるように）
+        # ★ 列挙を最初に登録する（クラスのフィールドにも書けるように。A-37）
+        de: rc[ast.Node] | None = root.body
+        while de is not None:
+            ne: rc[ast.Node] = de
+            if ne.kind == ast.ND_ENUM:
+                self.declare_enum(ne)
+            de = ne.next
+
+        # ★ 範囲型を次に登録する（クラスのフィールドにも書けるように）
         dr: rc[ast.Node] | None = root.body
         while dr is not None:
             nr: rc[ast.Node] = dr
@@ -4478,6 +4789,27 @@ def unwrap_type(t: rc[ast.Type] | None) -> rc[ast.Type]:
         return rc(ast.Type(ast.TY_INT))
     else:
         return t
+
+def unwrap_ms(m: rc[types.ModuleSyms] | None) -> rc[types.ModuleSyms]:
+    if m is None:
+        panic("sema: モジュールの表がありません")
+        return rc(types.ModuleSyms(None))
+    else:
+        return m
+
+def unwrap_enumdef(e: rc[ast.EnumDef] | None) -> rc[ast.EnumDef]:
+    if e is None:
+        panic("sema: 列挙の定義がありません")
+        return rc(ast.EnumDef("", None))
+    else:
+        return e
+
+def unwrap_enumval(v: rc[ast.EnumVal] | None) -> rc[ast.EnumVal]:
+    if v is None:
+        panic("sema: 列挙の枝がありません")
+        return rc(ast.EnumVal("", 0, None))
+    else:
+        return v
 
 def unwrap_class(c: rc[ast.Class] | None) -> rc[ast.Class]:
     if c is None:

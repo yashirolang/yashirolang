@@ -448,6 +448,54 @@ class Vec2:
 
 ---
 
+## 5.7 列挙と場合分け
+
+「決まった選択肢のどれか」は `enum` で書きます。
+
+```python
+enum Color:
+    Red
+    Green
+    Blue
+```
+
+`match` で場合分けします。
+
+```python
+def name_of(c: Color) -> str:
+    match c:
+        case Color.Red:
+            return "あか"
+        case Color.Green:
+            return "みどり"
+        case Color.Blue:
+            return "あお"
+    return "?"
+```
+
+**★ 枝を書き忘れるとコンパイルエラーになります。**
+
+```
+error: match に書いていない枝があります: Color.Blue
+```
+
+これがこの機能の値打ちです。あとから `Color` に枝を足したとき、**直す場所を
+コンパイラが全部挙げてくれます**。定数の束と `if` の連なりで書いていると、
+直し忘れた場所は黙って動き続けます。
+
+`int` と `str` でも使えます。こちらは値が無限にあるので `case _` が要ります。
+
+```python
+match b:
+    case 48:
+        return "ゼロ"
+    case _:
+        return "その他"
+```
+
+**注意: 列挙は `int` と混ざりません。** `c + 1` も `c == 0` もエラーです。
+番号として使いたくなったら、それは `enum` ではなく `int` の仕事です。
+
 ## 6. モジュールと標準ライブラリ
 
 1 ファイル = 1 モジュールです。`import` はファイル名（拡張子なし）を指します。

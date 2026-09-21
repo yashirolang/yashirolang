@@ -1183,6 +1183,45 @@ def walk_stmt(pr: mut Prove, env: mut Env, n: rc[ast.Node] | None) -> None:
             env.assign_from(then_e)
         return
 
+    # ── 場合分け（A-37）──
+    #
+    # ★ **if の合流と同じ。** どの case も「入る前の状態」から始まり、
+    #   出たところで合流する。
+    #
+    # ★ **必ず抜ける case は合流に混ぜない**（if と同じ扱い）。これで
+    #   `match 〜: case 〜: return` の後ろに事実が残る。
+    #
+    # 注意: case の中で絞り込める事実はない（調べているのは列挙か定数で、
+    #   区間解析が使える形ではないため）。ここは「分岐して合流する」ことだけを
+    #   正しく扱う。
+    #   対になる定義: src/prove.c の case ND_MATCH
+    if nn.kind == ast.ND_MATCH:
+        walk_expr(pr, env, nn.lhs)
+
+        merged: Env = env.copy_of()
+        any_m: bool = False
+        cm: rc[ast.Node] | None = nn.body
+        while cm is not None:
+            ccm: rc[ast.Node] = cm
+            ce: Env = env.copy_of()
+            walk_stmt(pr, ce, ccm.body)
+            if not always_exits(ccm.body):
+                if not any_m:
+                    merged.assign_from(ce)
+                    any_m = True
+                else:
+                    merged.join(ce)
+            cm = ccm.next
+        # 注意: どの case も抜けるなら、この先は届かない。入る前の状態を
+        #   そのまま残す（if で両方抜けるときと同じ扱い）。
+        if any_m:
+            env.assign_from(merged)
+        return
+
+    # ★ 列挙の宣言は実行時に何もしない（A-37）
+    if nn.kind == ast.ND_ENUM:
+        return
+
     if nn.kind == ast.ND_WHILE:
         # ★ ループの入口で成り立つことを求める。
         #   注意: break / continue があると本体が 1 本道でなくなるので、

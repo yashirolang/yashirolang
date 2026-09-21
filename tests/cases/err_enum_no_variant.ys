@@ -1,0 +1,9 @@
+# ERROR: 列挙 'Color' に枝 'Purple' はありません
+# 無い枝は書けません（A-37）
+enum Color:
+    Red
+    Green
+
+def main() -> int:
+    c: Color = Color.Purple
+    return 0

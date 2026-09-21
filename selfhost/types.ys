@@ -101,6 +101,7 @@ class ModuleSyms:
     classes: rc[ast.Class] | None
     ifaces: rc[ast.Iface] | None
     ranges: rc[RangeTy] | None      # 範囲型（A-28）
+    enums: rc[ast.EnumDef] | None   # 列挙（A-37）
     globals: rc[Scope] | None
     next: rc[ModuleSyms] | None
 

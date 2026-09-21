@@ -1025,6 +1025,39 @@ static void walk_stmt(Prove *pr, Env *env, Node *n) {
             return;
         }
 
+        // ── 場合分け（A-37）──
+        //
+        // ★ **if の合流と同じです。** どの case も「入る前の状態」から始まり、
+        //   出たところで合流します。
+        //
+        // ★ **必ず抜ける case は合流に混ぜません**（if と同じ扱い）。
+        //   これで `match 〜: case 〜: return` の後ろに事実が残ります。
+        //
+        // 注意: case の中で絞り込める事実はありません（調べているのは
+        //   列挙か定数で、区間解析が使える形ではないため）。ここは
+        //   「分岐して合流する」ことだけを正しく扱います。
+        case ND_MATCH: {
+            walk_expr(pr, env, n->lhs);
+
+            Env merged;
+            bool any = false;
+            for (Node *c = n->body; c; c = c->next) {
+                Env ce = env_copy(env);
+                walk_stmt(pr, &ce, c->body);
+                if (always_exits(c->body)) continue;   // この先へは落ちない
+                if (!any) { merged = ce; any = true; }
+                else env_join(&merged, &ce);
+            }
+            // 注意: どの case も抜けるなら、この先は届きません。入る前の
+            //   状態をそのまま残します（if で両方抜けるときと同じ扱い）。
+            if (any) *env = merged;
+            return;
+        }
+
+        // ★ 列挙の宣言は実行時に何もしません（A-37）
+        case ND_ENUM:
+            return;
+
         case ND_WHILE: {
             // ★ ループの入口で成り立つことを求めます。
             //

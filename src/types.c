@@ -117,6 +117,15 @@ Type *type_iface(char *name, struct Iface *i) {
     return t;
 }
 
+// enum 型（A-37）。★ 同一性は定義ポインタで決めます（名前ではありません）。
+//   import が入ると lexer.Kind と parser.Kind が同時に存在しえます。
+Type *type_enum(const char *name, struct EnumDef *e) {
+    Type *t = new_type(TY_ENUM);
+    t->name = (char *)name;
+    t->en = e;
+    return t;
+}
+
 Type *type_class(char *name, struct Class *cls) {
     Type *t = new_type(TY_CLASS);
     t->name = name;
@@ -188,6 +197,10 @@ bool type_equal(Type *a, Type *b) {
     // ★ インタフェースも定義で比べます（名前ではありません）
     if (a->kind == TY_IFACE) return a->iface == b->iface;
 
+    // ★ 列挙も定義で比べます（A-37）。同名の enum が別モジュールにあっても
+    //   別の型です。
+    if (a->kind == TY_ENUM) return a->en == b->en;
+
     // ★ タプルは「並びが同じ」なら同じ型です（名前はありません）
     if (a->kind == TY_TUPLE) {
         if (a->nparams != b->nparams) return false;
@@ -231,6 +244,7 @@ const char *type_name(Type *t) {
         }
         case TY_CLASS: return t->name;
         case TY_IFACE: return t->name;
+        case TY_ENUM: return t->name;
         case TY_TUPLE: {
             StrBuf sb;
             sb_init(&sb);

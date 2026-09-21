@@ -31,6 +31,14 @@ TY_TUPLE: int = 13   # (A, B) → ptr（要素を並べた構造体へのポイ�
 # ★ どちらも「中身の型」を elem に持ちます。Thread[R] の elem は**戻り型** R。
 TY_THREAD: int = 14  # Thread[R] → ptr（ランタイムの PlThread への不透明な参照）
 TY_MUTEX: int = 15   # mutex[T]  → ptr（ランタイムの PlMutex への不透明な参照）
+# ── 列挙（A-37）──
+# ★ 表現は i64（枝に 0 から番号を振っただけ）。
+#   注意: 範囲型のように TY_INT のままにはしません。範囲型は「int の一種」で
+#     混ざるべきですが、列挙は `Color.Red + 1` や `c == 3` を**通しては
+#     いけない**からです。TY_INT にすると、既存の `kind == TY_INT` の判定が
+#     全部「列挙も通す」意味になり、書き忘れた場所が静かに通ります。
+#   対になる定義: src/types.h の TY_ENUM
+TY_ENUM: int = 16    # enum Color → i64
 
 # ★ プログラム全体のインタフェース・メソッド数（vtable の長さ）。
 #   注意: sema が数え、codegen が読みます（codegen の引数を増やさないための割り切り）。
@@ -43,6 +51,7 @@ class Type:
     name: str             # クラス名（エラーメッセージ用）
     cls: rc[Class] | None     # 定義への参照。★ 型の同一性はこれで判定する
     iface: rc[Iface] | None   # TY_IFACE のときの定義への参照
+    en: rc[EnumDef] | None    # TY_ENUM のときの定義への参照（★ 同一性はこれ）
     opt: rc[Type] | None      # この型の「T | None」版（1 個だけ作る）
     # ★ 関数型の引数の並び（fn 以外では空）
     params: list[rc[Type]]
@@ -91,6 +100,53 @@ class IMethod:
         self.name = copy(name)
         self.sig = sig
         self.slot = slot
+
+
+# ── 列挙の定義（A-37）──────────────────────────────────
+#
+# ★ 枝は**宣言した順**に 0 から番号を振ります。番号を書かせないのは、
+#   書けると「番号を合わせるために枝を並べ替える」コードが生まれ、
+#   枝の追加が怖い変更になるからです。
+#   対になる定義: src/ast.h の EnumVal / EnumDef
+class EnumVal:
+    name: str
+    val: int
+    tok: rc[token.Token] | None
+    next: rc[EnumVal] | None
+
+    def init(self, name: str, val: int, tok: rc[token.Token] | None) -> None:
+        self.name = copy(name)
+        self.val = val
+        self.tok = tok
+        self.next = None
+
+
+class EnumDef:
+    name: str
+    tok: rc[token.Token] | None
+    vals: rc[EnumVal] | None   # 宣言順
+    nvals: int
+    type: rc[Type] | None      # この定義に対応する TY_ENUM（1 個だけ作る）
+    owner_name: str
+    next: rc[EnumDef] | None
+
+    def init(self, name: str, tok: rc[token.Token] | None) -> None:
+        self.name = copy(name)
+        self.tok = tok
+        self.vals = None
+        self.nvals = 0
+        self.type = None
+        self.owner_name = ""
+        self.next = None
+
+    # 枝を名前で引く（無ければ None）
+    def find(self, name: str) -> rc[EnumVal] | None:
+        v: rc[EnumVal] | None = self.vals
+        while v is not None:
+            if v.name == name:
+                return v
+            v = v.next
+        return None
 
 
 class Iface:
@@ -194,6 +250,14 @@ def type_mutex(elem: rc[Type] | None) -> rc[Type]:
     t.elem = elem
     return t
 
+# 列挙の型（A-37）。★ 同一性は定義で決める（名前ではない）。
+#   対になる定義: src/types.c の type_enum
+def type_enum(name: str, e: rc[EnumDef] | None) -> rc[Type]:
+    t: rc[Type] = rc(Type(TY_ENUM))
+    t.name = copy(name)
+    t.en = e
+    return t
+
 # インタフェースの型
 def type_iface(name: str, i: rc[Iface] | None) -> rc[Type]:
     t: rc[Type] = rc(Type(TY_IFACE))
@@ -262,6 +326,9 @@ def type_equal(a: rc[Type], b: rc[Type]) -> bool:
     # ★ インタフェースも定義で比べる（名前ではない）
     if a.kind == TY_IFACE:
         return same_iface(a, b)
+    # ★ 列挙も定義で比べる（A-37）
+    if a.kind == TY_ENUM:
+        return same_enum(a, b)
     # ★ タプルは「並びが同じ」なら同じ型（名前はない）
     if a.kind == TY_TUPLE:
         if len(a.params) != len(b.params):
@@ -278,6 +345,15 @@ def type_equal(a: rc[Type], b: rc[Type]) -> bool:
 
 # ★ インタフェースも「同じ定義か」で比べる
 # 注意: 'T | None' 同士は == で比べられないので、先に絞り込みます
+# ★ 列挙も定義で比べる（A-37）。同名の enum が別モジュールにあっても別の型。
+def same_enum(a: rc[Type], b: rc[Type]) -> bool:
+    ea: rc[EnumDef] | None = a.en
+    eb: rc[EnumDef] | None = b.en
+    if ea is None or eb is None:
+        return False
+    return ea == eb
+
+
 def same_iface(a: rc[Type], b: rc[Type]) -> bool:
     ia: rc[Iface] | None = a.iface
     ib: rc[Iface] | None = b.iface
@@ -335,6 +411,8 @@ def type_name(t: rc[Type]) -> str:
     if t.kind == TY_FLOAT:
         return "float"
     if t.kind == TY_IFACE:
+        return copy(t.name)
+    if t.kind == TY_ENUM:
         return copy(t.name)
     if t.kind == TY_FN:
         ps: list[str] = []
@@ -464,6 +542,16 @@ ND_ENSURES: int = 45    # ensures  <式> … return のたびに確かめる
 # ★ ensures の中でだけ使える名前 'result'（戻り値そのもの）。
 #   注意: 箱（alloca）は作らない。**いま返そうとしている値**を指すだけ。
 ND_RESULT: int = 46
+# ── 列挙と場合分け（A-37）──
+# ★ 中身を持つ枝はありません（枝は名前だけ）。表現は i64 で 0 から番号を振る。
+#   enum Color:        → ND_ENUM   : name, body（ND_ENUMVAL の並び）, en
+#       Red            → ND_ENUMVAL: name, ival（振った番号）
+#   match c:           → ND_MATCH  : lhs（調べる式）, body（ND_CASE の並び）
+#       case Color.Red:→ ND_CASE   : lhs（値。`_` なら None）, body
+ND_ENUM: int = 47
+ND_ENUMVAL: int = 48
+ND_MATCH: int = 49
+ND_CASE: int = 50
 
 # ── 仮引数の受け取り方（C 版 ParamMode と同じ順序・同じ値）──
 PM_BORROW: int = 0   # 既定。読むだけ借りる
@@ -620,6 +708,10 @@ class Node:
     #   「呼ぶランタイム関数の名前」を持ちます（codegen が使うのはそれだけ）。
     builtin: str
     cls: rc[Class] | None
+    # ★ 列挙の定義（A-37）。
+    #     ND_ENUM  … 自分の enum 定義
+    #     ND_MATCH … 調べる式が列挙のとき、その定義（網羅検査で使う）
+    en: rc[EnumDef] | None
     field: rc[Field] | None
 
     # ── 子ノード ──
@@ -1016,6 +1108,25 @@ def dump(n: rc[Node] | None, depth: int) -> None:
     elif n.kind == ND_SCOPE:
         # C 版 src/ast.c の ND_SCOPE と同じ出力にすること
         print(pad + "(scope")
+        dump(n.body, depth + 1)
+        print(pad + ")")
+    elif n.kind == ND_ENUM:
+        # ★ 列挙と場合分け（A-37）。C 版 src/ast.c と 1 文字も違ってはいけない
+        print(pad + "(enum " + n.name)
+        dump_siblings(n.body, depth + 1)
+        print(pad + ")")
+    elif n.kind == ND_ENUMVAL:
+        print(pad + "(enumval " + n.name + " " + str(n.ival) + ")")
+    elif n.kind == ND_MATCH:
+        print(pad + "(match")
+        dump(n.lhs, depth + 1)
+        dump_siblings(n.body, depth + 1)
+        print(pad + ")")
+    elif n.kind == ND_CASE:
+        # 注意: `case _` は調べる式を持たない（lhs が None）
+        print(pad + "(case")
+        if n.lhs is not None:
+            dump(n.lhs, depth + 1)
         dump(n.body, depth + 1)
         print(pad + ")")
     elif n.kind == ND_REQUIRES:

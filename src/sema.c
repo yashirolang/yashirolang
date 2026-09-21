@@ -106,6 +106,7 @@ struct ModuleSyms {
     FuncSig *funcs;    // トップレベル関数とメソッド
     Class *classes;
     RangeTy *ranges;   // 範囲型（type Percent = int range(0, 100)）
+    EnumDef *enums;    // 列挙（enum Color: ...。A-37）
     Scope *globals;    // グローバル変数のスコープ
     ModuleSyms *next;
 };
@@ -133,6 +134,7 @@ typedef struct {
     Class *classes;    // クラス表（同上、モジュールごと）
     Iface *ifaces;     // インタフェース表（モジュールごと）
     RangeTy *ranges;   // 範囲型の表（同上、モジュールごと）
+    EnumDef *enums;    // 列挙の表（同上、モジュールごと。A-37）
     int next_slot;     // 次に振る vtable のスロット番号
 
     // ── モジュール ──
@@ -338,6 +340,26 @@ static FuncSig *lookup_func_by_ir(Sema *s, const char *ir_name) {
 static RangeTy *lookup_range_in(ModuleSyms *ms, const char *name) {
     for (RangeTy *r = ms->ranges; r; r = r->next)
         if (strcmp(r->name, name) == 0) return r;
+    return NULL;
+}
+
+// ── 列挙の引き当て（A-37）──────────────────────────────
+static EnumDef *lookup_enum_in(ModuleSyms *ms, const char *name) {
+    for (EnumDef *e = ms->enums; e; e = e->next)
+        if (strcmp(e->name, name) == 0) return e;
+    return NULL;
+}
+
+static EnumDef *lookup_enum(Sema *s, const char *name) {
+    for (EnumDef *e = s->enums; e; e = e->next)
+        if (strcmp(e->name, name) == 0) return e;
+    return NULL;
+}
+
+// 枝を名前で引く（無ければ NULL）
+static EnumVal *lookup_enum_val(EnumDef *e, const char *name) {
+    for (EnumVal *v = e->vals; v; v = v->next)
+        if (strcmp(v->name, name) == 0) return v;
     return NULL;
 }
 
@@ -811,6 +833,16 @@ static Type *resolve_base_type(Sema *s, Node *tr) {
         }
 
         // ★ 他のモジュールのインタフェース
+        // ★ 他のモジュールの列挙（A-37）
+        EnumDef *me = lookup_enum_in(ms, tr->name);
+        if (me) {
+            if (tr->lhs)
+                error_at_hint(tr->tok, "列挙は要素型を取りません",
+                              "型 '%s.%s' は要素型を取りません", tr->mod_name,
+                              tr->name);
+            return me->type;
+        }
+
         Iface *mi = lookup_iface_in(ms, tr->name);
         if (mi) return type_iface(mi->name, mi);
 
@@ -932,6 +964,15 @@ static Type *resolve_base_type(Sema *s, Node *tr) {
             error_at_hint(tr->tok, "範囲型は要素型を取りません",
                           "型 '%s' は要素型を取りません", tr->name);
         return rt->type;
+    }
+
+    // ★ 列挙（A-37）。クラス名より先に引きます。
+    EnumDef *et0 = lookup_enum(s, tr->name);
+    if (et0) {
+        if (tr->lhs)
+            error_at_hint(tr->tok, "列挙は要素型を取りません",
+                          "型 '%s' は要素型を取りません", tr->name);
+        return et0->type;
     }
 
     // ★ タプル型 (A, B)
@@ -2548,7 +2589,62 @@ static Type *auto_deref(Type *t) {
     return t && t->kind == TY_RC ? t->elem : t;
 }
 
+// `Color.Red` を、型のついた定数に畳む（A-37）。
+//
+// ★ **ND_INT に書き換えます。** 値はただの i64 なので、codegen に
+//   新しい形を増やす必要がありません。型だけ TY_ENUM にしておけば、
+//   `Color.Red + 1` は「int と Color は混ざりません」で止まります。
+//
+// 戻り値: 畳めたら型、そうでなければ NULL（ふつうのフィールドとして続ける）
+static Type *fold_enum_value(Sema *s, Node *n) {
+    EnumDef *e = NULL;
+
+    // `Color.Red` … 左が変数として宣言されていない名前で、列挙なら
+    if (n->lhs->kind == ND_VAR && !lookup(s, n->lhs->name))
+        e = lookup_enum(s, n->lhs->name);
+
+    // `mod.Color.Red` … 左がモジュール修飾の列挙なら
+    if (!e && n->lhs->kind == ND_FIELD) {
+        ModuleSyms *lm = dot_module(s, n->lhs);
+        if (lm) e = lookup_enum_in(lm, n->lhs->name);
+    }
+    if (!e) return NULL;
+
+    EnumVal *v = lookup_enum_val(e, n->name);
+    if (!v) {
+        Diag d = {0};
+        d.message = diag_fmt("列挙 '%s' に枝 '%s' はありません", e->name, n->name);
+        d.primary.tok = n->tok;
+        d.primary.label = "この枝は定義されていません";
+        d.related.tok = e->tok;
+        d.related.label = "列挙の定義はここです";
+        StrBuf sb;
+        sb_init(&sb);
+        sb_printf(&sb, "書ける枝は ");
+        int k = 0;
+        for (EnumVal *q = e->vals; q; q = q->next)
+            sb_printf(&sb, "%s%s", k++ ? " / " : "", q->name);
+        sb_printf(&sb, " です");
+        d.hint = sb_str(&sb);
+        diag_fail(&d);
+    }
+
+    // ★ ここで木を書き換えます（畳み込み）。
+    n->kind = ND_INT;
+    n->ival = v->val;
+    n->lhs = NULL;
+    n->type = e->type;
+    n->en = e;
+    return e->type;
+}
+
 static Type *check_field(Sema *s, Node *n) {
+    // ★ 列挙の枝はフィールドではありません（A-37）。モジュール解決より
+    //   先に見ます——`Color.Red` の `Color` は変数でもモジュールでもない
+    //   からです。
+    Type *et = fold_enum_value(s, n);
+    if (et) return et;
+
     ModuleSyms *ms = dot_module(s, n);
     if (ms) return check_module_global(s, n, ms);
 
@@ -3573,6 +3669,166 @@ static void check_stmt(Sema *s, Node *n) {
             break;
         }
 
+        // ── 場合分け（A-37）──────────────────────────────
+        //
+        // ★ 見るのは 4 つです。
+        //     ① 調べる式の型（列挙 / int / str だけ）
+        //     ② どの case の値も同じ型か
+        //     ③ 同じ値を 2 回書いていないか
+        //     ④ **枝が全部あるか**（列挙）／ case _ があるか（int / str）
+        //
+        // ★ ④ が本体です。枝を足したとき「直す場所をコンパイラに
+        //   挙げさせる」ためにこの機能を入れました。網羅を確かめないなら
+        //   if の連なりと同じで、入れる意味がありません。
+        case ND_MATCH: {
+            Type *st = auto_deref(check_expr(s, n->lhs));
+
+            bool is_enum = st->kind == TY_ENUM;
+            if (!is_enum && st->kind != TY_INT && st->kind != TY_STR) {
+                Diag d = {0};
+                d.message = diag_fmt("'%s' は match で調べられません",
+                                     type_name(st));
+                d.primary.tok = n->lhs->tok;
+                d.primary.label = "ここに書けるのは 列挙 / int / str です";
+                d.hint = "クラスの場合分けはインタフェースで書きます"
+                         "（どの枝かを型が持ちます）";
+                diag_fail(&d);
+            }
+            if (is_enum) n->en = st->en;
+
+            // 注意: **枝を数えるのに固定長の配列を使いません。** 枝の数に
+            //   上限を設ける理由がありません。
+            bool has_default = false;
+            Node *default_at = NULL;
+
+            for (Node *c = n->body; c; c = c->next) {
+                if (!c->lhs) {
+                    // ★ `case _`。**2 つ書けません**し、**最後でなければ
+                    //   なりません**（後ろの case は決して選ばれないため）。
+                    if (has_default) {
+                        Diag d = {0};
+                        d.message = "case _ が 2 つあります";
+                        d.primary.tok = c->tok;
+                        d.primary.label = "2 つめです";
+                        d.related.tok = default_at->tok;
+                        d.related.label = "最初の case _ はここです";
+                        diag_fail(&d);
+                    }
+                    has_default = true;
+                    default_at = c;
+                    if (c->next)
+                        error_at_hint(c->next->tok,
+                                      "case _ より後ろの case は決して選ばれません",
+                                      "この case は届きません");
+                    check_block(s, c->body);
+                    continue;
+                }
+                if (has_default) UNREACHABLE();  // 上で断っている
+
+                Type *ct = check_expr(s, c->lhs);
+                if (!type_equal(ct, st)) {
+                    Diag d = {0};
+                    d.message = diag_fmt("case の値の型が違います"
+                                         "（'%s' を調べているのに '%s' です）",
+                                         type_name(st), type_name(ct));
+                    d.primary.tok = c->lhs->tok;
+                    d.primary.label = diag_fmt("ここは '%s' です", type_name(ct));
+                    d.hint = "match は暗黙の変換をしません（言語全体と同じです）";
+                    diag_fail(&d);
+                }
+
+                // ★ **値がコンパイル時に決まらないものは断ります。**
+                //   変数を書けるようにすると、上から順に比べるだけの
+                //   「if の連なり」と同じになり、網羅を確かめられません。
+                if (c->lhs->kind != ND_INT && c->lhs->kind != ND_STR) {
+                    Diag d = {0};
+                    d.message = "case には決まった値を書きます";
+                    d.primary.tok = c->lhs->tok;
+                    d.primary.label = "ここはコンパイル時に決まりません";
+                    d.hint = is_enum
+                        ? "列挙の枝（例: Color.Red）を書いてください"
+                        : "リテラルを書いてください（変えられる値は if で比べます）";
+                    diag_fail(&d);
+                }
+
+                // ★ 同じ値を 2 回書いていないか。通すと、2 つめは決して
+                //   選ばれないのに黙って通ります。
+                for (Node *q = n->body; q != c; q = q->next) {
+                    if (!q->lhs) continue;
+                    bool same = c->lhs->kind == ND_INT
+                        ? q->lhs->kind == ND_INT && q->lhs->ival == c->lhs->ival
+                        : q->lhs->kind == ND_STR &&
+                          q->lhs->slen == c->lhs->slen &&
+                          memcmp(q->lhs->sval, c->lhs->sval,
+                                 (size_t)c->lhs->slen) == 0;
+                    if (same) {
+                        Diag d = {0};
+                        d.message = "同じ値の case が 2 つあります";
+                        d.primary.tok = c->lhs->tok;
+                        d.primary.label = "2 つめは決して選ばれません";
+                        d.related.tok = q->lhs->tok;
+                        d.related.label = "最初の case はここです";
+                        diag_fail(&d);
+                    }
+                }
+
+                check_block(s, c->body);
+            }
+
+            // ── ④ 網羅 ──
+            if (is_enum) {
+                if (!has_default) {
+                    StrBuf missing;
+                    sb_init(&missing);
+                    int nmiss = 0;
+                    for (EnumVal *v = st->en->vals; v; v = v->next) {
+                        bool found = false;
+                        for (Node *c = n->body; c && !found; c = c->next)
+                            if (c->lhs && c->lhs->ival == v->val) found = true;
+                        if (!found)
+                            sb_printf(&missing, "%s%s.%s", nmiss++ ? " / " : "",
+                                      st->en->name, v->name);
+                    }
+                    if (nmiss) {
+                        Diag d = {0};
+                        d.message = diag_fmt("match に書いていない枝があります: %s",
+                                             sb_str(&missing));
+                        d.primary.tok = n->tok;
+                        d.primary.label = "ここで全部の枝を扱ってください";
+                        d.related.tok = st->en->tok;
+                        d.related.label = "列挙の定義はここです";
+                        d.hint = "どれにも当たらないときの動きが要るなら "
+                                 "case _: を書いてください";
+                        diag_fail(&d);
+                    }
+                    // ★ 全部書いてあるなら case _ は要りません（書くと
+                    //   「決して選ばれない case」になるので、上で断ります）。
+                } else {
+                    // 枝を全部書いたうえでの case _ は届きません。
+                    int ncase = 0;
+                    for (Node *c = n->body; c; c = c->next)
+                        if (c->lhs) ncase++;
+                    if (ncase == st->en->nvals)
+                        error_at_hint(default_at->tok,
+                                      "枝を全部書いてあるので case _ は届きません",
+                                      "この case は選ばれません");
+                }
+            } else if (!has_default) {
+                // ★ int / str は値が無限にあるので、網羅を静的に示せません。
+                //   **case _ を必須にします** — 無いと「どれにも当たらない」
+                //   ときの動きが書かれていないことになります。
+                Diag d = {0};
+                d.message = diag_fmt("'%s' の match には case _ が要ります",
+                                     type_name(st));
+                d.primary.tok = n->tok;
+                d.primary.label = "どれにも当たらないときの動きがありません";
+                d.hint = "最後に case _: を書いてください"
+                         "（値が無限にあるので、全部を書き尽くせません）";
+                diag_fail(&d);
+            }
+            break;
+        }
+
         case ND_WHILE: {
             check_cond(s, "while の条件", n, n->lhs);
             s->loop_depth++;
@@ -3819,6 +4075,25 @@ static bool always_returns(Node *n) {
             //   変数や式は追いません（保守的でよい）。
             return n->lhs && n->lhs->kind == ND_BOOL && n->lhs->ival != 0 &&
                    !has_break(n->body);
+
+        // ★ match は「どの case も抜けるなら」抜けます（A-37）。
+        //
+        //   注意: **これが無いと、全部の case で return しているのに
+        //     「値を返さない経路があります」と言われます**（try で同じ穴を
+        //     踏みました。0.17.0 の記録を参照）。
+        //
+        //   注意: 素通りする経路が残っていないと言えるのは、
+        //     **列挙で網羅されている**か **case _ がある**ときだけです。
+        //     どちらでもなければ（＝ sema が通していない形）保守的に false。
+        case ND_MATCH: {
+            bool has_default = false;
+            for (Node *c = n->body; c; c = c->next) {
+                if (!always_returns(c->body)) return false;
+                if (!c->lhs) has_default = true;
+            }
+            // 列挙は網羅を強制済み（check_stmt）。int / str は case _ 必須。
+            return has_default || (n->en != NULL);
+        }
 
         case ND_TRY:
             // ★ try の中身と、**すべての** except が抜けるなら、この try は抜けます。
@@ -4749,6 +5024,60 @@ static void check_main(Sema *s, Node *ast) {
 // ★ **クラスより先に**登録します。クラスのフィールドやメソッドの型注釈に
 //   範囲型を書けるようにするためです（依存の向きは 範囲型 → int だけなので、
 //   互いに参照し合うことはありません）。
+// 列挙を登録する（A-37）。
+//
+// ★ **範囲型やクラスより先に**登録します。クラスのフィールドやメソッドの
+//   型注釈に列挙を書けるようにするためです（列挙は何にも依存しないので、
+//   互いに参照し合うことはありません）。
+static void declare_enum(Sema *s, Node *n) {
+    if (type_from_name(n->name))
+        error_at_hint(n->tok, diag_fmt("'%s' は組み込みの型名です", n->name),
+                      "この名前は使えません");
+    EnumDef *old = lookup_enum(s, n->name);
+    if (old) {
+        Diag d = {0};
+        d.message = diag_fmt("型 '%s' はすでに定義されています", n->name);
+        d.primary.tok = n->tok;
+        d.primary.label = "同じ名前の列挙が 2 つあります";
+        d.related.tok = old->tok;
+        d.related.label = "最初の定義はここです";
+        diag_fail(&d);
+    }
+    if (lookup_class(s, n->name))
+        error_at_hint(n->tok, "クラスと同じ名前の列挙は作れません",
+                      "'%s' はクラス名として使われています", n->name);
+    if (lookup_range(s, n->name))
+        error_at_hint(n->tok, "範囲型と同じ名前の列挙は作れません",
+                      "'%s' は範囲型として使われています", n->name);
+
+    EnumDef *e = xmalloc(sizeof(EnumDef));
+    e->name = n->name;
+    e->tok = n->tok;
+    e->vals = NULL;
+    e->nvals = 0;
+    e->owner = s->cur;
+
+    // 枝を宣言した順に並べます（番号は parser が振ってあります）。
+    EnumVal *tail = NULL;
+    for (Node *v = n->body; v; v = v->next) {
+        EnumVal *ev = xmalloc(sizeof(EnumVal));
+        ev->name = v->name;
+        ev->val = v->ival;
+        ev->tok = v->tok;
+        ev->next = NULL;
+        if (tail) tail->next = ev; else e->vals = ev;
+        tail = ev;
+        e->nvals++;
+    }
+
+    e->type = type_enum(e->name, e);
+    e->next = s->enums;
+    s->enums = e;
+    s->cur->enums = e;
+    n->en = e;
+    n->type = e->type;
+}
+
 static void declare_range(Sema *s, Node *n) {
     if (type_from_name(n->name))
         error_at_hint(n->tok, diag_fmt("'%s' は組み込みの型名です", n->name),
@@ -4779,7 +5108,11 @@ static void declare_range(Sema *s, Node *n) {
 
 // モジュール 1 つぶんの宣言を登録する（パス 1a / 1b / 1c）
 static void declare_module(Sema *s, Node *ast) {
-    // ★ 範囲型を最初に登録します（クラスのフィールドにも書けるように）
+    // ★ 列挙を最初に登録します（クラスのフィールドにも書けるように。A-37）
+    for (Node *d = ast->body; d; d = d->next)
+        if (d->kind == ND_ENUM) declare_enum(s, d);
+
+    // ★ 範囲型を次に登録します（クラスのフィールドにも書けるように）
     for (Node *d = ast->body; d; d = d->next)
         if (d->kind == ND_RANGEDECL) declare_range(s, d);
 
@@ -4808,6 +5141,7 @@ static void declare_module(Sema *s, Node *ast) {
         else if (d->kind == ND_PRAGMA) continue;  // 設定（宣言ではない）
         else if (d->kind == ND_IFACE) continue;   // 上で済んでいる
         else if (d->kind == ND_RANGEDECL) continue;  // 上で済んでいる
+        else if (d->kind == ND_ENUM) continue;       // 上で済んでいる（A-37）
         else UNREACHABLE();  // parser が保証している
     }
 }

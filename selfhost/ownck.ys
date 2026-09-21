@@ -1549,6 +1549,41 @@ def stmt(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
         flow_join(f, else_f)
         return
 
+    # ── 場合分け（A-37）──
+    #
+    # ★ **if の合流と同じ扱い。** どの case も「入る前の状態」から始まり、
+    #   出たところで全部を合流させる。
+    #
+    #   注意: **調べる式は 1 回だけ使う**（codegen も 1 回しか評価しない）。
+    #     case の数だけ数えると、`match xs.pop():` のような形で
+    #     「何度も移動した」と誤って言うことになる。
+    if k == ast.ND_MATCH:
+        use_expr(o, f, nn.lhs)
+
+        result_m: rc[Flow] = flow_copy(f)
+        first_m: bool = True
+        cm: rc[ast.Node] | None = nn.body
+        while cm is not None:
+            ccm: rc[ast.Node] = cm
+            cf: rc[Flow] = flow_copy(f)
+            # 注意: case の値（Color.Red / 48 / "ja"）は**定数**なので、
+            #   use_expr に通す必要がない（sema がそう縛っている）。
+            stmt(o, cf, ccm.body)
+            if first_m:
+                result_m.ents = move_out(cf.ents)
+                result_m.dead = cf.dead
+                first_m = False
+            else:
+                flow_join(result_m, cf)
+            cm = ccm.next
+        f.ents = move_out(result_m.ents)
+        f.dead = result_m.dead
+        return
+
+    # ★ 列挙の宣言は実行時に何もしない（枝はただの定数。A-37）
+    if k == ast.ND_ENUM:
+        return
+
     if k == ast.ND_WHILE:
         check_while(o, f, nn)
         return

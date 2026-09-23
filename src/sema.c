@@ -85,6 +85,9 @@ struct FuncSig {
 
     // ★ ジェネリック関数のテンプレート（実体化前）
     Node *tmpl;         // ND_FUNC（targs を持つ）。実体なら NULL
+    // ★ 定義の木（A-43）。捕獲した lambda を渡してよいか——つまり
+    //   「この関数は受け取った関数の値をしまうか」——を見るのに使います。
+    Node *node;
 
     FuncSig *next;
 };
@@ -545,6 +548,10 @@ static void check_defaults(Sema *s, FuncSig *f, Node *fn);
 static void resolve_raises(Sema *s, Node *fn, FuncSig *f);
 // 中身を持つ枝の隠しクラスを引く / 生成に書き換える（A-41）
 static Class *branch_class(Sema *s, EnumDef *e, EnumVal *ev);
+// 捕獲した lambda を逃がさない（A-43）
+static void reject_escaping_closure(Node *v, const char *what);
+static bool fn_param_escapes_at(Sema *s, Node *body, const char *pname,
+                                int hops);
 static Type *check_new(Sema *s, Node *n, Class *c);
 // lambda を「使う側の型」から実体にする（A-42）
 static FuncSig *instantiate_lambda(Sema *s, FuncSig *tmpl, Node *ref);
@@ -1653,7 +1660,19 @@ static Type *check_var(Sema *s, Node *n) {
     if (!v) {
         FuncSig *f = lookup_func(s, n->name);
         // ★ lambda は**使う側の型**で実体になります（A-42）。
-        if (f && f->tmpl && f->tmpl->is_lambda) f = instantiate_lambda(s, f, n);
+        if (f && f->tmpl && f->tmpl->is_lambda) {
+            Type *shown = s->expected;   // 捕獲は隠すので、外から見える型はこれ
+            f = instantiate_lambda(s, f, n);
+            if (n->caps) {
+                // ★ 捕まえた値は**末尾の引数**として渡しますが、
+                //   **外から見える型には出しません**（A-43）。
+                //   呼ぶ側は `fn(int) -> bool` としてしか触りません。
+                n->ir_name = f->ir_name;
+                n->is_func_ref = true;
+                n->type = shown;
+                return shown;
+            }
+        }
         if (f && f->tmpl) {
             // ジェネリック関数そのものは値にできません（型引数が決まらない）。
             Diag d = {0};
@@ -1925,6 +1944,7 @@ static void check_assign(Sema *s, Node *n) {
         s->expected = et;
         Type *actual = check_expr(s, n->rhs);
         s->expected = NULL;
+        reject_escaping_closure(n->rhs, "しまうことが");   // A-43
 
         if (!type_assignable(actual, et)) {
             Diag d = {0};
@@ -1949,6 +1969,7 @@ static void check_assign(Sema *s, Node *n) {
 
         s->expected = ft;
         Type *actual = check_expr(s, n->rhs);
+        reject_escaping_closure(n->rhs, "しまうことが");   // A-43
         s->expected = NULL;
 
         if (!type_assignable(actual, ft)) {
@@ -1986,6 +2007,8 @@ static void check_assign(Sema *s, Node *n) {
     //   絞り込みで一時的に狭くなっていても、代入できる範囲は変わりません。
     s->expected = v->declared;  // ★ xs = [] のため
     Type *actual = check_expr(s, n->rhs);
+    // ★ グローバルは枠より長生きするので、捕獲した lambda は入れられません（A-43）
+    if (v->is_global) reject_escaping_closure(n->rhs, "しまうことが");
     s->expected = NULL;
     if (!type_assignable(actual, v->declared)) {
         Diag d = {0};
@@ -2354,6 +2377,7 @@ static Type *check_list_lit(Sema *s, Node *n) {
     //   それに従うのが素直です（「空リストの期待型」の延長）。
     s->expected = want && want->kind == TY_LIST ? want->elem : NULL;
     Type *first = check_expr(s, n->body);
+    reject_escaping_closure(n->body, "しまうことが");   // A-43
     Type *et = first;
     if (want && want->kind == TY_LIST && type_assignable(first, want->elem))
         et = want->elem;
@@ -2367,6 +2391,7 @@ static Type *check_list_lit(Sema *s, Node *n) {
     for (Node *el = n->body->next; el; el = el->next, i++) {
         s->expected = et;
         Type *t = check_expr(s, el);
+        reject_escaping_closure(el, "しまうことが");   // A-43
         if (!type_assignable(t, et)) {
             Diag d = {0};
             d.message = diag_fmt("リストの要素の型がそろっていません（第 %d 要素）", i);
@@ -2863,6 +2888,11 @@ static Type *check_class_method(Sema *s, Node *n, Class *c) {
         s->expected = f->params[i + 1];
         Type *at = check_expr(s, a);
         s->expected = NULL;
+        // ★ 呼び先がしまうなら、捕獲した lambda は渡せません（A-43）
+        // 注意: 定義の木が無いときは「しまう」と答えます（安全側）
+        if (a->caps && (!f->node ||
+                        fn_param_escapes_at(s, f->node->body, f->pnames[i + 1], 0)))
+            reject_escaping_closure(a, "しまうことが");
         mark_arg_own_rc(a, f, i + 1);
         if (!type_assignable(at, f->params[i + 1])) {
             Diag d = {0};
@@ -3374,6 +3404,11 @@ static Type *check_new(Sema *s, Node *n, Class *c) {
         s->expected = f->params[i + 1];
         Type *at = check_expr(s, a);
         s->expected = NULL;
+        // ★ 生成はふつう「しまう」ので、捕獲した lambda は渡せません（A-43）
+        // 注意: 定義の木が無いときは「しまう」と答えます（安全側）
+        if (a->caps && (!f->node ||
+                        fn_param_escapes_at(s, f->node->body, f->pnames[i + 1], 0)))
+            reject_escaping_closure(a, "しまうことが");
         mark_arg_own_rc(a, f, i + 1);
         if (!type_assignable(at, f->params[i + 1])) {
             Diag d = {0};
@@ -3642,6 +3677,8 @@ static Type *check_call(Sema *s, Node *n) {
             error_at_hint(n->args->tok,
                           "spawn の 1 つ目は関数です（例: spawn(work, job)）",
                           "'%s' は関数ではありません", type_name(ft));
+        // ★ 別のスレッドは、作った枠より長生きしえます（A-43）
+        reject_escaping_closure(n->args, "別のスレッドへ渡すことが");
         if (ft->nparams != nargs - 1)
             error_at_hint(n->args->tok,
                           diag_fmt("'%s' は %d 個の引数を取ります", type_name(ft),
@@ -3939,6 +3976,22 @@ static Type *check_call_sig(Sema *s, Node *n, FuncSig *f, const char *what) {
         s->expected = f->params[i]->kind == TY_FN ? f->params[i] : NULL;
         Type *at = check_expr(s, a);
         s->expected = NULL;
+        // ★ 捕獲した lambda は、**しまわない**相手にだけ渡せます（A-43）。
+        //   呼ぶだけ・局所に置くだけなら、呼び出しは作った枠より短いので安全です。
+        if (a->caps && f->node && i < f->nparams &&
+            fn_param_escapes_at(s, f->node->body, f->pnames[i], 0)) {
+            Diag d = {0};
+            d.message = diag_fmt("捕獲した lambda を '%s' に渡せません", shown);
+            d.primary.tok = a->tok;
+            d.primary.label = "この lambda は外の変数を捕まえています";
+            d.related.tok = f->tok;
+            d.related.label = diag_fmt("'%s' は受け取った関数をしまいます",
+                                       f->pnames[i]);
+            d.hint = "捕まえた値は作った関数の枠の上にあるので、"
+                     "しまわれると読めなくなります。"
+                     "捕獲しない lambda か、def で書いた関数を渡してください";
+            diag_fail(&d);
+        }
         // ★ codegen へ「この実引数は借用で渡す」と**分かっている**ことを伝えます。
         //   借用なら相手は所有権を受け取らないので、呼び出し後に一時値を
         //   解放できます（A-21e）。
@@ -3964,6 +4017,74 @@ static Type *check_call_sig(Sema *s, Node *n, FuncSig *f, const char *what) {
 }
 
 // return の検査
+// ── 捕獲した lambda を逃がさない（A-43）──────────────────
+//
+// ★ 捕獲した lambda は**作った関数の枠の上**にあります。枠が畳まれたあとに
+//   呼ばれたら、読むのは他人の場所です。だから**逃がす形を断ります**——
+//   返す・しまう・別スレッドへ渡す。
+//
+// 注意: 素の関数の値（`f` をそのまま渡す）は静的な記録を指すので、
+//   ここには引っかかりません。制限がかかるのは**捕まえたときだけ**です。
+static void reject_escaping_closure(Node *v, const char *what) {
+    if (!v || !v->caps) return;
+    Diag d = {0};
+    d.message = diag_fmt("捕獲した lambda は%sできません", what);
+    d.primary.tok = v->tok;
+    d.primary.label = "この lambda は外の変数を捕まえています";
+    d.related.tok = v->caps->tok;
+    d.related.label = diag_fmt("'%s' を捕まえています", v->caps->name);
+    d.hint = "捕まえた値は**作った関数の枠の上**にあるので、"
+             "その関数より長生きできません。"
+             "引数として渡す（呼んでもらう）のは できます";
+    diag_fail(&d);
+}
+
+// この関数は、受け取った関数の値を**しまう**か（A-43）。
+//
+// ★ しまうのは「返す」「フィールド・グローバル・list に入れる」の 3 つです。
+//   自分の枠の中で使うだけ（呼ぶ・局所変数に置く）なら、捕獲した lambda を
+//   渡しても安全です——呼び出しは、作った枠より短いからです。
+//
+// 注意: **分からないときは「しまう」と答えます**（安全側）。
+//   hops は**関数を何段たどったか**です（木の深さではありません）。
+//   たどりすぎたら「しまう」と答えて打ち切ります。
+static bool fn_param_escapes_at(Sema *s, Node *body, const char *pname, int hops) {
+    for (Node *n = body; n; n = n->next) {
+        if (n->kind == ND_RETURN && n->lhs && n->lhs->kind == ND_VAR &&
+            strcmp(n->lhs->name, pname) == 0)
+            return true;
+        if (n->kind == ND_ASSIGN && n->rhs && n->rhs->kind == ND_VAR &&
+            strcmp(n->rhs->name, pname) == 0)
+            return true;   // フィールド・グローバル・添字のどれでも断ります
+        if (n->kind == ND_LIST)
+            for (Node *el = n->body; el; el = el->next)
+                if (el->kind == ND_VAR && strcmp(el->name, pname) == 0)
+                    return true;
+
+        // ★ 別の関数へ渡している場合は、**その先も見ます**。
+        //   `def a(p): return b(p)` の b が しまうなら、a も しまいます。
+        if (n->kind == ND_CALL || n->kind == ND_METHOD) {
+            int ai = 0;
+            for (Node *a = n->args; a; a = a->next, ai++) {
+                if (a->kind != ND_VAR || strcmp(a->name, pname) != 0) continue;
+                if (hops >= 4) return true;          // たどりすぎ（安全側）
+                FuncSig *g = n->kind == ND_CALL ? lookup_func(s, n->name) : NULL;
+                if (!g || !g->node || ai >= g->nparams) return true;  // 分からない
+                if (fn_param_escapes_at(s, g->node->body, g->pnames[ai], hops + 1))
+                    return true;
+            }
+        }
+
+        if (fn_param_escapes_at(s, n->lhs, pname, hops)) return true;
+        if (fn_param_escapes_at(s, n->rhs, pname, hops)) return true;
+        if (fn_param_escapes_at(s, n->els, pname, hops)) return true;
+        if (fn_param_escapes_at(s, n->body, pname, hops)) return true;
+        if (fn_param_escapes_at(s, n->incr, pname, hops)) return true;
+        if (fn_param_escapes_at(s, n->args, pname, hops)) return true;
+    }
+    return false;
+}
+
 static void check_return(Sema *s, Node *n) {
     Type *want = s->cur_func->ret;
 
@@ -3984,6 +4105,7 @@ static void check_return(Sema *s, Node *n) {
     s->expected = want;  // ★ return [] のため
     Type *got = check_expr(s, n->lhs);
     s->expected = NULL;
+    reject_escaping_closure(n->lhs, "返すことが");   // A-43
     if (want->kind == TY_NONE) {
         Diag d = {0};
         d.message = diag_fmt("戻り型が None の関数 '%s' は値を返せません",
@@ -5028,6 +5150,7 @@ static void declare_method(Sema *s, Class *c, Node *fn) {
     f->pnames = xmalloc(sizeof(char *) * (size_t)nparams);
     f->pmodes = xmalloc(sizeof(ParamMode) * (size_t)nparams);
     f->defaults = xmalloc(sizeof(Node *) * (size_t)(nparams ? nparams : 1));
+    f->node = fn;                  // A-43
     f->tok = fn->tok;
 
     int i = 0;
@@ -5579,6 +5702,7 @@ static void declare_func(Sema *s, Node *n) {
     f->pmodes = nparams ? xmalloc(sizeof(ParamMode) * (size_t)nparams) : NULL;
     f->defaults = xmalloc(sizeof(Node *) * (size_t)(nparams ? nparams : 1));
     f->is_lambda = n->is_lambda;   // A-42
+    f->node = n;                   // A-43
     f->tok = n->tok;
 
     int i = 0;
@@ -5636,6 +5760,59 @@ static void declare_func(Sema *s, Node *n) {
 //
 // 注意: 同じ lambda を違う型で 2 度使えば、実体が 2 つできます
 //   （ジェネリック関数と同じです）。
+// lambda の本体から「外の変数」を集める（A-43）。
+//
+// ★ **ここが捕獲の入口です。** lambda はトップレベルへ持ち上げるので、
+//   外の名前はそのままでは見えません。**作った場所で**（＝いまの scope が
+//   まだ生きているうちに）どれを捕まえるか決め、**引数として渡す**形に
+//   書き換えます。
+//
+// 注意: グローバルと関数は捕まえません（持ち上げた先からも見えます）。
+static void collect_captures(Sema *s, Node *n, Node *params, Node **out) {
+    for (; n; n = n->next) {
+        if (n->kind == ND_VAR) {
+            bool is_param = false;
+            for (Node *pm = params; pm; pm = pm->next)
+                if (strcmp(pm->name, n->name) == 0) is_param = true;
+            VarEntry *v = is_param ? NULL : lookup(s, n->name);
+            if (v && !v->is_global) {
+                bool seen = false;
+                for (Node *c = *out; c; c = c->next)
+                    if (strcmp(c->name, n->name) == 0) seen = true;
+                if (!seen) {
+                    Node *c = new_var_node(n->tok, n->name);
+                    c->ir_name = v->ir_name;
+                    c->type = v->type;
+                    Node **tail = out;
+                    while (*tail) tail = &(*tail)->next;
+                    *tail = c;
+                }
+            }
+        }
+        collect_captures(s, n->lhs, params, out);
+        collect_captures(s, n->rhs, params, out);
+        collect_captures(s, n->els, params, out);
+        collect_captures(s, n->body, params, out);
+        collect_captures(s, n->incr, params, out);
+        collect_captures(s, n->args, params, out);
+    }
+}
+
+// 捕まえられる型か（A-43）。
+//
+// ★ **値型だけ**です。`str` や `list` を捕まえると「借りものを枠の上に
+//   持ち回る」話になり、元を動かせるかどうかの検査が要ります。
+//   まずは黙って壊れない範囲から入れます（design/closures.md §4）。
+static bool capturable(Type *t) {
+    switch (t->kind) {
+        case TY_INT:
+        case TY_FLOAT:
+        case TY_BOOL: return true;
+        case TY_ENUM: return !(t->en && t->en->has_payload);
+        default: return false;
+    }
+}
+
 static FuncSig *instantiate_lambda(Sema *s, FuncSig *tmpl, Node *ref) {
     Node *tn = tmpl->tmpl;
 
@@ -5663,12 +5840,37 @@ static FuncSig *instantiate_lambda(Sema *s, FuncSig *tmpl, Node *ref) {
         diag_fail(&d);
     }
 
-    // 束ねる型の並び（引数 … と戻り型）
+    // ★ 外の変数を集めます（A-43）。**いまの scope が生きているうち**に
+    //   決めます（この後で持ち上げ先のモジュールへ移ります）。
+    Node *caps = NULL;
+    collect_captures(s, tn->body, tn->params, &caps);
+    int ncap = 0;
+    for (Node *c = caps; c; c = c->next) {
+        if (!capturable(c->type)) {
+            Diag d = {0};
+            d.message = diag_fmt("'%s' は捕まえられません（'%s' 型）", c->name,
+                                 type_name(c->type));
+            d.primary.tok = ref->tok;
+            d.primary.label = "この lambda が外の変数を使っています";
+            d.hint = "捕まえられるのは値型だけです"
+                     "（int / float / bool / 列挙 / 範囲型）。"
+                     "それ以外は引数で受け取るか、def で書いた関数にしてください";
+            diag_fail(&d);
+        }
+        ncap++;
+    }
+    ref->caps = caps;
+
+    // 束ねる型の並び（引数 … と戻り型 … と捕まえた値の型）
     Type *args[MAX_TARGS];
-    int nt = np + 1;
+    int nt = np + 1 + ncap;
     if (nt > MAX_TARGS) error_at(ref->tok, "lambda の引数が多すぎます");
     for (int i = 0; i < np; i++) args[i] = want->params[i];
     args[np] = want->elem;
+    {
+        int k = np + 1;
+        for (Node *c = caps; c; c = c->next, k++) args[k] = c->type;
+    }
 
     char *iname = mangle_inst(tmpl->name, args, nt);
 
@@ -5693,12 +5895,39 @@ static FuncSig *instantiate_lambda(Sema *s, FuncSig *tmpl, Node *ref) {
         b->next = binds;
         binds = b;
     }
-    s->tbind = binds;
 
     Node *inst = ast_clone(tn);
     inst->name = iname;
     inst->targs = NULL;
     inst->next = NULL;
+
+    // ★ 捕まえた値は**末尾の引数**として受け取ります（A-43）。
+    //   こうすると本体の名前解決は今までどおりで済みます——捕まえた名前が
+    //   そのまま引数の名前になるので、書き換えるところがありません。
+    //   codegen が「記録から読んで渡す」包みを作ります。
+    if (ncap > 0) {
+        Node *ptail = inst->params;
+        while (ptail && ptail->next) ptail = ptail->next;
+        int ci = 0;
+        for (Node *c = caps; c; c = c->next, ci++) {
+            char *tname = diag_fmt("%s.C%d", tmpl->name, ci);
+            TBind *b = xmalloc(sizeof(TBind));
+            b->name = tname;
+            b->type = c->type;
+            b->next = binds;
+            binds = b;
+
+            Node *pm = new_node(ND_PARAM, ref->tok);
+            pm->name = c->name;
+            Node *tr = new_node(ND_TYPEREF, ref->tok);
+            tr->name = tname;
+            pm->type_ref = tr;
+            if (ptail) ptail->next = pm; else inst->params = pm;
+            ptail = pm;
+        }
+    }
+
+    s->tbind = binds;
 
     declare_func(s, inst);
 

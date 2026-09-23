@@ -974,6 +974,10 @@ static char *gen_list_lit(Emitter *e, Node *n);
 static char *gen_listcomp(Emitter *e, Node *n);
 // 並行実行（A-18）
 static const char *thunk_for(Emitter *e, Type *fnty);
+// 関数の値（記録へのポインタ）を作る（A-43）
+static const char *closure_ref(Emitter *e, const char *ir_name, Type *ft);
+// 捕獲した lambda の記録を枠の上に作る（A-43）
+static char *closure_make(Emitter *e, Node *n);
 static char *pack_i64(Emitter *e, Type *t, char *v);
 static char *unpack_i64(Emitter *e, Type *t, char *v);
 static char *gen_index_addr(Emitter *e, char *obj, char *idx, const char *sty,
@@ -1237,12 +1241,12 @@ static char *gen_expr(Emitter *e, Node *n) {
                 strcmp(n->ir_name, e->subst_ir) == 0)
                 return (char *)e->subst_val;
 
-            // ★ 関数の名前を値として使う場合。
-            //   箱から読むのではなく、**関数のラベルそのもの**が値です。
+            // ★ 関数の名前を値として使う場合（A-43）。
+            //   **記録へのポインタ**が値です（捕獲した lambda と形をそろえます）。
             if (n->is_func_ref) {
-                char *t = xmalloc(strlen(n->ir_name) + 2);
-                snprintf(t, strlen(n->ir_name) + 2, "@%s", n->ir_name);
-                return t;
+                // ★ 捕獲した lambda は、枠の上に記録を作ります（A-43）
+                if (n->caps) return closure_make(e, n);
+                return (char *)closure_ref(e, n->ir_name, n->type);
             }
 
             // 変数の読み出し（規約 R2）。bool なら i8 → i1 の変換も入る。
@@ -2683,9 +2687,8 @@ static char *gen_field(Emitter *e, Node *n) {
         for (int i = 0; i < ft->nparams; i++)
             sb_printf(&types, "%s%s", i ? ", " : "", llvm_type(ft->params[i]));
         declare_extern(e, llvm_type(ft->elem), n->ir_name, sb_str(&types));
-        char *t = xmalloc(strlen(n->ir_name) + 2);
-        snprintf(t, strlen(n->ir_name) + 2, "@%s", n->ir_name);
-        return t;
+        // ★ 記録へのポインタにします（A-43）。包みはこのモジュールに作ります。
+        return (char *)closure_ref(e, n->ir_name, ft);
     }
 
     // ★ '.' の左がモジュールなら、これはグローバル変数の読み出し。
@@ -4139,12 +4142,17 @@ static char *gen_call(Emitter *e, Node *n) {
     if (n->is_indirect) {
         // 注意: **ptr として読むこと。** ty_int を渡すと i64 で読んでしまい、
         //    call の呼び先が整数になって LLVM に弾かれます。
+        char *clo = new_tmp(e);
+        sb_printf(&e->fn, "  %s = load ptr, ptr %s\n", clo, n->ir_name);
+        // ★ 値は**記録へのポインタ**です（A-43）。先頭から関数ポインタを読み、
+        //   記録自身を隠し第 1 引数として渡します。
         char *fp = new_tmp(e);
-        sb_printf(&e->fn, "  %s = load ptr, ptr %s\n", fp, n->ir_name);
+        sb_printf(&e->fn, "  %s = load ptr, ptr %s\n", fp, clo);
         StrBuf a2, t2;
         sb_init(&a2);
         sb_init(&t2);
-        gen_args(e, n->args, &a2, &t2, true);
+        sb_printf(&a2, "ptr %s", clo);
+        gen_args(e, n->args, &a2, &t2, false);   // 先頭は記録なので first=false
         if (n->type->kind == TY_NONE) {
             sb_printf(&e->fn, "  call void %s(%s)\n", fp, sb_str(&a2));
             return NULL;
@@ -4276,6 +4284,147 @@ static char *unpack_i64(Emitter *e, Type *t, char *v) {
 //   型で決まります**。float は整数と別のレジスタで渡され、None を返す
 //   関数には戻り値レジスタがありません。型を偽って呼ぶと、その 2 つで
 //   静かに壊れます。型どおりに呼ぶ場所を 1 か所に閉じ込めます。
+// ── 関数の値は「記録へのポインタ」（A-43）──────────────────
+//
+// ★ 捕獲を入れるために、`fn` の値の表現を変えました。
+//
+//     素の関数 f      →  @f.clo   = { ptr @f.clo.thunk }        （静的。確保なし）
+//     捕獲する lambda →  枠の上の { ptr @lambda.thunk, 捕まえた値… }
+//
+//   どちらも「記録へのポインタ」なので、**呼ぶ側は 1 通り**で済みます
+//   ——記録の先頭から関数ポインタを読み、**記録自身を隠し第 1 引数**として
+//   渡します。
+//
+// ★ 素の関数には薄い包み（thunk）を 1 つ作ります。隠し引数を捨てて、
+//   本物を呼ぶだけです。これで「捕獲あり」と「捕獲なし」の呼び方が揃います。
+// 捕獲した lambda の記録を**枠の上に**作る（A-43）。
+//
+//   %clo = alloca { ptr, <捕まえた値の型…> }
+//   store ptr @<実体>.cap.thunk, ptr %clo      ← 先頭は必ず関数ポインタ
+//   store <捕まえた値>, ...                     ← 作ったときの写し
+//
+// ★ 確保しません（枠が畳まれるだけ）。だから**作った関数より長生きできません**
+//   ——逃がそうとしたら所有権検査が断ります（design/closures.md 案 C）。
+static char *closure_make(Emitter *e, Node *n) {
+    Type *ft = n->type;
+
+    // 記録の型（{ ptr, 捕まえた値… }）
+    StrBuf rec;
+    sb_init(&rec);
+    sb_printf(&rec, "{ ptr");
+    for (Node *c = n->caps; c; c = c->next)
+        sb_printf(&rec, ", %s", llvm_mem_type(c->type));
+    sb_printf(&rec, " }");
+
+    // 包み: 記録から捕まえた値を読み、本体へ**末尾の引数**として渡す
+    StrBuf key;
+    sb_init(&key);
+    sb_printf(&key, "cap:%s", n->ir_name);
+    const char *th = drop_fn_cached(e, sb_str(&key));
+    if (!th) {
+        StrBuf tname;
+        sb_init(&tname);
+        sb_printf(&tname, "@%s.cap.thunk", n->ir_name);
+        drop_fn_remember(e, sb_str(&key), sb_str(&tname));
+        th = sb_str(&tname);
+
+        StrBuf params, argl;
+        sb_init(&params);
+        sb_init(&argl);
+        for (int i = 0; i < ft->nparams; i++) {
+            sb_printf(&params, ", %s %%a%d", llvm_type(ft->params[i]), i);
+            sb_printf(&argl, "%s%s %%a%d", i ? ", " : "",
+                      llvm_type(ft->params[i]), i);
+        }
+
+        StrBuf b;
+        sb_init(&b);
+        sb_printf(&b, "\ndefine internal %s %s(ptr %%env%s) {\nentry:\n",
+                  llvm_type(ft->elem), th, sb_str(&params));
+        int ci = 0;
+        for (Node *c = n->caps; c; c = c->next, ci++) {
+            sb_printf(&b,
+                      "  %%cp%d = getelementptr %s, ptr %%env, i32 0, i32 %d\n",
+                      ci, sb_str(&rec), ci + 1);
+            sb_printf(&b, "  %%cv%d = load %s, ptr %%cp%d\n", ci,
+                      llvm_mem_type(c->type), ci);
+            const char *use = "";
+            if (c->type->kind == TY_BOOL) {
+                sb_printf(&b, "  %%cb%d = trunc i8 %%cv%d to i1\n", ci, ci);
+                use = "cb";
+            } else {
+                use = "cv";
+            }
+            sb_printf(&argl, "%s%s %%%s%d", ft->nparams || ci ? ", " : "",
+                      llvm_type(c->type), use, ci);
+        }
+        if (ft->elem->kind == TY_NONE)
+            sb_printf(&b, "  call void @%s(%s)\n  ret void\n}\n", n->ir_name,
+                      sb_str(&argl));
+        else
+            sb_printf(&b, "  %%r = call %s @%s(%s)\n  ret %s %%r\n}\n",
+                      llvm_type(ft->elem), n->ir_name, sb_str(&argl),
+                      llvm_type(ft->elem));
+        sb_printf(&e->thunkdefs, "%s", sb_str(&b));
+    }
+
+    // 記録を枠の上に作って、値を詰める
+    char *clo = new_tmp(e);
+    sb_printf(&e->allocas, "  %s = alloca %s\n", clo, sb_str(&rec));
+    sb_printf(&e->fn, "  store ptr %s, ptr %s\n", th, clo);
+    int ci = 0;
+    for (Node *c = n->caps; c; c = c->next, ci++) {
+        char *v = gen_load(e, c->type, c->ir_name);
+        char *slot = new_tmp(e);
+        sb_printf(&e->fn, "  %s = getelementptr %s, ptr %s, i32 0, i32 %d\n",
+                  slot, sb_str(&rec), clo, ci + 1);
+        gen_store(e, c->type, v, slot);
+    }
+    return clo;
+}
+
+static const char *closure_ref(Emitter *e, const char *ir_name, Type *ft) {
+    StrBuf key;
+    sb_init(&key);
+    sb_printf(&key, "clo:%s", ir_name);
+    const char *hit = drop_fn_cached(e, sb_str(&key));
+    if (hit) return hit;
+
+    StrBuf gname;
+    sb_init(&gname);
+    sb_printf(&gname, "@%s.clo", ir_name);
+    drop_fn_remember(e, sb_str(&key), sb_str(&gname));
+
+    // 包み: 隠し第 1 引数（記録）を捨てて、本物を呼ぶ
+    StrBuf params, argl;
+    sb_init(&params);
+    sb_init(&argl);
+    for (int i = 0; i < ft->nparams; i++) {
+        sb_printf(&params, ", %s %%a%d", llvm_type(ft->params[i]), i);
+        sb_printf(&argl, "%s%s %%a%d", i ? ", " : "", llvm_type(ft->params[i]), i);
+    }
+
+    StrBuf b;
+    sb_init(&b);
+    sb_printf(&b, "\ndefine internal %s @%s.clo.thunk(ptr %%env%s) {\nentry:\n",
+              llvm_type(ft->elem), ir_name, sb_str(&params));
+    if (ft->elem->kind == TY_NONE) {
+        sb_printf(&b, "  call void @%s(%s)\n  ret void\n}\n", ir_name,
+                  sb_str(&argl));
+    } else {
+        sb_printf(&b, "  %%r = call %s @%s(%s)\n  ret %s %%r\n}\n",
+                  llvm_type(ft->elem), ir_name, sb_str(&argl),
+                  llvm_type(ft->elem));
+    }
+    sb_printf(&e->thunkdefs, "%s", sb_str(&b));
+
+    // 記録そのもの（関数ポインタ 1 本だけ）
+    sb_printf(&e->globals, "%s = private constant { ptr } { ptr @%s.clo.thunk }\n",
+              sb_str(&gname), ir_name);
+
+    return sb_str(&gname);
+}
+
 static const char *thunk_for(Emitter *e, Type *fnty) {
     const char *key = type_name(fnty);
     for (StrLit *q = e->thunks; q; q = q->next)
@@ -4291,7 +4440,10 @@ static const char *thunk_for(Emitter *e, Type *fnty) {
     sb_init(&b);
     sb_printf(&b, "\ndefine internal i64 %s(i64 %%f, ptr %%a) {\n", sb_str(&name));
     sb_printf(&b, "entry:\n");
-    sb_printf(&b, "  %%fp = inttoptr i64 %%f to ptr\n");
+    // ★ 渡ってくるのは**記録へのポインタ**です（A-43）。先頭から関数ポインタを
+    //   読み、記録自身を隠し第 1 引数として渡します。
+    sb_printf(&b, "  %%clo = inttoptr i64 %%f to ptr\n");
+    sb_printf(&b, "  %%fp = load ptr, ptr %%clo\n");
 
     // 引数を i64 の配列から本来の型へ 1 つずつ取り出す
     StrBuf argl;
@@ -4323,13 +4475,18 @@ static const char *thunk_for(Emitter *e, Type *fnty) {
         use = sb_str(&ub);
         sb_printf(&argl, "%s%s %s", i ? ", " : "", llvm_type(at), use);
     }
+    // ★ 隠し第 1 引数（記録）を先頭に足します（A-43）
+    StrBuf argl2;
+    sb_init(&argl2);
+    sb_printf(&argl2, "ptr %%clo%s%s", sb_str(&argl)[0] ? ", " : "",
+              sb_str(&argl));
 
     // 本来の型で呼び、戻り値を i64 に詰め直す
     if (rt->kind == TY_NONE) {
-        sb_printf(&b, "  call void %%fp(%s)\n", sb_str(&argl));
+        sb_printf(&b, "  call void %%fp(%s)\n", sb_str(&argl2));
         sb_printf(&b, "  ret i64 0\n");
     } else {
-        sb_printf(&b, "  %%r = call %s %%fp(%s)\n", llvm_type(rt), sb_str(&argl));
+        sb_printf(&b, "  %%r = call %s %%fp(%s)\n", llvm_type(rt), sb_str(&argl2));
         switch (rt->kind) {
             case TY_INT:
                 sb_printf(&b, "  ret i64 %%r\n");

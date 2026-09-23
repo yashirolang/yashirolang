@@ -1643,7 +1643,15 @@ class Sema:
             if fs is not None:
                 fst: rc[ast.Node] | None = unwrap_sig(fs).tmpl
                 if fst is not None and unwrap_node(fst).is_lambda:
+                    shown: rc[ast.Type] | None = self.expected
                     fs = self.instantiate_lambda(unwrap_sig(fs), n)
+                    if n.caps is not None:
+                        # ★ 捕まえた値は**末尾の引数**として渡しますが、
+                        #   **外から見える型には出しません**（A-43）。
+                        n.ir_name = copy(unwrap_sig(fs).ir_name)
+                        n.is_func_ref = True
+                        n.type = shown
+                        return unwrap_type(shown)
             if fs is not None and unwrap_sig(fs).tmpl is not None:
                 # ジェネリック関数そのものは値にできません（型引数が決まらない）
                 diag.error_full(unwrap_tok(n.tok),
@@ -1931,6 +1939,7 @@ class Sema:
 
             self.expected = et
             av: rc[ast.Type] = self.check_expr(unwrap_node(n.rhs))
+            self.reject_escaping_closure(n.rhs, "しまうことが")   # A-43
             self.expected = None
 
             if not ast.type_assignable(av, et):
@@ -1951,6 +1960,7 @@ class Sema:
 
             self.expected = ft
             av2: rc[ast.Type] = self.check_expr(unwrap_node(n.rhs))
+            self.reject_escaping_closure(n.rhs, "しまうことが")   # A-43
             self.expected = None
 
             if not ast.type_assignable(av2, ft):
@@ -1987,6 +1997,10 @@ class Sema:
         declared2: rc[ast.Type] = unwrap_type(v.declared)
         self.expected = declared2
         actual2: rc[ast.Type] = self.check_expr(unwrap_node(n.rhs))
+        # ★ グローバルは枠より長生きするので、捕獲した lambda は入れられません（A-43）
+        gv0: rc[types.VarEntry] | None = self.lookup(target.name)
+        if gv0 is not None and gv0.is_global:
+            self.reject_escaping_closure(n.rhs, "しまうことが")
         self.expected = None
         if not ast.type_assignable(actual2, declared2):
             diag.error_full(unwrap_tok(unwrap_node(n.rhs).tok), "型が一致しません",
@@ -2722,6 +2736,7 @@ class Sema:
                 self.expected = want.elem
         first_node: rc[ast.Node] = unwrap_node(n.body)
         first: rc[ast.Type] = self.check_expr(first_node)
+        self.reject_escaping_closure(n.body, "しまうことが")   # A-43
         et: rc[ast.Type] = first
         if want is not None:
             w: rc[ast.Type] = want
@@ -2741,6 +2756,7 @@ class Sema:
             e: rc[ast.Node] = el
             self.expected = et
             t: rc[ast.Type] = self.check_expr(e)
+            self.reject_escaping_closure(e, "しまうことが")   # A-43
             if not ast.type_assignable(t, et):
                 diag.error_full(unwrap_tok(e.tok),
                                 "リストの要素の型がそろっていません（第 " + str(i) +
@@ -3205,6 +3221,15 @@ class Sema:
             self.expected = want
             at: rc[ast.Type] = self.check_expr(arg)
             self.expected = None
+            # ★ 呼び先がしまうなら、捕獲した lambda は渡せません（A-43）
+            if arg.caps is not None:
+                mnode: rc[ast.Node] | None = f.node
+                mstores: bool = True
+                if mnode is not None:
+                    mstores = self.fn_param_escapes_at(unwrap_node(mnode).body,
+                                                       f.pnames[i + 1], 0)
+                if mstores:
+                    self.reject_escaping_closure(arg, "しまうことが")
             mark_arg_own_rc(arg, f, i + 1)
             if not ast.type_assignable(at, want):
                 diag.error_full(unwrap_tok(arg.tok),
@@ -3614,6 +3639,15 @@ class Sema:
             self.expected = want
             at: rc[ast.Type] = self.check_expr(arg)
             self.expected = None
+            # ★ 生成はふつう「しまう」ので、捕獲した lambda は渡せません（A-43）
+            if arg.caps is not None:
+                cnode: rc[ast.Node] | None = f.node
+                cstores: bool = True
+                if cnode is not None:
+                    cstores = self.fn_param_escapes_at(unwrap_node(cnode).body,
+                                                       f.pnames[i + 1], 0)
+                if cstores:
+                    self.reject_escaping_closure(arg, "しまうことが")
             mark_arg_own_rc(arg, f, i + 1)
             if not ast.type_assignable(at, want):
                 diag.error_full(unwrap_tok(arg.tok),
@@ -3769,6 +3803,8 @@ class Sema:
                 return self.ty_int()
             fa: rc[ast.Node] = unwrap_node(n.args)
             ft: rc[ast.Type] = self.check_expr(fa)
+            # ★ 別のスレッドは、作った枠より長生きしえます（A-43）
+            self.reject_escaping_closure(n.args, "別のスレッドへ渡すことが")
             if ft.kind != ast.TY_FN:
                 diag.error_at_hint(unwrap_tok(fa.tok),
                                    "spawn の 1 つ目は関数です（例: spawn(work, job)）",
@@ -3877,6 +3913,24 @@ class Sema:
                 self.expected = f.params[i]
             at: rc[ast.Type] = self.check_expr(arg)
             self.expected = None
+            # ★ 捕獲した lambda は、**しまわない**相手にだけ渡せます（A-43）
+            if arg.caps is not None:
+                fnode: rc[ast.Node] | None = f.node
+                stores: bool = True
+                if fnode is not None:
+                    stores = self.fn_param_escapes_at(unwrap_node(fnode).body,
+                                                      f.pnames[i], 0)
+                if stores:
+                    diag.error_full(unwrap_tok(arg.tok),
+                                    "捕獲した lambda を '" + shown + "' に渡せません",
+                                    "この lambda は外の変数を捕まえています",
+                                    f.tok,
+                                    "'" + f.pnames[i] + "' は受け取った関数を" +
+                                    "しまいます",
+                                    "捕まえた値は作った関数の枠の上にあるので、" +
+                                    "しまわれると読めなくなります。" +
+                                    "捕獲しない lambda か、def で書いた関数を" +
+                                    "渡してください")
             # ★ codegen へ「この実引数は借用で渡すと**分かっている**」ことを
             #   伝えます。借用なら相手は所有権を受け取らないので、呼び出し後に
             #   一時値を解放できます（A-21e）。
@@ -4252,6 +4306,91 @@ class Sema:
                             "どれにも当たらないときの動きがありません", None, "",
                             "最後に case _: を書いてください（値が無限にあるので、全部を書き尽くせません）")
 
+    # ── 捕獲した lambda を逃がさない（A-43）──────────────────
+    #
+    # ★ 捕獲した lambda は**作った関数の枠の上**にあります。枠が畳まれたあとに
+    #   呼ばれたら、読むのは他人の場所です。だから**逃がす形を断ります**。
+    #   対になる定義: src/sema.c の reject_escaping_closure
+    def reject_escaping_closure(self, v: rc[ast.Node] | None, what: str) -> None:
+        if v is None:
+            return
+        vv: rc[ast.Node] = v
+        c0: rc[ast.Node] | None = vv.caps
+        if c0 is None:
+            return
+        cc: rc[ast.Node] = c0
+        diag.error_full(unwrap_tok(vv.tok),
+                        "捕獲した lambda は" + what + "できません",
+                        "この lambda は外の変数を捕まえています",
+                        cc.tok, "'" + cc.name + "' を捕まえています",
+                        "捕まえた値は**作った関数の枠の上**にあるので、" +
+                        "その関数より長生きできません。" +
+                        "引数として渡す（呼んでもらう）のは できます")
+
+    # この関数は、受け取った関数の値を**しまう**か（A-43）。
+    #
+    # ★ しまうのは「返す」「フィールド・グローバル・list に入れる」の 3 つです。
+    #   注意: **分からないときは「しまう」と答えます**（安全側）。
+    #   対になる定義: src/sema.c の fn_param_escapes_at
+    def fn_param_escapes_at(mut self, body: rc[ast.Node] | None, pname: str,
+                            hops: int) -> bool:
+        cur: rc[ast.Node] | None = body
+        while cur is not None:
+            n: rc[ast.Node] = cur
+            if n.kind == ast.ND_RETURN and n.lhs is not None:
+                l0: rc[ast.Node] = unwrap_node(n.lhs)
+                if l0.kind == ast.ND_VAR and l0.name == pname:
+                    return True
+            if n.kind == ast.ND_ASSIGN and n.rhs is not None:
+                r0: rc[ast.Node] = unwrap_node(n.rhs)
+                if r0.kind == ast.ND_VAR and r0.name == pname:
+                    return True
+            if n.kind == ast.ND_LIST:
+                el: rc[ast.Node] | None = n.body
+                while el is not None:
+                    e0: rc[ast.Node] = el
+                    if e0.kind == ast.ND_VAR and e0.name == pname:
+                        return True
+                    el = e0.next
+
+            # ★ 別の関数へ渡している場合は、**その先も見ます**
+            if n.kind == ast.ND_CALL or n.kind == ast.ND_METHOD:
+                ai: int = 0
+                a0: rc[ast.Node] | None = n.args
+                while a0 is not None:
+                    aa: rc[ast.Node] = a0
+                    if aa.kind == ast.ND_VAR and aa.name == pname:
+                        if hops >= 4:
+                            return True      # たどりすぎ（安全側）
+                        g: rc[types.FuncSig] | None = None
+                        if n.kind == ast.ND_CALL:
+                            g = self.lookup_func(n.name)
+                        if g is None:
+                            return True      # 分からない（安全側）
+                        gg: rc[types.FuncSig] = g
+                        if gg.node is None or ai >= gg.nparams:
+                            return True
+                        if self.fn_param_escapes_at(unwrap_node(gg.node).body,
+                                                    gg.pnames[ai], hops + 1):
+                            return True
+                    ai = ai + 1
+                    a0 = aa.next
+
+            if self.fn_param_escapes_at(n.lhs, pname, hops):
+                return True
+            if self.fn_param_escapes_at(n.rhs, pname, hops):
+                return True
+            if self.fn_param_escapes_at(n.els, pname, hops):
+                return True
+            if self.fn_param_escapes_at(n.body, pname, hops):
+                return True
+            if self.fn_param_escapes_at(n.incr, pname, hops):
+                return True
+            if self.fn_param_escapes_at(n.args, pname, hops):
+                return True
+            cur = n.next
+        return False
+
     def check_return(mut self, n: mut rc[ast.Node]) -> None:
         fn: rc[types.FuncSig] = unwrap_sig(self.cur_func)
         want: rc[ast.Type] = unwrap_type(fn.ret)
@@ -4269,6 +4408,7 @@ class Sema:
         self.expected = want     # ★ return [] のため
         got: rc[ast.Type] = self.check_expr(val)
         self.expected = None
+        self.reject_escaping_closure(n.lhs, "返すことが")   # A-43
 
         if want.kind == ast.TY_NONE:
             diag.error_full(unwrap_tok(val.tok),
@@ -4498,6 +4638,7 @@ class Sema:
 
         f: rc[types.FuncSig] = rc(types.FuncSig(mname, fn.tok))
         f.ret = ret
+        f.node = fn                 # A-43
 
         pm: rc[ast.Node] | None = fn.params
         while pm is not None:
@@ -4960,6 +5101,61 @@ class Sema:
     #   型引数を作っておき、ここで fn(int) -> bool の中身を束ねます。
     #   **新しい仕組みを足していません。**
     #   対になる定義: src/sema.c の instantiate_lambda
+    # lambda の本体から「外の変数」を集める（A-43）。
+    #
+    # ★ **ここが捕獲の入口です。** lambda はトップレベルへ持ち上げるので、
+    #   外の名前はそのままでは見えません。**作った場所で**どれを捕まえるか
+    #   決め、**引数として渡す**形に書き換えます。
+    #
+    # 注意: グローバルと関数は捕まえません（持ち上げた先からも見えます）。
+    #   対になる定義: src/sema.c の collect_captures
+    def collect_captures(mut self, n: rc[ast.Node] | None,
+                         params: rc[ast.Node] | None,
+                         out: mut list[rc[ast.Node]]) -> None:
+        cur: rc[ast.Node] | None = n
+        while cur is not None:
+            c: rc[ast.Node] = cur
+            if c.kind == ast.ND_VAR:
+                is_param: bool = False
+                pm: rc[ast.Node] | None = params
+                while pm is not None:
+                    p: rc[ast.Node] = pm
+                    if p.name == c.name:
+                        is_param = True
+                    pm = p.next
+                if not is_param:
+                    v: rc[types.VarEntry] | None = self.lookup(c.name)
+                    if v is not None:
+                        vv: rc[types.VarEntry] = v
+                        seen: bool = not vv.is_global
+                        seen = not seen      # グローバルなら捕まえません
+                        for q in out:
+                            if q.name == c.name:
+                                seen = True
+                        if not seen:
+                            cap: rc[ast.Node] = ast.new_var_node(c.tok, c.name)
+                            cap.ir_name = copy(vv.ir_name)
+                            cap.type = vv.type
+                            out.append(cap)
+            self.collect_captures(c.lhs, params, out)
+            self.collect_captures(c.rhs, params, out)
+            self.collect_captures(c.els, params, out)
+            self.collect_captures(c.body, params, out)
+            self.collect_captures(c.incr, params, out)
+            self.collect_captures(c.args, params, out)
+            cur = c.next
+
+    # 捕まえられる型か（A-43）。**値型だけ**です。
+    def capturable(self, t: rc[ast.Type]) -> bool:
+        if t.kind == ast.TY_INT or t.kind == ast.TY_FLOAT or t.kind == ast.TY_BOOL:
+            return True
+        if t.kind == ast.TY_ENUM:
+            e0: rc[ast.EnumDef] | None = t.en
+            if e0 is None:
+                return True
+            return not unwrap_enumdef(e0).has_payload
+        return False
+
     def instantiate_lambda(mut self, tmpl: rc[types.FuncSig],
                            ref: mut rc[ast.Node]) -> rc[types.FuncSig]:
         tn: rc[ast.Node] = unwrap_node(tmpl.tmpl)
@@ -5001,13 +5197,30 @@ class Sema:
                             " 引数の lambda です")
             return tmpl
 
-        # 束ねる型の並び（引数 … と戻り型）
+        # ★ 外の変数を集めます（A-43）。**いまの scope が生きているうち**に
+        #   決めます（この後で持ち上げ先のモジュールへ移ります）。
+        caps: list[rc[ast.Node]] = []
+        self.collect_captures(tn.body, tn.params, caps)
+        for c in caps:
+            if not self.capturable(unwrap_type(c.type)):
+                diag.error_full(unwrap_tok(ref.tok),
+                                "'" + c.name + "' は捕まえられません（'" +
+                                ast.type_name(unwrap_type(c.type)) + "' 型）",
+                                "この lambda が外の変数を使っています", None, "",
+                                "捕まえられるのは値型だけです" +
+                                "（int / float / bool / 列挙 / 範囲型）。" +
+                                "それ以外は引数で受け取るか、def で書いた関数に" +
+                                "してください")
+
+        # 束ねる型の並び（引数 … と戻り型 … と捕まえた値の型）
         args: list[rc[ast.Type]] = []
         i: int = 0
         while i < np:
             args.append(want.params[i])
             i = i + 1
         args.append(ast.elem_of(want))
+        for c2 in caps:
+            args.append(unwrap_type(c2.type))
 
         iname: str = self.mangle_inst(tmpl.name, args)
 
@@ -5044,6 +5257,42 @@ class Sema:
         inst.name = copy(iname)
         inst.targs = None
         inst.next = None
+
+        # ★ 捕まえた値は**末尾の引数**として受け取ります（A-43）。
+        #   本体の名前解決は今までどおりで済みます——捕まえた名前がそのまま
+        #   引数の名前になるので、書き換えるところがありません。
+        if len(caps) > 0:
+            ptail: rc[ast.Node] | None = inst.params
+            last_p: rc[ast.Node] | None = None
+            while ptail is not None:
+                lp: rc[ast.Node] = ptail
+                last_p = lp
+                ptail = lp.next
+            ci: int = 0
+            for c3 in caps:
+                tname: str = tmpl.name + ".C" + str(ci)
+                binds.names.append(copy(tname))
+                binds.types_.append(unwrap_type(c3.type))
+
+                pm2: rc[ast.Node] = ast.new_node(ast.ND_PARAM, ref.tok)
+                pm2.name = copy(c3.name)
+                tr2: rc[ast.Node] = ast.new_node(ast.ND_TYPEREF, ref.tok)
+                tr2.name = copy(tname)
+                pm2.type_ref = tr2
+                if last_p is None:
+                    inst.params = pm2
+                else:
+                    unwrap_node(last_p).next = pm2
+                last_p = pm2
+                ci = ci + 1
+
+            # 捕獲の並びを ref に覚えさせます（codegen が記録を作ります）
+            head_c: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, ref.tok)
+            cc: rc[ast.Node] = head_c
+            for c4 in caps:
+                cc.next = c4
+                cc = c4
+            ref.caps = head_c.next
 
         self.declare_func(inst)
 
@@ -5289,6 +5538,7 @@ class Sema:
         f: rc[types.FuncSig] = rc(types.FuncSig(n.name, n.tok))
         f.ret = ret
         f.is_lambda = n.is_lambda   # A-42
+        f.node = n                  # A-43
 
         pm: rc[ast.Node] | None = n.params
         while pm is not None:

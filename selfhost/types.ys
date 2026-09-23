@@ -44,6 +44,10 @@ class FuncSig:
 
     # ★ ジェネリック関数のテンプレート（実体なら None）
     tmpl: rc[ast.Node] | None
+    # ★ 定義の木（A-43）。捕獲した lambda を渡してよいか——つまり
+    #   「この関数は受け取った関数の値をしまうか」——を見るのに使います。
+    #   対になる定義: src/sema.c の node
+    node: rc[ast.Node] | None
 
     # ── raises 節（宣言されたエラーのクラス）──
     raises_cls: list[rc[ast.Class]]

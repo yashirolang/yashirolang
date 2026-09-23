@@ -1,0 +1,13 @@
+# ERROR: 捕獲した lambda はしまうことができません
+# 捕獲した lambda はフィールドにしまえない（A-43）
+class Holder:
+    f: fn(int) -> int
+
+    def init(self, f: fn(int) -> int) -> None:
+        self.f = f
+
+def main() -> int:
+    h: Holder = Holder(lambda x: x)      # 捕獲なしなら通ります
+    n: int = 5
+    h.f = lambda x: x + n
+    return 0

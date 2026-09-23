@@ -1,0 +1,12 @@
+# ERROR: 捕獲した lambda は返すことができません
+# ERROR: その関数より長生きできません
+# 捕獲した lambda は返せない（A-43）
+#
+# ★ 捕まえた値は作った関数の枠の上にあります。返すと、枠が畳まれたあとを
+#   読むことになります。
+def make(n: int) -> fn(int) -> bool:
+    return lambda x: x > n
+
+def main() -> int:
+    f: fn(int) -> bool = make(3)
+    return 0

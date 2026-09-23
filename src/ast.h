@@ -459,6 +459,11 @@ struct Node {
     //   ND_VAR  … その lambda を指す名前
     bool is_lambda;
 
+    // ★ 捕獲した外の変数（A-43）。ND_VAR（lambda を指す名前）に付きます。
+    //   中身は ND_VAR の並びで、sema が ir_name と type を入れます。
+    //   codegen はこれを見て、枠の上に記録を作ります。
+    Node *caps;
+
     // ★ 中身を持つ枝（A-41）。
     //   ND_ENUM  … 中身を持つ枝が 1 つでもあるか（表現が変わります）
     //   ND_CLASS … 枝から作った隠しクラスか（利用者には見せません）

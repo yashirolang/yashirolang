@@ -1,0 +1,68 @@
+# OUTPUT: False True
+# OUTPUT: 3
+# OUTPUT: 23
+# OUTPUT: 6.0
+# OUTPUT: True
+# OUTPUT: 23 101
+# EXIT: 0
+# 捕獲（クロージャ。A-43）
+#
+#   ★ 捕まえた値は**作った関数の枠の上**に置きます（確保しません）。
+#     `fn` の値は「記録へのポインタ」で、素の関数なら静的な記録、捕獲ありなら
+#     枠の上の記録を指します。呼ぶ側はどちらも同じ形です。
+#
+#   ★ 枠の上にあるので、**作った関数より長生きできません**。返す・しまう・
+#     別スレッドへ渡す、はコンパイル時に断ります
+#     （err_lambda_escape_* が見ます）。渡して**呼んでもらう**のはできます。
+#
+#   ★ 捕獲は**作ったときの値の写し**です。捕まえたあとに外を書き換えても、
+#     写しは変わりません（下の 23 と 101 がそれです）。
+#
+#   注意: 捕まえられるのは値型だけです（err_lambda_capture）。
+enum Level:
+    Low
+    High
+
+
+def count_if(xs: list[int], pred: fn(int) -> bool) -> int:
+    n: int = 0
+    for x in xs:
+        if pred(x):
+            n = n + 1
+    return n
+
+
+def apply(f: fn(int) -> int, v: int) -> int:
+    return f(v)
+
+
+def scale_by(f: fn(float) -> float, v: float) -> float:
+    return f(v)
+
+
+def choose(f: fn() -> bool) -> bool:
+    return f()
+
+
+def main() -> int:
+    n: int = 2
+    p: fn(int) -> bool = lambda x: x > n
+    print(str(p(1)) + " " + str(p(5)))
+    print(str(count_if([1, 2, 3, 4, 5], lambda x: x > n)))
+
+    # 2 つ捕まえる
+    a: int = 10
+    b: int = 3
+    g: fn(int) -> int = lambda x: x * a + b
+    print(str(g(2)))
+
+    scale: float = 1.5
+    print(str(scale_by(lambda v: v * scale, 4.0)))
+
+    on: bool = True
+    print(str(choose(lambda: on)))
+
+    # ★ 捕獲は写しです。外を書き換えても、作り済みの lambda は変わりません
+    a = 100
+    print(str(g(2)) + " " + str(apply(lambda x: x + a, 1)))
+    return 0

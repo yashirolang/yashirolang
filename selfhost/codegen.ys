@@ -609,6 +609,135 @@ class Emitter:
     #   「全部 i64 として直接呼べばいい」ように見えるが、**呼び出し規約は
     #   型で決まる**。float は整数と別のレジスタで渡され、None を返す関数には
     #   戻り値レジスタが無い。型を偽って呼ぶと、その 2 つで静かに壊れる。
+    # ── 関数の値は「記録へのポインタ」（A-43）──────────────────
+    #
+    # ★ 捕獲を入れるために、fn の値の表現を変えました。
+    #
+    #     素の関数 f      →  @f.clo  = { ptr @f.clo.thunk }   （静的。確保なし）
+    #     捕獲する lambda →  枠の上の { ptr @…cap.thunk, 捕まえた値… }
+    #
+    #   どちらも「記録へのポインタ」なので、**呼ぶ側は 1 通り**で済みます。
+    #   対になる定義: src/codegen.c の closure_ref / closure_make
+    def closure_ref(mut self, ir_name: str, ft: rc[ast.Type]) -> str:
+        key: str = "clo:" + ir_name
+        hit: str = self.drop_fn_cached(key)
+        if len(hit) > 0:
+            return hit
+
+        gname: str = "@" + ir_name + ".clo"
+        self.drop_fn_remember(key, gname)
+
+        params: list[str] = []
+        argl: list[str] = []
+        i: int = 0
+        while i < len(ft.params):
+            params.append(", " + self.llvm_type(ft.params[i]) + " %a" + str(i))
+            sep: str = ""
+            if i > 0:
+                sep = ", "
+            argl.append(sep + self.llvm_type(ft.params[i]) + " %a" + str(i))
+            i = i + 1
+
+        rt: rc[ast.Type] = ast.elem_of(ft)
+        b: list[str] = []
+        b.append("\ndefine internal " + self.llvm_type(rt) + " @" + ir_name +
+                 ".clo.thunk(ptr %env" + strings.join(params, "") + ") {\nentry:\n")
+        if rt.kind == ast.TY_NONE:
+            b.append("  call void @" + ir_name + "(" + strings.join(argl, "") +
+                     ")\n  ret void\n}\n")
+        else:
+            b.append("  %r = call " + self.llvm_type(rt) + " @" + ir_name +
+                     "(" + strings.join(argl, "") + ")\n  ret " +
+                     self.llvm_type(rt) + " %r\n}\n")
+        self.thunkdefs.append(strings.join(b, ""))
+
+        self.globals_.append(gname + " = private constant { ptr } { ptr @" +
+                            ir_name + ".clo.thunk }\n")
+        return gname
+
+    # 捕獲した lambda の記録を**枠の上に**作る（A-43）。
+    #
+    # ★ 確保しません（枠が畳まれるだけ）。だから**作った関数より長生き
+    #   できません**——逃がす形は sema が断ります。
+    def closure_make(mut self, n: rc[ast.Node]) -> str:
+        ft: rc[ast.Type] = type_of(n)
+
+        # 記録の型（{ ptr, 捕まえた値… }）
+        rec: str = "{ ptr"
+        c0: rc[ast.Node] | None = n.caps
+        while c0 is not None:
+            cc: rc[ast.Node] = c0
+            rec = rec + ", " + self.llvm_mem_type(type_of(cc))
+            c0 = cc.next
+        rec = rec + " }"
+
+        key: str = "cap:" + n.ir_name
+        th: str = self.drop_fn_cached(key)
+        if len(th) == 0:
+            th = "@" + n.ir_name + ".cap.thunk"
+            self.drop_fn_remember(key, th)
+
+            params: list[str] = []
+            argl: list[str] = []
+            i: int = 0
+            while i < len(ft.params):
+                params.append(", " + self.llvm_type(ft.params[i]) + " %a" + str(i))
+                sep: str = ""
+                if i > 0:
+                    sep = ", "
+                argl.append(sep + self.llvm_type(ft.params[i]) + " %a" + str(i))
+                i = i + 1
+
+            rt: rc[ast.Type] = ast.elem_of(ft)
+            b: list[str] = []
+            b.append("\ndefine internal " + self.llvm_type(rt) + " " + th +
+                     "(ptr %env" + strings.join(params, "") + ") {\nentry:\n")
+            ci: int = 0
+            c1: rc[ast.Node] | None = n.caps
+            while c1 is not None:
+                cv: rc[ast.Node] = c1
+                ct: rc[ast.Type] = type_of(cv)
+                b.append("  %cp" + str(ci) + " = getelementptr " + rec +
+                         ", ptr %env, i32 0, i32 " + str(ci + 1) + "\n")
+                b.append("  %cv" + str(ci) + " = load " + self.llvm_mem_type(ct) +
+                         ", ptr %cp" + str(ci) + "\n")
+                use: str = "cv"
+                if ct.kind == ast.TY_BOOL:
+                    b.append("  %cb" + str(ci) + " = trunc i8 %cv" + str(ci) +
+                             " to i1\n")
+                    use = "cb"
+                sep2: str = ""
+                if len(ft.params) > 0 or ci > 0:
+                    sep2 = ", "
+                argl.append(sep2 + self.llvm_type(ct) + " %" + use + str(ci))
+                ci = ci + 1
+                c1 = cv.next
+            if rt.kind == ast.TY_NONE:
+                b.append("  call void @" + n.ir_name + "(" +
+                         strings.join(argl, "") + ")\n  ret void\n}\n")
+            else:
+                b.append("  %r = call " + self.llvm_type(rt) + " @" + n.ir_name +
+                         "(" + strings.join(argl, "") + ")\n  ret " +
+                         self.llvm_type(rt) + " %r\n}\n")
+            self.thunkdefs.append(strings.join(b, ""))
+
+        # 記録を枠の上に作って、値を詰める
+        clo: str = self.new_tmp()
+        self.allocas.append("  " + clo + " = alloca " + rec + "\n")
+        self.emit("  store ptr " + th + ", ptr " + clo + "\n")
+        ci2: int = 0
+        c2: rc[ast.Node] | None = n.caps
+        while c2 is not None:
+            cw: rc[ast.Node] = c2
+            v: str = self.gen_load(type_of(cw), cw.ir_name)
+            slot: str = self.new_tmp()
+            self.emit("  " + slot + " = getelementptr " + rec + ", ptr " + clo +
+                      ", i32 0, i32 " + str(ci2 + 1) + "\n")
+            self.gen_store(type_of(cw), v, slot)
+            ci2 = ci2 + 1
+            c2 = cw.next
+        return clo
+
     def thunk_for(mut self, fnty: rc[ast.Type]) -> str:
         key: str = ast.type_name(fnty)
         i: int = 0
@@ -625,7 +754,10 @@ class Emitter:
         b: list[str] = []
         b.append("\ndefine internal i64 " + name + "(i64 %f, ptr %a) {\n")
         b.append("entry:\n")
-        b.append("  %fp = inttoptr i64 %f to ptr\n")
+        # ★ 渡ってくるのは**記録へのポインタ**です（A-43）。先頭から関数
+        #   ポインタを読み、記録自身を隠し第 1 引数として渡します。
+        b.append("  %clo = inttoptr i64 %f to ptr\n")
+        b.append("  %fp = load ptr, ptr %clo\n")
 
         # 引数を i64 の配列から本来の型へ 1 つずつ取り出す
         argl: list[str] = []
@@ -652,7 +784,11 @@ class Emitter:
                 sep = ""
             argl.append(sep + self.llvm_type(at) + " " + use)
             k = k + 1
-        args: str = strings.join(argl, "")
+        # ★ 隠し第 1 引数（記録）を先頭に足します（A-43）
+        args0: str = strings.join(argl, "")
+        args: str = "ptr %clo"
+        if len(args0) > 0:
+            args = "ptr %clo, " + args0
 
         # 本来の型で呼び、戻り値を i64 に詰め直す
         if rt.kind == ast.TY_NONE:
@@ -776,7 +912,10 @@ class Emitter:
             # ★ 関数の名前を値として使う場合。箱から読むのではなく、
             #   **関数のラベルそのもの**が値です。
             if n.is_func_ref:
-                return "@" + n.ir_name
+                # ★ 捕獲した lambda は枠の上に記録を作ります（A-43）
+                if n.caps is not None:
+                    return self.closure_make(n)
+                return self.closure_ref(n.ir_name, type_of(n))
             # 変数の読み出し（規約 R2）。sema が割り当てた ir_name を使う
             vv: str = self.gen_load(type_of(n), n.ir_name)
             # ★ ここで所有権が移ったなら、スロットに null を書きます。
@@ -2733,7 +2872,8 @@ class Emitter:
                 ps.append(self.llvm_type(pt))
             self.declare_extern(self.llvm_type(ast.elem_of(ftt)), n.ir_name,
                                 strings.join(ps, ", "))
-            return "@" + n.ir_name
+            # ★ 記録へのポインタにします（A-43）。包みはこのモジュールに作ります。
+            return self.closure_ref(n.ir_name, ftt)
 
         # ★ '.' の左がモジュールなら、グローバル変数の読み出し
         if len(n.mod_name) > 0:
@@ -3808,14 +3948,18 @@ class Emitter:
         #     箱から読んだ値をそのまま置くだけ。declare も要らない。
         #   注意: **ptr として読むこと**（i64 で読むと呼び先が整数になる）。
         if n.is_indirect:
+            clo: str = self.new_tmp()
+            self.emit("  " + clo + " = load ptr, ptr " + n.ir_name + "\n")
+            # ★ 値は**記録へのポインタ**です（A-43）。先頭から関数ポインタを
+            #   読み、記録自身を隠し第 1 引数として渡します。
             fp: str = self.new_tmp()
-            self.emit("  " + fp + " = load ptr, ptr " + n.ir_name + "\n")
+            self.emit("  " + fp + " = load ptr, ptr " + clo + "\n")
             iargs: list[str] = []
             itypes: list[str] = []
-            self.gen_args(n.args, iargs, itypes, True)
+            self.gen_args(n.args, iargs, itypes, False)
             # 注意: gen_args は **区切りを要素に埋め込む**ので、
             #    ここは "" で連結すること（", " だと二重になる）
-            ia: str = strings.join(iargs, "")
+            ia: str = "ptr " + clo + strings.join(iargs, "")
             if type_of(n).kind == ast.TY_NONE:
                 self.emit("  call void " + fp + "(" + ia + ")\n")
                 return ""

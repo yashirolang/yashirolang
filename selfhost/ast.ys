@@ -731,6 +731,12 @@ class Node:
     #   対になる定義: src/ast.h の is_lambda
     is_lambda: bool
 
+    # ★ 捕獲した外の変数（A-43）。ND_VAR（lambda を指す名前）に付きます。
+    #   中身は ND_VAR の並びで、sema が ir_name と type を入れます。
+    #   codegen はこれを見て、枠の上に記録を作ります。
+    #   対になる定義: src/ast.h の caps
+    caps: rc[Node] | None
+
     # ★ 中身を持つ枝（A-41）。
     #   ND_ENUM    … 中身を持つ枝が 1 つでもあるか（表現が変わります）
     #   ND_CLASS   … 枝から作った隠しクラスか
@@ -851,6 +857,7 @@ class Node:
         self.hid_cur = ""
         self.hid_obj = ""
         self.is_lambda = False
+        self.caps = None
         self.has_payload = False
         self.is_enum_branch = False
         self.is_enum_view = False

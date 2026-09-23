@@ -1,0 +1,15 @@
+# ERROR: 捕獲した lambda はしまうことができません
+# しまう相手には渡せない（A-43）
+#
+# ★ 呼び先が「受け取った関数をしまう」なら、捕獲した lambda は渡せません。
+#   呼ぶだけ・局所に置くだけなら渡せます（lambda_capture が見ます）。
+class Button:
+    on_click: fn(int) -> int
+
+    def init(self, on_click: fn(int) -> int) -> None:
+        self.on_click = on_click
+
+def main() -> int:
+    k: int = 3
+    b: Button = Button(lambda x: x * k)
+    return 0

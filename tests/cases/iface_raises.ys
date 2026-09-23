@@ -1,0 +1,77 @@
+# OUTPUT: 書けた: 5
+# OUTPUT: 失敗: いつも失敗します
+# OUTPUT: 束ねて書けた: 3
+# EXIT: 0
+# インタフェース越しの raises（A-40）
+#
+#   ★ **失敗しうる操作を差し替えられる**ようになりました。0.33.0 までは
+#     「raises するメソッドを持つクラスはインタフェース越しに呼べません」と
+#     断っていたので、書き出し先を差し替える Writer のような設計が、
+#     そもそも型で表せませんでした。
+#
+#   ★ 投げうるエラーは**宣言で固定**します（実装に同じ raises を求めます。
+#     err_iface_raises_more / err_iface_raises_less）。呼ぶ側は宣言しか
+#     見ないので、そこが違うと try を書く手がかりが無くなります。
+#
+#   注意: IR の段取りは直接呼び出しと同じです——エラースロットを最後の引数で
+#     渡し、戻ってタグを見ます。呼び先がレジスタ（vtable から読んだ値）なだけです。
+class IOError:
+    msg: str
+
+    def init(self, msg: own str) -> None:
+        self.msg = msg
+
+
+interface Writer:
+    def write(mut self, s: str) -> int raises IOError
+
+
+class Memory(Writer):
+    n: int
+
+    def init(self) -> None:
+        self.n = 0
+
+    def write(mut self, s: str) -> int raises IOError:
+        if len(s) == 0:
+            raise IOError("空です")
+        self.n = self.n + len(s)
+        return self.n
+
+
+class Broken(Writer):
+    def write(mut self, s: str) -> int raises IOError:
+        raise IOError("いつも失敗します")
+
+
+# ★ 呼ぶ側は「どの実装か」を知りません。宣言の raises だけで書けます。
+def write_all(w: mut Writer, parts: list[str]) -> int raises IOError:
+    last: int = 0
+    for s in parts:
+        last = w.write(s)
+    return last
+
+
+def main() -> int:
+    m: Memory = Memory()
+    mw: Writer = m
+    try:
+        print("書けた: " + str(write_all(mw, ["ab", "cde"])))
+    except IOError as e:
+        print("失敗: " + e.msg)
+
+    b: Broken = Broken()
+    bw: Writer = b
+    try:
+        print("書けた: " + str(write_all(bw, ["x"])))
+    except IOError as e2:
+        print("失敗: " + e2.msg)
+
+    # 直に呼んでも同じです（try で捕まえるか、raises を足すか）
+    m2: Memory = Memory()
+    w2: Writer = m2
+    try:
+        print("束ねて書けた: " + str(w2.write("abc")))
+    except IOError as e3:
+        print("失敗: " + e3.msg)
+    return 0

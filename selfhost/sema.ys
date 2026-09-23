@@ -3222,6 +3222,16 @@ class Sema:
 
             n.iface_slot = slot
             n.is_iface_call = True
+
+            # ★ 失敗しうるメソッド（A-40）。**宣言に書いてある raises** で見ます。
+            #   どの実装が呼ばれるかは実行時に決まりますが、**投げうるエラーの
+            #   集合は宣言で固定**してあるので（check_implements が実装に同じ
+            #   raises を求めます）、呼ぶ側はここで決められます。
+            if sig2.err_types is not None:
+                tmp: rc[types.FuncSig] = rc(types.FuncSig(n.name, sig2.tok))
+                self.resolve_raises(sig2, tmp)
+                self.check_can_fail(n, tmp, ifc.name + "." + n.name)
+
             return self.resolve_type(unwrap_node(sig2.type_ref))
 
         # ── Thread[R].join() — 終わるまで待って戻り値を受け取る ──
@@ -4518,11 +4528,42 @@ class Sema:
                                 "'" + ast.type_name(unwrap_type(fs.ret)) + "' を返します",
                                 sig.tok,
                                 "宣言では '" + ast.type_name(wr) + "' です", "")
-            if len(fs.raises_cls) > 0:
-                diag.error_at_hint(unwrap_tok(fs.tok),
-                                   "インタフェース越しには呼べません" +
-                                   "（エラーの受け渡しを表せないため）",
-                                   "'" + c.name + "." + im.name + "' は raises します")
+            # ★ raises も宣言の一部です（A-40）。
+            #   実装だけが失敗しうる、という形は通せません——呼ぶ側は
+            #   インタフェースの宣言しか見ないので、try を書く手がかりが
+            #   無くなります。逆に、宣言にあって実装に無いのも断ります。
+            decl: rc[types.FuncSig] = rc(types.FuncSig(im.name, sig.tok))
+            self.resolve_raises(sig, decl)
+            if len(fs.raises_cls) != len(decl.raises_cls):
+                diag.error_full(unwrap_tok(fs.tok),
+                                "'" + c.name + "." + im.name +
+                                "' の raises が宣言と違います",
+                                "実装は " + str(len(fs.raises_cls)) +
+                                " 個のエラーを宣言しています",
+                                sig.tok,
+                                "宣言では " + str(len(decl.raises_cls)) + " 個です",
+                                "インタフェース越しに呼ぶ側は宣言しか見ません。" +
+                                "同じ raises を書いてください")
+            di: int = 0
+            while di < len(decl.raises_cls):
+                found: bool = False
+                fj: int = 0
+                while fj < len(fs.raises_cls):
+                    if same_class(fs.raises_cls[fj], decl.raises_cls[di]):
+                        found = True
+                    fj = fj + 1
+                if not found:
+                    diag.error_full(unwrap_tok(fs.tok),
+                                    "'" + c.name + "." + im.name + "' が '" +
+                                    decl.raises_cls[di].name +
+                                    "' を宣言していません",
+                                    "このエラーが raises にありません",
+                                    sig.tok,
+                                    "宣言では '" + decl.raises_cls[di].name +
+                                    "' を投げます",
+                                    "インタフェース越しに呼ぶ側は宣言しか" +
+                                    "見ません。同じ raises を書いてください")
+                di = di + 1
 
     def declare_class_members(mut self, n: mut rc[ast.Node]) -> None:
         c: rc[ast.Class] = unwrap_class(n.cls)

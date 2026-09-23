@@ -1,0 +1,20 @@
+# ERROR: 失敗しうる呼び出し 'Writer.write' を処理していません
+# ERROR: try で捕まえるか、この関数に 'raises IOError' を足してください
+# インタフェース越しでも、失敗を握りつぶせない（A-40）
+class IOError:
+    msg: str
+
+    def init(self, msg: own str) -> None:
+        self.msg = msg
+
+interface Writer:
+    def write(mut self, s: str) -> int raises IOError
+
+class W(Writer):
+    def write(mut self, s: str) -> int raises IOError:
+        raise IOError("x")
+
+def main() -> int:
+    w: Writer = W()
+    print(str(w.write("a")))
+    return 0

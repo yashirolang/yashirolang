@@ -482,6 +482,23 @@ def print_all(xs: list[Show]) -> None:
 別々のクラスを 1 つのリストに入れたいときに使います。
 注意: デフォルト実装と関連型はありません。
 
+**失敗しうるメソッドも宣言できます**（`raises`）。
+
+```python
+interface Writer:
+    def write(mut self, s: str) -> int raises IOError
+
+def write_all(w: mut Writer, parts: list[str]) -> int raises IOError:
+    last: int = 0
+    for s in parts:
+        last = w.write(s)      # どの実装が呼ばれるかは実行時に決まります
+    return last
+```
+
+投げうるエラーは**宣言で固定**します（実装にも同じ `raises` が要ります）。
+呼ぶ側は宣言しか見ないので、そこが揃っていないと `try` を書く手がかりが
+無くなるためです。
+
 ### 5.7 自分の型を `for` で回す
 
 3 つのメソッドを書くと、`for` で回せます。

@@ -536,6 +536,8 @@ static Type *check_class_method(Sema *s, Node *n, Class *c);
 static Type *check_field(Sema *s, Node *n);
 // 既定値の並びと型を確かめる（A-38）
 static void check_defaults(Sema *s, FuncSig *f, Node *fn);
+// raises 節を解決する（A-40 でインタフェースの宣言からも使います）
+static void resolve_raises(Sema *s, Node *fn, FuncSig *f);
 // lambda を「使う側の型」から実体にする（A-42）
 static FuncSig *instantiate_lambda(Sema *s, FuncSig *tmpl, Node *ref);
 // 呼び出しの引数を並べ替えて、足りないぶんを既定値で埋める（A-38）
@@ -2998,6 +3000,20 @@ static Type *check_method(Sema *s, Node *n) {
 
         n->iface_slot = im->slot;
         n->is_iface_call = true;
+
+        // ★ 失敗しうるメソッド（A-40）。**宣言に書いてある raises** で見ます。
+        //   どの実装が呼ばれるかは実行時に決まりますが、**投げうるエラーの
+        //   集合は宣言で固定**してあるので（check_implements が実装に同じ
+        //   raises を求めます）、呼ぶ側はここで決められます。
+        if (sig->raises) {
+            FuncSig tmp = {0};
+            tmp.name = n->name;
+            tmp.tok = sig->tok;
+            resolve_raises(s, sig, &tmp);
+            check_can_fail(s, n, &tmp,
+                           diag_fmt("%s.%s", ifc->name, n->name));
+        }
+
         return resolve_type(s, sig->type_ref);
     }
 
@@ -5040,11 +5056,45 @@ static void check_implements(Sema *s, Class *c, Iface *ifc, Token *at) {
             d.related.label = diag_fmt("宣言では '%s' です", type_name(wr));
             diag_fail(&d);
         }
-        if (f->nraises > 0)
-            error_at_hint(f->tok,
-                          "インタフェース越しには呼べません"
-                          "（エラーの受け渡しを表せないため）",
-                          "'%s.%s' は raises します", c->name, im->name);
+        // ★ raises も宣言の一部です（A-40）。
+        //   実装だけが失敗しうる、という形は通せません——呼ぶ側は
+        //   インタフェースの宣言しか見ないので、try を書く手がかりが
+        //   無くなります。逆に、宣言にあって実装に無いのも断ります
+        //   （呼ぶ側に要らない try を書かせることになります）。
+        FuncSig decl = {0};
+        decl.name = im->name;
+        decl.tok = sig->tok;
+        resolve_raises(s, sig, &decl);
+        if (f->nraises != decl.nraises) {
+            Diag d = {0};
+            d.message = diag_fmt("'%s.%s' の raises が宣言と違います", c->name,
+                                 im->name);
+            d.primary.tok = f->tok;
+            d.primary.label = diag_fmt("実装は %d 個のエラーを宣言しています",
+                                       f->nraises);
+            d.related.tok = sig->tok;
+            d.related.label = diag_fmt("宣言では %d 個です", decl.nraises);
+            d.hint = "インタフェース越しに呼ぶ側は宣言しか見ません。"
+                     "同じ raises を書いてください";
+            diag_fail(&d);
+        }
+        for (int i = 0; i < decl.nraises; i++) {
+            bool found = false;
+            for (int j = 0; j < f->nraises; j++)
+                if (f->raises[j] == decl.raises[i]) { found = true; break; }
+            if (found) continue;
+            Diag d = {0};
+            d.message = diag_fmt("'%s.%s' が '%s' を宣言していません", c->name,
+                                 im->name, decl.raises[i]->name);
+            d.primary.tok = f->tok;
+            d.primary.label = "このエラーが raises にありません";
+            d.related.tok = sig->tok;
+            d.related.label = diag_fmt("宣言では '%s' を投げます",
+                                       decl.raises[i]->name);
+            d.hint = "インタフェース越しに呼ぶ側は宣言しか見ません。"
+                     "同じ raises を書いてください";
+            diag_fail(&d);
+        }
     }
 }
 

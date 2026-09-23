@@ -1,0 +1,22 @@
+# ERROR: の raises が宣言と違います
+# 実装だけが失敗しうる（A-40）
+#
+# ★ 呼ぶ側はインタフェースの宣言しか見ないので、try を書く手がかりが
+#   ありません。実装だけが raises する形は通せません。
+class IOError:
+    msg: str
+
+    def init(self, msg: own str) -> None:
+        self.msg = msg
+
+interface Writer:
+    def write(mut self, s: str) -> int
+
+class Loud(Writer):
+    def write(mut self, s: str) -> int raises IOError:
+        raise IOError("失敗")
+
+def main() -> int:
+    w: Writer = Loud()
+    print(str(w.write("a")))
+    return 0

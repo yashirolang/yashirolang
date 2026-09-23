@@ -1,0 +1,26 @@
+# ERROR: 'Silent.write' の raises が宣言と違います
+# ERROR: インタフェース越しに呼ぶ側は宣言しか見ません
+# 宣言にある raises が実装に無い（A-40）
+#
+# ★ 呼ぶ側は宣言しか見ません。実装が失敗しないからといって raises を
+#   落とすと、別の実装に差し替えた日に呼ぶ側が壊れます。
+class IOError:
+    msg: str
+
+    def init(self, msg: own str) -> None:
+        self.msg = msg
+
+interface Writer:
+    def write(mut self, s: str) -> int raises IOError
+
+class Silent(Writer):
+    def write(mut self, s: str) -> int:
+        return len(s)
+
+def main() -> int:
+    w: Writer = Silent()
+    try:
+        print(str(w.write("a")))
+    except IOError as e:
+        print(e.msg)
+    return 0

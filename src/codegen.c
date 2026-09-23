@@ -2255,7 +2255,13 @@ static void flush_pending_temps(Emitter *e, Node *call) {
 }
 
 // 呼び出しを 1 行出す（戻り値が None なら値を返さない）
-static char *emit_call(Emitter *e, Node *n, const char *args) {
+//
+// ★ 呼び先は**名前でもレジスタでもかまいません**（callee に "@f" か "%t.3" を
+//   渡します）。インタフェース越しの呼び出し（vtable）も、失敗しうるときの
+//   段取り——エラースロットを渡して、戻ったらタグを見る——が要るので、
+//   同じところを通します（A-40）。
+static char *emit_call_to(Emitter *e, Node *n, const char *callee,
+                          const char *args) {
     // ── 失敗しうる呼び出し ──
     //
     //   ① エラースロットのタグを 0 にする
@@ -2276,11 +2282,11 @@ static char *emit_call(Emitter *e, Node *n, const char *args) {
 
     char *t = NULL;
     if (n->type->kind == TY_NONE) {
-        sb_printf(&e->fn, "  call void @%s(%s)\n", n->ir_name, sb_str(&full));
+        sb_printf(&e->fn, "  call void %s(%s)\n", callee, sb_str(&full));
     } else {
         t = new_tmp(e);
-        sb_printf(&e->fn, "  %s = call %s @%s(%s)\n", t, llvm_type(n->type),
-                  n->ir_name, sb_str(&full));
+        sb_printf(&e->fn, "  %s = call %s %s(%s)\n", t, llvm_type(n->type),
+                  callee, sb_str(&full));
     }
 
     if (n->can_fail) {
@@ -2321,6 +2327,14 @@ static char *emit_call(Emitter *e, Node *n, const char *args) {
     //     まだ渡していない値を解放してしまいます。
     flush_pending_temps(e, n);
     return t;
+}
+
+// 名前で呼ぶ（いちばん多い形）
+static char *emit_call(Emitter *e, Node *n, const char *args) {
+    StrBuf callee;
+    sb_init(&callee);
+    sb_printf(&callee, "@%s", n->ir_name);
+    return emit_call_to(e, n, sb_str(&callee), args);
 }
 
 static char *gen_method(Emitter *e, Node *n) {
@@ -2388,14 +2402,10 @@ static char *gen_method(Emitter *e, Node *n) {
         sb_init(&it);
         sb_printf(&ia, "ptr %s", ok);
         gen_args(e, n->args, &ia, &it, false);
-        if (n->type->kind == TY_NONE) {
-            sb_printf(&e->fn, "  call void %s(%s)\n", fp, sb_str(&ia));
-            return NULL;
-        }
-        char *t = new_tmp(e);
-        sb_printf(&e->fn, "  %s = call %s %s(%s)\n", t, llvm_type(n->type), fp,
-                  sb_str(&ia));
-        return t;
+
+        // ★ 失敗しうるメソッドなら、エラースロットも渡します（A-40）。
+        //   **直接呼び出しと同じ段取り**です（呼び先がレジスタなだけ）。
+        return emit_call_to(e, n, fp, sb_str(&ia));
     }
 
     // クラスのメソッド。self を第 1 引数に渡すだけ。

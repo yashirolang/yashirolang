@@ -2302,7 +2302,12 @@ class Emitter:
             a = arg.next
 
     # 呼び出しを 1 行出す（戻り値が None なら値を返さない）
-    def emit_call(mut self, n: rc[ast.Node], args: str) -> str:
+    # ★ 呼び先は**名前でもレジスタでもかまいません**（callee に "@f" か
+    #   "%t.3" を渡します）。インタフェース越しの呼び出し（vtable）も、
+    #   失敗しうるときの段取り——エラースロットを渡して、戻ったらタグを
+    #   見る——が要るので、同じところを通します（A-40）。
+    #   対になる定義: src/codegen.c の emit_call_to
+    def emit_call_to(mut self, n: rc[ast.Node], callee: str, args: str) -> str:
         rt: rc[ast.Type] = type_of(n)
 
         # ── 失敗しうる呼び出し ──
@@ -2322,11 +2327,11 @@ class Emitter:
 
         t: str = ""
         if rt.kind == ast.TY_NONE:
-            self.emit("  call void @" + n.ir_name + "(" + full + ")\n")
+            self.emit("  call void " + callee + "(" + full + ")\n")
         else:
             t = self.new_tmp()
-            self.emit("  " + t + " = call " + self.llvm_type(rt) + " @" +
-                      n.ir_name + "(" + full + ")\n")
+            self.emit("  " + t + " = call " + self.llvm_type(rt) + " " +
+                      callee + "(" + full + ")\n")
 
         if n.can_fail:
             cid: int = self.label_counter
@@ -2368,6 +2373,10 @@ class Emitter:
 
     # 控えておいた一時値を解放して、控えを空にする（A-21e）。
     #
+    # 名前で呼ぶ（いちばん多い形）
+    def emit_call(mut self, n: rc[ast.Node], args: str) -> str:
+        return self.emit_call_to(n, "@" + n.ir_name, args)
+
     # 注意: **戻り値が借りものの呼び出しでは解放しません。**
     #   `def pick(a: str) -> str: return a` のように引数をそのまま返す関数だと、
     #   戻り値が実引数と**同じ実体**です。呼び出し後に実引数を解放すると、
@@ -2460,13 +2469,10 @@ class Emitter:
             iargs2.append("ptr " + iok)
             self.gen_args(n.args, iargs2, itypes2, False)
             ia2: str = strings.join(iargs2, "")
-            if type_of(n).kind == ast.TY_NONE:
-                self.emit("  call void " + ifp + "(" + ia2 + ")\n")
-                return ""
-            it2: str = self.new_tmp()
-            self.emit("  " + it2 + " = call " + self.llvm_type(type_of(n)) +
-                      " " + ifp + "(" + ia2 + ")\n")
-            return it2
+
+            # ★ 失敗しうるメソッドなら、エラースロットも渡します（A-40）。
+            #   **直接呼び出しと同じ段取り**です（呼び先がレジスタなだけ）。
+            return self.emit_call_to(n, ifp, ia2)
 
         # クラスのメソッド。self を第 1 引数に渡すだけ
         # ★ rc[T] の中身のメソッドも同じように呼べる

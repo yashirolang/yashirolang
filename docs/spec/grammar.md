@@ -260,11 +260,17 @@ arg_list   ::= call_arg { "," call_arg }
    `x == 1` は比較、`x = 1` はキーワード引数です（"=" と "==" は別のトークン）。 *)
 call_arg   ::= [ IDENT "=" ] expr
 
+(* ── lambda（A-42）── *)
+(* 注意: 本体は式 1 つだけです。型は書きません（置かれた場所から決まります）。
+   捕獲はまだありません（トップレベルの関数に持ち上げるため）。 *)
+lambda_expr ::= "lambda" [ IDENT { "," IDENT } ] ":" expr
+
 primary    ::= INT | FLOAT | STRING
              | "True" | "False" | "None"
              | IDENT
              | "(" expr ")"
              | list_display
+             | lambda_expr
 
 list_display ::= "[" [ expr { "," expr } [ "," ] ] "]"
 ```

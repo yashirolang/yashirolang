@@ -517,6 +517,7 @@ Node *ast_clone(Node *n) {
     //     名前がぶつかることはありません（ジェネリクスの単相化）。
     c->hid_cur = n->hid_cur;
     c->hid_obj = n->hid_obj;
+    c->is_lambda = n->is_lambda;   // A-42
 
     c->lhs = ast_clone(n->lhs);
     c->rhs = ast_clone(n->rhs);

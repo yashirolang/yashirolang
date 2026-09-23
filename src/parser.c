@@ -10,6 +10,11 @@ typedef struct {
     TokenVec toks;
     int pos;
     int hidden;  // 脱糖で作る隠し変数の連番
+    // ★ lambda を持ち上げた関数の並び（A-42）。
+    //   式の途中で見つけた lambda は、**トップレベルの関数**にして
+    //   ここに貯め、program() の最後に並びへ足します。
+    Node *lam_head;
+    Node *lam_tail;
 } Parser;
 
 // ── トークン操作の基本部品 ──────────────────────────────────
@@ -268,7 +273,12 @@ static Node *fstring(Parser *p, Token *t) {
     return result;
 }
 
+static Node *lambda_expr(Parser *p);
+
 static Node *primary(Parser *p) {
+    // ★ lambda（A-42）。**式の一種**です（トップレベルの関数に持ち上げます）。
+    if (tok_is_kw(peek(p), "lambda")) return lambda_expr(p);
+
     // 括弧：優先順位を無視して中身を先に計算させる。
     // 再帰的に expr() を呼び戻すのがポイント（階層の一番上に戻る）。
     //
@@ -653,6 +663,106 @@ static Node *call_arg(Parser *p) {
         return v;
     }
     return expr(p);
+}
+
+// lambda_expr ::= "lambda" [ IDENT { "," IDENT } ] ":" expr
+//
+// ★ **トップレベルの関数に持ち上げます**（脱糖）。書いた場所には、その関数を
+//   指す名前だけが残ります。
+//
+//     f(xs, lambda x: x > 0)
+//       →  def lambda.0[.T0, .R](x: .T0) -> .R:     ← 型は使う側から決まる
+//              return x > 0
+//           f(xs, lambda.0)
+//
+// ★ **引数の型も戻り型も書きません。** 書かせると `lambda x: int -> bool: x > 0`
+//   のような形になり、短く書くための機能なのに元の def より長くなります。
+//   代わりに**ジェネリック関数と同じ仕掛け**に乗せます——型引数を自分で作って
+//   おき、`fn(int) -> bool` が要る場所に置かれたときに、その型を束ねます
+//   （sema の instantiate_lambda）。
+//
+// 注意: **本体は式 1 つだけ**です（Python と同じ）。文を書きたいときは def を
+//   使います——名前が付いたほうが、読む人にもデバッガにも親切です。
+//
+// 注意: 外の変数は**まだ**使えません（捕獲は入っていません）。持ち上げた先は
+//   トップレベルなので、外の名前はそこから見えません。sema が
+//   「lambda の中から外の変数は使えません」と案内します。
+static Node *lambda_expr(Parser *p) {
+    Token *kw = advance(p);   // "lambda"
+
+    char *name = hidden_name(p, "lambda");
+
+    Node *fn = new_node(ND_FUNC, kw);
+    fn->name = name;
+    fn->is_lambda = true;
+
+    // 引数（名前だけ）と、それぞれに割り当てる型引数
+    Node phead = {0};
+    Node *pcur = &phead;
+    Node thead = {0};
+    Node *tcur = &thead;
+    int np = 0;
+
+    if (!tok_is(peek(p), ":")) {
+        for (;;) {
+            Token *a = peek(p);
+            if (a->kind != TK_IDENT)
+                error_at_hint(a, "lambda の引数は名前で書きます"
+                                 "（例: lambda x, y: x + y）",
+                              "引数の名前が必要です");
+            advance(p);
+
+            // .T0 / .T1 …（利用者が書けない名前にします）
+            Node *tp = new_node(ND_TYPEREF, a);
+            tp->name = diag_fmt("%s.T%d", name, np);
+            tcur->next = tp;
+            tcur = tp;
+
+            Node *pm = new_node(ND_PARAM, a);
+            pm->name = a->text;
+            Node *tr = new_node(ND_TYPEREF, a);
+            tr->name = tp->name;
+            pm->type_ref = tr;
+            pcur->next = pm;
+            pcur = pm;
+            np++;
+
+            if (!consume(p, ",")) break;
+        }
+    }
+
+    if (!consume(p, ":"))
+        error_at_hint(peek(p), "lambda は「lambda 引数: 式」の形で書きます",
+                      "':' が必要です");
+
+    // 戻り型の型引数 .R
+    Node *rp = new_node(ND_TYPEREF, kw);
+    rp->name = diag_fmt("%s.R", name);
+    tcur->next = rp;
+
+    Node *rtr = new_node(ND_TYPEREF, kw);
+    rtr->name = rp->name;
+
+    fn->targs = thead.next;
+    fn->params = phead.next;
+    fn->type_ref = rtr;
+
+    // 本体は「return 式」1 つだけ
+    Node *ret = new_node(ND_RETURN, kw);
+    ret->lhs = expr(p);
+    Node *body = new_node(ND_BLOCK, kw);
+    body->body = ret;
+    fn->body = body;
+
+    // 持ち上げる
+    if (p->lam_tail) p->lam_tail->next = fn;
+    else p->lam_head = fn;
+    p->lam_tail = fn;
+
+    // 書いた場所には、その関数を指す名前を残します
+    Node *ref = new_var_node(kw, name);
+    ref->is_lambda = true;
+    return ref;
 }
 
 // power ::= postfix [ "**" unary ]
@@ -2908,6 +3018,14 @@ static Node *program(Parser *p) {
                  "                 ...\n"
                  "                 return 0";
         diag_fail(&d);
+    }
+
+    // ★ 持ち上げた lambda をトップレベルの並びに足します（A-42）。
+    //   **最後に足すのは、前方参照が効くからです**（この言語は定義の順を
+    //   問いません）。
+    if (p->lam_head) {
+        cur->next = p->lam_head;
+        cur = p->lam_tail;
     }
 
     Node *blk = new_node(ND_BLOCK, first);

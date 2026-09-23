@@ -77,6 +77,8 @@ struct FuncSig {
     //     複製して入れるので、呼び出しごとに 1 つずつ作られます
     //     （Python のように「定義時に 1 つ作って共有」しません）。
     Node **defaults;
+    // ★ lambda から作った実体か（A-42）。エラーの言葉を変えるために持ちます。
+    bool is_lambda;
     int nparams;
     Token *tok;     // 定義位置（「この関数はここで定義されています」用）
     ModuleSyms *owner;  // どのモジュールのものか
@@ -534,6 +536,8 @@ static Type *check_class_method(Sema *s, Node *n, Class *c);
 static Type *check_field(Sema *s, Node *n);
 // 既定値の並びと型を確かめる（A-38）
 static void check_defaults(Sema *s, FuncSig *f, Node *fn);
+// lambda を「使う側の型」から実体にする（A-42）
+static FuncSig *instantiate_lambda(Sema *s, FuncSig *tmpl, Node *ref);
 // 呼び出しの引数を並べ替えて、足りないぶんを既定値で埋める（A-38）
 static void bind_args(Node *n, int nparams, char **pnames, Node **defaults,
                       Token *deftok, const char *subject, bool has_self);
@@ -1638,6 +1642,19 @@ static Type *check_var(Sema *s, Node *n) {
     //   注意: 変数が先です。同名の局所変数があればそちらが勝ちます。
     if (!v) {
         FuncSig *f = lookup_func(s, n->name);
+        // ★ lambda は**使う側の型**で実体になります（A-42）。
+        if (f && f->tmpl && f->tmpl->is_lambda) f = instantiate_lambda(s, f, n);
+        if (f && f->tmpl) {
+            // ジェネリック関数そのものは値にできません（型引数が決まらない）。
+            Diag d = {0};
+            d.message = diag_fmt("'%s' は型引数を取る関数なので、値にできません",
+                                 n->name);
+            d.primary.tok = n->tok;
+            d.primary.label = "ここでは値として使えません";
+            d.hint = "値にするには型が 1 つに決まっている必要があります"
+                     "（呼び出しなら実引数から決まります）";
+            diag_fail(&d);
+        }
         if (f) {
             if (f->nraises > 0) {
                 Diag d = {0};
@@ -1675,6 +1692,21 @@ static Type *check_var(Sema *s, Node *n) {
             d.primary.label = "このモジュールはここからは見えません";
             d.hint = diag_fmt("ファイルの先頭に 'import %s' を書いてください",
                               n->name);
+            diag_fail(&d);
+        }
+
+        // ★ lambda の中から外の変数を使おうとした場合（A-42）。
+        //   持ち上げた先はトップレベルなので、外の名前はそこから見えません。
+        //   「未定義の名前です」で突き放すと、何が起きたのか分かりません。
+        if (s->cur_func && s->cur_func->is_lambda) {
+            Diag d = {0};
+            d.message = diag_fmt("lambda の中から外の変数 '%s' は使えません",
+                                 n->name);
+            d.primary.tok = n->tok;
+            d.primary.label = "この名前は lambda の外のものです";
+            d.hint = "捕獲（クロージャ）はまだありません。"
+                     "使う値は引数で受け取るか、def で書いた関数にしてください"
+                     "（グローバルなら使えます）";
             diag_fail(&d);
         }
 
@@ -3767,7 +3799,12 @@ static Type *check_call_sig(Sema *s, Node *n, FuncSig *f, const char *what) {
     for (Node *a = n->args; a; a = a->next, i++) {
         // 注意: 引数には期待型を渡しません。
         //    move_out([]) の [] は「型注釈を書いてください」というエラーになります。
+        // ★ 例外は**関数型**です（A-42）。lambda はここから型をもらいます。
+        //   注意: 関数型に限るのは、[] のような「型注釈を書いてください」と
+        //     案内したい形まで通してしまわないためです。
+        s->expected = f->params[i]->kind == TY_FN ? f->params[i] : NULL;
         Type *at = check_expr(s, a);
+        s->expected = NULL;
         // ★ codegen へ「この実引数は借用で渡す」と**分かっている**ことを伝えます。
         //   借用なら相手は所有権を受け取らないので、呼び出し後に一時値を
         //   解放できます（A-21e）。
@@ -5186,6 +5223,7 @@ static void declare_func(Sema *s, Node *n) {
     f->pnames = nparams ? xmalloc(sizeof(char *) * (size_t)nparams) : NULL;
     f->pmodes = nparams ? xmalloc(sizeof(ParamMode) * (size_t)nparams) : NULL;
     f->defaults = xmalloc(sizeof(Node *) * (size_t)(nparams ? nparams : 1));
+    f->is_lambda = n->is_lambda;   // A-42
     f->tok = n->tok;
 
     int i = 0;
@@ -5229,6 +5267,112 @@ static void declare_func(Sema *s, Node *n) {
 //
 // ★ **実引数の型から型引数を決めます。** クラスと違い、左辺の型からは
 //   決められないためです（f(xs) の左辺には戻り値の型しかない）。
+// ── lambda を実体にする（A-42）───────────────────────────
+//
+// ★ lambda には**型が書いてありません**。どんな関数になるかは
+//   「置かれた場所」で決まります。
+//
+//     p: fn(int) -> bool = lambda x: x > 0
+//        ^^^^^^^^^^^^^^^ これが答え
+//
+//   ジェネリック関数の単相化と同じ道を通します——パーサが .T0 / .R という
+//   型引数を作っておき、ここで `fn(int) -> bool` の中身を束ねます。
+//   **新しい仕組みを足していません。**
+//
+// 注意: 同じ lambda を違う型で 2 度使えば、実体が 2 つできます
+//   （ジェネリック関数と同じです）。
+static FuncSig *instantiate_lambda(Sema *s, FuncSig *tmpl, Node *ref) {
+    Node *tn = tmpl->tmpl;
+
+    int np = 0;
+    for (Node *pm = tn->params; pm; pm = pm->next) np++;
+
+    Type *want = s->expected;
+    if (!want || want->kind != TY_FN) {
+        Diag d = {0};
+        d.message = "この lambda がどんな関数になるのか決められません";
+        d.primary.tok = ref->tok;
+        d.primary.label = "ここでは引数と戻り値の型が決まりません";
+        d.hint = "型注釈のある変数に入れるか、関数型の引数に渡してください:\n"
+                 "             p: fn(int) -> bool = lambda x: x > 0\n"
+                 "             count_if(xs, lambda x: x > 0)";
+        diag_fail(&d);
+    }
+    if (want->nparams != np) {
+        Diag d = {0};
+        d.message = diag_fmt("この lambda は %d 個の引数を取りますが、'%s' が要ります",
+                             np, type_name(want));
+        d.primary.tok = ref->tok;
+        d.primary.label = diag_fmt("引数が %d 個です", np);
+        d.hint = diag_fmt("ここに置けるのは %d 引数の lambda です", want->nparams);
+        diag_fail(&d);
+    }
+
+    // 束ねる型の並び（引数 … と戻り型）
+    Type *args[MAX_TARGS];
+    int nt = np + 1;
+    if (nt > MAX_TARGS) error_at(ref->tok, "lambda の引数が多すぎます");
+    for (int i = 0; i < np; i++) args[i] = want->params[i];
+    args[np] = want->elem;
+
+    char *iname = mangle_inst(tmpl->name, args, nt);
+
+    // 既に作ってあれば、それを返します
+    for (FuncSig *f = tmpl->owner->funcs; f; f = f->next)
+        if (!f->tmpl && strcmp(f->name, iname) == 0) return f;
+
+    ModuleSyms *saved_mod = s->cur;
+    Scope *saved_scope = s->scope;
+    TBind *saved_tbind = s->tbind;
+    FuncSig *saved_cur_func = s->cur_func;
+    UsedName *saved_used = s->used;
+
+    enter_module(s, tmpl->owner);
+
+    TBind *binds = NULL;
+    int ti = 0;
+    for (Node *tp = tn->targs; tp; tp = tp->next, ti++) {
+        TBind *b = xmalloc(sizeof(TBind));
+        b->name = tp->name;
+        b->type = args[ti];
+        b->next = binds;
+        binds = b;
+    }
+    s->tbind = binds;
+
+    Node *inst = ast_clone(tn);
+    inst->name = iname;
+    inst->targs = NULL;
+    inst->next = NULL;
+
+    declare_func(s, inst);
+
+    // codegen が拾えるように、そのモジュールの AST に足します
+    Node *ast = tmpl->owner->mod->ast;
+    Node *last = ast->body;
+    while (last->next) last = last->next;
+    last->next = inst;
+
+    Instance *q = xmalloc(sizeof(Instance));
+    q->node = inst;
+    q->owner = tmpl->owner;
+    q->binds = binds;
+    q->site = ref->tok;
+    q->iname = iname;
+    q->is_func = true;
+    q->next = s->pending;
+    s->pending = q;
+
+    FuncSig *made = lookup_func(s, iname);
+
+    enter_module(s, saved_mod);
+    s->scope = saved_scope;
+    s->cur_func = saved_cur_func;
+    s->used = saved_used;
+    s->tbind = saved_tbind;
+    return made;
+}
+
 static FuncSig *instantiate_func(Sema *s, FuncSig *tmpl, Node *call) {
     Node *tn = tmpl->tmpl;
 

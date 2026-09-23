@@ -710,6 +710,12 @@ class Node:
     hid_cur: str
     hid_obj: str
 
+    # ★ lambda（A-42）。
+    #   ND_FUNC … 持ち上げた lambda の本体（型は使う側から決まります）
+    #   ND_VAR  … その lambda を指す名前
+    #   対になる定義: src/ast.h の is_lambda
+    is_lambda: bool
+
     # 型注釈のモジュール修飾（ND_TYPEREF）
     mod_name: str
 
@@ -820,6 +826,7 @@ class Node:
         self.arg_name_tok = None
         self.hid_cur = ""
         self.hid_obj = ""
+        self.is_lambda = False
         self.nullable = False
         self.mod_name = ""
         self.ir_name = ""
@@ -1248,6 +1255,7 @@ def ast_clone(n: rc[Node] | None) -> rc[Node] | None:
     #     名前がぶつかることはありません（ジェネリクスの単相化）。
     c.hid_cur = copy(src.hid_cur)
     c.hid_obj = copy(src.hid_obj)
+    c.is_lambda = src.is_lambda   # A-42
 
     c.lhs = ast_clone(src.lhs)
     c.rhs = ast_clone(src.rhs)

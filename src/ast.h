@@ -444,6 +444,11 @@ struct Node {
     char *hid_cur;
     char *hid_obj;
 
+    // ★ lambda（A-42）。
+    //   ND_FUNC … 持ち上げた lambda の本体（型は使う側から決まります）
+    //   ND_VAR  … その lambda を指す名前
+    bool is_lambda;
+
     // ND_FIELD が指すフィールド（sema が解決する）
     Field *field;
 

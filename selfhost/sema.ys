@@ -1605,7 +1605,7 @@ class Sema:
         t.elem = f.ret
         return t
 
-    def check_var(self, n: mut rc[ast.Node]) -> rc[ast.Type]:
+    def check_var(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
         v: rc[types.VarEntry] | None = self.lookup(n.name)
 
         # ★ 契約（A-29）：ensures の式の中の 'result' は**戻り値そのもの**。
@@ -1634,6 +1634,19 @@ class Sema:
         #   注意: 変数が先。同名の局所変数があればそちらが勝つ。
         if v is None:
             fs: rc[types.FuncSig] | None = self.lookup_func(n.name)
+            # ★ lambda は**使う側の型**で実体になります（A-42）
+            if fs is not None:
+                fst: rc[ast.Node] | None = unwrap_sig(fs).tmpl
+                if fst is not None and unwrap_node(fst).is_lambda:
+                    fs = self.instantiate_lambda(unwrap_sig(fs), n)
+            if fs is not None and unwrap_sig(fs).tmpl is not None:
+                # ジェネリック関数そのものは値にできません（型引数が決まらない）
+                diag.error_full(unwrap_tok(n.tok),
+                                "'" + n.name +
+                                "' は型引数を取る関数なので、値にできません",
+                                "ここでは値として使えません", None, "",
+                                "値にするには型が 1 つに決まっている必要があります" +
+                                "（呼び出しなら実引数から決まります）")
             if fs is not None:
                 if len(fs.raises_cls) > 0:
                     diag.error_full(unwrap_tok(n.tok),
@@ -1664,6 +1677,17 @@ class Sema:
                                 "ファイルの先頭に 'import " + n.name +
                                 "' を書いてください")
 
+            # ★ lambda の中から外の変数を使おうとした場合（A-42）。
+            #   持ち上げた先はトップレベルなので、外の名前は見えません。
+            cf0: rc[types.FuncSig] | None = self.cur_func
+            if cf0 is not None and unwrap_sig(cf0).is_lambda:
+                diag.error_full(unwrap_tok(n.tok),
+                                "lambda の中から外の変数 '" + n.name +
+                                "' は使えません",
+                                "この名前は lambda の外のものです", None, "",
+                                "捕獲（クロージャ）はまだありません。" +
+                                "使う値は引数で受け取るか、def で書いた関数に" +
+                                "してください（グローバルなら使えます）")
             diag.error_full(unwrap_tok(n.tok),
                             "未定義の名前 '" + n.name + "' です",
                             "この名前は宣言されていません", None, "",
@@ -3718,7 +3742,12 @@ class Sema:
         while a is not None:
             arg: rc[ast.Node] = a
             # 注意: 引数には期待型を渡さない
+            # ★ 例外は**関数型**です（A-42）。lambda はここから型をもらいます。
+            self.expected = None
+            if f.params[i].kind == ast.TY_FN:
+                self.expected = f.params[i]
             at: rc[ast.Type] = self.check_expr(arg)
+            self.expected = None
             # ★ codegen へ「この実引数は借用で渡すと**分かっている**」ことを
             #   伝えます。借用なら相手は所有権を受け取らないので、呼び出し後に
             #   一時値を解放できます（A-21e）。
@@ -4578,6 +4607,135 @@ class Sema:
     #
     # ★ **実引数の型から型引数を決める。** クラスと違い、左辺の型からは
     #   決められない（f(xs) の左辺には戻り値の型しかない）。
+    # ── lambda を実体にする（A-42）───────────────────────────
+    #
+    # ★ lambda には**型が書いてありません**。どんな関数になるかは
+    #   「置かれた場所」で決まります。
+    #
+    #     p: fn(int) -> bool = lambda x: x > 0
+    #        ^^^^^^^^^^^^^^^ これが答え
+    #
+    #   ジェネリック関数の単相化と同じ道を通します——パーサが .T0 / .R という
+    #   型引数を作っておき、ここで fn(int) -> bool の中身を束ねます。
+    #   **新しい仕組みを足していません。**
+    #   対になる定義: src/sema.c の instantiate_lambda
+    def instantiate_lambda(mut self, tmpl: rc[types.FuncSig],
+                           ref: mut rc[ast.Node]) -> rc[types.FuncSig]:
+        tn: rc[ast.Node] = unwrap_node(tmpl.tmpl)
+
+        np: int = 0
+        pm0: rc[ast.Node] | None = tn.params
+        while pm0 is not None:
+            p0: rc[ast.Node] = pm0
+            np = np + 1
+            pm0 = p0.next
+
+        want0: rc[ast.Type] | None = self.expected
+        if want0 is None:
+            diag.error_full(unwrap_tok(ref.tok),
+                            "この lambda がどんな関数になるのか決められません",
+                            "ここでは引数と戻り値の型が決まりません", None, "",
+                            "型注釈のある変数に入れるか、関数型の引数に渡して" +
+                            "ください:\n" +
+                            "             p: fn(int) -> bool = lambda x: x > 0\n" +
+                            "             count_if(xs, lambda x: x > 0)")
+            return tmpl
+        want: rc[ast.Type] = want0
+        if want.kind != ast.TY_FN:
+            diag.error_full(unwrap_tok(ref.tok),
+                            "この lambda がどんな関数になるのか決められません",
+                            "ここでは引数と戻り値の型が決まりません", None, "",
+                            "型注釈のある変数に入れるか、関数型の引数に渡して" +
+                            "ください:\n" +
+                            "             p: fn(int) -> bool = lambda x: x > 0\n" +
+                            "             count_if(xs, lambda x: x > 0)")
+            return tmpl
+        if len(want.params) != np:
+            diag.error_full(unwrap_tok(ref.tok),
+                            "この lambda は " + str(np) +
+                            " 個の引数を取りますが、'" + ast.type_name(want) +
+                            "' が要ります",
+                            "引数が " + str(np) + " 個です", None, "",
+                            "ここに置けるのは " + str(len(want.params)) +
+                            " 引数の lambda です")
+            return tmpl
+
+        # 束ねる型の並び（引数 … と戻り型）
+        args: list[rc[ast.Type]] = []
+        i: int = 0
+        while i < np:
+            args.append(want.params[i])
+            i = i + 1
+        args.append(ast.elem_of(want))
+
+        iname: str = self.mangle_inst(tmpl.name, args)
+
+        ow0: rc[types.ModuleSyms] | None = tmpl.owner
+        owner: rc[types.ModuleSyms] = self.cur_syms()
+        if ow0 is not None:
+            owner = ow0
+        ex: rc[types.FuncSig] | None = self.lookup_func_in(owner, iname)
+        if ex is not None:
+            return ex
+
+        saved_mod: rc[types.ModuleSyms] = self.cur_syms()
+        saved_scope: rc[types.Scope] | None = self.scope
+        saved_tbind: rc[TBinds] | None = self.tbind
+        saved_func: rc[types.FuncSig] | None = self.cur_func
+        saved_used: rc[UsedNames] = self.used
+        saved_expected: rc[ast.Type] | None = self.expected
+
+        self.enter_module(owner)
+        self.expected = None
+
+        binds: rc[TBinds] = rc(TBinds())
+        ti: int = 0
+        tp2: rc[ast.Node] | None = tn.targs
+        while tp2 is not None:
+            tpn2: rc[ast.Node] = tp2
+            binds.names.append(copy(tpn2.name))
+            binds.types_.append(args[ti])
+            ti = ti + 1
+            tp2 = tpn2.next
+        self.tbind = binds
+
+        inst: rc[ast.Node] = unwrap_node(ast.ast_clone(tn))
+        inst.name = copy(iname)
+        inst.targs = None
+        inst.next = None
+
+        self.declare_func(inst)
+
+        # codegen が拾えるように、そのモジュールの AST に足します
+        omod: rc[module.Module] | None = owner.mod
+        root: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, None)
+        if omod is None:
+            panic("sema: モジュールがありません")
+        else:
+            root = unwrap_node(omod.ast)
+        last: rc[ast.Node] = unwrap_node(root.body)
+        nx: rc[ast.Node] | None = last.next
+        while nx is not None:
+            last = nx
+            nx = last.next
+        last.next = inst
+
+        self.pending.append(Instance(inst, owner, binds, unwrap_tok(ref.tok),
+                                     copy(iname), True))
+
+        made: rc[types.FuncSig] | None = self.lookup_func(iname)
+
+        self.enter_module(saved_mod)
+        self.scope = saved_scope
+        self.cur_func = saved_func
+        self.used = saved_used
+        self.tbind = saved_tbind
+        self.expected = saved_expected
+        if made is None:
+            panic("sema: 実体化した lambda が見つかりません")
+            return tmpl
+        return made
+
     def instantiate_func(mut self, tmpl: rc[types.FuncSig],
                          call: mut rc[ast.Node]) -> rc[types.FuncSig]:
         tn: rc[ast.Node] = unwrap_node(tmpl.tmpl)
@@ -4789,6 +4947,7 @@ class Sema:
 
         f: rc[types.FuncSig] = rc(types.FuncSig(n.name, n.tok))
         f.ret = ret
+        f.is_lambda = n.is_lambda   # A-42
 
         pm: rc[ast.Node] | None = n.params
         while pm is not None:

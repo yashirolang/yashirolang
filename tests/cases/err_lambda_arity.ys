@@ -1,0 +1,5 @@
+# ERROR: この lambda は 1 個の引数を取りますが、'fn(int, int) -> bool' が要ります
+# 引数の数が置かれた場所と合わない（A-42）
+def main() -> int:
+    p: fn(int, int) -> bool = lambda x: x > 0
+    return 0

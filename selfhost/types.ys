@@ -34,6 +34,9 @@ class FuncSig:
     #     （Python のように「定義時に 1 つ作って共有」しません）。
     #   対になる定義: src/sema.c の defaults
     defaults: list[rc[ast.Node] | None]
+    # ★ lambda から作った実体か（A-42）。エラーの言葉を変えるために持ちます。
+    #   対になる定義: src/sema.c の is_lambda
+    is_lambda: bool
     nparams: int
     tok: rc[token.Token] | None
     owner: rc[ModuleSyms] | None
@@ -53,6 +56,7 @@ class FuncSig:
         self.params = []
         self.pnames = []
         self.defaults = []
+        self.is_lambda = False
         self.tok = tok
         self.raises_cls = []
 

@@ -1,0 +1,6 @@
+# ERROR: この lambda がどんな関数になるのか決められません
+# ERROR: 型注釈のある変数に入れるか、関数型の引数に渡してください
+# lambda は置かれた場所から型をもらう（A-42）
+def main() -> int:
+    print(str(lambda x: x))
+    return 0

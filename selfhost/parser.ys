@@ -17,6 +17,10 @@ class Parser:
     toks: list[rc[token.Token]]
     pos: int
     hidden: int   # 隠し変数の連番（for の脱糖で使う）
+    # ★ lambda を持ち上げた関数の並び（A-42）。式の途中で見つけた lambda は
+    #   **トップレベルの関数**にしてここに貯め、program() の最後に足します。
+    #   対になる定義: src/parser.c の lam_head / lam_tail
+    lams: list[rc[ast.Node]]
 
     # 注意: トークンの並びは **所有ごと**受け取ります（own）。
     #   借りたものをフィールドに置くと、貸してくれた相手より長生きします。
@@ -24,6 +28,7 @@ class Parser:
         self.toks = toks
         self.pos = 0
         self.hidden = 0
+        self.lams = []
 
     # ── トークンの読み取り ──────────────────────────────────
 
@@ -240,7 +245,97 @@ class Parser:
             return result
         return ast.new_str_node(t, "", 0)
 
+    # lambda_expr ::= "lambda" [ IDENT { "," IDENT } ] ":" expr
+    #
+    # ★ **トップレベルの関数に持ち上げます**（脱糖）。書いた場所には、その
+    #   関数を指す名前だけが残ります。
+    #
+    #     f(xs, lambda x: x > 0)
+    #       →  def lambda.0[.T0, .R](x: .T0) -> .R:   ← 型は使う側から決まる
+    #              return x > 0
+    #           f(xs, lambda.0)
+    #
+    # ★ 引数の型も戻り型も書きません。**ジェネリック関数と同じ仕掛け**に
+    #   乗せます——型引数を自分で作っておき、`fn(int) -> bool` が要る場所に
+    #   置かれたときに、その型を束ねます（sema の instantiate_lambda）。
+    #
+    # 注意: 本体は式 1 つだけです。外の変数はまだ使えません（捕獲は無い）。
+    #   対になる定義: src/parser.c の lambda_expr
+    def lambda_expr(mut self) -> rc[ast.Node]:
+        kw: rc[token.Token] = self.advance()   # "lambda"
+        name: str = self.hidden_name("lambda")
+
+        fn: rc[ast.Node] = ast.new_node(ast.ND_FUNC, kw)
+        fn.name = copy(name)
+        fn.is_lambda = True
+
+        phead: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, kw)
+        pcur: rc[ast.Node] = phead
+        thead: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, kw)
+        tcur: rc[ast.Node] = thead
+        np: int = 0
+
+        if not self.peek().is_punct(":"):
+            while True:
+                a: rc[token.Token] = self.peek()
+                if a.kind != token.TK_IDENT:
+                    self.fail_hint(a, "lambda の引数は名前で書きます" +
+                                      "（例: lambda x, y: x + y）",
+                                   "引数の名前が必要です")
+                self.advance()
+
+                # .T0 / .T1 …（利用者が書けない名前にします）
+                tp: rc[ast.Node] = ast.new_node(ast.ND_TYPEREF, a)
+                tp.name = name + ".T" + str(np)
+                tcur.next = tp
+                tcur = tp
+
+                pm: rc[ast.Node] = ast.new_node(ast.ND_PARAM, a)
+                pm.name = copy(a.text)
+                tr: rc[ast.Node] = ast.new_node(ast.ND_TYPEREF, a)
+                tr.name = copy(tp.name)
+                pm.type_ref = tr
+                pcur.next = pm
+                pcur = pm
+                np = np + 1
+
+                if self.consume(",") is None:
+                    break
+
+        if self.consume(":") is None:
+            self.fail_hint(self.peek(), "lambda は「lambda 引数: 式」の形で書きます",
+                           "':' が必要です")
+
+        # 戻り型の型引数 .R
+        rp: rc[ast.Node] = ast.new_node(ast.ND_TYPEREF, kw)
+        rp.name = name + ".R"
+        tcur.next = rp
+
+        rtr: rc[ast.Node] = ast.new_node(ast.ND_TYPEREF, kw)
+        rtr.name = name + ".R"
+
+        fn.targs = thead.next
+        fn.params = phead.next
+        fn.type_ref = rtr
+
+        # 本体は「return 式」1 つだけ
+        ret: rc[ast.Node] = ast.new_node(ast.ND_RETURN, kw)
+        ret.lhs = self.expr()
+        body: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, kw)
+        body.body = ret
+        fn.body = body
+
+        self.lams.append(fn)
+
+        ref: rc[ast.Node] = ast.new_var_node(kw, name)
+        ref.is_lambda = True
+        return ref
+
     def primary(mut self) -> rc[ast.Node]:
+        # ★ lambda（A-42）。**式の一種**です（トップレベルの関数に持ち上げます）。
+        if self.peek().is_kw("lambda"):
+            return self.lambda_expr()
+
         open_tok: rc[token.Token] | None = self.consume("(")
         if open_tok is not None:
             ot: rc[token.Token] = open_tok
@@ -2488,6 +2583,12 @@ class Parser:
                            "             def main() -> int:\n" +
                            "                 ...\n" +
                            "                 return 0")
+
+        # ★ 持ち上げた lambda をトップレベルの並びに足します（A-42）。
+        #   **最後に足すのは、前方参照が効くからです**（定義の順は問いません）。
+        for lam in self.lams:
+            cur.next = lam
+            cur = lam
 
         blk: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, first)
         blk.body = head.next

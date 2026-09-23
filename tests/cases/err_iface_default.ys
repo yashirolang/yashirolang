@@ -1,0 +1,19 @@
+# ERROR: インタフェースの宣言に既定値は書けません
+# インタフェースの宣言に既定値は書けない（A-38）
+#
+# ★ 実装ごとに違う既定値を書けてしまうと、呼ぶ側はどれが埋まるか分かりません。
+interface Shape:
+    def area(self, k: int = 2) -> int
+
+class Sq(Shape):
+    w: int
+
+    def init(self, w: int) -> None:
+        self.w = w
+
+    def area(self, k: int = 2) -> int:
+        return self.w * k
+
+def main() -> int:
+    s: Shape = Sq(2)
+    return s.area(3)

@@ -1,0 +1,95 @@
+# OUTPUT: a--- a- a*** --a
+# OUTPUT: 12 12
+# OUTPUT: T:5 ハコ:6
+# OUTPUT: 1/2 a-b
+# OUTPUT: 高
+# EXIT: 0
+# キーワード引数（A-38）
+#
+#   ★ `name = 値` で、**定義の順に関係なく**渡せます。並べ替えと既定値の
+#     穴埋めは sema がして、この先（型検査・codegen・所有権検査）には
+#     「定義の順に並んだ、ちょうど引数の数だけの実引数」が渡ります。
+#
+#   注意: **位置で渡す引数は、名前で渡す引数より前だけ**です
+#     （err_kwarg_pos_after）。混ぜられると、読む人が「この値は何番目か」を
+#     数え直すことになります。
+#
+#   注意: 名前で渡せるのは**呼び先がソースから 1 つに決まる**ときだけです。
+#     組み込み・関数の値・インタフェース越しには渡せません
+#     （err_kwarg_builtin / err_kwarg_fnvalue / err_kwarg_iface）。
+enum Level:
+    Low
+    High
+
+
+def pad(s: str, n: int = 3, c: str = "-", right: bool = True) -> str:
+    out: str = s
+    i: int = 0
+    while i < n:
+        if right:
+            out = out + c
+        else:
+            out = c + out
+        i = i + 1
+    return out
+
+
+class Box:
+    w: int
+    h: int
+    tag: str
+
+    def init(self, w: int, h: int = 2, tag: own str = "箱") -> None:
+        self.w = w
+        self.h = h
+        self.tag = tag
+
+    def area(self, scale: int = 1) -> int:
+        return self.w * self.h * scale
+
+    def show(self) -> str:
+        return self.tag + ":" + str(self.area())
+
+
+def firstn[T](xs: list[T], n: int = 1, sep: str = ",") -> str:
+    out: str = ""
+    i: int = 0
+    while i < n and i < len(xs):
+        if i > 0:
+            out = out + sep
+        out = out + str(xs[i])
+        i = i + 1
+    return out
+
+
+def level_name(l: Level = Level.High) -> str:
+    match l:
+        case Level.Low:
+            return "低"
+        case Level.High:
+            return "高"
+    return "?"
+
+
+def main() -> int:
+    # 位置 → 名前の順。飛ばした引数は既定値で埋まります
+    print(pad("a") + " " + pad("a", 1) + " " + pad("a", c = "*") + " " +
+          pad("a", right = False, n = 2))
+
+    # メソッド。self は数えません
+    b: Box = Box(3)
+    print(str(b.area(scale = 2)) + " " + str(b.area(2)))
+
+    # 生成（init の引数名が使えます）
+    b3: Box = Box(w = 1, h = 5, tag = "T")
+    b2: Box = Box(3, tag = "ハコ")
+    print(b3.show() + " " + b2.show())
+
+    # ジェネリック関数（名前で渡しても、型引数は正しく決まります）
+    xs: list[int] = [1, 2, 3]
+    ys: list[str] = ["a", "b"]
+    print(firstn(xs, n = 2, sep = "/") + " " + firstn(ys, sep = "-", n = 2))
+
+    # 列挙の枝を名前で渡す
+    print(level_name(l = Level.High))
+    return 0

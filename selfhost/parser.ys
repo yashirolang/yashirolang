@@ -539,6 +539,27 @@ class Parser:
             n = call
         return n
 
+    # 実引数を 1 つ読む（A-38）。
+    #
+    # ★ `name = 値` ならキーワード引数です。**印は arg_name に付けます**
+    #   （式そのものはふつうに読むので、木の形は今までどおり）。
+    #
+    # 注意: **2 トークン先まで見て決めます。** `x == 1` は比較で、`x = 1` は
+    #   キーワード引数です。'=' と '==' は別のトークンなので曖昧になりません。
+    #
+    # 注意: **並べ替えと既定値の穴埋めは sema の仕事です。** ここでは
+    #   「名前が付いている」ことだけを記録します。
+    def call_arg(mut self) -> rc[ast.Node]:
+        t: rc[token.Token] = self.peek()
+        if t.kind == token.TK_IDENT and self.peek_at(1).is_punct("="):
+            self.advance()   # 名前
+            self.advance()   # "="
+            v: rc[ast.Node] = self.expr()
+            v.arg_name = copy(t.text)
+            v.arg_name_tok = t
+            return v
+        return self.expr()
+
     # 引数リストを読む（閉じ括弧まで）。C 版は各所に展開されているが、
     # セルフホスト版はダミー先頭の扱いが冗長になるので 1 か所にまとめる。
     def arg_list(mut self, open_tok: rc[token.Token]) -> rc[ast.Node] | None:
@@ -546,7 +567,7 @@ class Parser:
         cur: rc[ast.Node] = head
         if not self.peek().is_punct(")"):
             while True:
-                cur.next = self.expr()
+                cur.next = self.call_arg()
                 nx: rc[ast.Node] | None = cur.next
                 if nx is None:
                     panic("parser: unreachable")
@@ -1666,6 +1687,76 @@ class Parser:
     # ★ 受け取り方（own / mut）を読む。**意味づけはまだしない。**
     #   own / mut は「型の前」に置く（言語仕様 v2 §11）。self だけ型注釈が
     #   無いので `mut self` と書く。
+    # 既定値を 1 つ読む（A-38）。**リテラルだけ**を許します。
+    #
+    # 注意: ここで断らずに通すと、あとで「呼び出し側に置き換える」ときに
+    #   名前や呼び出しが紛れ込みます。入口で形を縛るのがいちばん確実です。
+    def default_value(mut self, pname: rc[token.Token]) -> rc[ast.Node]:
+        t: rc[token.Token] = self.peek()
+
+        # ★ 符号つきの数（-1 / +1）。単項マイナスは式ですが、**数のリテラルに
+        #   限って**認めます（-1 が書けないと使いものになりません）。
+        if t.is_punct("-") or t.is_punct("+"):
+            nx: rc[token.Token] = self.peek_at(1)
+            if nx.kind == token.TK_INT or nx.kind == token.TK_FLOAT:
+                sign: rc[token.Token] = self.advance()
+                lit: rc[ast.Node] = self.primary()
+                if sign.is_punct("+"):
+                    return lit
+                neg: rc[ast.Node] = ast.new_node(ast.ND_UNARY, sign)
+                neg.op = ast.OP_NEG
+                neg.lhs = lit
+                return neg
+
+        # ★ 列挙の枝（Color.Red / mod.Color.Red）。sema が定数に畳みます。
+        #
+        # 注意: **ここでは点で繋いだ名前だけを自分で読みます。** 式の読み取り
+        #   （postfix）に任せると、f() や xs[0] まで通ってしまい、
+        #   「リテラルだけ」という約束が崩れます。
+        if t.kind == token.TK_IDENT:
+            e: rc[ast.Node] = ast.new_node(ast.ND_VAR, t)
+            e.name = copy(t.text)
+            self.advance()
+            while self.consume(".") is not None:
+                seg: rc[token.Token] = self.peek()
+                if seg.kind != token.TK_IDENT:
+                    self.fail_hint(seg, "ここには名前が必要です",
+                                   "'.' の後には名前を書きます")
+                self.advance()
+                fld: rc[ast.Node] = ast.new_node(ast.ND_FIELD, seg)
+                fld.lhs = e
+                fld.name = copy(seg.text)
+                e = fld
+            # ★ g() や xs[0] は**ここで**断ります（点で繋いだ名前の続きに
+            #   見えるので、黙って読み飛ばすと「名前だけ」を受け取ったことに
+            #   なります）。
+            if self.peek().is_punct("(") or self.peek().is_punct("["):
+                what: str = "既定値に添字は書けません"
+                if self.peek().is_punct("("):
+                    what = "既定値に呼び出しは書けません"
+                self.fail_full(self.peek(), what, "ここは実行しないと決まりません",
+                               "数 / 文字列 / True / False / None / 列挙の枝 " +
+                               "だけが書けます（既定値は呼び出し側に置き換わるので、" +
+                               "実行して決まる値は書けません）")
+            if e.kind != ast.ND_FIELD:
+                self.fail_full(t, "既定値に変数は書けません", "ここには値を書きます",
+                               "数 / 文字列 / True / False / None / 列挙の枝 " +
+                               "だけが書けます（変えられる値を既定値にすると、" +
+                               "呼ぶたびに答えが変わります）")
+            return e
+
+        if (t.kind == token.TK_INT or t.kind == token.TK_FLOAT or
+                t.kind == token.TK_STR or t.is_kw("True") or t.is_kw("False") or
+                t.is_kw("None")):
+            return self.primary()
+
+        self.fail_full(t, "引数 '" + pname.text + "' の既定値に書けるのはリテラルだけです",
+                       "ここは実行しないと決まりません",
+                       "数 / 文字列 / True / False / None / 列挙の枝 だけが書けます。" +
+                       "list が要るときは 'xs: list[int] | None = None' と書きます" +
+                       "（既定値の list は呼び出しをまたいで共有されるため、書けません）")
+        return self.primary()
+
     def param(mut self, allow_self: bool) -> rc[ast.Node]:
         # 名前の前に書けるのは 'mut self' の mut だけ
         lead: rc[token.Token] | None = None
@@ -1713,6 +1804,19 @@ class Parser:
         n.name = copy(name_tok.text)
         n.type_ref = tr
         n.mode = mode
+
+        # ── 既定値（A-38）──
+        #
+        # ★ **書けるのはリテラルだけです**（数・文字列・True / False / None・
+        #   列挙の枝・符号つきの数）。式を書けるようにしない理由は 2 つです。
+        #
+        #   ① **可変な既定値の罠を書けなくする。** Python の def f(xs=[]) は、
+        #      その list が**呼び出しをまたいで共有**されます。
+        #   ② **名前をどちらで解決するかを決めずに済む。** 既定値は**呼び出し側に
+        #      置き換える**作りなので、名前が入ると答えが 2 つになります。
+        if self.peek().is_punct("="):
+            self.advance()
+            n.rhs = self.default_value(name_tok)
         return n
 
     # 引数リスト（仮引数）を読む

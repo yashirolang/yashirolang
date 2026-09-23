@@ -142,6 +142,7 @@ static Token *expect(Parser *p, TokenKind kind, const char *what,
 //   primary     ::= INT | True | False | IDENT | "(" expr ")"   強い ↓
 
 static Node *expr(Parser *p);
+static Node *call_arg(Parser *p);   // 実引数 1 つ（キーワード引数を含む。A-38）
 static Node *list_comp(Parser *p, Token *open, Node *elem);
 static char *hidden_name(Parser *p, const char *tag);
 static Node *or_expr(Parser *p);
@@ -588,7 +589,7 @@ static Node *postfix(Parser *p) {
             Node *mcur = &mhead;
             if (!tok_is(peek(p), ")")) {
                 for (;;) {
-                    mcur->next = expr(p);
+                    mcur->next = call_arg(p);
                     mcur = mcur->next;
                     if (!consume(p, ",")) break;
                 }
@@ -618,7 +619,7 @@ static Node *postfix(Parser *p) {
         Node *cur = &head;
         if (!tok_is(peek(p), ")")) {
             for (;;) {
-                cur->next = expr(p);
+                cur->next = call_arg(p);
                 cur = cur->next;
                 if (!consume(p, ",")) break;
             }
@@ -627,6 +628,31 @@ static Node *postfix(Parser *p) {
         call->args = head.next;
         n = call;
     }
+}
+
+// 実引数を 1 つ読む（A-38）。
+//
+// ★ `name = 値` ならキーワード引数です。**印は `arg_name` に付けます**
+//   （式そのものはふつうに読むので、木の形は今までどおり）。
+//
+// 注意: **2 トークン先まで見て決めます。** `x == 1` は比較で、`x = 1` は
+//   キーワード引数です。`=` と `==` は別のトークンなので、ここは曖昧に
+//   なりません。
+//
+// 注意: **並べ替えと既定値の穴埋めは sema の仕事です。** ここでは
+//   「名前が付いている」ことだけを記録します（どの引数に当たるかは、
+//   呼び先が決まらないと分かりません）。
+static Node *call_arg(Parser *p) {
+    Token *t = peek(p);
+    if (t->kind == TK_IDENT && tok_is(peek_at(p, 1), "=")) {
+        advance(p);   // 名前
+        advance(p);   // "="
+        Node *v = expr(p);
+        v->arg_name = t->text;
+        v->arg_name_tok = t;
+        return v;
+    }
+    return expr(p);
 }
 
 // power ::= postfix [ "**" unary ]
@@ -2019,6 +2045,90 @@ static Node *raises_type(Parser *p) {
     return n;
 }
 
+// 既定値を 1 つ読む（A-38）。**リテラルだけ**を許します。
+//
+// 注意: ここで断らずに通すと、あとで「呼び出し側に置き換える」ときに
+//   名前や呼び出しが紛れ込みます。入口で形を縛るのがいちばん確実です。
+static Node *default_value(Parser *p, Token *pname) {
+    Token *t = peek(p);
+
+    // ★ 符号つきの数（-1 / +1）。単項マイナスは式ですが、**数のリテラルに
+    //   限って**認めます（`-1` が書けないと使いものになりません）。
+    if ((tok_is(t, "-") || tok_is(t, "+")) &&
+        (peek_at(p, 1)->kind == TK_INT || peek_at(p, 1)->kind == TK_FLOAT)) {
+        Token *sign = advance(p);
+        Node *lit = primary(p);
+        if (tok_is(sign, "+")) return lit;
+        Node *neg = new_node(ND_UNARY, sign);
+        neg->op = OP_NEG;
+        neg->lhs = lit;
+        return neg;
+    }
+
+    // ★ 列挙の枝（Color.Red / mod.Color.Red）。sema が定数に畳みます。
+    //
+    // 注意: **ここでは点で繋いだ名前だけを自分で読みます。** 式の読み取り
+    //   （postfix）に任せると、`f()` や `xs[0]` まで通ってしまい、
+    //   「リテラルだけ」という約束が崩れます。
+    if (t->kind == TK_IDENT) {
+        Node *e = new_node(ND_VAR, t);
+        e->name = t->text;
+        advance(p);
+        while (tok_is(peek(p), ".")) {
+            advance(p);
+            Token *seg = peek(p);
+            if (seg->kind != TK_IDENT)
+                error_at_hint(seg, "'.' の後には名前を書きます",
+                              "ここには名前が必要です");
+            advance(p);
+            Node *fld = new_node(ND_FIELD, seg);
+            fld->lhs = e;
+            fld->name = seg->text;
+            e = fld;
+        }
+        // ★ `g()` や `xs[0]` は**ここで**断ります（点で繋いだ名前の続きに
+        //   見えるので、黙って読み飛ばすと「名前だけ」を受け取ったことに
+        //   なります）。
+        if (tok_is(peek(p), "(") || tok_is(peek(p), "[")) {
+            Diag d = {0};
+            d.message = tok_is(peek(p), "(")
+                            ? "既定値に呼び出しは書けません"
+                            : "既定値に添字は書けません";
+            d.primary.tok = peek(p);
+            d.primary.label = "ここは実行しないと決まりません";
+            d.hint = "数 / 文字列 / True / False / None / 列挙の枝 だけが書けます"
+                     "（既定値は呼び出し側に置き換わるので、"
+                     "実行して決まる値は書けません）";
+            diag_fail(&d);
+        }
+        if (e->kind != ND_FIELD) {
+            Diag d = {0};
+            d.message = "既定値に変数は書けません";
+            d.primary.tok = t;
+            d.primary.label = "ここには値を書きます";
+            d.hint = "数 / 文字列 / True / False / None / 列挙の枝 だけが書けます"
+                     "（変えられる値を既定値にすると、呼ぶたびに答えが変わります）";
+            diag_fail(&d);
+        }
+        return e;
+    }
+
+    if (t->kind == TK_INT || t->kind == TK_FLOAT || t->kind == TK_STR ||
+        tok_is_kw(t, "True") || tok_is_kw(t, "False") || tok_is_kw(t, "None"))
+        return primary(p);
+
+    Diag d = {0};
+    d.message = diag_fmt("引数 '%s' の既定値に書けるのはリテラルだけです",
+                         pname->text);
+    d.primary.tok = t;
+    d.primary.label = "ここは実行しないと決まりません";
+    d.hint = "数 / 文字列 / True / False / None / 列挙の枝 だけが書けます。"
+             "list が要るときは 'xs: list[int] | None = None' と書きます"
+             "（既定値の list は呼び出しをまたいで共有されるため、書けません）";
+    diag_fail(&d);
+    return NULL;
+}
+
 // param ::= IDENT ":" [ "own" | "mut" ] type
 //          | [ "mut" ] "self"
 //
@@ -2084,6 +2194,24 @@ static Node *param(Parser *p, bool allow_self) {
     n->name = name_tok->text;
     n->type_ref = tr;
     n->mode = mode;
+
+    // ── 既定値（A-38）──
+    //
+    // ★ **書けるのはリテラルだけです**（数・文字列・True / False / None・
+    //   列挙の枝・符号つきの数）。式を書けるようにしない理由は 2 つです。
+    //
+    //   ① **可変な既定値の罠を書けなくする。** Python の `def f(xs=[])` は、
+    //      その list が**呼び出しをまたいで共有**されます。リテラルだけなら
+    //      この形が書けません（list が欲しい場面は
+    //      `xs: list[int] | None = None` と書きます）。
+    //
+    //   ② **名前をどちらで解決するかを決めずに済む。** `n: int = len(XS)` の
+    //      XS は定義側の名前か、呼び出し側の名前か。既定値は**呼び出し側に
+    //      置き換える**作りなので、名前が入ると答えが 2 つになります。
+    if (tok_is(peek(p), "=")) {
+        advance(p);
+        n->rhs = default_value(p, name_tok);
+    }
     return n;
 }
 

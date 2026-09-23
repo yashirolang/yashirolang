@@ -1,0 +1,7 @@
+# ERROR: 引数 'a' に 2 回渡しています
+# 同じ引数に位置と名前の両方で渡した（A-38）
+def f(a: int, b: int = 2) -> int:
+    return a + b
+
+def main() -> int:
+    return f(1, a = 3)

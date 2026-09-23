@@ -1,0 +1,20 @@
+# ERROR: インタフェース越しの呼び出しでは、名前で引数を渡せません
+# インタフェース越しには名前で渡せない（A-38）
+#
+# ★ どの実装が呼ばれるかは**実行時に**決まります。名前と既定値が使えるのは、
+#   クラスの型が分かっているときだけです。
+interface Shape:
+    def area(self, k: int) -> int
+
+class Sq(Shape):
+    w: int
+
+    def init(self, w: int) -> None:
+        self.w = w
+
+    def area(self, k: int) -> int:
+        return self.w * k
+
+def main() -> int:
+    s: Shape = Sq(2)
+    return s.area(k = 3)

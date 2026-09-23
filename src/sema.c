@@ -72,6 +72,11 @@ struct FuncSig {
     //   codegen が「実引数の一時値を呼び出し後に解放してよいか」を
     //   判断するのに使います（A-21e）。own なら所有権が移るので解放しません。
     ParamMode *pmodes;
+    // ★ 既定値（A-38）。書かれていない引数は NULL。
+    //   注意: **リテラルの木そのもの**を持ちます。sema が呼び出し側へ
+    //     複製して入れるので、呼び出しごとに 1 つずつ作られます
+    //     （Python のように「定義時に 1 つ作って共有」しません）。
+    Node **defaults;
     int nparams;
     Token *tok;     // 定義位置（「この関数はここで定義されています」用）
     ModuleSyms *owner;  // どのモジュールのものか
@@ -527,6 +532,12 @@ static Type *check_listcomp(Sema *s, Node *n);
 static Type *check_method(Sema *s, Node *n);
 static Type *check_class_method(Sema *s, Node *n, Class *c);
 static Type *check_field(Sema *s, Node *n);
+// 既定値の並びと型を確かめる（A-38）
+static void check_defaults(Sema *s, FuncSig *f, Node *fn);
+// 呼び出しの引数を並べ替えて、足りないぶんを既定値で埋める（A-38）
+static void bind_args(Node *n, int nparams, char **pnames, Node **defaults,
+                      Token *deftok, const char *subject, bool has_self);
+static void bind_args_sig(Node *n, FuncSig *f, int skip, const char *subject);
 
 // 型注釈（構文）を Type（意味）に変換する。
 //
@@ -1681,7 +1692,11 @@ static Type *check_var(Sema *s, Node *n) {
 static Type *check_expr(Sema *s, Node *n) {
     Type *t;
     switch (n->kind) {
-        case ND_INT: t = ty_int; break;
+        // ★ 畳んだ列挙の枝（A-37）はここに来ます。**もう一度検査しても
+        //   int に戻らない**ようにします（既定値は宣言の登録と本体の検査で
+        //   2 度通ることがあり、2 度目に型が変わると「'int' を 'Level' に
+        //   渡せません」という説明のつかないエラーになります）。
+        case ND_INT: t = n->en ? n->en->type : ty_int; break;
         // ★ 三項演算子。**両側の型が一致していること**を要求します。
         //   条件は bool。片方だけ絞り込む、といった細工はしません
         //   （式の型が一意に決まる、という言語全体の方針を守ります）。
@@ -2718,6 +2733,9 @@ static Type *check_class_method(Sema *s, Node *n, Class *c) {
         diag_fail(&d);
     }
 
+    // ★ 並べ替えと既定値の穴埋め（A-38）。self のぶん 1 つ飛ばします。
+    bind_args_sig(n, f, 1, diag_fmt("メソッド '%s'", mname));
+
     // 引数の個数（self は数えない）
     int nargs = 0;
     for (Node *a = n->args; a; a = a->next) nargs++;
@@ -2858,6 +2876,27 @@ static void scope_escape(Sema *s, Node *n, int loop_depth, int try_depth) {
     }
 }
 
+// ── 名前で引数を渡せない呼び出しを断る（A-38）──
+//
+// ★ 名前で渡せるのは、**呼び先がソースから 1 つに決まる**ときだけです
+//   （この言語で定義した関数・メソッド・生成）。組み込み・関数の値・
+//   インタフェース越しの呼び出しには、引数の名前がありません。
+//
+// 注意: **黙って無視してはいけません。** 名前を書いた人は「その引数に
+//   渡した」と思っているので、位置で渡ったまま通すと、静かに違う引数へ
+//   入ります。
+static void reject_kwargs(Node *args, const char *message, const char *why) {
+    for (Node *a = args; a; a = a->next) {
+        if (!a->arg_name) continue;
+        Diag d = {0};
+        d.message = message;
+        d.primary.tok = a->arg_name_tok;
+        d.primary.label = diag_fmt("'%s = …' と書いています", a->arg_name);
+        d.hint = why;
+        diag_fail(&d);
+    }
+}
+
 static Type *check_method(Sema *s, Node *n) {
     ModuleSyms *ms = dot_module(s, n);
     if (ms) return check_module_call(s, n, ms);
@@ -2866,6 +2905,20 @@ static Type *check_method(Sema *s, Node *n) {
     if (ot->kind == TY_OPT) reject_opt_access(n->lhs, n, "メソッド", ot);
 
     if (ot->kind == TY_CLASS) return check_class_method(s, n, ot->cls);
+
+    // ★ ここから先は、引数の名前を持たない呼び先です（A-38）。
+    //   インタフェース越しは**実行時に実装が決まる**ので、名前も既定値も
+    //   使えません（どの実装の名前を見ればよいか決まらないため）。
+    reject_kwargs(n->args,
+                  ot->kind == TY_IFACE
+                      ? "インタフェース越しの呼び出しでは、名前で引数を渡せません"
+                      : diag_fmt("'%s' は名前で引数を受け取りません", n->name),
+                  ot->kind == TY_IFACE
+                      ? "どの実装が呼ばれるかは実行時に決まります。"
+                        "名前と既定値が使えるのは、クラスの型が分かっている"
+                        "ときだけです"
+                      : "名前で渡せるのは、この言語で定義した"
+                        "関数・メソッド・生成だけです");
 
     // ★ インタフェース越しの呼び出し。
     //   どの実装が呼ばれるかは **実行時に**決まります（vtable を引く）。
@@ -3132,6 +3185,12 @@ static Type *check_new(Sema *s, Node *n, Class *c) {
 
     // init があるなら、その引数と突き合わせる（self は飛ばす）
     FuncSig *f = lookup_func_in(c->owner, mangle(c->name, "init"));
+
+    // ★ 並べ替えと既定値の穴埋め（A-38）。self のぶん 1 つ飛ばします。
+    bind_args_sig(n, f, 1, diag_fmt("クラス '%s'", c->name));
+    nargs = 0;
+    for (Node *a = n->args; a; a = a->next) nargs++;
+
     if (nargs != f->nparams - 1) {
         Diag d = {0};
         d.message = diag_fmt("'%s' の生成には %d 個の引数が必要ですが、%d 個渡されました",
@@ -3266,6 +3325,13 @@ static Type *check_call(Sema *s, Node *n) {
     VarEntry *fv = lookup(s, n->name);
     if (fv && fv->type && fv->type->kind == TY_FN) {
         Type *ft = fv->type;
+        // ★ 関数型には引数の**名前が入っていません**（A-38）。
+        reject_kwargs(n->args,
+                      diag_fmt("関数の値 '%s' は名前で引数を受け取りません",
+                               n->name),
+                      diag_fmt("この変数の型は '%s' です。"
+                               "関数の型には引数の名前が入らないので、"
+                               "位置で渡してください", type_name(ft)));
         int nargs = 0;
         for (Node *a = n->args; a; a = a->next) nargs++;
         if (nargs != ft->nparams) {
@@ -3297,6 +3363,14 @@ static Type *check_call(Sema *s, Node *n) {
         n->type = ft->elem;
         return ft->elem;
     }
+
+    // ★ 組み込み（print / len / append …）には引数の名前がありません（A-38）。
+    //   注意: クラス名なら生成なので、ここでは断りません（init の名前が使えます）。
+    if (!lookup_func(s, n->name) && !lookup_class(s, n->name))
+        reject_kwargs(n->args,
+                      diag_fmt("'%s' は名前で引数を受け取りません", n->name),
+                      "名前で渡せるのは、この言語で定義した"
+                      "関数・メソッド・生成だけです");
 
     // ── 低レベルの組み込み ──
     const LowLevel *ll = lowlevel_of(n->name);
@@ -3507,6 +3581,161 @@ static void check_can_fail(Sema *s, Node *n, FuncSig *f, const char *shown) {
     }
 }
 
+// ── 呼び出しの引数を並べ替えて、足りないぶんを既定値で埋める（A-38）──
+//
+// ★ **ここで n->args を「ちょうど引数の数だけ・定義の順」に書き換えます。**
+//   そうすれば、この先（型検査・codegen・所有権検査・証明）は今までどおり
+//   「前から順に当てる」だけで済みます。**呼び出しの形を知るのは
+//   この関数だけ**です。
+//
+// ★ 既定値は**呼び出しごとに複製**します。Python のように定義時に 1 つ
+//   作って共有すると、`def f(xs=[])` が呼び出しをまたいで同じ list を
+//   指します。もっとも、既定値に書けるのはリテラルだけなので、この言語では
+//   そもそもその形が書けません（parser の default_value）。
+//
+// ★ 引数の名前と既定値を**配列で**受け取ります。FuncSig を持たない
+//   ジェネリック関数（テンプレート）からも同じ検査を使うためです。
+//   pnames / defaults は self を飛ばした先頭を指します。
+//
+//   deftok … 「この関数はここで定義されています」に使う位置
+//   subject … エラーに出す呼び名（「関数 'add'」「クラス 'P'」など）
+//   has_self … self を飛ばしたか（案内の言葉を変えるだけ）
+//
+// ★ **名前も既定値も出てこない呼び出しには手を触れません。** その形の
+//   個数違いは、呼び出し側の検査が今までどおりの言葉で断ります
+//   （「関数 'add' は 2 個の引数を取りますが、3 個渡されました」）。
+//   ここで断ると、既定値のある関数のためだけの言い回しが、既定値と
+//   関係のない呼び出しにまで出てしまいます。
+static void bind_args(Node *n, int nparams, char **pnames, Node **defaults,
+                      Token *deftok, const char *subject, bool has_self) {
+    bool any_kw = false;
+    int nargs = 0;
+    for (Node *a = n->args; a; a = a->next) {
+        nargs++;
+        if (a->arg_name) any_kw = true;
+    }
+
+    bool has_default = false;
+    for (int i = 0; i < nparams && defaults; i++)
+        if (defaults[i]) { has_default = true; break; }
+
+    if (!any_kw && !has_default) return;
+    if (!any_kw && nargs == nparams) return;
+
+    Node **slot = xmalloc(sizeof(Node *) * (size_t)(nparams ? nparams : 1));
+    for (int i = 0; i < nparams; i++) slot[i] = NULL;
+
+    // ── ① 位置引数を前から当てる ──
+    int pos = 0;
+    bool seen_kw = false;
+    Node *kw_first = NULL;
+    for (Node *a = n->args; a; a = a->next) {
+        if (!a->arg_name) {
+            // ★ **位置引数はキーワード引数より前だけ**です。混ぜられると、
+            //   読む人が「この値は何番目の引数か」を数え直すことになります。
+            if (seen_kw) {
+                Diag d = {0};
+                d.message = "位置で渡す引数は、名前で渡す引数より前に書きます";
+                d.primary.tok = a->tok;
+                d.primary.label = "ここは名前つきの引数より後ろです";
+                d.related.tok = kw_first->arg_name_tok;
+                d.related.label = "名前で渡し始めたのはここです";
+                d.hint = "名前を付けるか、この引数を前へ動かしてください";
+                diag_fail(&d);
+            }
+            if (pos >= nparams) {
+                Diag d = {0};
+                d.message = diag_fmt("%s に渡せる引数は多くとも %d 個です（%d 個渡されました）",
+                                     subject, nparams, nargs);
+                d.primary.tok = a->tok;
+                d.primary.label = "この引数に当たるものがありません";
+                d.related.tok = deftok;
+                d.related.label = "この関数はここで定義されています";
+                if (has_self)
+                    d.hint = "self は自動的に渡されるので、書く必要はありません";
+                diag_fail(&d);
+            }
+            slot[pos++] = a;
+            continue;
+        }
+
+        seen_kw = true;
+        if (!kw_first) kw_first = a;
+
+        int at = -1;
+        for (int i = 0; i < nparams; i++)
+            if (strcmp(pnames[i], a->arg_name) == 0) { at = i; break; }
+        if (at < 0) {
+            StrBuf sb;
+            sb_init(&sb);
+            sb_printf(&sb, "書ける名前は ");
+            for (int i = 0; i < nparams; i++)
+                sb_printf(&sb, "%s%s", i ? " / " : "", pnames[i]);
+            sb_printf(&sb, " です");
+            Diag d = {0};
+            d.message = diag_fmt("%s に引数 '%s' はありません", subject,
+                                 a->arg_name);
+            d.primary.tok = a->arg_name_tok;
+            d.primary.label = "この名前の引数は定義されていません";
+            d.related.tok = deftok;
+            d.related.label = "この関数はここで定義されています";
+            d.hint = sb_str(&sb);
+            diag_fail(&d);
+        }
+        if (slot[at]) {
+            Diag d = {0};
+            d.message = diag_fmt("引数 '%s' に 2 回渡しています", a->arg_name);
+            d.primary.tok = a->arg_name_tok;
+            d.primary.label = "2 回目です";
+            d.related.tok = slot[at]->tok;
+            d.related.label = "1 回目はここです";
+            d.hint = at < pos ? "位置で渡したものに、名前でもう一度渡しています"
+                              : "同じ名前を 2 回書いています";
+            diag_fail(&d);
+        }
+        slot[at] = a;
+    }
+
+    // ── ② 空いているところを既定値で埋める ──
+    for (int i = 0; i < nparams; i++) {
+        if (slot[i]) continue;
+        Node *dflt = defaults ? defaults[i] : NULL;
+        if (!dflt) {
+            Diag d = {0};
+            d.message = diag_fmt("%s の引数 '%s' が渡されていません", subject,
+                                 pnames[i]);
+            d.primary.tok = n->tok;
+            d.primary.label = diag_fmt("引数 '%s' に当たるものがありません",
+                                       pnames[i]);
+            d.related.tok = deftok;
+            d.related.label = "この関数はここで定義されています";
+            d.hint = "この引数には既定値がないので、呼ぶときに必ず書きます";
+            diag_fail(&d);
+        }
+        // ★ **呼び出しごとに複製**します（共有しません）。
+        slot[i] = ast_clone(dflt);
+    }
+
+    // ── ③ 定義の順に繋ぎ直す ──
+    Node head = {0};
+    Node *cur = &head;
+    for (int i = 0; i < nparams; i++) {
+        slot[i]->next = NULL;
+        // ★ 印はもう要りません（並びが答えになったので）。
+        slot[i]->arg_name = NULL;
+        cur->next = slot[i];
+        cur = slot[i];
+    }
+    n->args = head.next;
+}
+
+// FuncSig を持つ呼び先（関数・メソッド・生成）はこちらを通します。
+static void bind_args_sig(Node *n, FuncSig *f, int skip, const char *subject) {
+    bind_args(n, f->nparams - skip, f->pnames ? f->pnames + skip : NULL,
+              f->defaults ? f->defaults + skip : NULL, f->tok, subject,
+              skip > 0);
+}
+
 // 呼び出しの引数を FuncSig と突き合わせる（③④）。
 //
 // ★ モジュール修飾の呼び出し（lexer.make(1)）でも同じ検査が要るので、
@@ -3516,6 +3745,11 @@ static Type *check_call_sig(Sema *s, Node *n, FuncSig *f, const char *what) {
                                     : f->name;
 
     check_can_fail(s, n, f, shown);
+
+    // ★ 並べ替えと既定値の穴埋め（A-38）。ここを通ると n->args は
+    //   「ちょうど引数の数だけ・定義の順」になります。
+    bind_args_sig(n, f, 0, diag_fmt("%s '%s'", what, shown));
+
     int nargs = 0;
     for (Node *a = n->args; a; a = a->next) nargs++;
     if (nargs != f->nparams) {
@@ -4237,6 +4471,7 @@ static void declare_method(Sema *s, Class *c, Node *fn) {
     f->params = xmalloc(sizeof(Type *) * (size_t)nparams);
     f->pnames = xmalloc(sizeof(char *) * (size_t)nparams);
     f->pmodes = xmalloc(sizeof(ParamMode) * (size_t)nparams);
+    f->defaults = xmalloc(sizeof(Node *) * (size_t)(nparams ? nparams : 1));
     f->tok = fn->tok;
 
     int i = 0;
@@ -4250,8 +4485,10 @@ static void declare_method(Sema *s, Class *c, Node *fn) {
         f->params[i] = pt;
         f->pnames[i] = pm->name;
         f->pmodes[i] = pm->mode;   // A-21e
+        f->defaults[i] = pm->rhs;  // A-38（無ければ NULL）
         pm->type = pt;
     }
+    check_defaults(s, f, fn);
 
     // コンストラクタ init は値を返せない（生成した自分自身が返るため）
     if (strcmp(fn->name, "init") == 0) {
@@ -4430,6 +4667,22 @@ static void declare_iface(Sema *s, Node *n) {
                 error_at_hint(m->tok,
                               "同じ名前のメソッドを 2 度書くことはできません",
                               "メソッド '%s' が重複しています", m->name);
+        // ★ インタフェースの宣言に既定値は書けません（A-38）。
+        //   呼ぶ側はどの実装が入るか知らないので、既定値を埋める人が
+        //   決まりません（実装ごとに違う既定値を書けてしまいます）。
+        for (Node *pm = m->params; pm; pm = pm->next) {
+            if (!pm->rhs) continue;
+            Diag d = {0};
+            d.message = "インタフェースの宣言に既定値は書けません";
+            d.primary.tok = pm->rhs->tok;
+            d.primary.label = "ここには既定値を書けません";
+            d.hint = "どの実装が呼ばれるかは実行時に決まるので、"
+                     "既定値を埋める人が決まりません。"
+                     "既定値はクラス側のメソッドに書いてください"
+                     "（インタフェース越しには使えません）";
+            diag_fail(&d);
+        }
+
         IMethod *im = xmalloc(sizeof(IMethod));
         im->name = m->name;
         im->sig = m;
@@ -4717,6 +4970,7 @@ static void declare_func(Sema *s, Node *n) {
     f->params = nparams ? xmalloc(sizeof(Type *) * (size_t)nparams) : NULL;
     f->pnames = nparams ? xmalloc(sizeof(char *) * (size_t)nparams) : NULL;
     f->pmodes = nparams ? xmalloc(sizeof(ParamMode) * (size_t)nparams) : NULL;
+    f->defaults = xmalloc(sizeof(Node *) * (size_t)(nparams ? nparams : 1));
     f->tok = n->tok;
 
     int i = 0;
@@ -4728,8 +4982,10 @@ static void declare_func(Sema *s, Node *n) {
         f->params[i] = pt;
         f->pnames[i] = pm->name;
         f->pmodes[i] = pm->mode;   // A-21e
+        f->defaults[i] = pm->rhs;  // A-38（無ければ NULL）
         pm->type = pt;
     }
+    check_defaults(s, f, n);
 
     // ★ extern は C 側で名前が決まっているので修飾しません
     //   （言語仕様 5.11）。修飾の目的は「本言語側の名前どうしの衝突を
@@ -4764,10 +5020,28 @@ static FuncSig *instantiate_func(Sema *s, FuncSig *tmpl, Node *call) {
     int nt = 0;
     for (Node *tp = tn->targs; tp; tp = tp->next) nt++;
 
-    int nargs = 0;
-    for (Node *a = call->args; a; a = a->next) nargs++;
     int want = 0;
     for (Node *pm = tn->params; pm; pm = pm->next) want++;
+
+    // ★ 並べ替えと既定値の穴埋め（A-38）。**型引数を決める前に**やります。
+    //   型引数は「何番目の引数が何型か」から決まるので、並びが定義どおりに
+    //   なっていないと、T が別の引数から決まってしまいます。
+    //   名前と既定値はテンプレートの引数リストから取ります（この関数には
+    //   まだ FuncSig がありません）。
+    if (want > 0) {
+        char **pnames = xmalloc(sizeof(char *) * (size_t)want);
+        Node **defaults = xmalloc(sizeof(Node *) * (size_t)want);
+        int pi = 0;
+        for (Node *pm = tn->params; pm; pm = pm->next, pi++) {
+            pnames[pi] = pm->name;
+            defaults[pi] = pm->rhs;
+        }
+        bind_args(call, want, pnames, defaults, tn->tok,
+                  diag_fmt("関数 '%s'", tmpl->name), false);
+    }
+
+    int nargs = 0;
+    for (Node *a = call->args; a; a = a->next) nargs++;
     if (nargs != want)
         error_at_hint(call->tok,
                       diag_fmt("'%s' は %d 個の引数を取ります", tmpl->name, want),
@@ -5024,6 +5298,51 @@ static void check_main(Sema *s, Node *ast) {
 // ★ **クラスより先に**登録します。クラスのフィールドやメソッドの型注釈に
 //   範囲型を書けるようにするためです（依存の向きは 範囲型 → int だけなので、
 //   互いに参照し合うことはありません）。
+// 既定値の並びと型を確かめる（A-38）。
+//
+// ★ 見るのは 2 つです。
+//   ① **既定値のある引数は後ろにまとめる。** 途中に置けると
+//      `f(1, , 3)` のような「飛ばし方」が要るか、位置引数が当たらなく
+//      なります。まとめておけば「前から順に当てて、余りは既定値」で済みます。
+//   ② **既定値の型が引数の型に入るか。** ここで確かめておかないと、
+//      呼び出しごとに同じエラーが出ます（間違っているのは定義側です）。
+static void check_defaults(Sema *s, FuncSig *f, Node *fn) {
+    int first_default = -1;
+    int i = 0;
+    for (Node *pm = fn->params; pm; pm = pm->next, i++) {
+        if (!f->defaults[i]) {
+            if (first_default >= 0) {
+                Diag d = {0};
+                d.message = diag_fmt("既定値のある引数より後ろに、既定値の無い引数 '%s' があります",
+                                     pm->name);
+                d.primary.tok = pm->tok;
+                d.primary.label = "この引数にも既定値が要ります";
+                d.related.tok = f->defaults[first_default]->tok;
+                d.related.label = diag_fmt("'%s' に既定値が付いています",
+                                           f->pnames[first_default]);
+                d.hint = "既定値のある引数は後ろにまとめてください"
+                         "（そうしないと、前から順に当てられません）";
+                diag_fail(&d);
+            }
+            continue;
+        }
+        if (first_default < 0) first_default = i;
+
+        // ★ 既定値の型を確かめます。**列挙の枝はここで定数に畳まれます**。
+        Type *dt = check_expr(s, f->defaults[i]);
+        if (!type_assignable(dt, f->params[i])) {
+            Diag d = {0};
+            d.message = diag_fmt("引数 '%s' の既定値の型が違います（'%s' に '%s' は入りません）",
+                                 pm->name, type_name(f->params[i]), type_name(dt));
+            d.primary.tok = f->defaults[i]->tok;
+            d.primary.label = diag_fmt("これは '%s' 型です", type_name(dt));
+            d.hint = no_implicit_hint(dt, f->params[i]);
+            diag_fail(&d);
+        }
+        f->defaults[i] = range_coerce(s, f->defaults[i], f->params[i]);  // A-28
+    }
+}
+
 // 列挙を登録する（A-37）。
 //
 // ★ **範囲型やクラスより先に**登録します。クラスのフィールドやメソッドの

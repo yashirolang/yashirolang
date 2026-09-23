@@ -1,0 +1,7 @@
+# ERROR: 関数 'f' の引数 'a' が渡されていません
+# 既定値の無い引数を飛ばした（A-38）
+def f(a: int, b: int = 2) -> int:
+    return a + b
+
+def main() -> int:
+    return f(b = 5)

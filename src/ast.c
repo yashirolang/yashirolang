@@ -115,6 +115,25 @@ const char *param_mode_prefix(ParamMode mode) {
     return "";
 }
 
+static void dump(Node *n, int depth);
+
+// 実引数を 1 つ出す（A-38）。
+//
+// ★ 名前で渡した引数は **(kwarg 名前 …)** で包みます。包まないと
+//   `f(1)` と `f(a = 1)` の木が同じに見えて、--dump-ast を突き合わせる
+//   セルフホストの検証が「名前を落とす実装」を見逃します。
+static void dump_arg(Node *a, int depth) {
+    if (!a->arg_name) {
+        dump(a, depth);
+        return;
+    }
+    for (int i = 0; i < depth; i++) printf("  ");
+    printf("(kwarg %s\n", a->arg_name);
+    dump(a, depth + 1);
+    for (int i = 0; i < depth; i++) printf("  ");
+    printf(")\n");
+}
+
 static void dump(Node *n, int depth) {
     for (int i = 0; i < depth; i++) printf("  ");
 
@@ -183,7 +202,7 @@ static void dump(Node *n, int depth) {
         case ND_METHOD:
             printf("(method %s\n", n->name);
             dump(n->lhs, depth + 1);
-            for (Node *a = n->args; a; a = a->next) dump(a, depth + 1);
+            for (Node *a = n->args; a; a = a->next) dump_arg(a, depth + 1);
             for (int i = 0; i < depth; i++) printf("  ");
             printf(")\n");
             break;
@@ -352,12 +371,20 @@ static void dump(Node *n, int depth) {
         case ND_PARAM:
             printf("(param %s%s\n", param_mode_prefix(n->mode), n->name);
             dump(n->type_ref, depth + 1);
+            // ★ 既定値（A-38）。無ければ何も出しません（既存の比較を壊さないため）
+            if (n->rhs) {
+                for (int i = 0; i < depth + 1; i++) printf("  ");
+                printf("(default\n");
+                dump(n->rhs, depth + 2);
+                for (int i = 0; i < depth + 1; i++) printf("  ");
+                printf(")\n");
+            }
             for (int i = 0; i < depth; i++) printf("  ");
             printf(")\n");
             break;
         case ND_CALL:
             printf("(call %s\n", n->name);
-            for (Node *a = n->args; a; a = a->next) dump(a, depth + 1);
+            for (Node *a = n->args; a; a = a->next) dump_arg(a, depth + 1);
             for (int i = 0; i < depth; i++) printf("  ");
             printf(")\n");
             break;
@@ -471,6 +498,11 @@ Node *ast_clone(Node *n) {
     c->nullable = n->nullable;
     c->mode = n->mode;
     c->is_global = n->is_global;
+    // ★ 畳んだ列挙の枝（A-37）。**これを写さないと、複製した既定値が
+    //   ただの int に戻ります**（A-38 でそれを踏みました）。
+    c->en = n->en;
+    c->arg_name = n->arg_name;
+    c->arg_name_tok = n->arg_name_tok;
 
     c->lhs = ast_clone(n->lhs);
     c->rhs = ast_clone(n->rhs);

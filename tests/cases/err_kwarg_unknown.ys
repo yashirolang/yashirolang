@@ -1,0 +1,8 @@
+# ERROR: 関数 'f' に引数 'c' はありません
+# ERROR: 書ける名前は a / b です
+# 無い名前で渡した（A-38）
+def f(a: int, b: int = 2) -> int:
+    return a + b
+
+def main() -> int:
+    return f(1, c = 3)

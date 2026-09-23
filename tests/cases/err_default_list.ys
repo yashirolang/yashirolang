@@ -1,0 +1,11 @@
+# ERROR: 既定値に書けるのはリテラルだけです
+# ERROR: xs: list[int] | None = None
+# 既定値に list は書けない（A-38）
+#
+# ★ Python の `def f(xs=[])` は、その list が**呼び出しをまたいで共有**
+#   されます。リテラルだけしか書けないようにして、この形を封じています。
+def f(xs: list[int] = []) -> int:
+    return len(xs)
+
+def main() -> int:
+    return f()

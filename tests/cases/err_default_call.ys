@@ -1,0 +1,10 @@
+# ERROR: 既定値に呼び出しは書けません
+# 既定値に呼び出しは書けない（A-38）
+def g() -> int:
+    return 1
+
+def f(a: int = g()) -> int:
+    return a
+
+def main() -> int:
+    return f()

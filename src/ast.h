@@ -425,6 +425,11 @@ struct Node {
     //     ND_MATCH : 調べる式が enum のとき、その定義（網羅検査で使う）
     EnumDef *en;
 
+    // ★ キーワード引数の名前（A-38）。実引数のノードに付きます。
+    //   NULL なら位置引数。並べ替えと既定値の穴埋めは sema がします。
+    char *arg_name;
+    Token *arg_name_tok;
+
     // ND_FIELD が指すフィールド（sema が解決する）
     Field *field;
 

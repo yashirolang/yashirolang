@@ -688,6 +688,12 @@ class Node:
     # 仮引数の受け取り方（ND_PARAM。PM_BORROW / PM_MUT / PM_OWN）
     mode: int
 
+    # ★ キーワード引数の名前（A-38）。実引数のノードに付きます。
+    #   空文字なら位置引数。並べ替えと既定値の穴埋めは sema がします。
+    #   対になる定義: src/ast.h の arg_name / arg_name_tok
+    arg_name: str
+    arg_name_tok: rc[token.Token] | None
+
     # 型注釈のモジュール修飾（ND_TYPEREF）
     mod_name: str
 
@@ -794,6 +800,8 @@ class Node:
         self.slen = 0
         self.op = 0
         self.name = ""
+        self.arg_name = ""
+        self.arg_name_tok = None
         self.nullable = False
         self.mod_name = ""
         self.ir_name = ""
@@ -984,7 +992,7 @@ def dump(n: rc[Node] | None, depth: int) -> None:
     elif n.kind == ND_METHOD:
         print(pad + "(method " + n.name)
         dump(n.lhs, depth + 1)
-        dump_siblings(n.args, depth + 1)
+        dump_args(n.args, depth + 1)
         print(pad + ")")
     elif n.kind == ND_FIELD:
         print(pad + "(field " + n.name)
@@ -1070,10 +1078,15 @@ def dump(n: rc[Node] | None, depth: int) -> None:
     elif n.kind == ND_PARAM:
         print(pad + "(param " + param_mode_prefix(n.mode) + n.name)
         dump(n.type_ref, depth + 1)
+        # ★ 既定値（A-38）。無ければ何も出しません（既存の比較を壊さないため）
+        if n.rhs is not None:
+            print(indent_of(depth + 1) + "(default")
+            dump(n.rhs, depth + 2)
+            print(indent_of(depth + 1) + ")")
         print(pad + ")")
     elif n.kind == ND_CALL:
         print(pad + "(call " + n.name)
-        dump_siblings(n.args, depth + 1)
+        dump_args(n.args, depth + 1)
         print(pad + ")")
     elif n.kind == ND_RETURN:
         if n.lhs is None:
@@ -1150,6 +1163,24 @@ def dump(n: rc[Node] | None, depth: int) -> None:
         panic("ast.dump: unknown node kind")
 
 # 兄弟をたどって全部出す（C 版の for (x = ...; x; x = x->next) と同じ）
+# 実引数を並べて出す（A-38）。
+#
+# ★ 名前で渡した引数は **(kwarg 名前 …)** で包みます。包まないと
+#   f(1) と f(a = 1) の木が同じに見えて、--dump-ast を突き合わせる
+#   セルフホストの検証が「名前を落とす実装」を見逃します。
+#   対になる定義: src/ast.c の dump_arg
+def dump_args(first: rc[Node] | None, depth: int) -> None:
+    cur: rc[Node] | None = first
+    while cur is not None:
+        a: rc[Node] = cur
+        if len(a.arg_name) == 0:
+            dump(a, depth)
+        else:
+            print(indent_of(depth) + "(kwarg " + a.arg_name)
+            dump(a, depth + 1)
+            print(indent_of(depth) + ")")
+        cur = a.next
+
 def dump_siblings(first: rc[Node] | None, depth: int) -> None:
     cur: rc[Node] | None = first
     while cur is not None:
@@ -1182,6 +1213,11 @@ def ast_clone(n: rc[Node] | None) -> rc[Node] | None:
     c.nullable = src.nullable
     c.mode = src.mode
     c.is_global = src.is_global
+    # ★ 畳んだ列挙の枝（A-37）。これを写さないと、複製した既定値が
+    #   ただの int に戻ります（A-38）。
+    c.en = src.en
+    c.arg_name = copy(src.arg_name)
+    c.arg_name_tok = src.arg_name_tok
 
     c.lhs = ast_clone(src.lhs)
     c.rhs = ast_clone(src.rhs)

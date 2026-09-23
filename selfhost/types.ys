@@ -28,6 +28,12 @@ class FuncSig:
     #   codegen が「実引数の一時値を呼び出し後に解放してよいか」を
     #   判断するのに使います（A-21e）。対になる定義: src/sema.c の pmodes
     pmodes: list[int]
+    # ★ 既定値（A-38）。書かれていない引数は None。
+    #   注意: **リテラルの木そのもの**を持ちます。sema が呼び出し側へ
+    #     複製して入れるので、呼び出しごとに 1 つずつ作られます
+    #     （Python のように「定義時に 1 つ作って共有」しません）。
+    #   対になる定義: src/sema.c の defaults
+    defaults: list[rc[ast.Node] | None]
     nparams: int
     tok: rc[token.Token] | None
     owner: rc[ModuleSyms] | None
@@ -46,6 +52,7 @@ class FuncSig:
         self.nparams = 0
         self.params = []
         self.pnames = []
+        self.defaults = []
         self.tok = tok
         self.raises_cls = []
 

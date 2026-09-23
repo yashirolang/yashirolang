@@ -36,6 +36,180 @@ def mark_arg_own_rc(arg: mut rc[ast.Node], f: rc[types.FuncSig], pi: int) -> Non
     else:
         arg.arg_own_rc = f.pmodes[pi] == ast.PM_OWN and ty_is_rc_shared(at)
 
+# ── 名前で引数を渡せない呼び出しを断る（A-38）──
+#
+# ★ 名前で渡せるのは、**呼び先がソースから 1 つに決まる**ときだけです
+#   （この言語で定義した関数・メソッド・生成）。組み込み・関数の値・
+#   インタフェース越しの呼び出しには、引数の名前がありません。
+#
+# 注意: **黙って無視してはいけません。** 名前を書いた人は「その引数に
+#   渡した」と思っているので、位置で渡ったまま通すと、静かに違う引数へ
+#   入ります。
+#   対になる定義: src/sema.c の reject_kwargs
+def reject_kwargs(args: rc[ast.Node] | None, message: str, why: str) -> None:
+    a: rc[ast.Node] | None = args
+    while a is not None:
+        arg: rc[ast.Node] = a
+        if len(arg.arg_name) > 0:
+            diag.error_full(unwrap_tok(arg.arg_name_tok), message,
+                            "'" + arg.arg_name + " = …' と書いています",
+                            None, "", why)
+        a = arg.next
+
+
+# ── 呼び出しの引数を並べ替えて、足りないぶんを既定値で埋める（A-38）──
+#
+# ★ **ここで n.args を「ちょうど引数の数だけ・定義の順」に書き換えます。**
+#   そうすれば、この先（型検査・codegen・所有権検査・証明）は今までどおり
+#   「前から順に当てる」だけで済みます。**呼び出しの形を知るのは
+#   この関数だけ**です。
+#
+# ★ 既定値は**呼び出しごとに複製**します。定義時に 1 つ作って共有すると、
+#   Python の def f(xs=[]) のように呼び出しをまたいで同じ値を指します。
+#
+# ★ 引数の名前と既定値を**リストで**受け取ります。FuncSig を持たない
+#   ジェネリック関数（テンプレート）からも同じ検査を使うためです。
+#   pnames / defaults は self を飛ばした先頭から並べます。
+#
+# ★ **名前も既定値も出てこない呼び出しには手を触れません。** その形の
+#   個数違いは、呼び出し側の検査が今までどおりの言葉で断ります。
+#   対になる定義: src/sema.c の bind_args
+def bind_args(n: mut rc[ast.Node], nparams: int, pnames: list[str],
+              defaults: list[rc[ast.Node] | None],
+              deftok: rc[token.Token] | None, subject: str,
+              has_self: bool) -> None:
+    any_kw: bool = False
+    nargs: int = 0
+    a0: rc[ast.Node] | None = n.args
+    while a0 is not None:
+        arg0: rc[ast.Node] = a0
+        nargs = nargs + 1
+        if len(arg0.arg_name) > 0:
+            any_kw = True
+        a0 = arg0.next
+
+    has_default: bool = False
+    i0: int = 0
+    while i0 < nparams:
+        if defaults[i0] is not None:
+            has_default = True
+        i0 = i0 + 1
+
+    if not any_kw and not has_default:
+        return
+    if not any_kw and nargs == nparams:
+        return
+
+    slot: list[rc[ast.Node] | None] = []
+    i1: int = 0
+    while i1 < nparams:
+        slot.append(None)
+        i1 = i1 + 1
+
+    # ── ① 位置引数を前から当てる ──
+    pos: int = 0
+    kw_first: rc[ast.Node] | None = None
+    a: rc[ast.Node] | None = n.args
+    while a is not None:
+        arg: rc[ast.Node] = a
+        if len(arg.arg_name) == 0:
+            # ★ **位置引数はキーワード引数より前だけ**です。混ぜられると、
+            #   読む人が「この値は何番目の引数か」を数え直すことになります。
+            if kw_first is not None:
+                diag.error_full(unwrap_tok(arg.tok),
+                                "位置で渡す引数は、名前で渡す引数より前に書きます",
+                                "ここは名前つきの引数より後ろです",
+                                unwrap_node(kw_first).arg_name_tok,
+                                "名前で渡し始めたのはここです",
+                                "名前を付けるか、この引数を前へ動かしてください")
+            if pos >= nparams:
+                hint: str = ""
+                if has_self:
+                    hint = "self は自動的に渡されるので、書く必要はありません"
+                diag.error_full(unwrap_tok(arg.tok),
+                                subject + " に渡せる引数は多くとも " +
+                                str(nparams) + " 個です（" + str(nargs) +
+                                " 個渡されました）",
+                                "この引数に当たるものがありません",
+                                deftok, "この関数はここで定義されています", hint)
+            slot[pos] = arg
+            pos = pos + 1
+            a = arg.next
+            continue
+
+        if kw_first is None:
+            kw_first = arg
+
+        at: int = -1
+        i2: int = 0
+        while i2 < nparams:
+            if at < 0 and pnames[i2] == arg.arg_name:
+                at = i2
+            i2 = i2 + 1
+        if at < 0:
+            diag.error_full(unwrap_tok(arg.arg_name_tok),
+                            subject + " に引数 '" + arg.arg_name + "' はありません",
+                            "この名前の引数は定義されていません",
+                            deftok, "この関数はここで定義されています",
+                            "書ける名前は " + strings.join(pnames, " / ") + " です")
+        if slot[at] is not None:
+            dup: str = "同じ名前を 2 回書いています"
+            if at < pos:
+                dup = "位置で渡したものに、名前でもう一度渡しています"
+            diag.error_full(unwrap_tok(arg.arg_name_tok),
+                            "引数 '" + arg.arg_name + "' に 2 回渡しています",
+                            "2 回目です",
+                            unwrap_node(slot[at]).tok, "1 回目はここです", dup)
+        slot[at] = arg
+        a = arg.next
+
+    # ── ② 空いているところを既定値で埋める ──
+    i3: int = 0
+    while i3 < nparams:
+        if slot[i3] is None:
+            d: rc[ast.Node] | None = defaults[i3]
+            if d is None:
+                diag.error_full(unwrap_tok(n.tok),
+                                subject + " の引数 '" + pnames[i3] +
+                                "' が渡されていません",
+                                "引数 '" + pnames[i3] + "' に当たるものがありません",
+                                deftok, "この関数はここで定義されています",
+                                "この引数には既定値がないので、呼ぶときに必ず書きます")
+            # ★ **呼び出しごとに複製**します（共有しません）。
+            slot[i3] = ast.ast_clone(d)
+        i3 = i3 + 1
+
+    # ── ③ 定義の順に繋ぎ直す ──
+    head: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, n.tok)
+    cur: rc[ast.Node] = head
+    i4: int = 0
+    while i4 < nparams:
+        s: rc[ast.Node] = unwrap_node(slot[i4])
+        s.next = None
+        # ★ 印はもう要りません（並びが答えになったので）。
+        s.arg_name = ""
+        cur.next = s
+        cur = s
+        i4 = i4 + 1
+    n.args = head.next
+
+
+# FuncSig を持つ呼び先（関数・メソッド・生成）はこちらを通します。
+def bind_args_sig(n: mut rc[ast.Node], f: rc[types.FuncSig], skip: int,
+                  subject: str) -> None:
+    pnames: list[str] = []
+    defaults: list[rc[ast.Node] | None] = []
+    i: int = skip
+    while i < f.nparams:
+        pnames.append(copy(f.pnames[i]))
+        if i < len(f.defaults):
+            defaults.append(f.defaults[i])
+        else:
+            defaults.append(None)
+        i = i + 1
+    bind_args(n, f.nparams - skip, pnames, defaults, f.tok, subject, skip > 0)
+
+
 # rc[T] / rc[T] | None（ownck の ty_is_rc と同じ判定）
 def ty_is_rc_shared(t: rc[ast.Type]) -> bool:
     if t.kind == ast.TY_RC:
@@ -1502,7 +1676,15 @@ class Sema:
     def check_expr(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
         t: rc[ast.Type] = self.ty_int()
         if n.kind == ast.ND_INT:
-            t = self.ty_int()
+            # ★ 畳んだ列挙の枝（A-37）はここに来ます。**もう一度検査しても
+            #   int に戻らない**ようにします（既定値は宣言の登録と本体の検査で
+            #   2 度通ることがあり、2 度目に型が変わると「'int' を 'Level' に
+            #   渡せません」という説明のつかないエラーになります）。
+            en0: rc[ast.EnumDef] | None = n.en
+            if en0 is None:
+                t = self.ty_int()
+            else:
+                t = unwrap_type(en0.type)
         elif n.kind == ast.ND_FLOAT:
             t = self.ty_float()
         elif n.kind == ast.ND_COND:
@@ -2704,6 +2886,9 @@ class Sema:
                             c.tok, "クラスの定義はここです", hint)
             return self.ty_int()
 
+        # ★ 並べ替えと既定値の穴埋め（A-38）。self のぶん 1 つ飛ばす。
+        bind_args_sig(n, unwrap_sig(f), 1, "メソッド '" + mname + "'")
+
         # 引数の個数（self は数えない）
         nargs: int = count_siblings(n.args)
         if nargs != f.nparams - 1:
@@ -2755,6 +2940,21 @@ class Sema:
 
         if ot.kind == ast.TY_CLASS:
             return self.check_class_method(n, unwrap_class(ot.cls))
+
+        # ★ ここから先は、引数の名前を持たない呼び先です（A-38）。
+        #   インタフェース越しは**実行時に実装が決まる**ので、名前も既定値も
+        #   使えません（どの実装の名前を見ればよいか決まらないため）。
+        if ot.kind == ast.TY_IFACE:
+            reject_kwargs(n.args,
+                          "インタフェース越しの呼び出しでは、名前で引数を渡せません",
+                          "どの実装が呼ばれるかは実行時に決まります。" +
+                          "名前と既定値が使えるのは、クラスの型が分かっている" +
+                          "ときだけです")
+        else:
+            reject_kwargs(n.args,
+                          "'" + n.name + "' は名前で引数を受け取りません",
+                          "名前で渡せるのは、この言語で定義した" +
+                          "関数・メソッド・生成だけです")
 
         # ★ インタフェース越しの呼び出し。
         #   どの実装が呼ばれるかは **実行時に**決まる（vtable を引く）。
@@ -3049,6 +3249,11 @@ class Sema:
         owner: rc[types.ModuleSyms] = self.syms_by_name(c.owner_name)
         f: rc[types.FuncSig] = unwrap_sig(
             self.lookup_func_in(owner, self.mangle(c.name, "init")))
+
+        # ★ 並べ替えと既定値の穴埋め（A-38）。self のぶん 1 つ飛ばす。
+        bind_args_sig(n, f, 1, "クラス '" + c.name + "'")
+        nargs = count_siblings(n.args)
+
         if nargs != f.nparams - 1:
             diag.error_full(unwrap_tok(n.tok),
                             "'" + c.name + "' の生成には " + str(f.nparams - 1) +
@@ -3088,6 +3293,12 @@ class Sema:
         fv: rc[types.VarEntry] | None = self.lookup(n.name)
         if fv is not None and unwrap_type(fv.type).kind == ast.TY_FN:
             ftv: rc[ast.Type] = unwrap_type(fv.type)
+            # ★ 関数型には引数の**名前が入っていません**（A-38）。
+            reject_kwargs(n.args,
+                          "関数の値 '" + n.name + "' は名前で引数を受け取りません",
+                          "この変数の型は '" + ast.type_name(ftv) + "' です。" +
+                          "関数の型には引数の名前が入らないので、" +
+                          "位置で渡してください")
             na2: int = count_siblings(n.args)
             if na2 != len(ftv.params):
                 diag.error_full(unwrap_tok(n.tok),
@@ -3117,6 +3328,14 @@ class Sema:
             n.is_indirect = True
             n.type = ast.elem_of(ftv)
             return ast.elem_of(ftv)
+
+        # ★ 組み込み（print / len / append …）には引数の名前がありません（A-38）。
+        #   注意: クラス名なら生成なので、ここでは断りません（init の名前が使えます）。
+        if self.lookup_func(n.name) is None and self.lookup_class(n.name) is None:
+            reject_kwargs(n.args,
+                          "'" + n.name + "' は名前で引数を受け取りません",
+                          "名前で渡せるのは、この言語で定義した" +
+                          "関数・メソッド・生成だけです")
 
         # ★ min / max（2 引数なので組み込みの表では表せない）
         #   注意: Python の min([1,2,3]) は入れていない（linalg.vmin を使う）
@@ -3290,6 +3509,11 @@ class Sema:
             shown = n.mod_name + "." + n.name
 
         self.check_can_fail(n, f, shown)
+
+        # ★ 並べ替えと既定値の穴埋め（A-38）。ここを通ると n.args は
+        #   「ちょうど引数の数だけ・定義の順」になります。
+        bind_args_sig(n, f, 0, what + " '" + shown + "'")
+
         nargs: int = count_siblings(n.args)
         if nargs != f.nparams:
             diag.error_full(unwrap_tok(n.tok),
@@ -3760,9 +3984,12 @@ class Sema:
             f.params.append(pt)
             f.pnames.append(copy(p.name))
             f.pmodes.append(p.mode)        # A-21e
+            f.defaults.append(p.rhs)       # A-38（無ければ None）
             f.nparams = f.nparams + 1
             p.type = pt
             pm = p.next
+
+        self.check_defaults(f, fn)
 
         # コンストラクタ init は値を返せない
         if fn.name == "init":
@@ -3952,6 +4179,22 @@ class Sema:
                     diag.error_at_hint(unwrap_tok(mn.tok),
                                        "同じ名前のメソッドを 2 度書くことはできません",
                                        "メソッド '" + mn.name + "' が重複しています")
+            # ★ インタフェースの宣言に既定値は書けません（A-38）。
+            #   呼ぶ側はどの実装が入るか知らないので、既定値を埋める人が
+            #   決まりません（実装ごとに違う既定値を書けてしまいます）。
+            ip: rc[ast.Node] | None = mn.params
+            while ip is not None:
+                ipp: rc[ast.Node] = ip
+                if ipp.rhs is not None:
+                    diag.error_full(unwrap_tok(unwrap_node(ipp.rhs).tok),
+                                    "インタフェースの宣言に既定値は書けません",
+                                    "ここには既定値を書けません", None, "",
+                                    "どの実装が呼ばれるかは実行時に決まるので、" +
+                                    "既定値を埋める人が決まりません。" +
+                                    "既定値はクラス側のメソッドに書いてください" +
+                                    "（インタフェース越しには使えません）")
+                ip = ipp.next
+
             ifc.methods.append(rc(ast.IMethod(mn.name, mn, self.next_slot)))
             self.next_slot = self.next_slot + 1
             m = mn.next
@@ -4137,8 +4380,26 @@ class Sema:
                          call: mut rc[ast.Node]) -> rc[types.FuncSig]:
         tn: rc[ast.Node] = unwrap_node(tmpl.tmpl)
 
-        nargs: int = count_siblings(call.args)
         want: int = count_siblings(tn.params)
+
+        # ★ 並べ替えと既定値の穴埋め（A-38）。**型引数を決める前に**やります。
+        #   型引数は「何番目の引数が何型か」から決まるので、並びが定義どおりに
+        #   なっていないと、T が別の引数から決まってしまいます。
+        #   名前と既定値はテンプレートの引数リストから取ります（この関数には
+        #   まだ FuncSig がありません）。
+        if want > 0:
+            tpnames: list[str] = []
+            tdefaults: list[rc[ast.Node] | None] = []
+            tpm: rc[ast.Node] | None = tn.params
+            while tpm is not None:
+                tp0: rc[ast.Node] = tpm
+                tpnames.append(copy(tp0.name))
+                tdefaults.append(tp0.rhs)
+                tpm = tp0.next
+            bind_args(call, want, tpnames, tdefaults, tn.tok,
+                      "関数 '" + tmpl.name + "'", False)
+
+        nargs: int = count_siblings(call.args)
         if nargs != want:
             diag.error_at_hint(unwrap_tok(call.tok),
                                "'" + tmpl.name + "' は " + str(want) +
@@ -4242,6 +4503,50 @@ class Sema:
             return tmpl
         return made
 
+    # 既定値の並びと型を確かめる（A-38）。
+    #
+    # ★ 見るのは 2 つです。
+    #   ① **既定値のある引数は後ろにまとめる。** 途中に置けると
+    #      「前から順に当てて、余りは既定値」で済まなくなります。
+    #   ② **既定値の型が引数の型に入るか。** ここで確かめておかないと、
+    #      呼び出しごとに同じエラーが出ます（間違っているのは定義側です）。
+    #   対になる定義: src/sema.c の check_defaults
+    def check_defaults(mut self, f: mut rc[types.FuncSig], fn: rc[ast.Node]) -> None:
+        first_default: int = -1
+        i: int = 0
+        pm: rc[ast.Node] | None = fn.params
+        while pm is not None:
+            p: rc[ast.Node] = pm
+            d0: rc[ast.Node] | None = f.defaults[i]
+            if d0 is None:
+                if first_default >= 0:
+                    diag.error_full(unwrap_tok(p.tok),
+                                    "既定値のある引数より後ろに、既定値の無い引数 '" +
+                                    p.name + "' があります",
+                                    "この引数にも既定値が要ります",
+                                    unwrap_node(f.defaults[first_default]).tok,
+                                    "'" + f.pnames[first_default] +
+                                    "' に既定値が付いています",
+                                    "既定値のある引数は後ろにまとめてください" +
+                                    "（そうしないと、前から順に当てられません）")
+            else:
+                if first_default < 0:
+                    first_default = i
+                d: rc[ast.Node] = d0
+                # ★ 既定値の型を確かめます。**列挙の枝はここで定数に畳まれます**。
+                dt: rc[ast.Type] = self.check_expr(d)
+                want: rc[ast.Type] = f.params[i]
+                if not ast.type_assignable(dt, want):
+                    diag.error_full(unwrap_tok(d.tok),
+                                    "引数 '" + p.name + "' の既定値の型が違います（'" +
+                                    ast.type_name(want) + "' に '" +
+                                    ast.type_name(dt) + "' は入りません）",
+                                    "これは '" + ast.type_name(dt) + "' 型です",
+                                    None, "", self.no_implicit_hint(dt, want))
+                f.defaults[i] = self.range_coerce(d, want)   # A-28
+            i = i + 1
+            pm = p.next
+
     def declare_func(mut self, n: mut rc[ast.Node]) -> None:
         self.reject_module_name(n.name, n.tok, "関数")
         clash: rc[ast.Class] | None = self.lookup_class(n.name)
@@ -4294,9 +4599,12 @@ class Sema:
             f.params.append(pt)
             f.pnames.append(copy(p.name))
             f.pmodes.append(p.mode)        # A-21e
+            f.defaults.append(p.rhs)       # A-38（無ければ None）
             f.nparams = f.nparams + 1
             p.type = pt
             pm = p.next
+
+        self.check_defaults(f, n)
 
         # ★ extern は C 側で名前が決まっているので修飾しない
         is_extern_decl: bool = n.body is None

@@ -110,8 +110,15 @@ top_level  ::= func_def
 func_def   ::= "def" IDENT "(" [ param_list ] ")" "->" type ":" block
 
 param_list ::= param { "," param }
-param      ::= IDENT ":" [ "own" | "mut" ] type      (* v2 *)
+param      ::= IDENT ":" [ "own" | "mut" ] type [ "=" default ]   (* v2。既定値は A-38 *)
              | [ "mut" ] "self"                       (* v2。self は型注釈なし *)
+
+(* ── 既定値（A-38）── *)
+(* 注意: **リテラルだけ**です。式は書けません（実行して決まる値を既定値に
+   すると、呼び出し側へ置き換えるときに名前や呼び出しが紛れ込みます）。 *)
+default    ::= [ "-" | "+" ] ( INT | FLOAT )
+             | STRING | "True" | "False" | "None"
+             | IDENT { "." IDENT }                     (* 列挙の枝 Color.Red *)
 
 (* ── extern 宣言 ── *)
 extern_def ::= "extern" "def" IDENT "(" [ param_list ] ")" "->" type NEWLINE
@@ -247,7 +254,11 @@ postfix    ::= primary { call_suffix | index_suffix | attr_suffix }
 call_suffix ::= "(" [ arg_list ] ")"
 index_suffix::= "[" expr "]"
 attr_suffix ::= "." IDENT
-arg_list   ::= expr { "," expr }
+arg_list   ::= call_arg { "," call_arg }
+(* ── キーワード引数（A-38）── *)
+(* 注意: 名前で渡す引数より後ろに、位置で渡す引数は書けません（sema が断ります）。
+   `x == 1` は比較、`x = 1` はキーワード引数です（"=" と "==" は別のトークン）。 *)
+call_arg   ::= [ IDENT "=" ] expr
 
 primary    ::= INT | FLOAT | STRING
              | "True" | "False" | "None"

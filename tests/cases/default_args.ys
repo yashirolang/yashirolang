@@ -1,0 +1,98 @@
+# OUTPUT: こんにちは, 世界!
+# OUTPUT: やあ, 世界!
+# OUTPUT: こんにちは, 世界!こんにちは, 世界!
+# OUTPUT: 箱:6 / 60
+# OUTPUT: -1.5 2.5
+# OUTPUT: 高 低
+# OUTPUT: -1 3
+# OUTPUT: 1 1,2,3
+# EXIT: 0
+# 既定引数（A-38）
+#
+#   ★ **書けるのはリテラルだけ**です（数・文字列・True / False / None・
+#     列挙の枝・符号つきの数）。`xs: list[int] = []` のような
+#     「呼び出しをまたいで共有される既定値」は書けません
+#     （err_default_list が見ます）。
+#
+#   ★ 既定値は**呼び出し側に置き換わります**。呼び出しごとに 1 つずつ
+#     作られるので、前の呼び出しの結果が残ることはありません。
+#
+#   注意: 既定値のある引数は**後ろにまとめます**（err_default_order）。
+def greet(name: str, greeting: str = "こんにちは", n: int = 1) -> str:
+    out: str = ""
+    i: int = 0
+    while i < n:
+        out = out + greeting + ", " + name + "!"
+        i = i + 1
+    return out
+
+
+enum Level:
+    Low
+    High
+
+
+class Box:
+    w: int
+    h: int
+    tag: str
+
+    # ★ init にも既定値を書けます（生成のときに埋まります）
+    def init(self, w: int, h: int = 2, tag: own str = "箱") -> None:
+        self.w = w
+        self.h = h
+        self.tag = tag
+
+    def area(self, scale: int = 1) -> int:
+        return self.w * self.h * scale
+
+
+# ★ 符号つきの数（単項マイナスは式ですが、数のリテラルに限って書けます）
+def half(x: float = -1.5) -> float:
+    return x
+
+
+# ★ 列挙の枝。sema が定数に畳みます（int には戻りません）
+def level_name(l: Level = Level.High) -> str:
+    match l:
+        case Level.Low:
+            return "低"
+        case Level.High:
+            return "高"
+    return "?"
+
+
+# ★ list が欲しいときの書き方。None を既定値にして中で作ります
+def count(v: list[int] | None = None) -> int:
+    if v is None:
+        return -1
+    return len(v)
+
+
+# ★ ジェネリック関数でも使えます（型引数は**並べ替えたあと**で決まります）
+def firstn[T](xs: list[T], n: int = 1, sep: str = ",") -> str:
+    out: str = ""
+    i: int = 0
+    while i < n and i < len(xs):
+        if i > 0:
+            out = out + sep
+        out = out + str(xs[i])
+        i = i + 1
+    return out
+
+
+def main() -> int:
+    print(greet("世界"))
+    print(greet("世界", "やあ"))
+    print(greet("世界", "こんにちは", 2))
+
+    b: Box = Box(3)
+    print(b.tag + ":" + str(b.area()) + " / " + str(b.area(10)))
+
+    print(str(half()) + " " + str(half(2.5)))
+    print(level_name() + " " + level_name(Level.Low))
+
+    xs: list[int] = [1, 2, 3]
+    print(str(count()) + " " + str(count(xs)))
+    print(firstn(xs) + " " + firstn(xs, 3))
+    return 0

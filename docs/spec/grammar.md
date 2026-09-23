@@ -129,6 +129,14 @@ class_def  ::= "class" IDENT ":" NEWLINE INDENT class_body DEDENT
 class_body ::= { field_decl } { func_def | NEWLINE }
 field_decl ::= IDENT ":" type NEWLINE
 
+(* ── 列挙（A-37）と中身を持つ枝（A-41）── *)
+(* 注意: "enum" は予約語ではありません。トップレベルで「enum の次が名前」と
+   並んだときだけこの規則に入ります。
+   注意: 中身を持つ枝が 1 つでもあると、その列挙は**全体がポインタ表現**に
+   なります（表現は列挙ごとに 1 つ）。 *)
+enum_decl  ::= "enum" IDENT ":" NEWLINE INDENT { enum_variant } DEDENT
+enum_variant ::= IDENT [ "(" param_list ")" ] NEWLINE
+
 (* ── 範囲型（部分型。A-28）── *)
 (* 注意: "type" も "range" も予約語ではありません。トップレベルで
    「IDENT("type") IDENT "="」と並んだときだけこの規則に入ります。 *)
@@ -162,7 +170,18 @@ stmt       ::= simple_stmt NEWLINE
              | if_stmt
              | while_stmt
              | for_stmt
+             | match_stmt
              | contract_stmt
+
+(* ── 場合分け（A-37 / A-41）──
+   注意: "match" / "case" は予約語ではありません（並びで決めます）。
+   注意: case に書けるのは**決まった値**だけです。中身を持つ枝の
+   `case Shape.Circle(r)` の括弧の中は、**束縛する名前**であって式ではありません。 *)
+match_stmt ::= "match" expr ":" NEWLINE INDENT { case_clause } DEDENT
+case_clause ::= "case" pattern ":" block
+pattern    ::= "_"
+             | INT | STRING
+             | IDENT "." IDENT [ "(" IDENT { "," IDENT } ")" ]
 
 (* ── 契約（A-29）──
    注意: "requires" / "ensures" は予約語ではありません。次のトークンが

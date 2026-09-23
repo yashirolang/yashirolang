@@ -232,7 +232,10 @@ static const char *llvm_type(Type *t) {
         case TY_PTR: return "ptr";    // ptr[T]（生ポインタ）
         case TY_THREAD: return "ptr"; // Thread[R]（PlThread への不透明な参照）
         case TY_MUTEX: return "ptr";  // mutex[T]（PlMutex への不透明な参照）
-        case TY_ENUM: return "i64";   // 列挙（枝に 0 から番号を振っただけ。A-37）
+        // 列挙（A-37）。枝に 0 から番号を振っただけなので i64 です。
+        // ★ ただし**中身を持つ枝**があるときは、枝の隠しクラスへの
+        //   ポインタになります（A-41）。
+        case TY_ENUM: return t->en && t->en->has_payload ? "ptr" : "i64";
         case TY_NULL: return "ptr";   // None リテラル
         default: UNREACHABLE();
     }
@@ -260,7 +263,8 @@ static const char *llvm_mem_type(Type *t) {
         case TY_THREAD: return "ptr";
         case TY_MUTEX: return "ptr";
         // ★ 列挙はただの i64 です（A-37）。枝に 0 から番号を振っただけ。
-        case TY_ENUM: return "i64";
+        //   中身を持つ枝があるときはポインタです（A-41）。
+        case TY_ENUM: return t->en && t->en->has_payload ? "ptr" : "i64";
         // 注意: TY_NONE はメモリ上の表現を持ちません。
         //    ここに来たら「None の変数を作ろうとしている」= コンパイラのバグ。
         default: UNREACHABLE();
@@ -1215,6 +1219,15 @@ static char *gen_expr(Emitter *e, Node *n) {
 
         case ND_FIELD:
             return gen_field(e, n);
+
+        // ★ 中身を持つ枝のタグ（A-41）。**先頭の i64 を読むだけ**です。
+        //   どの枝のクラスでもタグは先頭にあるので、見立て直しは要りません。
+        case ND_ENUMTAG: {
+            char *obj = gen_expr(e, n->lhs);
+            char *t = new_tmp(e);
+            sb_printf(&e->fn, "  %s = load i64, ptr %s\n", t, obj);
+            return t;
+        }
 
         case ND_VAR: {
             // ★ ガードの計算中は、誘導変数を「両端の値」に読み替えます。
@@ -3101,6 +3114,57 @@ static const char *gen_rc_drop(Emitter *e, Type *t) {
 }
 
 // 型 t の値 1 つを解放する関数の名前。コピー型なら NULL。
+// 中身を持つ列挙を解放する関数を作る（A-41）。
+//
+// ★ **どの枝かは実行時にしか分かりません。** 先頭のタグを読んで、
+//   その枝のクラスの解放関数へ振り分けます（枝ごとにフィールドが違うので、
+//   1 つの解放関数では済みません）。
+//
+//   注意: 名前だけの列挙（A-37）はただの i64 なので、ここには来ません。
+static const char *gen_enum_drop(Emitter *e, Type *t) {
+    EnumDef *en = t->en;
+    StrBuf key;
+    sb_init(&key);
+    sb_printf(&key, "enum:%s.%s", en->owner ? "m" : "", en->name);
+    const char *hit = drop_fn_cached(e, sb_str(&key));
+    if (hit) return hit;
+
+    StrBuf name;
+    sb_init(&name);
+    sb_printf(&name, "@drop.enum.%d", e->drop_counter++);
+    // ★ 先に登録します。枝が自分自身を持つ列挙（木）でも無限再帰しないため。
+    drop_fn_remember(e, sb_str(&key), sb_str(&name));
+
+    // 枝ごとの解放関数を先に作ります（本体を書き始める前に）。
+    int nv = en->nvals;
+    const char **bd = xmalloc(sizeof(char *) * (size_t)(nv ? nv : 1));
+    int i = 0;
+    for (EnumVal *v = en->vals; v; v = v->next, i++)
+        bd[i] = v->cls ? gen_class_drop(e, v->cls) : NULL;
+
+    StrBuf b;
+    sb_init(&b);
+    sb_printf(&b, "\ndefine internal void %s(ptr %%p) {\nentry:\n", sb_str(&name));
+    sb_printf(&b, "  %%isnull = icmp eq ptr %%p, null\n");
+    sb_printf(&b, "  br i1 %%isnull, label %%done, label %%body\nbody:\n");
+    sb_printf(&b, "  %%tag = load i64, ptr %%p\n");
+    sb_printf(&b, "  switch i64 %%tag, label %%done [\n");
+    i = 0;
+    for (EnumVal *v = en->vals; v; v = v->next, i++)
+        sb_printf(&b, "    i64 %lld, label %%b%d\n", v->val, i);
+    sb_printf(&b, "  ]\n");
+    i = 0;
+    for (EnumVal *v = en->vals; v; v = v->next, i++) {
+        sb_printf(&b, "b%d:\n", i);
+        if (bd[i]) sb_printf(&b, "  call void %s(ptr %%p)\n", bd[i]);
+        sb_printf(&b, "  br label %%done\n");
+    }
+    sb_printf(&b, "done:\n  ret void\n}\n");
+    sb_printf(&e->dropdefs, "%s", sb_str(&b));
+
+    return sb_str(&name);
+}
+
 static const char *drop_fn_for(Emitter *e, Type *t) {
     if (!t) return NULL;
     switch (t->kind) {
@@ -3110,6 +3174,8 @@ static const char *drop_fn_for(Emitter *e, Type *t) {
         case TY_LIST: return gen_list_drop(e, t);
         case TY_RC: return gen_rc_drop(e, t);
         case TY_CLASS: return gen_class_drop(e, t->cls);
+        // ★ 中身を持つ列挙（A-41）。名前だけの列挙は i64 なので何もしません。
+        case TY_ENUM: return t->en && t->en->has_payload ? gen_enum_drop(e, t) : NULL;
         // T | None は中身と同じ扱い（解放関数はどれも null を受け取れる）
         case TY_OPT: return drop_fn_for(e, t->elem);
         default: return NULL;  // int / bool / None
@@ -3174,10 +3240,15 @@ static void emit_drop_value(Emitter *e, Type *t, const char *val) {
 // 注意: 借りものを束縛している変数（`t = xs[i]` や for のループ変数）は
 //    **所有していない**ので解放しません。ownck が印を付けています。
 static bool is_droppable(Node *decl) {
+    // ★ 中身を持つ列挙（A-41）はヒープの物体です。名前だけの列挙は i64 なので
+    //   解放しません（en->has_payload で分かれます）。
+    bool payload_enum = decl->type && decl->type->kind == TY_ENUM &&
+                        decl->type->en && decl->type->en->has_payload;
     return decl->type && !decl->is_global && !decl->binds_borrow &&
            (decl->type->kind == TY_STR || decl->type->kind == TY_LIST ||
             decl->type->kind == TY_CLASS || decl->type->kind == TY_OPT ||
-            decl->type->kind == TY_RC);  // rc[T] はカウントを減らす
+            decl->type->kind == TY_RC ||   // rc[T] はカウントを減らす
+            payload_enum);
 }
 
 static void scope_add(Emitter *e, Node *decl) {

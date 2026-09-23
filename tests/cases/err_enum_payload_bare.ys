@@ -1,0 +1,18 @@
+# ERROR: 枝 'Shape.Circle' の中身は 1 個です（0 個書かれています）
+# 中身のある枝を名前だけで書いた（A-41）
+#
+# ★ 中身を捨てているのか、書き忘れたのか分かりません。書かせます。
+enum Shape:
+    Circle(r: float)
+    Rect(w: float, h: float)
+
+def f(s: Shape) -> float:
+    match s:
+        case Shape.Circle:
+            return 1.0
+        case Shape.Rect(w, h):
+            return w
+    return 0.0
+
+def main() -> int:
+    return 0

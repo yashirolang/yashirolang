@@ -2520,6 +2520,109 @@ static Node *iface_def(Parser *p) {
 // ★ `enum` は**予約語にしません**（`scope` と同じ扱い）。ふつうの名前
 //   としても使えるので、`enum: int = 0` のようなグローバル変数を
 //   壊さないためです。`enum` の次が名前なら宣言、と文脈で決めます。
+// ── 中身を持つ枝の隠しクラス（A-41）────────────────────────
+//
+// ★ 枝 1 つにつきクラスを 1 つ、**トップレベルに持ち上げます**
+//   （lambda と同じ手です）。こうすると、レイアウト・確保・解放・
+//   フィールドの読み書きが**クラスのためにもう書いてあるもの**で動きます。
+//
+//     enum Shape:                 class Shape$Circle:
+//         Circle(r: float)   →        __tag: int      ← 必ず先頭
+//                                     r: float
+//                                     def init(self, __tag: int, r: float) -> None:
+//                                         self.__tag = __tag
+//                                         self.r = r
+//
+// ★ タグを先頭に置くのは、`match` が**中身を見る前に**枝を決めるからです。
+//   どの枝のポインタでも同じ場所を読めます。
+static Node *enum_type_ref(Token *t, const char *name) {
+    Node *tr = new_node(ND_TYPEREF, t);
+    tr->name = (char *)name;
+    return tr;
+}
+
+static Node *enum_field_decl(Token *t, char *name, Node *type_ref) {
+    Node *f = new_node(ND_FIELDDECL, t);
+    f->name = name;
+    f->type_ref = type_ref;
+    return f;
+}
+
+static Node *enum_self_assign(Token *t, char *name) {
+    Node *fld = new_node(ND_FIELD, t);
+    fld->lhs = new_var_node(t, "self");
+    fld->name = name;
+    Node *as = new_node(ND_ASSIGN, t);
+    as->lhs = fld;
+    as->rhs = new_var_node(t, name);
+    return as;
+}
+
+static void hoist_enum_classes(Parser *p, Node *en) {
+    for (Node *ev = en->body; ev; ev = ev->next) {
+        Token *t = ev->tok;
+        Node *cls = new_node(ND_CLASS, t);
+        cls->name = diag_fmt("%s$%s", en->name, ev->name);
+        cls->is_enum_branch = true;
+
+        // フィールド: __tag: int, 宣言された中身…
+        Node fh = {0};
+        Node *fc = &fh;
+        fc->next = enum_field_decl(t, "__tag", enum_type_ref(t, "int"));
+        fc = fc->next;
+        for (Node *f = ev->params; f; f = f->next) {
+            fc->next = enum_field_decl(t, f->name, ast_clone(f->type_ref));
+            fc = fc->next;
+        }
+
+        // init(self, __tag: int, 中身…) -> None
+        Node *fn = new_node(ND_FUNC, t);
+        fn->name = "init";
+        fn->type_ref = enum_type_ref(t, "None");
+
+        Node ph = {0};
+        Node *pc = &ph;
+        Node *self = new_node(ND_PARAM, t);
+        self->name = "self";
+        pc->next = self;
+        pc = pc->next;
+        Node *tagp = new_node(ND_PARAM, t);
+        tagp->name = "__tag";
+        tagp->type_ref = enum_type_ref(t, "int");
+        pc->next = tagp;
+        pc = pc->next;
+        for (Node *f = ev->params; f; f = f->next) {
+            Node *pm = new_node(ND_PARAM, t);
+            pm->name = f->name;
+            pm->type_ref = ast_clone(f->type_ref);
+            // ★ 中身は**所有ごと**受け取ります。借りたものはしまえません。
+            pm->mode = PM_OWN;
+            pc->next = pm;
+            pc = pc->next;
+        }
+        fn->params = ph.next;
+
+        Node bh = {0};
+        Node *bc = &bh;
+        bc->next = enum_self_assign(t, "__tag");
+        bc = bc->next;
+        for (Node *f = ev->params; f; f = f->next) {
+            bc->next = enum_self_assign(t, f->name);
+            bc = bc->next;
+        }
+        Node *body = new_node(ND_BLOCK, t);
+        body->body = bh.next;
+        fn->body = body;
+
+        fc->next = fn;   // フィールドの後ろにメソッドを並べる（class_def と同じ形）
+        cls->body = fh.next;
+
+        if (p->lam_tail) p->lam_tail->next = cls;
+        else p->lam_head = cls;
+        p->lam_tail = cls;
+    }
+}
+
 static Node *enum_def(Parser *p) {
     Token *kw = advance(p);  // "enum"
 
@@ -2553,6 +2656,31 @@ static Node *enum_def(Parser *p) {
         }
         advance(p);
 
+        // ★ 中身を持つ枝（A-41）。`Circle(r: float)` の形で書きます。
+        //   注意: 中身なしの枝に `()` は付けられません（表記を 1 つに保つため）。
+        Node *fields = NULL;
+        Token *fopen = peek(p);
+        if (tok_is(fopen, "(")) {
+            advance(p);
+            if (tok_is(peek(p), ")")) {
+                Diag d = {0};
+                d.message = "中身のない枝に '()' は付けません";
+                d.primary.tok = fopen;
+                d.primary.label = "ここは空です";
+                d.hint = diag_fmt("中身が無いなら '%s' とだけ書きます", v->text);
+                diag_fail(&d);
+            }
+            Node fh = {0};
+            Node *fc = &fh;
+            for (;;) {
+                fc->next = param(p, false);
+                fc = fc->next;
+                if (!consume(p, ",")) break;
+            }
+            expect_close(p, ")", fopen);
+            fields = fh.next;
+        }
+
         // 注意: **同じ名前の枝を断ります。** 通すと、あとに書いたほうが
         //   決して選ばれない match ができ、それが黙って通ります。
         for (Node *q = head.next; q; q = q->next)
@@ -2569,6 +2697,7 @@ static Node *enum_def(Parser *p) {
         Node *ev = new_node(ND_ENUMVAL, v);
         ev->name = v->text;
         ev->ival = next_val++;
+        ev->params = fields;        // A-41（無ければ NULL）
         cur->next = ev;
         cur = cur->next;
         expect(p, TK_NEWLINE, "改行", "枝は 1 行に 1 つ書きます");
@@ -2579,6 +2708,13 @@ static Node *enum_def(Parser *p) {
         error_at_hint(kw, "枝を 1 つ以上書いてください",
                       "空の列挙は書けません");
     n->body = head.next;
+
+    // ★ 中身を持つ枝が 1 つでもあれば、**全部の枝**を隠しクラスにします（A-41）。
+    //   混ぜると代入も match も 2 通りになるので、表現は enum 単位で決めます。
+    for (Node *ev = n->body; ev; ev = ev->next)
+        if (ev->params) { n->has_payload = true; break; }
+    if (n->has_payload) hoist_enum_classes(p, n);
+
     return n;
 }
 

@@ -1,0 +1,19 @@
+# ERROR: case の中身には名前を書きます
+# 束縛は名前だけ（A-41）
+#
+# ★ 値で絞りたいときは本体で if を使います。case に式を書けるようにすると、
+#   「上から順に比べるだけ」になり、網羅を確かめられません。
+enum Shape:
+    Circle(r: float)
+    Empty
+
+def f(s: Shape) -> float:
+    match s:
+        case Shape.Circle(1.0):
+            return 1.0
+        case Shape.Empty:
+            return 0.0
+    return -1.0
+
+def main() -> int:
+    return 0

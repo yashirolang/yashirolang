@@ -620,6 +620,44 @@ match b:
 **注意: 列挙は `int` と混ざりません。** `c + 1` も `c == 0` もエラーです。
 番号として使いたくなったら、それは `enum` ではなく `int` の仕事です。
 
+#### 枝は中身を持てます
+
+```python
+enum Shape:
+    Circle(r: float)
+    Rect(w: float, h: float)
+    Empty                      # 中身なしの枝も混ぜられます
+
+
+def area(s: Shape) -> float:
+    match s:
+        case Shape.Circle(r):          # r が束縛されます
+            return 3.14 * r * r
+        case Shape.Rect(w, h):
+            return w * h
+        case Shape.Empty:
+            return 0.0
+    return -1.0
+
+
+a: Shape = Shape.Circle(2.0)
+```
+
+自分自身を中身に持てるので、構文木も書けます。
+
+```python
+enum Tree:
+    Leaf(v: int)
+    Pair(l: own Tree, r: own Tree)      # 中身は所有で受け取ります
+```
+
+**中身を持つ枝がある列挙の値は、クラスと同じ扱い**です（ヒープに置かれ、
+出口で解放されます）。所有・借用・`own` の規則は §7 のままで、覚えることは
+増えません。網羅の検査もそのままです。
+
+注意: `case` の括弧に書けるのは**束縛する名前だけ**です。`case Shape.Circle(1.0)`
+のように値で絞ることはできません（本体で `if` を使ってください）。
+
 ## 6. モジュールと標準ライブラリ
 
 1 ファイル = 1 モジュールです。`import` はファイル名（拡張子なし）を指します。

@@ -1,0 +1,9 @@
+# ERROR: 枝 'Color.Red' は中身を持ちません
+# 中身なしの枝に () は付けられない（A-41）
+enum Color:
+    Red
+    Green
+
+def main() -> int:
+    c: Color = Color.Red()
+    return 0

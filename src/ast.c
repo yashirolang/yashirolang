@@ -471,6 +471,13 @@ static void dump(Node *n, int depth) {
             for (int i = 0; i < depth; i++) printf("  ");
             printf(")\n");
             break;
+        // ★ 中身を持つ枝のタグ（A-41）
+        case ND_ENUMTAG:
+            printf("(enumtag\n");
+            dump(n->lhs, depth + 1);
+            for (int i = 0; i < depth; i++) printf("  ");
+            printf(")\n");
+            break;
         case ND_BLOCK:
             printf("(block\n");
             for (Node *s = n->body; s; s = s->next) dump(s, depth + 1);

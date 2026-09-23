@@ -60,6 +60,7 @@ yashirolang hello.ys -o hello && ./hello
 | [design/generics-and-interfaces.md](design/generics-and-interfaces.md) | ジェネリクス（単相化）・インタフェース（vtable）・演算子の多重定義 |
 | [design/error-handling.md](design/error-handling.md) | `raises` / `try` / `except` の実装 |
 | [design/closures.md](design/closures.md) | 捕獲（クロージャ）を入れるなら、どの表現にするか（まだ入れていません） |
+| [design/enum-payload.md](design/enum-payload.md) | 中身を持つ枝の表現（枝ごとの隠しクラス＋先頭のタグ） |
 | [design/concurrency.md](design/concurrency.md) | スレッド・`mutex[T]`・送出可能性の検査 |
 | [design/package-manager.md](design/package-manager.md) | レジストリを持たない設計・MVS・安全性 |
 | [design/tls.md](design/tls.md) | 暗号を自分で書かない理由・任意ビルド・ライセンスの整理 |

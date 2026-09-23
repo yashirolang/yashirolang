@@ -134,6 +134,8 @@ typedef enum {
     //           ...
     ND_ENUM,
     ND_ENUMVAL,
+    // ★ 中身を持つ枝のタグを読む（A-41）。codegen は load 1 つに落とします。
+    ND_ENUMTAG,
     ND_MATCH,
     ND_CASE,
 } NodeKind;
@@ -246,6 +248,11 @@ struct EnumVal {
     char *name;
     long long val;
     Token *tok;
+    // ★ 中身を持つ枝（A-41）。この枝のための隠しクラスと、中身の数。
+    //   中身なしの枝でも、その enum に中身を持つ枝があればクラスを持ちます
+    //   （表現を enum 単位でそろえるため）。
+    struct Class *cls;
+    int nfields;
     EnumVal *next;
 };
 
@@ -255,6 +262,9 @@ struct EnumDef {
     Token *tok;
     EnumVal *vals;
     int nvals;
+    // ★ 中身を持つ枝が 1 つでもあるか（A-41）。
+    //   true なら値の表現は「枝の隠しクラスへのポインタ」になります。
+    bool has_payload;
     struct Type *type;          // この定義に対応する TY_ENUM（1 個だけ作る）
     struct ModuleSyms *owner;
     EnumDef *next;
@@ -448,6 +458,16 @@ struct Node {
     //   ND_FUNC … 持ち上げた lambda の本体（型は使う側から決まります）
     //   ND_VAR  … その lambda を指す名前
     bool is_lambda;
+
+    // ★ 中身を持つ枝（A-41）。
+    //   ND_ENUM  … 中身を持つ枝が 1 つでもあるか（表現が変わります）
+    //   ND_CLASS … 枝から作った隠しクラスか（利用者には見せません）
+    bool has_payload;
+    bool is_enum_branch;
+    // ★ 「enum の値を、枝のクラスとして見る」宣言（A-41）。
+    //   ND_VARDECL に付きます。型検査をここだけ緩めます（IR では何も
+    //   起きません——ポインタを別のクラスとして読むだけです）。
+    bool is_enum_view;
 
     // ND_FIELD が指すフィールド（sema が解決する）
     Field *field;

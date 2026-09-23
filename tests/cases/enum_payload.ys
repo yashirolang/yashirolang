@@ -1,0 +1,81 @@
+# OUTPUT: 12.56 12.0 0.0
+# OUTPUT: text:こんにちは / num:42 / ping
+# OUTPUT: 木の合計: 6
+# OUTPUT: 変数に入れ替えても: 20.0
+# EXIT: 0
+# 中身を持つ枝（A-41）
+#
+#   ★ 枝ごとに**隠しクラス**を作り、**先頭にタグ**を置いています。
+#     レイアウト・確保・解放・フィールドの読み書きは、クラスのために
+#     もう書いてあるものがそのまま効きます（新しい種別を作っていません）。
+#
+#   ★ `match` は**タグを比べてから中身を読む**形に書き換わります。
+#     網羅の検査（A-37）はそのまま効きます（err_enum_payload_missing）。
+#
+#   注意: 中身を持つ枝が 1 つでもあれば、その列挙は**全体がポインタ表現**に
+#     なります（名前だけの列挙は今までどおり i64 です）。
+enum Shape:
+    Circle(r: float)
+    Rect(w: float, h: float)
+    Empty
+
+
+enum Msg:
+    Text(body: own str)
+    Num(v: int)
+    Ping
+
+
+# ★ 自分自身を中身に持てます（構文木や連結リストが書けます）
+enum Tree:
+    Leaf(v: int)
+    Pair(l: own Tree, r: own Tree)
+
+
+def area(s: Shape) -> float:
+    match s:
+        case Shape.Circle(r):
+            return 3.14 * r * r
+        case Shape.Rect(w, h):
+            return w * h
+        case Shape.Empty:
+            return 0.0
+    return -1.0
+
+
+def show(m: Msg) -> str:
+    match m:
+        case Msg.Text(body):
+            return "text:" + body
+        case Msg.Num(v):
+            return "num:" + str(v)
+        case Msg.Ping:
+            return "ping"
+    return "?"
+
+
+def total(t: Tree) -> int:
+    match t:
+        case Tree.Leaf(v):
+            return v
+        case Tree.Pair(l, r):
+            return total(l) + total(r)
+    return 0
+
+
+def main() -> int:
+    a: Shape = Shape.Circle(2.0)
+    b: Shape = Shape.Rect(3.0, 4.0)
+    c: Shape = Shape.Empty
+    print(str(area(a)) + " " + str(area(b)) + " " + str(area(c)))
+
+    print(show(Msg.Text("こんにちは")) + " / " + show(Msg.Num(42)) + " / " +
+          show(Msg.Ping))
+
+    t: Tree = Tree.Pair(Tree.Pair(Tree.Leaf(1), Tree.Leaf(2)), Tree.Leaf(3))
+    print("木の合計: " + str(total(t)))
+
+    # 変数に入れ替えても同じ（値はポインタ 1 個です）
+    s: Shape = Shape.Rect(4.0, 5.0)
+    print("変数に入れ替えても: " + str(area(s)))
+    return 0

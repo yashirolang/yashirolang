@@ -154,6 +154,9 @@ int type_size(Type *t) {
         case TY_THREAD:  // ランタイムの箱への不透明なポインタ
         case TY_MUTEX:
         case TY_OPT: return 8;  // T | None もポインタ 1 個
+        // ★ 列挙（A-37 / A-41）。名前だけの枝なら i64、中身を持つ枝が
+        //   あるなら枝のクラスへのポインタ——どちらも 8 バイトです。
+        case TY_ENUM: return 8;
         default: UNREACHABLE();  // None は値を持たない
     }
 }

@@ -1,0 +1,16 @@
+# ERROR: 枝 'Shape.Rect' の中身は 2 個です（1 個書かれています）
+# case の中身の数が枝と合わない（A-41）
+enum Shape:
+    Circle(r: float)
+    Rect(w: float, h: float)
+
+def f(s: Shape) -> float:
+    match s:
+        case Shape.Circle(r):
+            return r
+        case Shape.Rect(w):
+            return w
+    return 0.0
+
+def main() -> int:
+    return 0

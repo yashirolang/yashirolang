@@ -1,0 +1,8 @@
+# ERROR: 中身のない枝に '()' は付けません
+# 宣言でも空の () は書けない（A-41）
+enum Shape:
+    Circle(r: float)
+    Empty()
+
+def main() -> int:
+    return 0

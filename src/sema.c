@@ -187,6 +187,11 @@ typedef struct {
     //     指してしまいます。使う側のどの行が発端かを添えます。
     Token *inst_site;
     const char *inst_name;
+
+    // ★ sema が作る隠し変数の連番（A-41 の match）。
+    //   注意: この言語は同名の変数を隠せない（シャドーイングなし）ので、
+    //     名前は**必ず一意**にします。
+    int hidden;
 } Sema;
 
 // 型引数の束縛（K → str）
@@ -538,6 +543,9 @@ static Type *check_field(Sema *s, Node *n);
 static void check_defaults(Sema *s, FuncSig *f, Node *fn);
 // raises 節を解決する（A-40 でインタフェースの宣言からも使います）
 static void resolve_raises(Sema *s, Node *fn, FuncSig *f);
+// 中身を持つ枝の隠しクラスを引く / 生成に書き換える（A-41）
+static Class *branch_class(Sema *s, EnumDef *e, EnumVal *ev);
+static Type *check_new(Sema *s, Node *n, Class *c);
 // lambda を「使う側の型」から実体にする（A-42）
 static FuncSig *instantiate_lambda(Sema *s, FuncSig *tmpl, Node *ref);
 // 呼び出しの引数を並べ替えて、足りないぶんを既定値で埋める（A-38）
@@ -1731,6 +1739,11 @@ static Type *check_expr(Sema *s, Node *n) {
         //   2 度通ることがあり、2 度目に型が変わると「'int' を 'Level' に
         //   渡せません」という説明のつかないエラーになります）。
         case ND_INT: t = n->en ? n->en->type : ty_int; break;
+        // ★ 中身を持つ枝のタグ（A-41）。先頭の i64 を読むだけです。
+        case ND_ENUMTAG:
+            check_expr(s, n->lhs);
+            t = ty_int;
+            break;
         // ★ 三項演算子。**両側の型が一致していること**を要求します。
         //   条件は bool。片方だけ絞り込む、といった細工はしません
         //   （式の型が一意に決まる、という言語全体の方針を守ります）。
@@ -1822,6 +1835,16 @@ static void check_vardecl(Sema *s, Node *n) {
             error_at_hint(n->rhs->tok, "値を返さない式は変数に入れられません",
                           "None 型の値は変数にできません");
         declared = actual;
+    }
+
+    // ★ 見立て（A-41）。「enum の値を、当たった枝のクラスとして見る」宣言です。
+    //   **ここだけ型検査を通します。** match が枝を確かめた直後にしか作らない
+    //   （sema が組み立てる）ので、利用者がこの抜け道に触ることはありません。
+    if (n->is_enum_view && actual->kind == TY_ENUM && declared->kind == TY_CLASS) {
+        VarEntry *vv = declare(s, n->name, declared, n->tok);
+        n->ir_name = vv->ir_name;
+        n->type = declared;     // ★ codegen が箱の型に使います
+        return;
     }
 
     if (!type_assignable(actual, declared)) {
@@ -2645,6 +2668,51 @@ static Type *auto_deref(Type *t) {
 //   `Color.Red + 1` は「int と Color は混ざりません」で止まります。
 //
 // 戻り値: 畳めたら型、そうでなければ NULL（ふつうのフィールドとして続ける）
+// ── 中身を持つ枝を作る（A-41）────────────────────────────
+//
+// ★ `Shape.Circle(1.5)` を `Shape$Circle(0, 1.5)` に書き換えます
+//   （第 1 引数がタグ）。作るのは**ふつうのクラスの生成**なので、
+//   確保も解放も所有権の検査も、クラスのための仕組みがそのまま効きます。
+//
+//   nargs は「利用者が書いた中身の数」。ND_FIELD（中身なしの枝）から
+//   呼ぶときは 0 です。
+static Type *make_enum_value(Sema *s, Node *n, EnumDef *e, EnumVal *v,
+                             Node *args, int nargs) {
+    if (nargs != v->nfields) {
+        Diag d = {0};
+        d.message = diag_fmt("枝 '%s.%s' は %d 個の中身を取りますが、%d 個渡されました",
+                             e->name, v->name, v->nfields, nargs);
+        d.primary.tok = n->tok;
+        d.primary.label = v->nfields == 0 ? "この枝は中身を持ちません"
+                                          : "中身の数が違います";
+        d.related.tok = v->tok;
+        d.related.label = "枝の定義はここです";
+        d.hint = v->nfields == 0
+                     ? diag_fmt("'%s.%s' とだけ書きます", e->name, v->name)
+                     : diag_fmt("'%s.%s(…)' に %d 個書きます", e->name, v->name,
+                                v->nfields);
+        diag_fail(&d);
+    }
+
+    Class *bc = branch_class(s, e, v);
+
+    // タグを先頭に足して、隠しクラスの生成に書き換えます
+    Node *tag = new_int_node(n->tok, v->val);
+    tag->next = args;
+
+    n->kind = ND_CALL;
+    n->name = bc->name;
+    n->lhs = NULL;
+    n->args = tag;
+    n->en = e;
+    check_new(s, n, bc);
+
+    // ★ 静的な型は**列挙**です（枝のクラスではありません）。
+    //   利用者から見える型は 1 つ、という約束を守ります。
+    n->type = e->type;
+    return e->type;
+}
+
 static Type *fold_enum_value(Sema *s, Node *n) {
     EnumDef *e = NULL;
 
@@ -2677,6 +2745,10 @@ static Type *fold_enum_value(Sema *s, Node *n) {
         d.hint = sb_str(&sb);
         diag_fail(&d);
     }
+
+    // ★ 中身を持つ列挙なら、枝も**物体**です（A-41）。
+    //   表現を枝ごとに変えないので、中身なしの枝も同じ形で作ります。
+    if (e->has_payload) return make_enum_value(s, n, e, v, NULL, 0);
 
     // ★ ここで木を書き換えます（畳み込み）。
     n->kind = ND_INT;
@@ -2910,6 +2982,18 @@ static void scope_escape(Sema *s, Node *n, int loop_depth, int try_depth) {
     }
 }
 
+// ── 中身を持つ枝の隠しクラスを引く（A-41）────────────────
+//
+// ★ **遅れて引きます。** 列挙はクラスより先に登録する（クラスの
+//   フィールドに列挙を書けるようにするため）ので、列挙を登録する時点では
+//   枝のクラスがまだありません。最初に要ったときに引いて覚えます。
+static Class *branch_class(Sema *s, EnumDef *e, EnumVal *ev) {
+    if (ev->cls) return ev->cls;
+    ev->cls = lookup_class_in(e->owner, diag_fmt("%s$%s", e->name, ev->name));
+    if (!ev->cls) UNREACHABLE();   // parser が必ず作ります
+    return ev->cls;
+}
+
 // ── 名前で引数を渡せない呼び出しを断る（A-38）──
 //
 // ★ 名前で渡せるのは、**呼び先がソースから 1 つに決まる**ときだけです
@@ -2932,6 +3016,40 @@ static void reject_kwargs(Node *args, const char *message, const char *why) {
 }
 
 static Type *check_method(Sema *s, Node *n) {
+    // ★ 中身を持つ枝の生成（A-41）。`Shape.Circle(1.5)` はメソッド呼び出しに
+    //   見えますが、**枝を作る式**です。左が変数でない名前で、それが列挙なら
+    //   こちらに来ます（モジュール修飾は dot_module の後ろで見ます）。
+    if (n->lhs && n->lhs->kind == ND_VAR && !lookup(s, n->lhs->name)) {
+        EnumDef *e = lookup_enum(s, n->lhs->name);
+        if (e) {
+            EnumVal *v = lookup_enum_val(e, n->name);
+            if (!v) {
+                Diag d = {0};
+                d.message = diag_fmt("列挙 '%s' に枝 '%s' はありません", e->name,
+                                     n->name);
+                d.primary.tok = n->tok;
+                d.primary.label = "この枝は定義されていません";
+                d.related.tok = e->tok;
+                d.related.label = "列挙の定義はここです";
+                diag_fail(&d);
+            }
+            if (!e->has_payload) {
+                Diag d = {0};
+                d.message = diag_fmt("枝 '%s.%s' は中身を持ちません", e->name,
+                                     v->name);
+                d.primary.tok = n->tok;
+                d.primary.label = "ここに '(' は書けません";
+                d.related.tok = v->tok;
+                d.related.label = "枝の定義はここです";
+                d.hint = diag_fmt("'%s.%s' とだけ書きます", e->name, v->name);
+                diag_fail(&d);
+            }
+            int nargs = 0;
+            for (Node *a = n->args; a; a = a->next) nargs++;
+            return make_enum_value(s, n, e, v, n->args, nargs);
+        }
+    }
+
     ModuleSyms *ms = dot_module(s, n);
     if (ms) return check_module_call(s, n, ms);
 
@@ -3927,6 +4045,183 @@ static void check_unpack(Sema *s, Node *n) {
     n->type = rt;
 }
 
+// ── 中身を持つ枝の match（A-41）──────────────────────────
+//
+// ★ **ここで形を書き換えます。** 調べるのは「先頭のタグ（i64）」で、
+//   当たった枝の中身は**フィールドの読み出し**に落とします。
+//   そうすれば、網羅の検査（A-37）も codegen も今までどおりです。
+//
+//   match s:                    __m.0: Shape = s           ← 1 回だけ評価
+//       case Shape.Circle(r):   match tag(__m.0):
+//           BODY            →       case 0:
+//                                       __v.1: Shape$Circle = __m.0  ← 見立て
+//                                       r: float = __v.1.r
+//                                       BODY
+//
+// ★ 見立て（`__v`）に命令は要りません。LLVM のポインタは型を持たないので、
+//   同じ値を別のクラスとして読むだけです。タグが先頭にあるので、どの枝でも
+//   同じ場所にあります。
+static char *sema_hidden(Sema *s, const char *tag) {
+    return diag_fmt("%s.%d", tag, s->hidden++);
+}
+
+// パターン（`Shape.Circle(r)` / `Shape.Empty`）から枝を取り出す
+static EnumVal *pattern_branch(Sema *s, Node *pat, EnumDef *e) {
+    Node *owner = pat->lhs;
+    const char *bname = pat->name;
+    if (!owner || (pat->kind != ND_FIELD && pat->kind != ND_METHOD)) {
+        Diag d = {0};
+        d.message = "case には枝を書きます";
+        d.primary.tok = pat->tok;
+        d.primary.label = "ここは枝ではありません";
+        d.hint = diag_fmt("'%s.枝名' か '%s.枝名(中身…)' の形で書きます",
+                          e->name, e->name);
+        diag_fail(&d);
+    }
+    // 列挙の名前が合っているか（`Other.Branch` を断ります）
+    bool same = owner->kind == ND_VAR && strcmp(owner->name, e->name) == 0;
+    if (!same && owner->kind == ND_FIELD) same = strcmp(owner->name, e->name) == 0;
+    if (!same) {
+        Diag d = {0};
+        d.message = diag_fmt("'%s' の match に、別の列挙の枝は書けません",
+                             e->name);
+        d.primary.tok = pat->tok;
+        d.primary.label = "ここは違う列挙です";
+        d.related.tok = e->tok;
+        d.related.label = "調べている列挙はこれです";
+        diag_fail(&d);
+    }
+    EnumVal *v = lookup_enum_val(e, bname);
+    if (!v) {
+        Diag d = {0};
+        d.message = diag_fmt("列挙 '%s' に枝 '%s' はありません", e->name, bname);
+        d.primary.tok = pat->tok;
+        d.primary.label = "この枝は定義されていません";
+        d.related.tok = e->tok;
+        d.related.label = "列挙の定義はここです";
+        diag_fail(&d);
+    }
+    return v;
+}
+
+// case の本体の先頭に「見立て」と「中身の束縛」を差し込む
+static void bind_pattern(Sema *s, Node *c, Node *pat, EnumDef *e, EnumVal *v,
+                         char *mname) {
+    int nargs = 0;
+    if (pat->kind == ND_METHOD)
+        for (Node *a = pat->args; a; a = a->next) nargs++;
+
+    if (nargs != v->nfields) {
+        Diag d = {0};
+        d.message = diag_fmt("枝 '%s.%s' の中身は %d 個です（%d 個書かれています）",
+                             e->name, v->name, v->nfields, nargs);
+        d.primary.tok = pat->tok;
+        d.primary.label = v->nfields == 0 ? "この枝は中身を持ちません"
+                                          : "中身の数が合っていません";
+        d.related.tok = v->tok;
+        d.related.label = "枝の定義はここです";
+        d.hint = v->nfields == 0
+                     ? diag_fmt("'case %s.%s:' と書きます", e->name, v->name)
+                     : diag_fmt("'case %s.%s(…)' に %d 個の名前を書きます",
+                                e->name, v->name, v->nfields);
+        diag_fail(&d);
+    }
+    if (nargs == 0) return;
+
+    // 束縛の名前は「ただの名前」だけです（式は書けません）
+    for (Node *a = pat->args; a; a = a->next) {
+        if (a->kind != ND_VAR) {
+            Diag d = {0};
+            d.message = "case の中身には名前を書きます";
+            d.primary.tok = a->tok;
+            d.primary.label = "ここは名前ではありません";
+            d.hint = "束縛する名前を書きます（例: case Shape.Circle(r):）。"
+                     "値で絞りたいときは本体で if を使ってください";
+            diag_fail(&d);
+        }
+        for (Node *q = pat->args; q != a; q = q->next)
+            if (strcmp(q->name, a->name) == 0) {
+                Diag d = {0};
+                d.message = diag_fmt("束縛する名前 '%s' が 2 回あります", a->name);
+                d.primary.tok = a->tok;
+                d.primary.label = "2 つめです";
+                d.related.tok = q->tok;
+                d.related.label = "最初はここです";
+                diag_fail(&d);
+            }
+    }
+
+    Class *bc = branch_class(s, e, v);
+    Token *t = pat->tok;
+
+    // __v.N: <枝のクラス> = __m.N（見立て。IR では何も起きません）
+    char *vname = sema_hidden(s, "match.b");
+    Node *view = new_node(ND_VARDECL, t);
+    view->name = vname;
+    Node *vtr = new_node(ND_TYPEREF, t);
+    vtr->name = bc->name;
+    view->type_ref = vtr;
+    view->rhs = new_var_node(t, mname);
+    view->is_enum_view = true;
+
+    Node head = {0};
+    Node *cur = &head;
+    cur->next = view;
+    cur = cur->next;
+
+    // 中身を順に束縛（__tag は飛ばします）
+    Field *f = bc->fields;
+    if (f) f = f->next;              // ★ 先頭は __tag
+    for (Node *a = pat->args; a; a = a->next, f = f->next) {
+        Node *fld = new_node(ND_FIELD, a->tok);
+        fld->lhs = new_var_node(a->tok, vname);
+        fld->name = f->name;
+        Node *bind = new_node(ND_VARDECL, a->tok);
+        bind->name = a->name;
+        bind->rhs = fld;             // 型は右辺から決まります
+        cur->next = bind;
+        cur = cur->next;
+    }
+
+    cur->next = c->body->body;
+    c->body->body = head.next;
+}
+
+// match 全体を「タグで調べる形」に書き換える
+static void lower_match_payload(Sema *s, Node *n, EnumDef *e) {
+    Token *t = n->tok;
+
+    // ① 調べる式を 1 回だけ評価して、隠し変数に入れる
+    char *mname = sema_hidden(s, "match.v");
+    Node *decl = new_node(ND_VARDECL, t);
+    decl->name = mname;
+    decl->rhs = n->lhs;
+
+    // ② それぞれの case を「タグの比較 ＋ 中身の束縛」にする
+    for (Node *c = n->body; c; c = c->next) {
+        if (!c->lhs) continue;                  // case _
+        Node *pat = c->lhs;
+        EnumVal *v = pattern_branch(s, pat, e);
+        bind_pattern(s, c, pat, e, v, mname);
+        c->lhs = new_int_node(pat->tok, v->val);   // 比べるのはタグだけ
+    }
+
+    // ③ match を「タグを調べる match」にして、宣言と並べる
+    Node *m = new_node(ND_MATCH, t);
+    Node *tagn = new_node(ND_ENUMTAG, t);
+    tagn->lhs = new_var_node(t, mname);
+    m->lhs = tagn;
+    m->body = n->body;
+    m->en = e;                                  // 網羅の検査に使います
+
+    decl->next = m;
+
+    n->kind = ND_BLOCK;
+    n->lhs = NULL;
+    n->body = decl;
+    n->en = NULL;
+}
+
 // ── for の脱糖（A-39）───────────────────────────────────
 //
 // ★ **脱糖はここでします。** 0.1.0 からずっとパーサでやっていましたが、
@@ -4162,7 +4457,17 @@ static void check_stmt(Sema *s, Node *n) {
         case ND_MATCH: {
             Type *st = auto_deref(check_expr(s, n->lhs));
 
-            bool is_enum = st->kind == TY_ENUM;
+            // ★ 中身を持つ列挙（A-41）。**タグで調べる形に書き換えて**から
+            //   検査し直します。書き換えたあとは今までの match と同じ形です。
+            if (st->kind == TY_ENUM && st->en->has_payload) {
+                lower_match_payload(s, n, st->en);
+                check_stmt(s, n);     // 書き換えた自分（ND_BLOCK）を検査する
+                break;
+            }
+
+            // ★ タグを調べる match（A-41 が作った形）は、列挙として扱います。
+            EnumDef *men = st->kind == TY_ENUM ? st->en : n->en;
+            bool is_enum = men != NULL;
             if (!is_enum && st->kind != TY_INT && st->kind != TY_STR) {
                 Diag d = {0};
                 d.message = diag_fmt("'%s' は match で調べられません",
@@ -4173,7 +4478,7 @@ static void check_stmt(Sema *s, Node *n) {
                          "（どの枝かを型が持ちます）";
                 diag_fail(&d);
             }
-            if (is_enum) n->en = st->en;
+            if (is_enum) n->en = men;
 
             // 注意: **枝を数えるのに固定長の配列を使いません。** 枝の数に
             //   上限を設ける理由がありません。
@@ -4260,13 +4565,13 @@ static void check_stmt(Sema *s, Node *n) {
                     StrBuf missing;
                     sb_init(&missing);
                     int nmiss = 0;
-                    for (EnumVal *v = st->en->vals; v; v = v->next) {
+                    for (EnumVal *v = men->vals; v; v = v->next) {
                         bool found = false;
                         for (Node *c = n->body; c && !found; c = c->next)
                             if (c->lhs && c->lhs->ival == v->val) found = true;
                         if (!found)
                             sb_printf(&missing, "%s%s.%s", nmiss++ ? " / " : "",
-                                      st->en->name, v->name);
+                                      men->name, v->name);
                     }
                     if (nmiss) {
                         Diag d = {0};
@@ -4274,7 +4579,7 @@ static void check_stmt(Sema *s, Node *n) {
                                              sb_str(&missing));
                         d.primary.tok = n->tok;
                         d.primary.label = "ここで全部の枝を扱ってください";
-                        d.related.tok = st->en->tok;
+                        d.related.tok = men->tok;
                         d.related.label = "列挙の定義はここです";
                         d.hint = "どれにも当たらないときの動きが要るなら "
                                  "case _: を書いてください";
@@ -4287,7 +4592,7 @@ static void check_stmt(Sema *s, Node *n) {
                     int ncase = 0;
                     for (Node *c = n->body; c; c = c->next)
                         if (c->lhs) ncase++;
-                    if (ncase == st->en->nvals)
+                    if (ncase == men->nvals)
                         error_at_hint(default_at->tok,
                                       "枝を全部書いてあるので case _ は届きません",
                                       "この case は選ばれません");
@@ -5785,6 +6090,8 @@ static void declare_enum(Sema *s, Node *n) {
     e->nvals = 0;
     e->owner = s->cur;
 
+    e->has_payload = n->has_payload;   // A-41
+
     // 枝を宣言した順に並べます（番号は parser が振ってあります）。
     EnumVal *tail = NULL;
     for (Node *v = n->body; v; v = v->next) {
@@ -5793,6 +6100,10 @@ static void declare_enum(Sema *s, Node *n) {
         ev->val = v->ival;
         ev->tok = v->tok;
         ev->next = NULL;
+        // ★ 中身を持つ枝の数だけ数えておきます（A-41）。
+        //   隠しクラスは**あとで**結びます（branch_class）——列挙は
+        //   **クラスより先に**登録するので、この時点ではまだありません。
+        for (Node *f = v->params; f; f = f->next) ev->nfields++;
         if (tail) tail->next = ev; else e->vals = ev;
         tail = ev;
         e->nvals++;

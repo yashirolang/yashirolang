@@ -137,6 +137,9 @@ bool ty_is_owned(Type *t) {
         case TY_LIST:
         case TY_CLASS:
         case TY_RC: return true;  // rc[T] も「後始末が要る値」
+        // ★ 中身を持つ列挙（A-41）はヒープの物体です。名前だけの列挙は
+        //   ただの i64 なので、後始末は要りません。
+        case TY_ENUM: return t->en && t->en->has_payload;
         case TY_OPT: return ty_is_owned(t->elem);  // Token | None も所有型
         default: return false;                     // int / bool / None
     }

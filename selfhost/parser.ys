@@ -245,6 +245,116 @@ class Parser:
             return result
         return ast.new_str_node(t, "", 0)
 
+    # ── 中身を持つ枝の隠しクラス（A-41）────────────────────────
+    #
+    # ★ 枝 1 つにつきクラスを 1 つ、**トップレベルに持ち上げます**
+    #   （lambda と同じ手です）。こうすると、レイアウト・確保・解放・
+    #   フィールドの読み書きが**クラスのためにもう書いてあるもの**で動きます。
+    #
+    #     enum Shape:                 class Shape$Circle:
+    #         Circle(r: float)   →        __tag: int      ← 必ず先頭
+    #                                     r: float
+    #                                     def init(self, __tag: int, r: float) -> None:
+    #                                         self.__tag = __tag
+    #                                         self.r = r
+    #   対になる定義: src/parser.c の hoist_enum_classes
+    def enum_type_ref(self, t: rc[token.Token] | None, name: str) -> rc[ast.Node]:
+        tr: rc[ast.Node] = ast.new_node(ast.ND_TYPEREF, t)
+        tr.name = copy(name)
+        return tr
+
+    def enum_field_decl(self, t: rc[token.Token] | None, name: str,
+                        type_ref: rc[ast.Node] | None) -> rc[ast.Node]:
+        f: rc[ast.Node] = ast.new_node(ast.ND_FIELDDECL, t)
+        f.name = copy(name)
+        f.type_ref = type_ref
+        return f
+
+    def enum_self_assign(self, t: rc[token.Token] | None, name: str) -> rc[ast.Node]:
+        fld: rc[ast.Node] = ast.new_node(ast.ND_FIELD, t)
+        fld.lhs = ast.new_var_node(t, "self")
+        fld.name = copy(name)
+        asn: rc[ast.Node] = ast.new_node(ast.ND_ASSIGN, t)
+        asn.lhs = fld
+        asn.rhs = ast.new_var_node(t, name)
+        return asn
+
+    def hoist_enum_classes(mut self, en: rc[ast.Node]) -> None:
+        ev: rc[ast.Node] | None = en.body
+        while ev is not None:
+            v: rc[ast.Node] = ev
+            t: rc[token.Token] | None = v.tok
+            cls: rc[ast.Node] = ast.new_node(ast.ND_CLASS, t)
+            cls.name = en.name + "$" + v.name
+            cls.is_enum_branch = True
+
+            # フィールド: __tag: int, 宣言された中身…
+            fh: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, t)
+            fc: rc[ast.Node] = fh
+            d0: rc[ast.Node] = self.enum_field_decl(t, "__tag",
+                                                    self.enum_type_ref(t, "int"))
+            fc.next = d0
+            fc = d0
+            f0: rc[ast.Node] | None = v.params
+            while f0 is not None:
+                ff: rc[ast.Node] = f0
+                d1: rc[ast.Node] = self.enum_field_decl(t, ff.name,
+                                                        ast.ast_clone(ff.type_ref))
+                fc.next = d1
+                fc = d1
+                f0 = ff.next
+
+            # init(self, __tag: int, 中身…) -> None
+            fn: rc[ast.Node] = ast.new_node(ast.ND_FUNC, t)
+            fn.name = "init"
+            fn.type_ref = self.enum_type_ref(t, "None")
+
+            ph: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, t)
+            pc: rc[ast.Node] = ph
+            selfp: rc[ast.Node] = ast.new_node(ast.ND_PARAM, t)
+            selfp.name = "self"
+            pc.next = selfp
+            pc = selfp
+            tagp: rc[ast.Node] = ast.new_node(ast.ND_PARAM, t)
+            tagp.name = "__tag"
+            tagp.type_ref = self.enum_type_ref(t, "int")
+            pc.next = tagp
+            pc = tagp
+            f1: rc[ast.Node] | None = v.params
+            while f1 is not None:
+                fg: rc[ast.Node] = f1
+                pm: rc[ast.Node] = ast.new_node(ast.ND_PARAM, t)
+                pm.name = copy(fg.name)
+                pm.type_ref = ast.ast_clone(fg.type_ref)
+                # ★ 中身は**所有ごと**受け取ります。借りたものはしまえません。
+                pm.mode = ast.PM_OWN
+                pc.next = pm
+                pc = pm
+                f1 = fg.next
+            fn.params = ph.next
+
+            bh: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, t)
+            bc: rc[ast.Node] = bh
+            a0: rc[ast.Node] = self.enum_self_assign(t, "__tag")
+            bc.next = a0
+            bc = a0
+            f2: rc[ast.Node] | None = v.params
+            while f2 is not None:
+                fi: rc[ast.Node] = f2
+                a1: rc[ast.Node] = self.enum_self_assign(t, fi.name)
+                bc.next = a1
+                bc = a1
+                f2 = fi.next
+            body: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, t)
+            body.body = bh.next
+            fn.body = body
+
+            fc.next = fn      # フィールドの後ろにメソッドを並べる
+            cls.body = fh.next
+
+            self.lams.append(cls)
+            ev = v.next
+
     # lambda_expr ::= "lambda" [ IDENT { "," IDENT } ] ":" expr
     #
     # ★ **トップレベルの関数に持ち上げます**（脱糖）。書いた場所には、その
@@ -2095,6 +2205,27 @@ class Parser:
                                "1 行に 1 つ、名前だけを書きます（中身を持つ枝はまだありません）")
             self.advance()
 
+            # ★ 中身を持つ枝（A-41）。`Circle(r: float)` の形で書きます。
+            #   注意: 中身なしの枝に `()` は付けられません（表記を 1 つに保つため）。
+            fields: rc[ast.Node] | None = None
+            fopen: rc[token.Token] = self.peek()
+            if fopen.is_punct("("):
+                self.advance()
+                if self.peek().is_punct(")"):
+                    self.fail_full(fopen, "中身のない枝に '()' は付けません",
+                                   "ここは空です",
+                                   "中身が無いなら '" + v3.text + "' とだけ書きます")
+                fh: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, fopen)
+                fc: rc[ast.Node] = fh
+                while True:
+                    pmf: rc[ast.Node] = self.param(False)
+                    fc.next = pmf
+                    fc = pmf
+                    if self.consume(",") is None:
+                        break
+                self.expect_close(")", fopen)
+                fields = fh.next
+
             # 注意: **同じ名前の枝を断る。** 通すと、あとに書いたほうが
             #   決して選ばれない match ができ、それが黙って通る。
             q3: rc[ast.Node] | None = head3.next
@@ -2108,6 +2239,7 @@ class Parser:
             ev3: rc[ast.Node] = ast.new_node(ast.ND_ENUMVAL, v3)
             ev3.name = copy(v3.text)
             ev3.ival = nextval
+            ev3.params = fields        # A-41（無ければ None）
             nextval = nextval + 1
             cur3.next = ev3
             cur3 = ev3
@@ -2119,6 +2251,17 @@ class Parser:
             self.fail_hint(kwe, "枝を 1 つ以上書いてください",
                            "空の列挙は書けません")
         n3.body = head3.next
+
+        # ★ 中身を持つ枝が 1 つでもあれば、**全部の枝**を隠しクラスにします（A-41）。
+        #   混ぜると代入も match も 2 通りになるので、表現は enum 単位で決めます。
+        ev4: rc[ast.Node] | None = n3.body
+        while ev4 is not None:
+            e4: rc[ast.Node] = ev4
+            if e4.params is not None:
+                n3.has_payload = True
+            ev4 = e4.next
+        if n3.has_payload:
+            self.hoist_enum_classes(n3)
         return n3
 
     # ── 場合分け（A-37）──────────────────────────────────

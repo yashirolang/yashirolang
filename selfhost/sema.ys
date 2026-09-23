@@ -318,8 +318,13 @@ class Sema:
     inst_site: rc[token.Token] | None
     inst_name: str
 
+    # ★ sema が作る隠し変数の連番（A-41 の match）。
+    #   注意: この言語は同名の変数を隠せないので、名前は**必ず一意**にします。
+    hidden: int
+
     def init(self) -> None:
         self.prims = ast.Prims()
+        self.hidden = 0
         self.loop_depth = 0
         self.scope_depth = 0
         self.ensures_depth = 0
@@ -1699,7 +1704,11 @@ class Sema:
 
     def check_expr(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
         t: rc[ast.Type] = self.ty_int()
-        if n.kind == ast.ND_INT:
+        if n.kind == ast.ND_ENUMTAG:
+            # ★ 中身を持つ枝のタグ（A-41）。先頭の i64 を読むだけです。
+            self.check_expr(unwrap_node(n.lhs))
+            t = self.ty_int()
+        elif n.kind == ast.ND_INT:
             # ★ 畳んだ列挙の枝（A-37）はここに来ます。**もう一度検査しても
             #   int に戻らない**ようにします（既定値は宣言の登録と本体の検査で
             #   2 度通ることがあり、2 度目に型が変わると「'int' を 'Level' に
@@ -1839,6 +1848,15 @@ class Sema:
                                    "None 型の値は変数にできません")
             declared = actual
         want: rc[ast.Type] = unwrap_type(declared)
+
+        # ★ 見立て（A-41）。「enum の値を、当たった枝のクラスとして見る」宣言です。
+        #   **ここだけ型検査を通します。** match が枝を確かめた直後にしか
+        #   作らない（sema が組み立てる）ので、利用者は触れません。
+        if n.is_enum_view and actual.kind == ast.TY_ENUM and want.kind == ast.TY_CLASS:
+            vv0: rc[types.VarEntry] = self.declare(n.name, want, n.tok)
+            n.ir_name = copy(vv0.ir_name)
+            n.type = want
+            return
 
         if not ast.type_assignable(actual, want):
             diag.error_full(unwrap_tok(rhs.tok), "型が一致しません",
@@ -3003,6 +3021,65 @@ class Sema:
     #
     # 戻り値: 畳めたら型、そうでなければ None（ふつうのフィールドとして続ける）
     #   対になる定義: src/sema.c の fold_enum_value
+    # ── 中身を持つ枝の隠しクラスを引く（A-41）────────────────
+    #
+    # ★ **遅れて引きます。** 列挙はクラスより先に登録する（クラスの
+    #   フィールドに列挙を書けるようにするため）ので、列挙を登録する時点では
+    #   枝のクラスがまだありません。最初に要ったときに引いて覚えます。
+    #   対になる定義: src/sema.c の branch_class
+    def branch_class(mut self, e: rc[ast.EnumDef],
+                     ev: mut rc[ast.EnumVal]) -> rc[ast.Class]:
+        c0: rc[ast.Class] | None = ev.cls
+        if c0 is not None:
+            return c0
+        owner: rc[types.ModuleSyms] = self.syms_by_name(e.owner_name)
+        got: rc[ast.Class] | None = self.lookup_class_in(owner,
+                                                         e.name + "$" + ev.name)
+        if got is None:
+            panic("sema: 枝のクラスがありません")   # parser が必ず作ります
+            return rc(ast.Class("", None))
+        ev.cls = got
+        return got
+
+    def make_enum_value(mut self, n: mut rc[ast.Node], e: rc[ast.EnumDef],
+                        ev: mut rc[ast.EnumVal], args: rc[ast.Node] | None,
+                        nargs: int) -> rc[ast.Type]:
+        if nargs != ev.nfields:
+            label: str = "中身の数が違います"
+            hint: str = ("'" + e.name + "." + ev.name + "(…)' に " +
+                         str(ev.nfields) + " 個書きます")
+            if ev.nfields == 0:
+                label = "この枝は中身を持ちません"
+                hint = "'" + e.name + "." + ev.name + "' とだけ書きます"
+            diag.error_full(unwrap_tok(n.tok),
+                            "枝 '" + e.name + "." + ev.name + "' は " +
+                            str(ev.nfields) + " 個の中身を取りますが、" +
+                            str(nargs) + " 個渡されました",
+                            label, ev.tok, "枝の定義はここです", hint)
+
+        bc: rc[ast.Class] = self.branch_class(e, ev)
+
+        # タグを先頭に足して、隠しクラスの生成に書き換えます
+        tag: rc[ast.Node] = ast.new_int_node(n.tok, ev.val)
+        tag.next = args
+
+        n.kind = ast.ND_CALL
+        n.name = copy(bc.name)
+        n.lhs = None
+        n.args = tag
+        n.en = e
+        self.check_new(n, bc)
+
+        # ★ 静的な型は**列挙**です（枝のクラスではありません）。
+        n.type = e.type
+        return unwrap_type(e.type)
+
+    # ── 中身を持つ枝を作る（A-41）────────────────────────────
+    #
+    # ★ `Shape.Circle(1.5)` を `Shape$Circle(0, 1.5)` に書き換えます
+    #   （第 1 引数がタグ）。作るのは**ふつうのクラスの生成**なので、
+    #   確保も解放も所有権の検査も、クラスのための仕組みがそのまま効きます。
+    #   対になる定義: src/sema.c の make_enum_value
     def fold_enum_value(mut self, n: mut rc[ast.Node]) -> rc[ast.Type] | None:
         lhs0: rc[ast.Node] = unwrap_node(n.lhs)
         e0: rc[ast.EnumDef] | None = None
@@ -3035,6 +3112,11 @@ class Sema:
                             ed.tok, "列挙の定義はここです",
                             "書ける枝は " + strings.join(names, " / ") + " です")
         vv: rc[ast.EnumVal] = unwrap_enumval(v0)
+
+        # ★ 中身を持つ列挙なら、枝も**物体**です（A-41）。
+        #   表現を枝ごとに変えないので、中身なしの枝も同じ形で作ります。
+        if ed.has_payload:
+            return self.make_enum_value(n, ed, vv, None, 0)
 
         # ★ ここで木を書き換える（畳み込み）
         n.kind = ast.ND_INT
@@ -3143,6 +3225,43 @@ class Sema:
         return unwrap_type(f.ret)
 
     def check_method(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
+        # ★ 中身を持つ枝の生成（A-41）。`Shape.Circle(1.5)` はメソッド呼び出しに
+        #   見えますが、**枝を作る式**です。
+        lh0: rc[ast.Node] | None = n.lhs
+        if lh0 is not None:
+            lhv: rc[ast.Node] = lh0
+            if lhv.kind == ast.ND_VAR and self.lookup(lhv.name) is None:
+                eb: rc[ast.EnumDef] | None = self.lookup_enum(lhv.name)
+                if eb is not None:
+                    ed0: rc[ast.EnumDef] = eb
+                    vb: rc[ast.EnumVal] | None = ed0.find(n.name)
+                    if vb is None:
+                        diag.error_full(unwrap_tok(n.tok),
+                                        "列挙 '" + ed0.name + "' に枝 '" + n.name +
+                                        "' はありません",
+                                        "この枝は定義されていません", ed0.tok,
+                                        "列挙の定義はここです", "")
+                        return self.ty_int()
+                    vbb: rc[ast.EnumVal] = vb
+                    if not ed0.has_payload:
+                        diag.error_full(unwrap_tok(n.tok),
+                                        "枝 '" + ed0.name + "." + vbb.name +
+                                        "' は中身を持ちません",
+                                        "ここに '(' は書けません", vbb.tok,
+                                        "枝の定義はここです",
+                                        "'" + ed0.name + "." + vbb.name +
+                                        "' とだけ書きます")
+                    # 注意: 実引数の並びを**先に受けてから**渡します。
+                    #   n を可変で貸しながら n.args を共有で貸せません。
+                    bargs: rc[ast.Node] | None = n.args
+                    nb: int = 0
+                    ab0: rc[ast.Node] | None = bargs
+                    while ab0 is not None:
+                        abn: rc[ast.Node] = ab0
+                        nb = nb + 1
+                        ab0 = abn.next
+                    return self.make_enum_value(n, ed0, vbb, bargs, nb)
+
         ms: rc[types.ModuleSyms] | None = self.dot_module(n)
         if ms is not None:
             return self.check_module_call(n, ms)
@@ -3826,18 +3945,199 @@ class Sema:
     # ★ ④ が本体。枝を足したとき「直す場所をコンパイラに挙げさせる」ために
     #   この機能を入れた。網羅を確かめないなら if の連なりと同じ。
     #   対になる定義: src/sema.c の case ND_MATCH
+    # ── 中身を持つ枝の match（A-41）──────────────────────────
+    #
+    # ★ **ここで形を書き換えます。** 調べるのは「先頭のタグ（i64）」で、
+    #   当たった枝の中身は**フィールドの読み出し**に落とします。
+    #   そうすれば、網羅の検査（A-37）も codegen も今までどおりです。
+    #
+    #   match s:                    __m.0: Shape = s           ← 1 回だけ評価
+    #       case Shape.Circle(r):   match tag(__m.0):
+    #           BODY            →       case 0:
+    #                                       __v.1: Shape$Circle = __m.0  ← 見立て
+    #                                       r: float = __v.1.r
+    #                                       BODY
+    #   対になる定義: src/sema.c の lower_match_payload
+    def sema_hidden(mut self, tag: str) -> str:
+        name: str = tag + "." + str(self.hidden)
+        self.hidden = self.hidden + 1
+        return name
+
+    # パターン（`Shape.Circle(r)` / `Shape.Empty`）から枝を取り出す
+    def pattern_branch(mut self, pat: rc[ast.Node],
+                       e: rc[ast.EnumDef]) -> rc[ast.EnumVal]:
+        owner: rc[ast.Node] | None = pat.lhs
+        if owner is None or (pat.kind != ast.ND_FIELD and pat.kind != ast.ND_METHOD):
+            diag.error_full(unwrap_tok(pat.tok), "case には枝を書きます",
+                            "ここは枝ではありません", None, "",
+                            "'" + e.name + ".枝名' か '" + e.name +
+                            ".枝名(中身…)' の形で書きます")
+            return rc(ast.EnumVal("", 0, None))
+        ow: rc[ast.Node] = owner
+        if ow.name != e.name:
+            diag.error_full(unwrap_tok(pat.tok),
+                            "'" + e.name + "' の match に、別の列挙の枝は書けません",
+                            "ここは違う列挙です", e.tok,
+                            "調べている列挙はこれです", "")
+        v: rc[ast.EnumVal] | None = e.find(pat.name)
+        if v is None:
+            diag.error_full(unwrap_tok(pat.tok),
+                            "列挙 '" + e.name + "' に枝 '" + pat.name +
+                            "' はありません",
+                            "この枝は定義されていません", e.tok,
+                            "列挙の定義はここです", "")
+            return rc(ast.EnumVal("", 0, None))
+        return v
+
+    # case の本体の先頭に「見立て」と「中身の束縛」を差し込む
+    def bind_pattern(mut self, c: mut rc[ast.Node], pat: rc[ast.Node],
+                     e: rc[ast.EnumDef], v: mut rc[ast.EnumVal],
+                     mname: str) -> None:
+        nargs: int = 0
+        if pat.kind == ast.ND_METHOD:
+            a0: rc[ast.Node] | None = pat.args
+            while a0 is not None:
+                aa: rc[ast.Node] = a0
+                nargs = nargs + 1
+                a0 = aa.next
+
+        if nargs != v.nfields:
+            label: str = "中身の数が合っていません"
+            hint: str = ("'case " + e.name + "." + v.name + "(…)' に " +
+                         str(v.nfields) + " 個の名前を書きます")
+            if v.nfields == 0:
+                label = "この枝は中身を持ちません"
+                hint = "'case " + e.name + "." + v.name + ":' と書きます"
+            diag.error_full(unwrap_tok(pat.tok),
+                            "枝 '" + e.name + "." + v.name + "' の中身は " +
+                            str(v.nfields) + " 個です（" + str(nargs) +
+                            " 個書かれています）",
+                            label, v.tok, "枝の定義はここです", hint)
+        if nargs == 0:
+            return
+
+        # 束縛の名前は「ただの名前」だけです（式は書けません）
+        seen: list[str] = []
+        a1: rc[ast.Node] | None = pat.args
+        while a1 is not None:
+            ab: rc[ast.Node] = a1
+            if ab.kind != ast.ND_VAR:
+                diag.error_full(unwrap_tok(ab.tok), "case の中身には名前を書きます",
+                                "ここは名前ではありません", None, "",
+                                "束縛する名前を書きます（例: case Shape.Circle(r):）。" +
+                                "値で絞りたいときは本体で if を使ってください")
+            for s0 in seen:
+                if s0 == ab.name:
+                    diag.error_full(unwrap_tok(ab.tok),
+                                    "束縛する名前 '" + ab.name + "' が 2 回あります",
+                                    "2 つめです", None, "", "")
+            seen.append(copy(ab.name))
+            a1 = ab.next
+
+        bc: rc[ast.Class] = self.branch_class(e, v)
+        t: rc[token.Token] | None = pat.tok
+
+        # __v.N: <枝のクラス> = __m.N（見立て。IR では何も起きません）
+        vname: str = self.sema_hidden("match.b")
+        view: rc[ast.Node] = ast.new_node(ast.ND_VARDECL, t)
+        view.name = copy(vname)
+        vtr: rc[ast.Node] = ast.new_node(ast.ND_TYPEREF, t)
+        vtr.name = copy(bc.name)
+        view.type_ref = vtr
+        view.rhs = ast.new_var_node(t, mname)
+        view.is_enum_view = True
+
+        head: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, t)
+        cur: rc[ast.Node] = head
+        cur.next = view
+        cur = view
+
+        # 中身を順に束縛（__tag は飛ばします）
+        f: rc[ast.Field] | None = bc.fields
+        if f is not None:
+            f = unwrap_field(f).next
+        a3: rc[ast.Node] | None = pat.args
+        while a3 is not None:
+            ad: rc[ast.Node] = a3
+            ff: rc[ast.Field] = unwrap_field(f)
+            fld: rc[ast.Node] = ast.new_node(ast.ND_FIELD, ad.tok)
+            fld.lhs = ast.new_var_node(ad.tok, vname)
+            fld.name = copy(ff.name)
+            bind: rc[ast.Node] = ast.new_node(ast.ND_VARDECL, ad.tok)
+            bind.name = copy(ad.name)
+            bind.rhs = fld            # 型は右辺から決まります
+            cur.next = bind
+            cur = bind
+            f = ff.next
+            a3 = ad.next
+
+        cbody: rc[ast.Node] = unwrap_node(c.body)
+        cur.next = cbody.body
+        cbody.body = head.next
+
+    # match 全体を「タグで調べる形」に書き換える
+    def lower_match_payload(mut self, n: mut rc[ast.Node],
+                            e: rc[ast.EnumDef]) -> None:
+        t: rc[token.Token] | None = n.tok
+
+        # ① 調べる式を 1 回だけ評価して、隠し変数に入れる
+        mname: str = self.sema_hidden("match.v")
+        decl: rc[ast.Node] = ast.new_node(ast.ND_VARDECL, t)
+        decl.name = copy(mname)
+        decl.rhs = n.lhs
+
+        # ② それぞれの case を「タグの比較 ＋ 中身の束縛」にする
+        c: rc[ast.Node] | None = n.body
+        while c is not None:
+            cc: rc[ast.Node] = c
+            if cc.lhs is not None:
+                pat: rc[ast.Node] = unwrap_node(cc.lhs)
+                v: rc[ast.EnumVal] = self.pattern_branch(pat, e)
+                self.bind_pattern(cc, pat, e, v, mname)
+                cc.lhs = ast.new_int_node(pat.tok, v.val)   # 比べるのはタグだけ
+            c = cc.next
+
+        # ③ match を「タグを調べる match」にして、宣言と並べる
+        m: rc[ast.Node] = ast.new_node(ast.ND_MATCH, t)
+        tagn: rc[ast.Node] = ast.new_node(ast.ND_ENUMTAG, t)
+        tagn.lhs = ast.new_var_node(t, mname)
+        m.lhs = tagn
+        m.body = n.body
+        m.en = e                                  # 網羅の検査に使います
+
+        decl.next = m
+
+        n.kind = ast.ND_BLOCK
+        n.lhs = None
+        n.body = decl
+        n.en = None
+
     def check_match(mut self, n: mut rc[ast.Node]) -> None:
         subj: rc[ast.Node] = unwrap_node(n.lhs)
         st: rc[ast.Type] = auto_deref(self.check_expr(subj))
 
-        is_enum: bool = st.kind == ast.TY_ENUM
+        # ★ 中身を持つ列挙（A-41）。**タグで調べる形に書き換えて**から
+        #   検査し直します。書き換えたあとは今までの match と同じ形です。
+        if st.kind == ast.TY_ENUM:
+            en0: rc[ast.EnumDef] = unwrap_enumdef(st.en)
+            if en0.has_payload:
+                self.lower_match_payload(n, en0)
+                self.check_stmt(n)     # 書き換えた自分（ND_BLOCK）を検査する
+                return
+
+        # ★ タグを調べる match（A-41 が作った形）は、列挙として扱います。
+        men: rc[ast.EnumDef] | None = n.en
+        if st.kind == ast.TY_ENUM:
+            men = st.en
+
+        is_enum: bool = men is not None
         if not is_enum and st.kind != ast.TY_INT and st.kind != ast.TY_STR:
             diag.error_full(unwrap_tok(subj.tok),
                             "'" + ast.type_name(st) + "' は match で調べられません",
                             "ここに書けるのは 列挙 / int / str です", None, "",
                             "クラスの場合分けはインタフェースで書きます（どの枝かを型が持ちます）")
         if is_enum:
-            n.en = st.en
+            n.en = men
 
         has_default: bool = False
         default_at: rc[ast.Node] | None = None
@@ -3907,7 +4207,7 @@ class Sema:
 
         # ── ④ 網羅 ──
         if is_enum:
-            ed: rc[ast.EnumDef] = unwrap_enumdef(st.en)
+            ed: rc[ast.EnumDef] = unwrap_enumdef(men)
             if not has_default:
                 missing: list[str] = []
                 v: rc[ast.EnumVal] | None = ed.vals
@@ -5204,6 +5504,14 @@ class Sema:
         while v is not None:
             nv: rc[ast.Node] = v
             ev: rc[ast.EnumVal] = rc(ast.EnumVal(nv.name, nv.ival, nv.tok))
+            # ★ 中身の数だけ数えておきます（A-41）。隠しクラスは**あとで**
+            #   結びます（branch_class）——列挙は**クラスより先に**登録するので、
+            #   この時点ではまだありません。
+            pf: rc[ast.Node] | None = nv.params
+            while pf is not None:
+                pff: rc[ast.Node] = pf
+                ev.nfields = ev.nfields + 1
+                pf = pff.next
             if tail is None:
                 e.vals = ev
             else:
@@ -5212,6 +5520,7 @@ class Sema:
             e.nvals = e.nvals + 1
             v = nv.next
 
+        e.has_payload = n.has_payload   # A-41
         e.type = ast.type_enum(e.name, e)
         e.next = ms0.enums
         ms0.enums = e
@@ -5513,6 +5822,14 @@ def unwrap_enumdef(e: rc[ast.EnumDef] | None) -> rc[ast.EnumDef]:
         return rc(ast.EnumDef("", None))
     else:
         return e
+
+def unwrap_field(f: rc[ast.Field] | None) -> rc[ast.Field]:
+    if f is None:
+        panic("sema: フィールドがありません")
+        return rc(ast.Field("", None))
+    else:
+        return f
+
 
 def unwrap_enumval(v: rc[ast.EnumVal] | None) -> rc[ast.EnumVal]:
     if v is None:

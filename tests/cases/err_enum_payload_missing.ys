@@ -1,0 +1,14 @@
+# ERROR: match に書いていない枝があります: Shape.Rect
+# 中身を持つ列挙でも網羅は効く（A-41）
+enum Shape:
+    Circle(r: float)
+    Rect(w: float, h: float)
+
+def f(s: Shape) -> float:
+    match s:
+        case Shape.Circle(r):
+            return r
+    return 0.0
+
+def main() -> int:
+    return 0

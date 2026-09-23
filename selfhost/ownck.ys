@@ -141,10 +141,25 @@ def ty_is_rc(t: rc[ast.Type]) -> bool:
     return False
 
 # 所有型か（解放の対象になりうる型か）
+def unwrap_enum(e: rc[ast.EnumDef] | None) -> rc[ast.EnumDef]:
+    if e is None:
+        panic("ownck: 列挙の定義がありません")
+        return rc(ast.EnumDef("", None))
+    else:
+        return e
+
+
 def ty_is_owned(t: rc[ast.Type]) -> bool:
     if (t.kind == ast.TY_STR or t.kind == ast.TY_LIST or
             t.kind == ast.TY_CLASS or t.kind == ast.TY_RC):
         return True
+    # ★ 中身を持つ列挙（A-41）はヒープの物体です。名前だけの列挙は
+    #   ただの i64 なので、後始末は要りません。
+    if t.kind == ast.TY_ENUM:
+        e0: rc[ast.EnumDef] | None = t.en
+        if e0 is None:
+            return False
+        return unwrap_enum(e0).has_payload
     # T | None も中身が所有型なら所有型
     if t.kind == ast.TY_OPT:
         return ty_is_owned(ast.elem_of(t))

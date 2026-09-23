@@ -112,12 +112,20 @@ class EnumVal:
     name: str
     val: int
     tok: rc[token.Token] | None
+    # ★ 中身を持つ枝（A-41）。この枝のための隠しクラスと、中身の数。
+    #   中身なしの枝でも、その enum に中身を持つ枝があればクラスを持ちます
+    #   （表現を enum 単位でそろえるため）。
+    #   対になる定義: src/ast.h の EnumVal の cls / nfields
+    cls: rc[Class] | None
+    nfields: int
     next: rc[EnumVal] | None
 
     def init(self, name: str, val: int, tok: rc[token.Token] | None) -> None:
         self.name = copy(name)
         self.val = val
         self.tok = tok
+        self.cls = None
+        self.nfields = 0
         self.next = None
 
 
@@ -127,6 +135,9 @@ class EnumDef:
     vals: rc[EnumVal] | None   # 宣言順
     nvals: int
     type: rc[Type] | None      # この定義に対応する TY_ENUM（1 個だけ作る）
+    # ★ 中身を持つ枝が 1 つでもあるか（A-41）。
+    #   true なら値の表現は「枝の隠しクラスへのポインタ」になります。
+    has_payload: bool
     owner_name: str
     next: rc[EnumDef] | None
 
@@ -136,6 +147,7 @@ class EnumDef:
         self.vals = None
         self.nvals = 0
         self.type = None
+        self.has_payload = False
         self.owner_name = ""
         self.next = None
 
@@ -560,6 +572,9 @@ ND_CASE: int = 50
 #     → name（ループ変数）, lhs（対象）, body, hid_cur / hid_obj（隠し変数）
 ND_FOREACH: int = 51
 
+# ★ 中身を持つ枝のタグを読む（A-41）。codegen は load 1 つに落とします。
+ND_ENUMTAG: int = 52
+
 # ── 仮引数の受け取り方（C 版 ParamMode と同じ順序・同じ値）──
 PM_BORROW: int = 0   # 既定。読むだけ借りる
 PM_MUT: int = 1      # mut。書き換えるために借りる
@@ -716,6 +731,15 @@ class Node:
     #   対になる定義: src/ast.h の is_lambda
     is_lambda: bool
 
+    # ★ 中身を持つ枝（A-41）。
+    #   ND_ENUM    … 中身を持つ枝が 1 つでもあるか（表現が変わります）
+    #   ND_CLASS   … 枝から作った隠しクラスか
+    #   ND_VARDECL … 「enum の値を枝のクラスとして見る」宣言か
+    #   対になる定義: src/ast.h の has_payload / is_enum_branch / is_enum_view
+    has_payload: bool
+    is_enum_branch: bool
+    is_enum_view: bool
+
     # 型注釈のモジュール修飾（ND_TYPEREF）
     mod_name: str
 
@@ -827,6 +851,9 @@ class Node:
         self.hid_cur = ""
         self.hid_obj = ""
         self.is_lambda = False
+        self.has_payload = False
+        self.is_enum_branch = False
+        self.is_enum_view = False
         self.nullable = False
         self.mod_name = ""
         self.ir_name = ""
@@ -1139,6 +1166,11 @@ def dump(n: rc[Node] | None, depth: int) -> None:
         if n.els is not None:
             dump(n.els, depth + 1)
         print(pad + ")")
+    elif n.kind == ND_ENUMTAG:
+        # ★ 中身を持つ枝のタグ（A-41）
+        print(pad + "(enumtag")
+        dump(n.lhs, depth + 1)
+        print(pad + ")")
     elif n.kind == ND_FOREACH:
         # ★ for 文（A-39）。sema が while に書き換える前の形です
         #   （--dump-ast は構文解析の直後に出すので、ここを通ります）。
@@ -1256,6 +1288,9 @@ def ast_clone(n: rc[Node] | None) -> rc[Node] | None:
     c.hid_cur = copy(src.hid_cur)
     c.hid_obj = copy(src.hid_obj)
     c.is_lambda = src.is_lambda   # A-42
+    c.has_payload = src.has_payload       # A-41
+    c.is_enum_branch = src.is_enum_branch
+    c.is_enum_view = src.is_enum_view
 
     c.lhs = ast_clone(src.lhs)
     c.rhs = ast_clone(src.rhs)

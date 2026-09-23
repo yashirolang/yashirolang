@@ -301,8 +301,12 @@ class Emitter:
             return "ptr"          # mutex[T]
         if t.kind == ast.TY_PTR:
             return "ptr"          # ptr[T]（A-33：C のライブラリへ渡す）
-        # ★ 列挙はただの i64（枝に 0 から番号を振っただけ。A-37）
+        # ★ 列挙はただの i64（枝に 0 から番号を振っただけ。A-37）。
+        #   中身を持つ枝があるときは、枝の隠しクラスへのポインタです（A-41）。
         if t.kind == ast.TY_ENUM:
+            en0: rc[ast.EnumDef] | None = t.en
+            if en0 is not None and unwrap_enumdef(en0).has_payload:
+                return "ptr"
             return "i64"
         if t.kind == ast.TY_NULL:
             return "ptr"
@@ -340,8 +344,11 @@ class Emitter:
             return "ptr"
         if t.kind == ast.TY_PTR:
             return "ptr"
-        # ★ 列挙はただの i64（A-37）
+        # ★ 列挙はただの i64（A-37）。中身を持つ枝があるときはポインタ（A-41）
         if t.kind == ast.TY_ENUM:
+            en1: rc[ast.EnumDef] | None = t.en
+            if en1 is not None and unwrap_enumdef(en1).has_payload:
+                return "ptr"
             return "i64"
         panic("codegen: メモリ上の表現を持たない型です")
         return "i64"
@@ -780,6 +787,14 @@ class Emitter:
             if self.drop and n.moved_out and not n.is_global:
                 self.emit("  store ptr null, ptr " + n.ir_name + "\n")
             return vv
+
+        # ★ 中身を持つ枝のタグ（A-41）。**先頭の i64 を読むだけ**です。
+        #   どの枝のクラスでもタグは先頭にあるので、見立て直しは要りません。
+        if n.kind == ast.ND_ENUMTAG:
+            eobj: str = self.gen_expr(node_of(n.lhs))
+            et: str = self.new_tmp()
+            self.emit("  " + et + " = load i64, ptr " + eobj + "\n")
+            return et
 
         if n.kind == ast.ND_UNARY:
             return self.gen_unary(n)
@@ -2994,6 +3009,63 @@ class Emitter:
         return name
 
     # 型 t の値 1 つを解放する関数の名前。コピー型なら ""（空）。
+    # 中身を持つ列挙を解放する関数を作る（A-41）。
+    #
+    # ★ **どの枝かは実行時にしか分かりません。** 先頭のタグを読んで、
+    #   その枝のクラスの解放関数へ振り分けます。
+    #   対になる定義: src/codegen.c の gen_enum_drop
+    def gen_enum_drop(mut self, en: rc[ast.EnumDef]) -> str:
+        key: str = "enum:" + en.owner_name + "." + en.name
+        hit: str = self.drop_fn_cached(key)
+        if len(hit) > 0:
+            return hit
+
+        name: str = "@drop.enum." + str(self.drop_counter)
+        self.drop_counter = self.drop_counter + 1
+        # ★ 先に登録します。枝が自分自身を持つ列挙（木）でも無限再帰しないため。
+        self.drop_fn_remember(key, name)
+
+        # 枝ごとの解放関数を先に作ります（本体を書き始める前に）
+        bd: list[str] = []
+        v0: rc[ast.EnumVal] | None = en.vals
+        while v0 is not None:
+            vv: rc[ast.EnumVal] = v0
+            c0: rc[ast.Class] | None = vv.cls
+            if c0 is None:
+                bd.append("")
+            else:
+                bd.append(self.gen_class_drop(c0))
+            v0 = vv.next
+
+        b: list[str] = []
+        b.append("\ndefine internal void " + name + "(ptr %p) {\nentry:\n")
+        b.append("  %isnull = icmp eq ptr %p, null\n")
+        b.append("  br i1 %isnull, label %done, label %body\nbody:\n")
+        b.append("  %tag = load i64, ptr %p\n")
+        b.append("  switch i64 %tag, label %done [\n")
+        i: int = 0
+        v1: rc[ast.EnumVal] | None = en.vals
+        while v1 is not None:
+            v1v: rc[ast.EnumVal] = v1
+            b.append("    i64 " + str(v1v.val) + ", label %b" + str(i) + "\n")
+            i = i + 1
+            v1 = v1v.next
+        b.append("  ]\n")
+        i = 0
+        v2: rc[ast.EnumVal] | None = en.vals
+        while v2 is not None:
+            v2v: rc[ast.EnumVal] = v2
+            b.append("b" + str(i) + ":\n")
+            if len(bd[i]) > 0:
+                b.append("  call void " + bd[i] + "(ptr %p)\n")
+            b.append("  br label %done\n")
+            i = i + 1
+            v2 = v2v.next
+        b.append("done:\n  ret void\n}\n")
+        self.dropdefs.append(strings.join(b, ""))
+
+        return name
+
     def drop_fn_for(mut self, t: rc[ast.Type]) -> str:
         if t.kind == ast.TY_STR:
             self.declare_rt("void @pl_drop_str(ptr)")
@@ -3004,6 +3076,12 @@ class Emitter:
             return self.gen_rc_drop(t)
         if t.kind == ast.TY_CLASS:
             return self.gen_class_drop(class_of(t.cls))
+        # ★ 中身を持つ列挙（A-41）。名前だけの列挙は i64 なので何もしません。
+        if t.kind == ast.TY_ENUM:
+            en2: rc[ast.EnumDef] | None = t.en
+            if en2 is not None and unwrap_enumdef(en2).has_payload:
+                return self.gen_enum_drop(unwrap_enumdef(en2))
+            return ""
         # T | None は中身と同じ扱い（解放関数はどれも null を受け取れる）
         if t.kind == ast.TY_OPT:
             return self.drop_fn_for(ast.elem_of(t))
@@ -3020,6 +3098,12 @@ class Emitter:
         if decl.is_global or decl.binds_borrow:
             return False
         t: rc[ast.Type] = type_of(decl)
+        # ★ 中身を持つ列挙（A-41）はヒープの物体です。
+        if t.kind == ast.TY_ENUM:
+            en3: rc[ast.EnumDef] | None = t.en
+            if en3 is None:
+                return False
+            return unwrap_enumdef(en3).has_payload
         return (t.kind == ast.TY_STR or t.kind == ast.TY_LIST or
                 t.kind == ast.TY_CLASS or t.kind == ast.TY_OPT or
                 t.kind == ast.TY_RC)
@@ -4597,6 +4681,14 @@ def node_of(n: rc[ast.Node] | None) -> rc[ast.Node]:
         return ast.new_node(ast.ND_PASS, None)
     else:
         return n
+
+def unwrap_enumdef(e: rc[ast.EnumDef] | None) -> rc[ast.EnumDef]:
+    if e is None:
+        panic("codegen: 列挙の定義がありません")
+        return rc(ast.EnumDef("", None))
+    else:
+        return e
+
 
 def type_of(n: rc[ast.Node]) -> rc[ast.Type]:
     t: rc[ast.Type] | None = n.type

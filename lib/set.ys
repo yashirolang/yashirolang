@@ -45,6 +45,21 @@ class Set[T]:
     def items(mut self) -> list[T]:
         return self.d.keys()
 
+    # ── for で回す（A-39）────────────────────────────────
+    #
+    # ★ 中の表に丸投げします。**読み取り専用の借用のまま回せます**。
+    #
+    #       for x in s:
+    #           print(str(x))
+    def __first__(self) -> int:
+        return self.d.__first__()
+
+    def __next__(self, cur: int) -> int:
+        return self.d.__next__(cur)
+
+    def __get__(self, cur: int) -> T:
+        return self.d.__get__(cur)
+
 
 # ── 作る ────────────────────────────────────────────────────
 

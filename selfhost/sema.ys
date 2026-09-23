@@ -2096,6 +2096,192 @@ class Sema:
             self.scope_escape(n.els, ld, etd)
             q = n.next
 
+    # ── for の脱糖（A-39）───────────────────────────────────
+    #
+    # ★ **脱糖はここでします。** 0.1.0 からずっとパーサでやっていましたが、
+    #   利用者のクラスを回せるようにすると、**型が決まるまで形が決まりません**。
+    #
+    #     対象が list / str  → 添字で回す（今までと同じ形。IR は変わりません）
+    #     規約を持つクラス    → カーソルで回す
+    #
+    #   for x in xs:          for.it.N = xs            ← 対象は 1 回だけ評価
+    #       BODY        →     for.ix.N: int = 0
+    #                         while for.ix.N < len(for.it.N):
+    #                             x = for.it.N[for.ix.N]
+    #                             BODY
+    #                           incr: for.ix.N += 1    ← continue の飛び先
+    #
+    #   for x in c:           for.it.N = c
+    #       BODY        →     for.ix.N: int = for.it.N.__first__()
+    #                         while for.ix.N >= 0:
+    #                             x = for.it.N.__get__(for.ix.N)
+    #                             BODY
+    #                           incr: for.ix.N = for.it.N.__next__(for.ix.N)
+    #
+    # ★ カーソルは **int だけ**です。「イテレータ物体」を作る形にしません。
+    #   この言語は**借用を構造体に保存できない**ので（寿命注釈を入れないと
+    #   決めたため）、容器を指すイテレータを作るには容器を rc[T] にするか、
+    #   寿命を書かせることになります。カーソルなら、容器は借りたままで、
+    #   ループが持つのは int 1 つです。
+    #   対になる定義: src/sema.c の check_foreach
+    def iter_method(self, c: rc[ast.Class], name: str) -> rc[types.FuncSig] | None:
+        owner: rc[types.ModuleSyms] = self.syms_by_name(c.owner_name)
+        return self.lookup_func_in(owner, self.mangle(c.name, name))
+
+    # 規約どおりの形か確かめる（ret が None なら戻り型は問わない＝ __get__）
+    def check_iter_sig(mut self, f: rc[types.FuncSig], name: str, nparams: int,
+                       want_int_ret: bool, at: rc[token.Token] | None,
+                       c: rc[ast.Class]) -> None:
+        ok: bool = f.nparams == nparams
+        if ok and want_int_ret:
+            ok = unwrap_type(f.ret).kind == ast.TY_INT
+        if ok and nparams == 2:
+            ok = f.params[1].kind == ast.TY_INT
+        if ok:
+            return
+
+        hint: str = "def " + name + "(self) -> int の形で書いてください"
+        if name == "__get__":
+            hint = "def __get__(self, cur: int) -> T の形で書いてください"
+        elif nparams == 2:
+            hint = "def " + name + "(self, cur: int) -> int の形で書いてください"
+        diag.error_full(unwrap_tok(at),
+                        "'" + c.name + "." + name + "' の形が for の規約と違います",
+                        "この for がその規約を使います",
+                        f.tok, "このメソッドです", hint)
+
+    # 対象.名前(引数…) のメソッド呼び出しを組み立てる
+    def iter_call(self, tok: rc[token.Token] | None, obj: str, name: str,
+                  arg: rc[ast.Node] | None) -> rc[ast.Node]:
+        m: rc[ast.Node] = ast.new_node(ast.ND_METHOD, tok)
+        m.lhs = ast.new_var_node(tok, obj)
+        m.name = copy(name)
+        m.args = arg
+        return m
+
+    # 隠し変数の宣言（型注釈なし。型は右辺から決まります）
+    def hidden_var(self, tok: rc[token.Token] | None, name: str,
+                   init: rc[ast.Node] | None) -> rc[ast.Node]:
+        n: rc[ast.Node] = ast.new_node(ast.ND_VARDECL, tok)
+        n.name = copy(name)
+        n.rhs = init
+        return n
+
+    def check_foreach(mut self, n: mut rc[ast.Node]) -> None:
+        t: rc[token.Token] | None = n.tok
+        iter_: rc[ast.Node] = unwrap_node(n.lhs)
+        body: rc[ast.Node] = unwrap_node(n.body)
+
+        # ★ 対象の型を先に決めます（形がこれで決まります）。
+        #   注意: この式はこのあと組み立てる木の中でもう一度検査されます。
+        ct: rc[ast.Type] = auto_deref(self.check_expr(iter_))
+
+        head: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, t)
+        cur: rc[ast.Node] = head
+
+        # for.it.N = <対象>（★ 1 回だけ評価する）
+        d0: rc[ast.Node] = self.hidden_var(t, n.hid_obj, iter_)
+        cur.next = d0
+        cur = d0
+
+        cond: rc[ast.Node] = ast.new_int_node(t, 0)      # 下で必ず入れ替える
+        bind: rc[ast.Node] = ast.new_node(ast.ND_PASS, t)
+        inc: rc[ast.Node] = ast.new_node(ast.ND_PASS, t)
+
+        if ct.kind == ast.TY_CLASS:
+            c: rc[ast.Class] = unwrap_class(ct.cls)
+            first: rc[types.FuncSig] | None = self.iter_method(c, "__first__")
+            nextm: rc[types.FuncSig] | None = self.iter_method(c, "__next__")
+            getm: rc[types.FuncSig] | None = self.iter_method(c, "__get__")
+            if first is None or nextm is None or getm is None:
+                diag.error_full(unwrap_tok(iter_.tok),
+                                "クラス '" + c.name + "' は for で回せません",
+                                "'" + ast.type_name(ct) + "' 型です",
+                                c.tok, "クラスの定義はここです",
+                                "for で回すには 3 つのメソッドが要ります:\n" +
+                                "             def __first__(self) -> int          " +
+                                "最初のカーソル（無ければ -1）\n" +
+                                "             def __next__(self, cur: int) -> int " +
+                                "次のカーソル（無ければ -1）\n" +
+                                "             def __get__(self, cur: int) -> T    " +
+                                "そのカーソルの要素")
+                return
+            self.check_iter_sig(unwrap_sig(first), "__first__", 1, True, t, c)
+            self.check_iter_sig(unwrap_sig(nextm), "__next__", 2, True, t, c)
+            self.check_iter_sig(unwrap_sig(getm), "__get__", 2, False, t, c)
+
+            # for.ix.N: int = for.it.N.__first__()
+            d1: rc[ast.Node] = self.hidden_var(
+                t, n.hid_cur, self.iter_call(t, n.hid_obj, "__first__", None))
+            cur.next = d1
+            cur = d1
+
+            # for.ix.N >= 0
+            cond = ast.new_binop_node(t, ast.OP_GE,
+                                      ast.new_var_node(t, n.hid_cur),
+                                      ast.new_int_node(t, 0))
+
+            # x = for.it.N.__get__(for.ix.N)
+            bind = self.hidden_var(
+                t, n.name,
+                self.iter_call(t, n.hid_obj, "__get__",
+                               ast.new_var_node(t, n.hid_cur)))
+
+            # for.ix.N = for.it.N.__next__(for.ix.N)  ← continue の飛び先
+            inc = ast.new_node(ast.ND_ASSIGN, t)
+            inc.lhs = ast.new_var_node(t, n.hid_cur)
+            inc.rhs = self.iter_call(t, n.hid_obj, "__next__",
+                                     ast.new_var_node(t, n.hid_cur))
+        elif ct.kind == ast.TY_LIST or ct.kind == ast.TY_STR:
+            # for.ix.N: int = 0
+            d2: rc[ast.Node] = self.hidden_var(t, n.hid_cur, ast.new_int_node(t, 0))
+            cur.next = d2
+            cur = d2
+
+            # for.ix.N < len(for.it.N)
+            lencall: rc[ast.Node] = ast.new_node(ast.ND_CALL, t)
+            lencall.name = "len"
+            lencall.args = ast.new_var_node(t, n.hid_obj)
+            cond = ast.new_binop_node(t, ast.OP_LT,
+                                      ast.new_var_node(t, n.hid_cur), lencall)
+
+            # x = for.it.N[for.ix.N]
+            idx: rc[ast.Node] = ast.new_node(ast.ND_INDEX, t)
+            idx.lhs = ast.new_var_node(t, n.hid_obj)
+            idx.rhs = ast.new_var_node(t, n.hid_cur)
+            bind = self.hidden_var(t, n.name, idx)
+
+            # for.ix.N += 1  ← continue の飛び先
+            inc = ast.new_node(ast.ND_ASSIGN, t)
+            inc.lhs = ast.new_var_node(t, n.hid_cur)
+            inc.rhs = ast.new_binop_node(t, ast.OP_ADD,
+                                         ast.new_var_node(t, n.hid_cur),
+                                         ast.new_int_node(t, 1))
+        else:
+            diag.error_full(unwrap_tok(iter_.tok),
+                            "'" + ast.type_name(ct) + "' 型は for で回せません",
+                            "ここは回せる形ではありません", None, "",
+                            "回せるのは list / str / range(...) と、" +
+                            "__first__ / __next__ / __get__ を持つクラスです")
+            return
+
+        # 本体の先頭にループ変数の束縛を差し込む
+        bind.next = body.body
+        body.body = bind
+
+        wh: rc[ast.Node] = ast.new_node(ast.ND_WHILE, t)
+        wh.lhs = cond
+        wh.body = body
+        wh.incr = inc
+        cur.next = wh
+
+        # ★ 隠し変数を for のスコープに閉じ込めるため、ブロックにします。
+        #   **このノード自身を書き換えます**（親から見た並びを崩さないため）。
+        n.kind = ast.ND_BLOCK
+        n.name = ""
+        n.lhs = None
+        n.body = head.next
+
     def check_stmt(mut self, n: mut rc[ast.Node]) -> None:
         if n.kind == ast.ND_VARDECL:
             self.check_vardecl(n)
@@ -2155,6 +2341,10 @@ class Sema:
             self.check_match(n)
         elif n.kind == ast.ND_ENUM:
             return                      # 宣言は登録済み（declare_enum）
+        elif n.kind == ast.ND_FOREACH:
+            # ★ for は while へ書き換えてから検査します（A-39）
+            self.check_foreach(n)
+            self.check_stmt(n)     # 書き換えた自分（ND_BLOCK）を検査する
         elif n.kind == ast.ND_WHILE:
             self.check_cond("while の条件", n, unwrap_node(n.lhs))
             self.loop_depth = self.loop_depth + 1
@@ -4267,6 +4457,18 @@ class Sema:
             while pm is not None:
                 pn: rc[ast.Node] = pm
                 if k > 0:
+                    # ★ 引数の**名前**も宣言と同じであること（A-38 の続き）。
+                    #   名前は呼び出し側から見える約束です（キーワード引数）。
+                    if fs.pnames[k] != pn.name:
+                        diag.error_full(unwrap_tok(fs.tok),
+                                        "'" + c.name + "." + im.name + "' の " +
+                                        str(k) + " 番目の引数の名前が宣言と違います",
+                                        "実装では '" + fs.pnames[k] + "' です",
+                                        pn.tok,
+                                        "宣言では '" + pn.name + "' です",
+                                        "引数の名前は呼び出し側から見える約束です" +
+                                        "（名前で渡すときに使います）。" +
+                                        "宣言に合わせてください")
                     wt: rc[ast.Type] = self.resolve_type(unwrap_node(pn.type_ref))
                     if not ast.type_equal(fs.params[k], wt):
                         diag.error_full(unwrap_tok(fs.tok),

@@ -1,0 +1,26 @@
+# ERROR: 'Q.__next__' の形が for の規約と違います
+# ERROR: def __next__(self, cur: int) -> int の形で書いてください
+# 規約のメソッドの形が違う（A-39）
+#
+# ★ カーソルは int です。ここを見ないと、脱糖したあとの型エラー
+#   （利用者が書いていない式のエラー）になって読めません。
+class Q:
+    x: int
+
+    def init(self, x: int) -> None:
+        self.x = x
+
+    def __first__(self) -> int:
+        return 0
+
+    def __next__(self, cur: str) -> int:
+        return -1
+
+    def __get__(self, cur: int) -> int:
+        return self.x
+
+def main() -> int:
+    q: Q = Q(1)
+    for v in q:
+        print(str(v))
+    return 0

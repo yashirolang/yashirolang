@@ -1,0 +1,128 @@
+# OUTPUT: あいう
+# OUTPUT: continue と break: 4
+# OUTPUT: 流れてくるもの: 10
+# OUTPUT: 空: 0
+# OUTPUT: 穴のある容器: 15
+# EXIT: 0
+# for で回せる容器を自分で書く（A-39）
+#
+#   ★ 規約は 3 つのメソッドです。
+#       def __first__(self) -> int           最初のカーソル（無ければ -1）
+#       def __next__(self, cur: int) -> int  次のカーソル（無ければ -1）
+#       def __get__(self, cur: int) -> T     そのカーソルの要素
+#
+#   ★ カーソルは **int だけ**です。「イテレータ物体」を作る形にしていません
+#     ——この言語は借用を構造体に保存できないので（寿命注釈を入れないと
+#     決めたため）、容器を指すイテレータを作ると容器を rc[T] にするか、
+#     寿命を書かせることになります。カーソルなら容器は借りたままです。
+#
+#   注意: **穴のある容器**（hash 表のような）も書けます。`__next__` が
+#     空きを飛ばせばよいだけです。
+class Bag[T]:
+    xs: list[T]
+
+    def init(self, xs: own list[T]) -> None:
+        self.xs = xs
+
+    def __first__(self) -> int:
+        if len(self.xs) == 0:
+            return -1
+        return 0
+
+    def __next__(self, cur: int) -> int:
+        if cur + 1 >= len(self.xs):
+            return -1
+        return cur + 1
+
+    def __get__(self, cur: int) -> T:
+        return self.xs[cur]
+
+
+# ★ mut self で書けば「流れてくるもの」（行・受信）も表せます。
+#   容器に中身が無くても構いません——カーソルを進めるたびに作ります。
+class Counter:
+    limit: int
+    now: int
+
+    def init(self, limit: int) -> None:
+        self.limit = limit
+        self.now = 0
+
+    def __first__(mut self) -> int:
+        self.now = 1
+        if self.now > self.limit:
+            return -1
+        return 0
+
+    def __next__(mut self, cur: int) -> int:
+        self.now = self.now + 1
+        if self.now > self.limit:
+            return -1
+        return cur + 1
+
+    def __get__(self, cur: int) -> int:
+        return self.now
+
+
+# ★ 穴のある容器（-1 が空き）。__next__ が飛ばします。
+class Holey:
+    slots: list[int]
+
+    def init(self, slots: own list[int]) -> None:
+        self.slots = slots
+
+    def skip_from(self, from_: int) -> int:
+        i: int = from_
+        while i < len(self.slots):
+            if self.slots[i] != -1:
+                return i
+            i = i + 1
+        return -1
+
+    def __first__(self) -> int:
+        return self.skip_from(0)
+
+    def __next__(self, cur: int) -> int:
+        return self.skip_from(cur + 1)
+
+    def __get__(self, cur: int) -> int:
+        return self.slots[cur]
+
+
+def main() -> int:
+    # ジェネリックな容器（要素が str でも回せます）
+    b: Bag[str] = Bag(["あ", "い", "う"])
+    out: str = ""
+    for s in b:
+        out = out + s
+    print(out)
+
+    # continue は __next__ へ飛び、break はループを出ます
+    n: Bag[int] = Bag([1, 2, 3, 4])
+    total: int = 0
+    for v in n:
+        if v == 2:
+            continue
+        if v == 4:
+            break
+        total = total + v
+    print("continue と break: " + str(total))
+
+    c: Counter = Counter(4)
+    sum2: int = 0
+    for k in c:
+        sum2 = sum2 + k
+    print("流れてくるもの: " + str(sum2))
+
+    empty: Bag[int] = Bag([])
+    cnt: int = 0
+    for e in empty:
+        cnt = cnt + 1
+    print("空: " + str(cnt))
+
+    h: Holey = Holey([3, -1, 5, -1, -1, 7])
+    hs: int = 0
+    for x in h:
+        hs = hs + x
+    print("穴のある容器: " + str(hs))
+    return 0

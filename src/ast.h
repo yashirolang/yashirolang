@@ -32,6 +32,12 @@ typedef enum {
     // ── 制御構文 ──
     ND_IF,        // if 文    → lhs（条件）, body（then）, els（else）
     ND_WHILE,     // while 文 → lhs（条件）, body
+    // ★ for 文（A-39）。**sema が while に書き換えます**（脱糖）。
+    //   範囲（range）と enumerate はパーサで書き換えますが、それ以外は
+    //   「対象が list / str か、規約を持つクラスか」で形が変わるので、
+    //   **型が決まるまで決められません**。
+    //     → name（ループ変数）, lhs（対象）, body, hid_cur / hid_obj（隠し変数）
+    ND_FOREACH,
     ND_BREAK,     // break
     ND_CONTINUE,  // continue
     ND_PASS,      // pass（何もしない）
@@ -429,6 +435,14 @@ struct Node {
     //   NULL なら位置引数。並べ替えと既定値の穴埋めは sema がします。
     char *arg_name;
     Token *arg_name_tok;
+
+    // ★ ND_FOREACH が使う隠し変数の名前（A-39）。
+    //   **パーサが作ります**（脱糖は sema がしますが、名前の連番は
+    //   パーサが持っているので、そこで採っておきます）。
+    //     hid_cur … カーソル（list なら添字、クラスならカーソル）
+    //     hid_obj … 対象を 1 回だけ評価して入れておく変数
+    char *hid_cur;
+    char *hid_obj;
 
     // ND_FIELD が指すフィールド（sema が解決する）
     Field *field;

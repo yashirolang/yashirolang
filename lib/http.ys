@@ -674,9 +674,8 @@ def serve_n(l: mut net.Listener, handler: fn(Request) -> Response,
 #   違うのは「受け付けたあとに TLS で包む」ところだけで、要求の解釈も
 #   応答の組み立ても 1 か所のままです。
 #
-# 注意: **http のつもりで繋いできた人がふつうに来ます**（港を舐めて回る相手、
-#   https の場所を http:// で開いた人）。その 1 人でサーバーが終わっては
-#   困るので、やり取りに失敗した客は**黙って切って次に進みます**。
+# 注意: **http のつもりで繋いできた人がふつうに来ます**
+#   やり取りに失敗した客は**黙って切断し次に進みます**。
 
 def serve_tls(host: str, port: int, cert_path: str, key_path: str,
               handler: fn(Request) -> Response) -> None raises net.NetError:

@@ -217,7 +217,7 @@ import json               # 標準ライブラリ。名前はぶつかりませ�
 
 ## ドキュメント
 
-**まずは [docs/getting-started.md](docs/getting-started.md)（5 分）、次に [docs/tutorial.md](docs/tutorial.md)（30 分）です。**
+**まずは [docs/getting-started.md](docs/getting-started.md)、次に [docs/tutorial.md](docs/tutorial.md)です。**
 
 | | |
 |---|---|

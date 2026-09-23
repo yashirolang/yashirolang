@@ -1,0 +1,22 @@
+# ERROR: の 1 番目の引数の名前が宣言と違います
+# ERROR: 宣言では 'k' です
+# インタフェースの宣言と実装で引数の名前が違う（A-38 の続き）
+#
+# ★ 引数の名前は**呼び出し側から見える約束**です（名前で渡すときに使います）。
+#   型だけ合わせて名前が違うと、「インタフェース越しにも名前で渡せる」ように
+#   した日に、どちらの名前が正しいのか決められなくなります。
+interface Shape:
+    def area(self, k: int) -> int
+
+class Sq(Shape):
+    w: int
+
+    def init(self, w: int) -> None:
+        self.w = w
+
+    def area(self, n: int) -> int:
+        return self.w * n
+
+def main() -> int:
+    s: Shape = Sq(2)
+    return s.area(3)

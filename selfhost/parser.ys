@@ -1408,6 +1408,20 @@ class Parser:
         cond: rc[ast.Node] = ast.new_int_node(t, 0)   # 下で必ず入れ替える
         bind: rc[ast.Node] = ast.new_node(ast.ND_PASS, t)
 
+        # ★ range 以外は **sema が脱糖します**（A-39）。
+        #   対象が list / str なら「添字で回す」形、規約を持つクラスなら
+        #   「カーソルで回す」形になりますが、**どちらになるかは型が決まるまで
+        #   分かりません**。隠し変数の名前だけここで採っておきます
+        #   （連番を持っているのはパーサなので、IR に出る名前が変わりません）。
+        if not is_range:
+            fe: rc[ast.Node] = ast.new_node(ast.ND_FOREACH, t)
+            fe.name = copy(var_tok.text)
+            fe.lhs = iter_
+            fe.body = body
+            fe.hid_cur = copy(ix)
+            fe.hid_obj = self.hidden_name("for.it")
+            return fe
+
         if is_range:
             # for.ix.N: int = start
             d1: rc[ast.Node] = self.hidden_decl(t, ix, start)

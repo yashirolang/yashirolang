@@ -188,6 +188,37 @@ class Dict[K, V]:
     #       while i < d.len():
     #           print(f"{d.key_at(i)} -> {d.val_at(i)}")
     #           i = i + 1
+    # ── for で回す（A-39）────────────────────────────────
+    #
+    # ★ **読み取り専用の借用のまま回せます。** keys() は詰め直しのために
+    #   `mut self` が要るので、`def total(d: Dict[str, int])` のような
+    #   「読むだけの関数」からは回せませんでした。カーソルなら詰め直さずに
+    #   消えたところを飛ばすだけなので、`self` で済みます。
+    #
+    #       for k in d:              # 鍵が順に出ます（入れた順）
+    #           print(k + " -> " + str(d.get(k)))
+    #
+    # 注意: 回している間に入れたり消したりしないでください（カーソルが
+    #   指す先が変わります）。所有権の検査が止めてくれる形にはなっています
+    #   ——足したり消したりするメソッドは `mut self` なので、読み取り専用の
+    #   借用では呼べません。
+    def live_from(self, from_: int) -> int:
+        i: int = from_
+        while i < len(self.keys_):
+            if self.live[i]:
+                return i
+            i = i + 1
+        return -1
+
+    def __first__(self) -> int:
+        return self.live_from(0)
+
+    def __next__(self, cur: int) -> int:
+        return self.live_from(cur + 1)
+
+    def __get__(self, cur: int) -> K:
+        return self.keys_[cur]
+
     def key_at(mut self, i: int) -> K:
         if self.dead > 0:
             self.compact()

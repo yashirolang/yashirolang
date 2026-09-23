@@ -462,6 +462,15 @@ static void dump(Node *n, int depth) {
             printf(")\n");
             break;
 
+        // ★ for 文（A-39）。sema が while に書き換える前の形です
+        //   （--dump-ast は構文解析の直後に出すので、ここを通ります）。
+        case ND_FOREACH:
+            printf("(foreach %s\n", n->name);
+            dump(n->lhs, depth + 1);
+            dump(n->body, depth + 1);
+            for (int i = 0; i < depth; i++) printf("  ");
+            printf(")\n");
+            break;
         case ND_BLOCK:
             printf("(block\n");
             for (Node *s = n->body; s; s = s->next) dump(s, depth + 1);
@@ -503,6 +512,11 @@ Node *ast_clone(Node *n) {
     c->en = n->en;
     c->arg_name = n->arg_name;
     c->arg_name_tok = n->arg_name_tok;
+    // ★ for の隠し変数（A-39）。
+    //   注意: **同じ名前のまま複製します。** 実体ごとに別の関数になるので
+    //     名前がぶつかることはありません（ジェネリクスの単相化）。
+    c->hid_cur = n->hid_cur;
+    c->hid_obj = n->hid_obj;
 
     c->lhs = ast_clone(n->lhs);
     c->rhs = ast_clone(n->rhs);

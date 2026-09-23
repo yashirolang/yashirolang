@@ -553,6 +553,13 @@ ND_ENUMVAL: int = 48
 ND_MATCH: int = 49
 ND_CASE: int = 50
 
+# ── for 文（A-39）──
+# ★ **sema が while に書き換えます**（脱糖）。範囲（range）と enumerate は
+#   パーサで書き換えますが、それ以外は「対象が list / str か、規約を持つ
+#   クラスか」で形が変わるので、**型が決まるまで決められません**。
+#     → name（ループ変数）, lhs（対象）, body, hid_cur / hid_obj（隠し変数）
+ND_FOREACH: int = 51
+
 # ── 仮引数の受け取り方（C 版 ParamMode と同じ順序・同じ値）──
 PM_BORROW: int = 0   # 既定。読むだけ借りる
 PM_MUT: int = 1      # mut。書き換えるために借りる
@@ -694,6 +701,15 @@ class Node:
     arg_name: str
     arg_name_tok: rc[token.Token] | None
 
+    # ★ ND_FOREACH が使う隠し変数の名前（A-39）。
+    #   **パーサが作ります**（脱糖は sema がしますが、名前の連番は
+    #   パーサが持っているので、そこで採っておきます）。
+    #     hid_cur … カーソル（list なら添字、クラスならカーソル）
+    #     hid_obj … 対象を 1 回だけ評価して入れておく変数
+    #   対になる定義: src/ast.h の hid_cur / hid_obj
+    hid_cur: str
+    hid_obj: str
+
     # 型注釈のモジュール修飾（ND_TYPEREF）
     mod_name: str
 
@@ -802,6 +818,8 @@ class Node:
         self.name = ""
         self.arg_name = ""
         self.arg_name_tok = None
+        self.hid_cur = ""
+        self.hid_obj = ""
         self.nullable = False
         self.mod_name = ""
         self.ir_name = ""
@@ -1114,6 +1132,13 @@ def dump(n: rc[Node] | None, depth: int) -> None:
         if n.els is not None:
             dump(n.els, depth + 1)
         print(pad + ")")
+    elif n.kind == ND_FOREACH:
+        # ★ for 文（A-39）。sema が while に書き換える前の形です
+        #   （--dump-ast は構文解析の直後に出すので、ここを通ります）。
+        print(pad + "(foreach " + n.name)
+        dump(n.lhs, depth + 1)
+        dump(n.body, depth + 1)
+        print(pad + ")")
     elif n.kind == ND_BLOCK:
         print(pad + "(block")
         dump_siblings(n.body, depth + 1)
@@ -1218,6 +1243,11 @@ def ast_clone(n: rc[Node] | None) -> rc[Node] | None:
     c.en = src.en
     c.arg_name = copy(src.arg_name)
     c.arg_name_tok = src.arg_name_tok
+    # ★ for の隠し変数（A-39）。
+    #   注意: **同じ名前のまま複製します。** 実体ごとに別の関数になるので
+    #     名前がぶつかることはありません（ジェネリクスの単相化）。
+    c.hid_cur = copy(src.hid_cur)
+    c.hid_obj = copy(src.hid_obj)
 
     c.lhs = ast_clone(src.lhs)
     c.rhs = ast_clone(src.rhs)

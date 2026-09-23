@@ -3874,6 +3874,198 @@ static void check_unpack(Sema *s, Node *n) {
     n->type = rt;
 }
 
+// ── for の脱糖（A-39）───────────────────────────────────
+//
+// ★ **脱糖はここでします。** 0.1.0 からずっとパーサでやっていましたが、
+//   利用者のクラスを回せるようにすると、**型が決まるまで形が決まりません**。
+//
+//     対象が list / str  → 添字で回す（今までと同じ形。IR は変わりません）
+//     規約を持つクラス    → カーソルで回す
+//
+//   for x in xs:          for.it.N = xs            ← 対象は 1 回だけ評価
+//       BODY        →     for.ix.N: int = 0
+//                         while for.ix.N < len(for.it.N):
+//                             x = for.it.N[for.ix.N]
+//                             BODY
+//                           incr: for.ix.N += 1    ← continue の飛び先
+//
+//   for x in c:           for.it.N = c
+//       BODY        →     for.ix.N: int = for.it.N.__first__()
+//                         while for.ix.N >= 0:
+//                             x = for.it.N.__get__(for.ix.N)
+//                             BODY
+//                           incr: for.ix.N = for.it.N.__next__(for.ix.N)
+//
+// ★ カーソルは **int だけ**です。「イテレータ物体」を作る形にしません。
+//   この言語は**借用を構造体に保存できない**ので（寿命注釈を入れないと
+//   決めたため）、容器を指すイテレータを作るには容器を rc[T] にするか、
+//   寿命を書かせることになります。カーソルなら、容器は借りたままで、
+//   ループが持つのは int 1 つです。
+//
+// ★ 規約は 3 つのメソッドです（どれか 1 つでも欠けたら断ります）。
+//     def __first__(self) -> int          最初のカーソル（無ければ -1）
+//     def __next__(self, cur: int) -> int 次のカーソル（無ければ -1）
+//     def __get__(self, cur: int) -> T    そのカーソルの要素
+//   mut self で書けば「流れてくるもの」（行・受信）も表せます。
+
+// 規約のメソッドを 1 つ引く（無ければ NULL）
+static FuncSig *iter_method(Sema *s, Class *c, const char *name) {
+    return lookup_func_in(c->owner, mangle(c->name, name));
+}
+
+// 規約どおりの形か確かめる
+static void check_iter_sig(FuncSig *f, const char *name, int nparams,
+                           Type *ret, Token *at, Class *c) {
+    bool ok = f->nparams == nparams && (!ret || type_equal(f->ret, ret));
+    // 第 2 引数（カーソル）は int
+    if (ok && nparams == 2) ok = f->params[1]->kind == TY_INT;
+    if (ok) return;
+
+    Diag d = {0};
+    d.message = diag_fmt("'%s.%s' の形が for の規約と違います", c->name, name);
+    d.primary.tok = at;
+    d.primary.label = "この for がその規約を使います";
+    d.related.tok = f->tok;
+    d.related.label = "このメソッドです";
+    d.hint = strcmp(name, "__get__") == 0
+                 ? "def __get__(self, cur: int) -> T の形で書いてください"
+                 : diag_fmt("def %s(%s) -> int の形で書いてください", name,
+                            nparams == 2 ? "self, cur: int" : "self");
+    diag_fail(&d);
+}
+
+// 隠し変数の宣言（型注釈なし。型は右辺から決まります）
+static Node *hidden_var(Token *tok, char *name, Node *init) {
+    Node *n = new_node(ND_VARDECL, tok);
+    n->name = name;
+    n->rhs = init;
+    return n;
+}
+
+// 対象.名前(引数…) のメソッド呼び出しを組み立てる
+static Node *iter_call(Token *tok, char *obj, const char *name, Node *arg) {
+    Node *m = new_node(ND_METHOD, tok);
+    m->lhs = new_var_node(tok, obj);
+    m->name = (char *)name;
+    m->args = arg;
+    return m;
+}
+
+static void check_foreach(Sema *s, Node *n) {
+    Token *t = n->tok;
+    Node *iter = n->lhs;
+    Node *body = n->body;
+
+    // ★ 対象の型を先に決めます（形がこれで決まります）。
+    //   注意: この式はこのあと組み立てる木の中でもう一度検査されます。
+    //     検査は同じ結果になる（べき冪等な）ものだけなので、問題ありません。
+    Type *ct = auto_deref(check_expr(s, iter));
+
+    Node head = {0};
+    Node *cur = &head;
+
+    // for.it.N = <対象>（★ 1 回だけ評価する）
+    cur->next = hidden_var(t, n->hid_obj, iter);
+    cur = cur->next;
+
+    Node *cond = NULL;
+    Node *bind = NULL;
+    Node *inc = NULL;
+
+    if (ct->kind == TY_CLASS) {
+        Class *c = ct->cls;
+        FuncSig *first = iter_method(s, c, "__first__");
+        FuncSig *next = iter_method(s, c, "__next__");
+        FuncSig *get = iter_method(s, c, "__get__");
+        if (!first || !next || !get) {
+            Diag d = {0};
+            d.message = diag_fmt("クラス '%s' は for で回せません", c->name);
+            d.primary.tok = iter->tok;
+            d.primary.label = diag_fmt("'%s' 型です", type_name(ct));
+            d.related.tok = c->tok;
+            d.related.label = "クラスの定義はここです";
+            d.hint = "for で回すには 3 つのメソッドが要ります:\n"
+                     "             def __first__(self) -> int          "
+                     "最初のカーソル（無ければ -1）\n"
+                     "             def __next__(self, cur: int) -> int "
+                     "次のカーソル（無ければ -1）\n"
+                     "             def __get__(self, cur: int) -> T    "
+                     "そのカーソルの要素";
+            diag_fail(&d);
+        }
+        check_iter_sig(first, "__first__", 1, ty_int, t, c);
+        check_iter_sig(next, "__next__", 2, ty_int, t, c);
+        check_iter_sig(get, "__get__", 2, NULL, t, c);
+
+        // for.ix.N: int = for.it.N.__first__()
+        cur->next = hidden_var(t, n->hid_cur,
+                               iter_call(t, n->hid_obj, "__first__", NULL));
+        cur = cur->next;
+
+        // for.ix.N >= 0
+        cond = new_binop_node(t, OP_GE, new_var_node(t, n->hid_cur),
+                              new_int_node(t, 0));
+
+        // x = for.it.N.__get__(for.ix.N)
+        bind = hidden_var(t, n->name,
+                          iter_call(t, n->hid_obj, "__get__",
+                                    new_var_node(t, n->hid_cur)));
+
+        // for.ix.N = for.it.N.__next__(for.ix.N)  ← continue の飛び先
+        inc = new_node(ND_ASSIGN, t);
+        inc->lhs = new_var_node(t, n->hid_cur);
+        inc->rhs = iter_call(t, n->hid_obj, "__next__",
+                             new_var_node(t, n->hid_cur));
+    } else if (ct->kind == TY_LIST || ct->kind == TY_STR) {
+        // for.ix.N: int = 0
+        cur->next = hidden_var(t, n->hid_cur, new_int_node(t, 0));
+        cur = cur->next;
+
+        // for.ix.N < len(for.it.N)
+        Node *lencall = new_node(ND_CALL, t);
+        lencall->name = "len";
+        lencall->args = new_var_node(t, n->hid_obj);
+        cond = new_binop_node(t, OP_LT, new_var_node(t, n->hid_cur), lencall);
+
+        // x = for.it.N[for.ix.N]
+        Node *idx = new_node(ND_INDEX, t);
+        idx->lhs = new_var_node(t, n->hid_obj);
+        idx->rhs = new_var_node(t, n->hid_cur);
+        bind = hidden_var(t, n->name, idx);
+
+        // for.ix.N += 1  ← continue の飛び先
+        inc = new_node(ND_ASSIGN, t);
+        inc->lhs = new_var_node(t, n->hid_cur);
+        inc->rhs = new_binop_node(t, OP_ADD, new_var_node(t, n->hid_cur),
+                                  new_int_node(t, 1));
+    } else {
+        Diag d = {0};
+        d.message = diag_fmt("'%s' 型は for で回せません", type_name(ct));
+        d.primary.tok = iter->tok;
+        d.primary.label = "ここは回せる形ではありません";
+        d.hint = "回せるのは list / str / range(...) と、"
+                 "__first__ / __next__ / __get__ を持つクラスです";
+        diag_fail(&d);
+    }
+
+    // 本体の先頭にループ変数の束縛を差し込む
+    bind->next = body->body;
+    body->body = bind;
+
+    Node *wh = new_node(ND_WHILE, t);
+    wh->lhs = cond;
+    wh->body = body;
+    wh->incr = inc;
+    cur->next = wh;
+
+    // ★ 隠し変数を for のスコープに閉じ込めるため、ブロックにします。
+    //   **このノード自身を書き換えます**（親から見た並びを崩さないため）。
+    n->kind = ND_BLOCK;
+    n->name = NULL;
+    n->lhs = NULL;
+    n->body = head.next;
+}
+
 static void check_stmt(Sema *s, Node *n) {
     switch (n->kind) {
         case ND_VARDECL: check_vardecl(s, n); break;
@@ -4062,6 +4254,12 @@ static void check_stmt(Sema *s, Node *n) {
             }
             break;
         }
+
+        // ★ for は while へ書き換えてから検査します（A-39）
+        case ND_FOREACH:
+            check_foreach(s, n);
+            check_stmt(s, n);     // 書き換えた自分（ND_BLOCK）を検査する
+            break;
 
         case ND_WHILE: {
             check_cond(s, "while の条件", n, n->lhs);
@@ -4765,6 +4963,23 @@ static void check_implements(Sema *s, Class *c, Iface *ifc, Token *at) {
         int k = 0;
         for (Node *pm = sig->params; pm; pm = pm->next, k++) {
             if (k == 0) continue;   // self
+            // ★ 引数の**名前**も宣言と同じであること（A-38 の続き）。
+            //   名前は呼び出し側から見える約束です（キーワード引数）。
+            //   ここを見ないと、宣言と実装で名前が違っても通ってしまい、
+            //   「インタフェース越しにも名前で渡せる」ようにした日に、
+            //   どちらの名前が正しいのか決められなくなります。
+            if (strcmp(f->pnames[k], pm->name) != 0) {
+                Diag d = {0};
+                d.message = diag_fmt("'%s.%s' の %d 番目の引数の名前が宣言と違います",
+                                     c->name, im->name, k);
+                d.primary.tok = f->tok;
+                d.primary.label = diag_fmt("実装では '%s' です", f->pnames[k]);
+                d.related.tok = pm->tok;
+                d.related.label = diag_fmt("宣言では '%s' です", pm->name);
+                d.hint = "引数の名前は呼び出し側から見える約束です"
+                         "（名前で渡すときに使います）。宣言に合わせてください";
+                diag_fail(&d);
+            }
             Type *wt = resolve_type(s, pm->type_ref);
             if (!type_equal(f->params[k], wt)) {
                 Diag d = {0};

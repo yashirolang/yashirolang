@@ -1650,6 +1650,21 @@ static Node *for_stmt(Parser *p) {
     Node *cond = NULL;
     Node *bind = NULL;
 
+    // ★ range 以外は **sema が脱糖します**（A-39）。
+    //   対象が list / str なら「添字で回す」形、規約を持つクラスなら
+    //   「カーソルで回す」形になりますが、**どちらになるかは型が決まるまで
+    //   分かりません**。隠し変数の名前だけここで採っておきます
+    //   （連番を持っているのはパーサなので、IR に出る名前が変わりません）。
+    if (!is_range) {
+        Node *fe = new_node(ND_FOREACH, t);
+        fe->name = var_tok->text;
+        fe->lhs = iter;
+        fe->body = body;
+        fe->hid_cur = ix;
+        fe->hid_obj = hidden_name(p, "for.it");
+        return fe;
+    }
+
     if (is_range) {
         // for.ix.N: int = start
         cur->next = hidden_decl(t, ix, start);

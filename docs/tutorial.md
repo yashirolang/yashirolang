@@ -1,6 +1,6 @@
 # yashirolang 入門
 
-**yashirolang を書く人のための手引きです。** Python を書いたことがあれば 30 分で読み切れます。
+**yashirolang を書く人のための手引きです。**
 Python と同じところは説明しません。**違うところだけ**を順に見ていきます。
 
 > **一行でいうと** — Python の見た目のまま、型が静的に決まり、機械語にコンパイルされる言語です。
@@ -461,7 +461,51 @@ def print_all(xs: list[Show]) -> None:
 別々のクラスを 1 つのリストに入れたいときに使います。
 注意: デフォルト実装と関連型はありません。
 
-### 5.7 演算子の多重定義
+### 5.7 自分の型を `for` で回す
+
+3 つのメソッドを書くと、`for` で回せます。
+
+```python
+class Bag[T]:
+    xs: list[T]
+
+    def init(self, xs: own list[T]) -> None:
+        self.xs = xs
+
+    def __first__(self) -> int:              # 最初のカーソル（無ければ -1）
+        if len(self.xs) == 0:
+            return -1
+        return 0
+
+    def __next__(self, cur: int) -> int:     # 次のカーソル（無ければ -1）
+        if cur + 1 >= len(self.xs):
+            return -1
+        return cur + 1
+
+    def __get__(self, cur: int) -> T:        # そのカーソルの要素
+        return self.xs[cur]
+
+
+b: Bag[str] = Bag(["あ", "い", "う"])
+for s in b:
+    print(s)
+```
+
+**カーソルは `int` です。** Python のようなイテレータ物体は作りません——この言語は
+借りたものを構造体に保存できないので（§7）、容器を指すイテレータを作ると容器を
+`rc[T]` にするか、寿命を書かせることになります。カーソルなら容器は借りたままです。
+
+穴のある容器（ハッシュ表など）は `__next__` で空きを飛ばします。`mut self` で書けば、
+行を読んでいく・受信するといった**流れてくるもの**も同じ形で書けます。
+
+`dict` と `set` はこの規約を持っています。
+
+```python
+for k in d:                 # 鍵が順に出ます
+    print(k + " -> " + str(d.get(k)))
+```
+
+### 5.8 演算子の多重定義
 
 ```python
 class Vec2:
@@ -490,7 +534,7 @@ class Vec2:
 
 ---
 
-## 5.7 列挙と場合分け
+### 5.9 列挙と場合分け
 
 「決まった選択肢のどれか」は `enum` で書きます。
 

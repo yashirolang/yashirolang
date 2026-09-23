@@ -1,0 +1,49 @@
+# OUTPUT: 読むだけの関数から回せる: 4
+# OUTPUT: 鍵: ac
+# OUTPUT: 集合: 6
+# OUTPUT: 空の dict: 0
+# EXIT: 0
+# dict と set を for で回す（A-39）
+#
+#   ★ **読み取り専用の借用のまま回せる**ことがこの機能の値打ちです。
+#     keys() は詰め直し（compact）のために mut self が要るので、
+#     `def total(d: dict.Dict[str, int])` のような「読むだけの関数」からは
+#     回せませんでした（E-MUT-1）。
+#
+#   注意: 消した要素は飛ばします（詰め直しません）。
+import dict
+import set
+
+
+def total(d: dict.Dict[str, int]) -> int:
+    n: int = 0
+    for k in d:
+        n = n + d.get(k)
+    return n
+
+
+def main() -> int:
+    d: dict.Dict[str, int] = dict.Dict()
+    d.set("a", 1)
+    d.set("b", 2)
+    d.set("c", 3)
+    d.remove("b")
+    print("読むだけの関数から回せる: " + str(total(d)))
+
+    keys: str = ""
+    for k in d:
+        keys = keys + k
+    print("鍵: " + keys)
+
+    s: set.Set[int] = set.of([1, 2, 3])
+    sum2: int = 0
+    for x in s:
+        sum2 = sum2 + x
+    print("集合: " + str(sum2))
+
+    e: dict.Dict[str, int] = dict.Dict()
+    cnt: int = 0
+    for k2 in e:
+        cnt = cnt + 1
+    print("空の dict: " + str(cnt))
+    return 0

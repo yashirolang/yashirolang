@@ -20,8 +20,8 @@ yashirolang hello.ys -o hello && ./hello
 
 | | ドキュメント | 中身 |
 |---|---|---|
-| 1 | **[getting-started.md](getting-started.md)** | **5 分** — 入れる・動かす・プロジェクトにする |
-| 2 | **[tutorial.md](tutorial.md)** | **30 分** — 言語のひととおり（Python との差分・所有権・並行・エラー処理） |
+| 1 | **[getting-started.md](getting-started.md)** | 入れる・動かす・プロジェクトにする |
+| 2 | **[tutorial.md](tutorial.md)** | 言語のひととおり（Python との差分・所有権・並行・エラー処理） |
 | 3 | [reference/](reference/) | 困ったときに引く（下記） |
 
 ---

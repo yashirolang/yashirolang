@@ -1,0 +1,14 @@
+# ERROR: クラス 'P' は for で回せません
+# ERROR: for で回すには 3 つのメソッドが要ります
+# 規約を持たないクラスは回せない（A-39）
+class P:
+    x: int
+
+    def init(self, x: int) -> None:
+        self.x = x
+
+def main() -> int:
+    p: P = P(1)
+    for v in p:
+        print(str(v))
+    return 0

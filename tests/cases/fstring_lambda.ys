@@ -1,0 +1,29 @@
+# OUTPUT: 捕獲       1
+# OUTPUT: 内包       2
+# OUTPUT: 二重   1 2
+# EXIT: 0
+# f-string の中に lambda や内包表記を書く（A-43 の穴）
+#
+#   ★ f-string の中の式は**別のパーサで読みます**。そこで作った lambda を
+#     引き取らないと、持ち上げ先が無くなって「未定義の名前 'lambda.0'」に
+#     なります。隠し名の連番も引き継がないと、外のものとぶつかります。
+#
+#   注意: 見落としやすい穴です（f-string の中だけで壊れる）。ここで固定します。
+def count_if(xs: list[int], pred: fn(int) -> bool) -> int:
+    n: int = 0
+    for x in xs:
+        if pred(x):
+            n = n + 1
+    return n
+
+
+def main() -> int:
+    n: int = 2
+    print(f"{'捕獲':<8}{count_if([1, 2, 3], lambda x: x > n):>4}")
+
+    xs: list[int] = [1, 2, 3]
+    print(f"{'内包':<8}{len([v for v in xs if v > 1]):>4}")
+
+    # 1 つの f-string に 2 つ（連番がぶつからないこと）
+    print(f"{'二重':<6}{count_if(xs, lambda a: a > 2):>2}{count_if(xs, lambda b: b > 1):>2}")
+    return 0

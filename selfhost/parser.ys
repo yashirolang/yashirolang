@@ -233,7 +233,17 @@ class Parser:
 
             # 注意: tokenize は行末に改行を要求するので足します
             sub: Parser = Parser(lexer.tokenize(t.src.file, ex + "\n"))
+            # ★ 隠し名の連番を**引き継ぎます**（A-43）。中で lambda や内包表記を
+            #   書くと隠し名を作るので、0 から振り直すと外のものとぶつかります。
+            sub.hidden = self.hidden
             inner: rc[ast.Node] = sub.expr()
+            self.hidden = sub.hidden
+
+            # ★ 中で作った lambda（と枝のクラス）を**外へ引き取ります**（A-43）。
+            #   捨てると、持ち上げ先が無くなって「未定義の名前 'lambda.0'」に
+            #   なります——f-string の中は別のパーサで読むので、見落としやすい穴です。
+            for lam0 in sub.lams:
+                self.lams.append(lam0)
 
             # 注意: **式を最後まで読み切ったかを確かめる。**
             #    これが無いと f"{x:>8}" のような書式指定が「x」だけ読まれて

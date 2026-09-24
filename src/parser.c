@@ -267,7 +267,20 @@ static Node *fstring(Parser *p, Token *t) {
         Parser sp = {0};
         sp.toks = tokenize(t->file, sb_str(&sub));
         sp.pos = 0;
+        // ★ 隠し名の連番を**引き継ぎます**（A-43）。中で lambda や内包表記を
+        //   書くと隠し名を作るので、0 から振り直すと外のものとぶつかります。
+        sp.hidden = p->hidden;
         Node *inner = expr(&sp);
+        p->hidden = sp.hidden;
+
+        // ★ 中で作った lambda（と枝のクラス）を**外へ引き取ります**（A-43）。
+        //   ここで捨てると、持ち上げ先が無くなって「未定義の名前 'lambda.0'」に
+        //   なります——f-string の中は別のパーサで読むので、見落としやすい穴です。
+        if (sp.lam_head) {
+            if (p->lam_tail) p->lam_tail->next = sp.lam_head;
+            else p->lam_head = sp.lam_head;
+            p->lam_tail = sp.lam_tail;
+        }
 
         // 注意: **式を最後まで読み切ったかを確かめます。**
         //    これが無いと f"{x:>8}" のような書式指定が「x」だけ読まれて

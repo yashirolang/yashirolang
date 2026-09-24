@@ -3206,6 +3206,165 @@ class Emitter:
 
         return name
 
+    # ── 複製（A-44）────────────────────────────────────────
+    #
+    # ★ 「1 つ複製する関数」を型ごとに作ります（解放の drop_fn_for と同じ形）。
+    #   値型は "" ——**写すものがない**ので、呼び出しを出しません。
+    #   対になる定義: src/codegen.c の copy_fn_for / gen_list_copy /
+    #     gen_branch_copy / gen_enum_copy
+    def gen_list_copy(mut self, t: rc[ast.Type]) -> str:
+        key: str = "copylist:" + ast.type_name(t)
+        hit: str = self.drop_fn_cached(key)
+        if len(hit) > 0:
+            return hit
+
+        name: str = "@copy.list." + str(self.drop_counter)
+        self.drop_counter = self.drop_counter + 1
+        self.drop_fn_remember(key, name)
+
+        ec: str = self.copy_fn_for(ast.elem_of(t))
+        if len(ec) == 0:
+            ec = "null"
+
+        self.declare_rt("ptr @pl_list_copy_with(ptr, ptr)")
+        b: list[str] = []
+        b.append("\ndefine internal ptr " + name + "(ptr %l) {\nentry:\n")
+        b.append("  %r = call ptr @pl_list_copy_with(ptr %l, ptr " + ec + ")\n")
+        b.append("  ret ptr %r\n}\n")
+        self.dropdefs.append(strings.join(b, ""))
+        return name
+
+    # 中身を持つ枝のクラスを複製する関数（利用者には見えないクラスなので自動）
+    def gen_branch_copy(mut self, c: rc[ast.Class]) -> str:
+        key: str = "copycls:" + c.ir_name
+        hit: str = self.drop_fn_cached(key)
+        if len(hit) > 0:
+            return hit
+
+        name: str = "@copy." + c.ir_name
+        self.drop_fn_remember(key, name)
+
+        ftype: str = self.class_type(c)
+        fcopy: list[str] = []
+        f0: rc[ast.Field] | None = c.fields
+        while f0 is not None:
+            ff: rc[ast.Field] = f0
+            fcopy.append(self.copy_fn_for(type_of_field(ff)))
+            f0 = ff.next
+
+        self.declare_rt("ptr @pl_alloc(i64)")
+        b: list[str] = []
+        b.append("\ndefine internal ptr " + name + "(ptr %p) {\nentry:\n")
+        b.append("  %isnull = icmp eq ptr %p, null\n")
+        b.append("  br i1 %isnull, label %none, label %body\nbody:\n")
+        b.append("  %o = call ptr @pl_alloc(i64 " + str(c.size) + ")\n")
+        i: int = 0
+        f1: rc[ast.Field] | None = c.fields
+        while f1 is not None:
+            fg: rc[ast.Field] = f1
+            mt: str = self.llvm_mem_type(type_of_field(fg))
+            b.append("  %sp" + str(i) + " = getelementptr %" + ftype +
+                     ".type, ptr %p, i32 0, i32 " + str(fg.index) + "\n")
+            b.append("  %dp" + str(i) + " = getelementptr %" + ftype +
+                     ".type, ptr %o, i32 0, i32 " + str(fg.index) + "\n")
+            b.append("  %v" + str(i) + " = load " + mt + ", ptr %sp" + str(i) + "\n")
+            if len(fcopy[i]) > 0:
+                b.append("  %c" + str(i) + " = call ptr " + fcopy[i] +
+                         "(ptr %v" + str(i) + ")\n")
+                b.append("  store ptr %c" + str(i) + ", ptr %dp" + str(i) + "\n")
+            else:
+                b.append("  store " + mt + " %v" + str(i) + ", ptr %dp" +
+                         str(i) + "\n")
+            i = i + 1
+            f1 = fg.next
+        b.append("  ret ptr %o\nnone:\n  ret ptr null\n}\n")
+        self.dropdefs.append(strings.join(b, ""))
+        return name
+
+    # 中身を持つ列挙を複製する関数（タグで枝ごとに振り分け）
+    def gen_enum_copy(mut self, en: rc[ast.EnumDef]) -> str:
+        key: str = "copyenum:" + en.name
+        hit: str = self.drop_fn_cached(key)
+        if len(hit) > 0:
+            return hit
+
+        name: str = "@copy.enum." + str(self.drop_counter)
+        self.drop_counter = self.drop_counter + 1
+        self.drop_fn_remember(key, name)
+
+        bc: list[str] = []
+        v0: rc[ast.EnumVal] | None = en.vals
+        while v0 is not None:
+            vv: rc[ast.EnumVal] = v0
+            c0: rc[ast.Class] | None = vv.cls
+            if c0 is None:
+                bc.append("")
+            else:
+                bc.append(self.gen_branch_copy(c0))
+            v0 = vv.next
+
+        b: list[str] = []
+        b.append("\ndefine internal ptr " + name + "(ptr %p) {\nentry:\n")
+        b.append("  %isnull = icmp eq ptr %p, null\n")
+        b.append("  br i1 %isnull, label %none, label %body\nbody:\n")
+        b.append("  %tag = load i64, ptr %p\n")
+        b.append("  switch i64 %tag, label %none [\n")
+        i: int = 0
+        v1: rc[ast.EnumVal] | None = en.vals
+        while v1 is not None:
+            v1v: rc[ast.EnumVal] = v1
+            b.append("    i64 " + str(v1v.val) + ", label %b" + str(i) + "\n")
+            i = i + 1
+            v1 = v1v.next
+        b.append("  ]\n")
+        i = 0
+        v2: rc[ast.EnumVal] | None = en.vals
+        while v2 is not None:
+            v2v: rc[ast.EnumVal] = v2
+            b.append("b" + str(i) + ":\n")
+            if len(bc[i]) > 0:
+                b.append("  %r" + str(i) + " = call ptr " + bc[i] + "(ptr %p)\n")
+                b.append("  ret ptr %r" + str(i) + "\n")
+            else:
+                b.append("  ret ptr %p\n")
+            i = i + 1
+            v2 = v2v.next
+        b.append("none:\n  ret ptr null\n}\n")
+        self.dropdefs.append(strings.join(b, ""))
+        return name
+
+    def copy_fn_for(mut self, t: rc[ast.Type]) -> str:
+        if t.kind == ast.TY_STR:
+            self.declare_rt("ptr @pl_str_copy(ptr)")
+            return "@pl_str_copy"
+        if t.kind == ast.TY_LIST:
+            return self.gen_list_copy(t)
+        if t.kind == ast.TY_OPT:
+            # どの複製関数も null を受け取れます
+            return self.copy_fn_for(ast.elem_of(t))
+        if t.kind == ast.TY_ENUM:
+            e0: rc[ast.EnumDef] | None = t.en
+            if e0 is not None and unwrap_enumdef(e0).has_payload:
+                return self.gen_enum_copy(unwrap_enumdef(e0))
+            return ""
+        if t.kind == ast.TY_CLASS:
+            # 利用者が書いた __copy__（sema が「あること」を確かめてあります）
+            c: rc[ast.Class] = class_of(t.cls)
+            m: str = "@" + c.ir_name + ".__copy__"
+            # 注意: このモジュールで定義しているクラスには declare を出しません
+            local: bool = False
+            d0: rc[ast.Node] | None = self.ast_body
+            while d0 is not None:
+                dd: rc[ast.Node] = d0
+                if dd.kind == ast.ND_CLASS and dd.targs is None and dd.cls is not None:
+                    if class_of(dd.cls).ir_name == c.ir_name:
+                        local = True
+                d0 = dd.next
+            if not local:
+                self.declare_extern("ptr", c.ir_name + ".__copy__", "ptr")
+            return m
+        return ""   # int / bool / float は写すものがありません
+
     def drop_fn_for(mut self, t: rc[ast.Type]) -> str:
         if t.kind == ast.TY_STR:
             self.declare_rt("void @pl_drop_str(ptr)")
@@ -3938,6 +4097,33 @@ class Emitter:
                       ", i64 " + str(kind) + ")\n")
             return lt
 
+        # ★ f-string の書式（A-45）。ランタイムを呼ぶだけです。
+        if n.is_fmt:
+            fvals: list[str] = []
+            ftypes: list[str] = []
+            self.gen_args(n.args, fvals, ftypes, True)
+            if n.ir_name == "pl_str_pad":
+                self.declare_rt("ptr @pl_str_pad(ptr, i64, i64, i64)")
+            else:
+                self.declare_rt("ptr @pl_fmt_f64(double, i64)")
+            ft2: str = self.new_tmp()
+            self.emit("  " + ft2 + " = call ptr @" + n.ir_name + "(" +
+                      strings.join(fvals, "") + ")\n")
+            return ft2
+
+        # ★ copy(v)（A-44）。型ごとに出すものが変わります。
+        #   値型は**呼び出しを出しません**（写すものがないため）。
+        if n.is_copy:
+            cav: rc[ast.Node] = node_of(n.args)
+            cv: str = self.gen_expr(cav)
+            # ★ rc[T] は**中身**を複製します（sema が型を自動で剥がしています）
+            cv = self.deref_rc(type_of(cav), cv)
+            cf: str = self.copy_fn_for(type_of(n))
+            if len(cf) == 0:
+                return cv
+            ct2: str = self.new_tmp()
+            self.emit("  " + ct2 + " = call ptr " + cf + "(ptr " + cv + ")\n")
+            return ct2
         if len(n.builtin) > 0:
             return self.gen_builtin_call(n)
         if n.cls is not None:

@@ -1,0 +1,7 @@
+# ERROR: 小数の書式は 'int' 型には使えません
+# ERROR: float にだけ使えます
+# 小数の桁数は float だけ（A-45）
+def main() -> int:
+    x: int = 1
+    print(f"{x:.2f}")
+    return 0

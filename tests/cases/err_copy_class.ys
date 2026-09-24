@@ -1,0 +1,18 @@
+# ERROR: クラス 'P' は copy できません
+# ERROR: 複製できるようにするには __copy__ を書きます
+# クラスの複製には __copy__ が要る（A-44）
+#
+# ★ 黙って浅く写すと、所有しているフィールド（str / list / 別のクラス）を
+#   2 つの実体が指すことになり、解放が二重になります。だから書かせます。
+class P:
+    x: int
+    tag: str
+
+    def init(self, x: int, tag: own str) -> None:
+        self.x = x
+        self.tag = tag
+
+def main() -> int:
+    p: P = P(1, "あ")
+    q: P = copy(p)
+    return 0

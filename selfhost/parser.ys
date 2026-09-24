@@ -202,8 +202,30 @@ class Parser:
             if depth != 0:
                 self.fail_full(t, "f-string の '{' が閉じられていません",
                                "ここです", "")
-            ex: str = strings.substr(src, ex_start, i - ex_start)
+            ex0: str = strings.substr(src, ex_start, i - ex_start)
             i = i + 1                      # '}'
+
+            # ── 書式指定（A-45）──
+            #
+            # ★ `{式:書式}` の形です。**括弧の外側にある ':' だけ**を探します
+            #   （`{xs[1:2]}` の ':' はスライスなので、ここでは切りません）。
+            # 注意: ex0 は**借りたまま**使います（移動させると下で読めません）
+            ex: str = copy(ex0)
+            spec: str = ""
+            has_spec: bool = False
+            d2: int = 0
+            si: int = 0
+            while si < len(ex0):
+                sc: str = ex0[si]
+                if sc == "(" or sc == "[" or sc == "{":
+                    d2 = d2 + 1
+                elif sc == ")" or sc == "]" or sc == "}":
+                    d2 = d2 - 1
+                elif sc == ":" and d2 == 0 and not has_spec:
+                    ex = strings.substr(ex0, 0, si)
+                    spec = strings.substr(ex0, si + 1, len(ex0) - si - 1)
+                    has_spec = True
+                si = si + 1
 
             if len(ex) == 0:
                 self.fail_full(t, "f-string の '{}' が空です",
@@ -221,12 +243,83 @@ class Parser:
                 self.fail_full(t,
                                "f-string の中の式を解釈できません: '" + ex + "'",
                                "ここです",
-                               "書式指定（f\"{x:>8}\" のような桁揃え）はありません。" +
-                               "strings.lpad / strings.rpad を使ってください")
+                               "式の書き方を確かめてください" +
+                               "（書式を付けるなら f\"{x:>8}\" のように " +
+                               "':' の後ろに書きます）")
+
+            # ★ 書式指定は**ここで脱糖します**（A-45）。出来上がるのは
+            #   ふつうの呼び出しなので、sema も codegen も書式を知りません。
+            fill: int = 32          # ' '
+            align: int = -1
+            fwidth: int = 0
+            prec: int = -1
+            fixed: bool = False
+            if has_spec:
+                k: int = 0
+                if len(spec) >= 2 and (spec[1] == "<" or spec[1] == ">" or
+                                       spec[1] == "^"):
+                    fill = strings.byte_at(spec, 0)
+                    align = 0
+                    if spec[1] == ">":
+                        align = 1
+                    elif spec[1] == "^":
+                        align = 2
+                    k = 2
+                elif len(spec) >= 1 and (spec[0] == "<" or spec[0] == ">" or
+                                         spec[0] == "^"):
+                    align = 0
+                    if spec[0] == ">":
+                        align = 1
+                    elif spec[0] == "^":
+                        align = 2
+                    k = 1
+                while k < len(spec) and spec[k] >= "0" and spec[k] <= "9":
+                    fwidth = fwidth * 10 + (strings.byte_at(spec, k) - 48)
+                    k = k + 1
+                if k < len(spec) and spec[k] == ".":
+                    k = k + 1
+                    prec = 0
+                    while k < len(spec) and spec[k] >= "0" and spec[k] <= "9":
+                        prec = prec * 10 + (strings.byte_at(spec, k) - 48)
+                        k = k + 1
+                if k < len(spec) and spec[k] == "f":
+                    fixed = True
+                    k = k + 1
+                if k != len(spec):
+                    self.fail_full(t, "書式指定を解釈できません: '" + spec + "'",
+                                   "ここです",
+                                   "書けるのは [埋め文字][< > ^][幅][.桁数][f] です" +
+                                   "（例: {x:>8} / {v:.2f} / {s:*^10}）")
+                if prec >= 0 and not fixed:
+                    self.fail_full(t, "小数の桁数には 'f' が要ります", "ここです",
+                                   "例: {v:.2f}（小数点以下 2 桁）")
+                if align < 0:
+                    align = 0       # 既定は左寄せ
 
             call: rc[ast.Node] = ast.new_node(ast.ND_CALL, t)
-            call.name = "str"
-            call.args = inner
+            if fixed:
+                # fmt.f64(式, 桁数)
+                call.name = "fmt.f64"
+                pn: int = prec
+                if pn < 0:
+                    pn = 6
+                inner.next = ast.new_int_node(t, pn)
+                call.args = inner
+            else:
+                call.name = "str"
+                call.args = inner
+
+            if fwidth > 0:
+                pad: rc[ast.Node] = ast.new_node(ast.ND_CALL, t)
+                pad.name = "fmt.pad"
+                wn: rc[ast.Node] = ast.new_int_node(t, fwidth)
+                an: rc[ast.Node] = ast.new_int_node(t, align)
+                fn2: rc[ast.Node] = ast.new_int_node(t, fill)
+                call.next = wn
+                wn.next = an
+                an.next = fn2
+                pad.args = call
+                call = pad
 
             if result is not None:
                 result = ast.new_binop_node(t, ast.OP_ADD, result, call)

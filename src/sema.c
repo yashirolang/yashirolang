@@ -2198,15 +2198,8 @@ const Builtin BUILTINS[] = {
     //   注意: EOF では panic します。読めないかもしれない場面では
     //     io.read_line()（None が返る）を使ってください。
     {"input", TY_STR, TY_STR, "pl_input"},
-    {"copy", TY_STR, TY_STR, "pl_str_copy"},
-    // ★ **値型にも copy を許します**（そのまま返すだけ）。
-    //   ジェネリックなコードの中では T が int かもしれず、str のときだけ
-    //   copy が要るのに T では書き分けられない、という行き止まりがありました
-    //   （lib/set を書いていて見つけました）。
-    //   注意: 実装名 "pl_copy_id" は codegen が**呼び出しを出さない印**です。
-    {"copy", TY_INT, TY_INT, "pl_copy_id"},
-    {"copy", TY_FLOAT, TY_FLOAT, "pl_copy_id"},
-    {"copy", TY_BOOL, TY_BOOL, "pl_copy_id"},
+    // ★ copy は**型ごとに出すものが変わる**ので、この表では扱いません
+    //   （A-44。check_call の中で 1 か所にまとめてあります）。
     {NULL, 0, 0, NULL},
 };
 
@@ -3012,6 +3005,60 @@ static void scope_escape(Sema *s, Node *n, int loop_depth, int try_depth) {
     }
 }
 
+// ── 複製できる型か（A-44）────────────────────────────────
+//
+// ★ 「複製できる」は型ごとに意味が違います。
+//     値型（int / float / bool / 列挙）… そのまま（写すものがありません）
+//     str                              … 新しい文字列
+//     list[T]                          … 新しい list（要素も T の複製）
+//     クラス                            … `__copy__` を書いたものだけ
+//     T | None                         … None はそのまま、中身は複製
+//     中身を持つ列挙                     … 枝ごとに中身を複製（自動）
+//
+// 注意: **rc[T] は複製しません。** あれは「1 つの値を 2 か所から持つ」ための
+//   型で、複製したい相手ではありません（複製したいなら中身を copy します）。
+static void check_copyable(Sema *s, Type *t, Token *at) {
+    switch (t->kind) {
+        case TY_INT:
+        case TY_FLOAT:
+        case TY_BOOL:
+        case TY_STR: return;
+        case TY_ENUM: return;                    // 枝ごとの複製は codegen が出します
+        case TY_LIST: check_copyable(s, t->elem, at); return;
+        case TY_OPT:  check_copyable(s, t->elem, at); return;
+        case TY_CLASS: {
+            Class *c = t->cls;
+            FuncSig *f = lookup_func_in(c->owner, mangle(c->name, "__copy__"));
+            if (f && f->nparams == 1 && type_equal(f->ret, t)) return;
+            Diag d = {0};
+            d.message = diag_fmt("クラス '%s' は copy できません", c->name);
+            d.primary.tok = at;
+            d.primary.label = diag_fmt("'%s' 型です", type_name(t));
+            d.related.tok = c->tok;
+            d.related.label = "クラスの定義はここです";
+            d.hint = f ? diag_fmt("'__copy__' は 'def __copy__(self) -> %s:' "
+                                  "の形で書きます", c->name)
+                       : diag_fmt("複製できるようにするには __copy__ を書きます:\n"
+                                  "             def __copy__(self) -> %s:\n"
+                                  "                 return %s(…)",
+                                  c->name, c->name);
+            diag_fail(&d);
+        }
+        default: break;
+    }
+    Diag d = {0};
+    d.message = diag_fmt("'%s' 型は copy できません", type_name(t));
+    d.primary.tok = at;
+    d.primary.label = "ここは複製できる型ではありません";
+    d.hint = t->kind == TY_RC
+                 ? "rc[T] は「1 つの値を 2 か所から持つ」ための型です"
+                   "（複製ではありません）。中身を複製するなら copy(r.get()) の"
+                   "ように中身を渡してください"
+                 : "複製できるのは 値型 / str / list / __copy__ を持つクラス / "
+                   "列挙 と、それらの T | None です";
+    diag_fail(&d);
+}
+
 // ── 中身を持つ枝の隠しクラスを引く（A-41）────────────────
 //
 // ★ **遅れて引きます。** 列挙はクラスより先に登録する（クラスの
@@ -3716,6 +3763,68 @@ static Type *check_call(Sema *s, Node *n) {
         n->is_extern = false;
         n->name = "mutex";
         return type_mutex(at);
+    }
+
+    // ── f-string の書式指定が作る呼び出し（A-45）──────────────
+    //
+    // ★ 利用者は書けない名前です（'.' が入っているので識別子になりません）。
+    //   パーサが f"{x:>8}" を脱糖して作ります。
+    if (strcmp(n->name, "fmt.pad") == 0 || strcmp(n->name, "fmt.f64") == 0) {
+        bool is_pad = strcmp(n->name, "fmt.pad") == 0;
+        int want = is_pad ? 4 : 2;
+        int nargs = 0;
+        for (Node *a = n->args; a; a = a->next) nargs++;
+        if (nargs != want) UNREACHABLE();   // パーサが作る形です
+        int i = 0;
+        for (Node *a = n->args; a; a = a->next, i++) {
+            Type *at = check_expr(s, a);
+            Type *need = (i == 0) ? (is_pad ? ty_str : ty_float) : ty_int;
+            if (!type_assignable(at, need)) {
+                Diag d = {0};
+                d.message = is_pad
+                    ? diag_fmt("書式（桁揃え）は '%s' 型には使えません",
+                               type_name(at))
+                    : diag_fmt("小数の書式は '%s' 型には使えません",
+                               type_name(at));
+                d.primary.tok = a->tok;
+                d.primary.label = diag_fmt("これは '%s' 型です", type_name(at));
+                d.hint = is_pad ? "桁揃えは文字列にしてから行います"
+                                : "'.2f' のような書式は float にだけ使えます"
+                                  "（int なら float(x) にしてください）";
+                diag_fail(&d);
+            }
+        }
+        n->builtin = NULL;
+        n->ir_name = is_pad ? "pl_str_pad" : "pl_fmt_f64";
+        n->is_fmt = true;
+        n->type = ty_str;
+        return ty_str;
+    }
+
+    // ── copy(v) — 複製の抽象（A-44）────────────────────────
+    //
+    // ★ **どの型でも書けること**が値打ちです。ジェネリックなコードの中では
+    //   `T` が `int` かもしれず、`str` のときだけ複製が要る——という書き分けが
+    //   できませんでした。`copy` を 1 つの入口にして、型ごとに出すものを
+    //   変えます（値型はそのまま、str は新しい文字列、list は要素ごと…）。
+    //
+    // 注意: **クラスは `__copy__` を書いたものだけ**です。黙って浅く写すと、
+    //   所有しているフィールド（str / list / 別のクラス）を 2 つの実体が
+    //   指すことになり、解放が二重になります。
+    if (strcmp(n->name, "copy") == 0 && !lookup_func(s, "copy")) {
+        int nargs = 0;
+        for (Node *a = n->args; a; a = a->next) nargs++;
+        if (nargs != 1)
+            error_at_hint(n->tok, "copy(値) の形で使ってください",
+                          "copy は 1 個の引数を取りますが、%d 個渡されました",
+                          nargs);
+        Type *t = auto_deref(check_expr(s, n->args));
+        check_copyable(s, t, n->args->tok);
+        n->builtin = NULL;
+        n->ir_name = NULL;
+        n->is_copy = true;
+        n->type = t;
+        return t;
     }
 
     if (is_builtin_name(n->name)) return check_builtin_call(s, n);

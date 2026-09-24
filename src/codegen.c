@@ -3168,6 +3168,163 @@ static const char *gen_enum_drop(Emitter *e, Type *t) {
     return sb_str(&name);
 }
 
+// ── 複製（A-44）────────────────────────────────────────
+//
+// ★ 「1 つ複製する関数」を型ごとに作ります（解放の drop_fn_for と同じ形）。
+//   値型は NULL——**写すものがない**ので、呼び出しを出しません。
+//
+//   str          … @pl_str_copy
+//   list[T]      … 生成した @copy.list.N（要素は T の複製関数で写す）
+//   クラス        … 利用者が書いた `__copy__`
+//   中身を持つ列挙 … 生成した @copy.enum.N（タグで枝ごとに振り分け）
+static const char *copy_fn_for(Emitter *e, Type *t);
+
+// list[T] を複製する関数を作る。
+static const char *gen_list_copy(Emitter *e, Type *t) {
+    StrBuf key;
+    sb_init(&key);
+    sb_printf(&key, "copylist:%s", type_name(t));
+    const char *hit = drop_fn_cached(e, sb_str(&key));
+    if (hit) return hit;
+
+    StrBuf name;
+    sb_init(&name);
+    sb_printf(&name, "@copy.list.%d", e->drop_counter++);
+    drop_fn_remember(e, sb_str(&key), sb_str(&name));
+
+    const char *ec = copy_fn_for(e, t->elem);
+
+    declare_rt(e, "ptr @pl_list_copy_with(ptr, ptr)");
+    StrBuf b;
+    sb_init(&b);
+    sb_printf(&b, "\ndefine internal ptr %s(ptr %%l) {\nentry:\n", sb_str(&name));
+    sb_printf(&b, "  %%r = call ptr @pl_list_copy_with(ptr %%l, ptr %s)\n",
+              ec ? ec : "null");
+    sb_printf(&b, "  ret ptr %%r\n}\n");
+    sb_printf(&e->dropdefs, "%s", sb_str(&b));
+    return sb_str(&name);
+}
+
+// 中身を持つ枝のクラスを複製する関数を作る（利用者には見えないクラスなので、
+// **自動で**中身を写します）。
+static const char *gen_branch_copy(Emitter *e, Class *c) {
+    StrBuf key;
+    sb_init(&key);
+    sb_printf(&key, "copycls:%s", c->ir_name);
+    const char *hit = drop_fn_cached(e, sb_str(&key));
+    if (hit) return hit;
+
+    StrBuf name;
+    sb_init(&name);
+    sb_printf(&name, "@copy.%s", c->ir_name);
+    drop_fn_remember(e, sb_str(&key), sb_str(&name));
+
+    const char *ftype = class_type(e, c);
+    const char **fcopy = xmalloc(sizeof(char *) * (size_t)(c->nfields + 1));
+    int nf = 0;
+    for (Field *f = c->fields; f; f = f->next) fcopy[nf++] = copy_fn_for(e, f->type);
+
+    declare_rt(e, "ptr @pl_alloc(i64)");
+    StrBuf b;
+    sb_init(&b);
+    sb_printf(&b, "\ndefine internal ptr %s(ptr %%p) {\nentry:\n", sb_str(&name));
+    sb_printf(&b, "  %%isnull = icmp eq ptr %%p, null\n");
+    sb_printf(&b, "  br i1 %%isnull, label %%none, label %%body\nbody:\n");
+    sb_printf(&b, "  %%o = call ptr @pl_alloc(i64 %d)\n", c->size);
+    int i = 0;
+    for (Field *f = c->fields; f; f = f->next, i++) {
+        const char *mt = llvm_mem_type(f->type);
+        sb_printf(&b, "  %%sp%d = getelementptr %%%s.type, ptr %%p, i32 0, i32 %d\n",
+                  i, ftype, f->index);
+        sb_printf(&b, "  %%dp%d = getelementptr %%%s.type, ptr %%o, i32 0, i32 %d\n",
+                  i, ftype, f->index);
+        sb_printf(&b, "  %%v%d = load %s, ptr %%sp%d\n", i, mt, i);
+        if (fcopy[i]) {
+            sb_printf(&b, "  %%c%d = call ptr %s(ptr %%v%d)\n", i, fcopy[i], i);
+            sb_printf(&b, "  store ptr %%c%d, ptr %%dp%d\n", i, i);
+        } else {
+            sb_printf(&b, "  store %s %%v%d, ptr %%dp%d\n", mt, i, i);
+        }
+    }
+    sb_printf(&b, "  ret ptr %%o\nnone:\n  ret ptr null\n}\n");
+    sb_printf(&e->dropdefs, "%s", sb_str(&b));
+    return sb_str(&name);
+}
+
+// 中身を持つ列挙を複製する関数を作る（タグで枝ごとに振り分け）。
+static const char *gen_enum_copy(Emitter *e, Type *t) {
+    EnumDef *en = t->en;
+    StrBuf key;
+    sb_init(&key);
+    sb_printf(&key, "copyenum:%s", en->name);
+    const char *hit = drop_fn_cached(e, sb_str(&key));
+    if (hit) return hit;
+
+    StrBuf name;
+    sb_init(&name);
+    sb_printf(&name, "@copy.enum.%d", e->drop_counter++);
+    drop_fn_remember(e, sb_str(&key), sb_str(&name));
+
+    int nv = en->nvals;
+    const char **bc = xmalloc(sizeof(char *) * (size_t)(nv ? nv : 1));
+    int i = 0;
+    for (EnumVal *v = en->vals; v; v = v->next, i++)
+        bc[i] = v->cls ? gen_branch_copy(e, v->cls) : NULL;
+
+    StrBuf b;
+    sb_init(&b);
+    sb_printf(&b, "\ndefine internal ptr %s(ptr %%p) {\nentry:\n", sb_str(&name));
+    sb_printf(&b, "  %%isnull = icmp eq ptr %%p, null\n");
+    sb_printf(&b, "  br i1 %%isnull, label %%none, label %%body\nbody:\n");
+    sb_printf(&b, "  %%tag = load i64, ptr %%p\n");
+    sb_printf(&b, "  switch i64 %%tag, label %%none [\n");
+    i = 0;
+    for (EnumVal *v = en->vals; v; v = v->next, i++)
+        sb_printf(&b, "    i64 %lld, label %%b%d\n", v->val, i);
+    sb_printf(&b, "  ]\n");
+    i = 0;
+    for (EnumVal *v = en->vals; v; v = v->next, i++) {
+        sb_printf(&b, "b%d:\n", i);
+        if (bc[i]) {
+            sb_printf(&b, "  %%r%d = call ptr %s(ptr %%p)\n", i, bc[i]);
+            sb_printf(&b, "  ret ptr %%r%d\n", i);
+        } else {
+            sb_printf(&b, "  ret ptr %%p\n");
+        }
+    }
+    sb_printf(&b, "none:\n  ret ptr null\n}\n");
+    sb_printf(&e->dropdefs, "%s", sb_str(&b));
+    return sb_str(&name);
+}
+
+static const char *copy_fn_for(Emitter *e, Type *t) {
+    if (!t) return NULL;
+    switch (t->kind) {
+        case TY_STR:
+            declare_rt(e, "ptr @pl_str_copy(ptr)");
+            return "@pl_str_copy";
+        case TY_LIST: return gen_list_copy(e, t);
+        case TY_OPT: return copy_fn_for(e, t->elem);   // どの複製関数も null を返せます
+        case TY_ENUM:
+            return t->en && t->en->has_payload ? gen_enum_copy(e, t) : NULL;
+        case TY_CLASS: {
+            // 利用者が書いた __copy__（sema が「あること」を確かめてあります）
+            StrBuf m;
+            sb_init(&m);
+            sb_printf(&m, "@%s.__copy__", t->cls->ir_name);
+            // 注意: **このモジュールで定義しているクラスには declare を出しません**
+            //   （「再定義」で落ちます）。drop の生成と同じ判断です。
+            bool local = false;
+            for (Node *d = e->ast->body; d; d = d->next)
+                if (d->kind == ND_CLASS && !d->targs && d->cls == t->cls)
+                    local = true;
+            if (!local) declare_extern(e, "ptr", sb_str(&m) + 1, "ptr");
+            return sb_str(&m);
+        }
+        default: return NULL;   // int / bool / float は写すものがありません
+    }
+}
+
 static const char *drop_fn_for(Emitter *e, Type *t) {
     if (!t) return NULL;
     switch (t->kind) {
@@ -4129,6 +4286,35 @@ static char *gen_call(Emitter *e, Node *n) {
         char *t = new_tmp(e);
         sb_printf(&e->fn, "  %s = call ptr @pl_list_str(ptr %s, i64 %d)\n", t, v,
                   kind);
+        return t;
+    }
+
+    // ★ f-string の書式（A-45）。ランタイムを呼ぶだけです。
+    if (n->is_fmt) {
+        StrBuf args, types;
+        sb_init(&args);
+        sb_init(&types);
+        gen_args(e, n->args, &args, &types, true);
+        declare_rt(e, strcmp(n->ir_name, "pl_str_pad") == 0
+                          ? "ptr @pl_str_pad(ptr, i64, i64, i64)"
+                          : "ptr @pl_fmt_f64(double, i64)");
+        char *t = new_tmp(e);
+        sb_printf(&e->fn, "  %s = call ptr @%s(%s)\n", t, n->ir_name,
+                  sb_str(&args));
+        return t;
+    }
+
+    // ★ copy(v)（A-44）。型ごとに出すものが変わります。
+    //   値型は**呼び出しを出しません**（写すものがないため）。
+    if (n->is_copy) {
+        char *v = gen_expr(e, n->args);
+        // ★ rc[T] は**中身**を複製します（sema が型を自動で剥がしています）。
+        //   値のほうも剥がさないと、数え札の箱を複製しようとします。
+        v = deref_rc(e, n->args->type, v);
+        const char *cf = copy_fn_for(e, n->type);
+        if (!cf) return v;
+        char *t = new_tmp(e);
+        sb_printf(&e->fn, "  %s = call ptr %s(ptr %s)\n", t, cf, v);
         return t;
     }
 

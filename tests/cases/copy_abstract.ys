@@ -1,0 +1,83 @@
+# OUTPUT: 3 あ
+# OUTPUT: 2 3
+# OUTPUT: 2 2
+# OUTPUT: 12 もともと
+# OUTPUT: ラベル: ラベル
+# OUTPUT: rc の中身: 7
+# OUTPUT: ジェネリック: 2 2
+# EXIT: 0
+# 複製の抽象（A-44）
+#
+#   ★ **どの型でも copy(v) と書けること**が値打ちです。ジェネリックなコードの
+#     中では T が int かもしれず、str のときだけ複製が要る——という書き分けが
+#     できませんでした。
+#
+#       値型・列挙の枝  … そのまま（呼び出しも出しません）
+#       str            … 新しい文字列
+#       list[T]        … 新しい list（要素も T の複製）
+#       クラス          … `__copy__` を書いたものだけ（err_copy_class）
+#       中身を持つ列挙   … 枝ごとに中身を複製（自動）
+#
+#   注意: rc[T] は自動で中身が見えるので、copy(r) は**中身の複製**です。
+class P:
+    x: int
+    tag: str
+
+    def init(self, x: int, tag: own str) -> None:
+        self.x = x
+        self.tag = tag
+
+    def __copy__(self) -> P:
+        return P(self.x, copy(self.tag))
+
+
+enum Shape:
+    Circle(r: float)
+    Label(s: own str)
+
+
+# ★ これが書きたかった形です（T が何であっても通ります）
+class Box[T]:
+    xs: list[T]
+
+    def init(self, xs: own list[T]) -> None:
+        self.xs = xs
+
+    def dup(self) -> list[T]:
+        return copy(self.xs)
+
+
+def main() -> int:
+    print(str(copy(3)) + " " + copy("あ"))
+
+    xs: list[str] = ["a", "b"]
+    ys: list[str] = copy(xs)
+    ys.append("c")
+    print(str(len(xs)) + " " + str(len(ys)))
+
+    # 入れ子の list も要素ごとに複製されます
+    m: list[list[int]] = [[1, 2], [3]]
+    m2: list[list[int]] = copy(m)
+    print(str(len(m2)) + " " + str(len(m2[0])))
+
+    p: P = P(1, "もと")
+    q: P = copy(p)
+    q.x = 2
+    print(str(p.x) + str(q.x) + " " + p.tag + q.tag)
+
+    s: Shape = Shape.Label("ラベル")
+    s2: Shape = copy(s)
+    match s2:
+        case Shape.Circle(r):
+            print("円")
+        case Shape.Label(t):
+            print("ラベル: " + t)
+
+    r: rc[P] = rc(P(7, "r"))
+    rp: P = copy(r)
+    print("rc の中身: " + str(rp.x))
+
+    b: Box[str] = Box(["い", "ろ"])
+    d: list[str] = b.dup()
+    print("ジェネリック: " + str(len(d)) + " " + str(len(b.xs)))
+    return 0

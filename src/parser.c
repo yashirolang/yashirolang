@@ -224,6 +224,32 @@ static Node *fstring(Parser *p, Token *t) {
         int exlen = (int)(q - ex);
         q++;                       // '}'
 
+        // ── 書式指定（A-45）──
+        //
+        // ★ `{式:書式}` の形です。**括弧の外側にある ':' だけ**を探します
+        //   （`{xs[1:2]}` の ':' はスライスなので、ここでは切りません）。
+        //
+        //     [埋め文字][< > ^]  桁揃え（表示幅。全角は 2 桁）
+        //     [幅]               その幅まで詰める
+        //     [.桁数]            小数点以下の桁（float のみ）
+        //     [f]                固定小数点
+        const char *spec = NULL;
+        int speclen = 0;
+        {
+            int d2 = 0;
+            for (int i = 0; i < exlen; i++) {
+                char c = ex[i];
+                if (c == '(' || c == '[' || c == '{') d2++;
+                else if (c == ')' || c == ']' || c == '}') d2--;
+                else if (c == ':' && d2 == 0) {
+                    spec = ex + i + 1;
+                    speclen = exlen - i - 1;
+                    exlen = i;
+                    break;
+                }
+            }
+        }
+
         if (exlen == 0) {
             Diag d = {0};
             d.message = "f-string の '{}' が空です";
@@ -252,16 +278,87 @@ static Node *fstring(Parser *p, Token *t) {
                                  exlen, ex);
             d.primary.tok = t;
             d.primary.label = "ここです";
-            d.hint = "書式指定（f\"{x:>8}\" のような桁揃え）はありません。"
-                     "strings.lpad / strings.rpad を使ってください";
+            d.hint = "式の書き方を確かめてください"
+                     "（書式を付けるなら f\"{x:>8}\" のように ':' の後ろに書きます）";
             diag_fail(&d);
         }
 
         // ★ 位置は f-string のトークンに揃えます。部分文字列の中の位置を
         //   そのまま出すと、元のソースに無い行番号になってしまいます。
-        Node *call = new_node(ND_CALL, t);
-        call->name = "str";
-        call->args = inner;
+        //
+        // ★ 書式指定は**ここで脱糖します**（A-45）。出来上がるのは
+        //   ふつうの呼び出しなので、sema も codegen も書式を知りません。
+        //
+        //     f"{x:>8}"    →  fmt.pad(str(x), 8, 1, 32)
+        //     f"{x:.2f}"   →  fmt.pad(fmt.f64(x, 2), 0, 0, 32)
+        long long fill = ' ', align = -1, width = 0, prec = -1;
+        bool fixed = false;
+        if (spec) {
+            int i = 0;
+            // [埋め文字][< > ^]
+            if (speclen >= 2 && (spec[1] == '<' || spec[1] == '>' || spec[1] == '^')) {
+                fill = (unsigned char)spec[0];
+                align = spec[1] == '<' ? 0 : (spec[1] == '>' ? 1 : 2);
+                i = 2;
+            } else if (speclen >= 1 &&
+                       (spec[0] == '<' || spec[0] == '>' || spec[0] == '^')) {
+                align = spec[0] == '<' ? 0 : (spec[0] == '>' ? 1 : 2);
+                i = 1;
+            }
+            while (i < speclen && spec[i] >= '0' && spec[i] <= '9')
+                width = width * 10 + (spec[i++] - '0');
+            if (i < speclen && spec[i] == '.') {
+                i++;
+                prec = 0;
+                while (i < speclen && spec[i] >= '0' && spec[i] <= '9')
+                    prec = prec * 10 + (spec[i++] - '0');
+            }
+            if (i < speclen && spec[i] == 'f') { fixed = true; i++; }
+            if (i != speclen) {
+                Diag d = {0};
+                d.message = diag_fmt("書式指定を解釈できません: '%.*s'", speclen,
+                                     spec);
+                d.primary.tok = t;
+                d.primary.label = "ここです";
+                d.hint = "書けるのは [埋め文字][< > ^][幅][.桁数][f] です"
+                         "（例: {x:>8} / {v:.2f} / {s:*^10}）";
+                diag_fail(&d);
+            }
+            if (prec >= 0 && !fixed) {
+                Diag d = {0};
+                d.message = "小数の桁数には 'f' が要ります";
+                d.primary.tok = t;
+                d.primary.label = "ここです";
+                d.hint = "例: {v:.2f}（小数点以下 2 桁）";
+                diag_fail(&d);
+            }
+            if (align < 0) align = 0;   // 既定は左寄せ
+        }
+
+        Node *call;
+        if (fixed) {
+            // fmt.f64(式, 桁数)
+            call = new_node(ND_CALL, t);
+            call->name = "fmt.f64";
+            inner->next = new_int_node(t, prec < 0 ? 6 : prec);
+            call->args = inner;
+        } else {
+            call = new_node(ND_CALL, t);
+            call->name = "str";
+            call->args = inner;
+        }
+        if (width > 0) {
+            Node *pad = new_node(ND_CALL, t);
+            pad->name = "fmt.pad";
+            Node *w = new_int_node(t, width);
+            Node *a = new_int_node(t, align);
+            Node *fl = new_int_node(t, fill);
+            call->next = w;
+            w->next = a;
+            a->next = fl;
+            pad->args = call;
+            call = pad;
+        }
 
         result = result ? new_binop_node(t, OP_ADD, result, call) : call;
     }

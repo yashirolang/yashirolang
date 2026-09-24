@@ -786,6 +786,12 @@ class Node:
     is_indirect: bool
     # ★ min / max（2 引数なので組み込みの表に載らない）
     is_minmax: bool
+    # ★ copy(v)（A-44）。型によって出すものが変わるので、codegen が見ます。
+    #   対になる定義: src/ast.h の is_copy
+    is_copy: bool
+    # ★ f-string の書式（A-45）。パーサが作る fmt.pad / fmt.f64 の呼び出し。
+    #   対になる定義: src/ast.h の is_fmt
+    is_fmt: bool
     # ★ print(list) / str(list)（要素の型で呼び分ける）
     is_list_str: bool
     # ★ move_out(場所)（所有権を取り出して、その場所は空にする）
@@ -870,6 +876,8 @@ class Node:
         self.is_func_ref = False
         self.is_indirect = False
         self.is_minmax = False
+        self.is_copy = False
+        self.is_fmt = False
         self.is_list_str = False
         self.is_move_out = False
         self.arg_is_borrowed = False

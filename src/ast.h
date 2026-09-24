@@ -500,6 +500,10 @@ struct Node {
 
     // ★ min / max（2 引数なので組み込みの表に載らない）
     bool is_minmax;
+    // ★ copy(v)（A-44）。型によって出すものが変わるので、codegen が見ます。
+    bool is_copy;
+    // ★ f-string の書式（A-45）。パーサが作る fmt.pad / fmt.f64 の呼び出し。
+    bool is_fmt;
     // ★ wrap_add / wrap_sub / wrap_mul（桁あふれを検査しない算術）。
     //   注意: 旗は**末尾に足します**（列挙値と同じ理由。selfhost 側と揃えるため）。
     bool is_wrap;

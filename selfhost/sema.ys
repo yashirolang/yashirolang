@@ -374,13 +374,9 @@ class Sema:
             #   注意: EOF では panic する。読めないかもしれない場面では
             #     io.read_line()（None が返る）を使うこと。
             Builtin("input", ast.TY_STR, ast.TY_STR, "pl_input"),
-            Builtin("copy", ast.TY_STR, ast.TY_STR, "pl_str_copy"),
-            # ★ 値型にも copy を許す（そのまま返すだけ）。
-            #   注意: "pl_copy_id" は codegen が**呼び出しを出さない印**。
-            #   対になる定義: src/sema.c の BUILTINS
-            Builtin("copy", ast.TY_INT, ast.TY_INT, "pl_copy_id"),
-            Builtin("copy", ast.TY_FLOAT, ast.TY_FLOAT, "pl_copy_id"),
-            Builtin("copy", ast.TY_BOOL, ast.TY_BOOL, "pl_copy_id")]
+            # ★ copy は**型ごとに出すものが変わる**ので、この表では扱いません
+            #   （A-44。check_call の中で 1 か所にまとめてあります）。
+            Builtin("input", ast.TY_STR, ast.TY_STR, "pl_input")]
 
     # ── プリミティブ型のシングルトン ────────────────────────
 
@@ -3664,6 +3660,53 @@ class Sema:
         return unwrap_type(c.type)
 
     # 関数呼び出しの検査（型システム 5.7 の順序）
+    # ── 複製できる型か（A-44）────────────────────────────────
+    #
+    # ★ 「複製できる」は型ごとに意味が違います。
+    #     値型・列挙 … そのまま／枝ごとに中身を複製
+    #     str        … 新しい文字列
+    #     list[T]    … 新しい list（要素も T の複製）
+    #     クラス      … `__copy__` を書いたものだけ
+    #   対になる定義: src/sema.c の check_copyable
+    def check_copyable(mut self, t: rc[ast.Type], at: rc[token.Token] | None) -> None:
+        if (t.kind == ast.TY_INT or t.kind == ast.TY_FLOAT or
+                t.kind == ast.TY_BOOL or t.kind == ast.TY_STR or
+                t.kind == ast.TY_ENUM):
+            return
+        if t.kind == ast.TY_LIST or t.kind == ast.TY_OPT:
+            self.check_copyable(ast.elem_of(t), at)
+            return
+        if t.kind == ast.TY_CLASS:
+            c: rc[ast.Class] = unwrap_class(t.cls)
+            owner: rc[types.ModuleSyms] = self.syms_by_name(c.owner_name)
+            f: rc[types.FuncSig] | None = self.lookup_func_in(
+                owner, self.mangle(c.name, "__copy__"))
+            if f is not None:
+                ff: rc[types.FuncSig] = f
+                if ff.nparams == 1 and ast.type_equal(unwrap_type(ff.ret), t):
+                    return
+            hint: str = ("複製できるようにするには __copy__ を書きます:\n" +
+                         "             def __copy__(self) -> " + c.name + ":\n" +
+                         "                 return " + c.name + "(…)")
+            if f is not None:
+                hint = ("'__copy__' は 'def __copy__(self) -> " + c.name +
+                        ":' の形で書きます")
+            diag.error_full(unwrap_tok(at),
+                            "クラス '" + c.name + "' は copy できません",
+                            "'" + ast.type_name(t) + "' 型です",
+                            c.tok, "クラスの定義はここです", hint)
+            return
+
+        hint2: str = ("複製できるのは 値型 / str / list / __copy__ を持つクラス / " +
+                      "列挙 と、それらの T | None です")
+        if t.kind == ast.TY_RC:
+            hint2 = ("rc[T] は「1 つの値を 2 か所から持つ」ための型です" +
+                     "（複製ではありません）。中身を複製するなら " +
+                     "copy(r.get()) のように中身を渡してください")
+        diag.error_full(unwrap_tok(at),
+                        "'" + ast.type_name(t) + "' 型は copy できません",
+                        "ここは複製できる型ではありません", None, "", hint2)
+
     def check_call(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
         # ★ 名前が **関数型の変数**なら間接呼び出し
         #   注意: 変数を先に見る（同名の関数があっても変数が勝つ）
@@ -3848,6 +3891,66 @@ class Sema:
                                    "'" + ast.type_name(mat) + "' は mutex に入れられません")
             n.is_extern = False
             return ast.type_mutex(mat)
+
+        # ── f-string の書式指定が作る呼び出し（A-45）──────────────
+        #
+        # ★ 利用者は書けない名前です（'.' が入っているので識別子になりません）。
+        #   パーサが f"{x:>8}" を脱糖して作ります。
+        if n.name == "fmt.pad" or n.name == "fmt.f64":
+            is_pad: bool = n.name == "fmt.pad"
+            fi: int = 0
+            fa: rc[ast.Node] | None = n.args
+            while fa is not None:
+                faa: rc[ast.Node] = fa
+                fat: rc[ast.Type] = self.check_expr(faa)
+                need: rc[ast.Type] = self.ty_int()
+                if fi == 0:
+                    if is_pad:
+                        need = self.ty_str()
+                    else:
+                        need = self.ty_float()
+                if not ast.type_assignable(fat, need):
+                    msg: str = ("小数の書式は '" + ast.type_name(fat) +
+                                "' 型には使えません")
+                    fhint: str = ("'.2f' のような書式は float にだけ使えます" +
+                                  "（int なら float(x) にしてください）")
+                    if is_pad:
+                        msg = ("書式（桁揃え）は '" + ast.type_name(fat) +
+                               "' 型には使えません")
+                        fhint = "桁揃えは文字列にしてから行います"
+                    diag.error_full(unwrap_tok(faa.tok), msg,
+                                    "これは '" + ast.type_name(fat) + "' 型です",
+                                    None, "", fhint)
+                fi = fi + 1
+                fa = faa.next
+            n.builtin = ""
+            n.ir_name = "pl_fmt_f64"
+            if is_pad:
+                n.ir_name = "pl_str_pad"
+            n.is_fmt = True
+            n.type = self.ty_str()
+            return self.ty_str()
+
+        # ── copy(v) — 複製の抽象（A-44）────────────────────────
+        #
+        # ★ **どの型でも書けること**が値打ちです。型ごとに出すものを変えます。
+        #   注意: クラスは `__copy__` を書いたものだけです（黙って浅く写すと、
+        #     所有しているフィールドを 2 つの実体が指して二重解放になります）。
+        if n.name == "copy" and self.lookup_func("copy") is None:
+            ncp: int = count_siblings(n.args)
+            if ncp != 1:
+                diag.error_at_hint(unwrap_tok(n.tok),
+                                   "copy(値) の形で使ってください",
+                                   "copy は 1 個の引数を取りますが、" + str(ncp) +
+                                   " 個渡されました")
+            cav: rc[ast.Node] = unwrap_node(n.args)
+            ct: rc[ast.Type] = auto_deref(self.check_expr(cav))
+            self.check_copyable(ct, cav.tok)
+            n.builtin = ""
+            n.ir_name = ""
+            n.is_copy = True
+            n.type = ct
+            return ct
 
         if self.is_builtin_name(n.name):
             return self.check_builtin_call(n)

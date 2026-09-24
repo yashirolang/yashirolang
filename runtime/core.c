@@ -572,6 +572,98 @@ char *pl_str_from_int(long long v) {
     return p;
 }
 
+char *pl_str_from_float(double v);   // 下で定義
+
+// ── f-string の書式指定（A-45）─────────────────────────────
+//
+// ★ 表示幅で数えます（全角は 2 桁）。バイト数で数えると日本語の表が崩れます。
+//   判定の範囲は lib/strings の is_wide と**同じもの**です。
+static int pl_is_wide_cp(long long cp) {
+    return (cp >= 0x1100 && cp <= 0x115F) || (cp >= 0x2E80 && cp <= 0xA4CF) ||
+           (cp >= 0xAC00 && cp <= 0xD7A3) || (cp >= 0xF900 && cp <= 0xFAFF) ||
+           (cp >= 0xFE30 && cp <= 0xFE6F) || (cp >= 0xFF00 && cp <= 0xFF60) ||
+           (cp >= 0xFFE0 && cp <= 0xFFE6);
+}
+
+long long pl_str_width(const char *s) {
+    long long n = pl_str_len(s), w = 0, i = 0;
+    while (i < n) {
+        unsigned char b = (unsigned char)s[i];
+        if (b < 0x80) { w++; i++; continue; }
+        long long len = b >= 0xF0 ? 4 : (b >= 0xE0 ? 3 : 2);
+        long long cp = b & (b >= 0xF0 ? 0x07 : (b >= 0xE0 ? 0x0F : 0x1F));
+        for (long long k = 1; k < len && i + k < n; k++)
+            cp = (cp << 6) | ((unsigned char)s[i + k] & 0x3F);
+        w += pl_is_wide_cp(cp) ? 2 : 1;
+        i += len;
+    }
+    return w;
+}
+
+// 表示幅 width まで詰める。align は 0=左寄せ / 1=右寄せ / 2=中央。
+//
+// 注意: **既に width を超えていたら、そのまま返します**（切りません）。
+//   切ると、表の桁は揃っても中身が読めなくなります。
+char *pl_str_pad(const char *s, long long width, long long align, long long fill) {
+    long long n = pl_str_len(s);
+    long long w = pl_str_width(s);
+    if (w >= width) {
+        char *c = pl_str_alloc(n);
+        pl_memcpy(c, s, n + 1);
+        return c;
+    }
+    long long pad = width - w;
+    long long left = align == 1 ? pad : (align == 2 ? pad / 2 : 0);
+    long long right = pad - left;
+    char *out = pl_str_alloc(n + pad);
+    long long k = 0;
+    for (long long i = 0; i < left; i++) out[k++] = (char)fill;
+    pl_memcpy(out + k, s, n);
+    k += n;
+    for (long long i = 0; i < right; i++) out[k++] = (char)fill;
+    out[k] = '\0';
+    return out;
+}
+
+// 小数点以下を prec 桁に固定して文字列にする（四捨五入。0 から遠いほうへ）。
+//
+// 注意: **大きすぎる値は最短表現に逃がします**（i64 に入らないため）。
+//   表を出すための機能なので、そこまでの値は想定しません。
+char *pl_fmt_f64(double v, long long prec) {
+    if (v != v || v - v != v - v) return pl_str_from_float(v);
+    if (prec < 0) prec = 0;
+    if (prec > 17) prec = 17;
+
+    int neg = 0;
+    {
+        union { double d; unsigned long long u; } cv;
+        cv.d = v;
+        if (cv.u >> 63) { neg = 1; v = -v; }
+    }
+    double scale = 1.0;
+    for (long long i = 0; i < prec; i++) scale *= 10.0;
+    double scaled = v * scale + 0.5;
+    if (scaled >= 9.2233720368547758e18) return pl_str_from_float(neg ? -v : v);
+
+    unsigned long long fixed = (unsigned long long)scaled;
+    char digits[32];
+    long long nd = 0;
+    if (fixed == 0) digits[nd++] = '0';
+    while (fixed > 0) { digits[nd++] = (char)('0' + (int)(fixed % 10)); fixed /= 10; }
+    while (nd <= prec) digits[nd++] = '0';   // 0.0x のぶんを足す
+
+    long long total = neg + nd + (prec > 0 ? 1 : 0);
+    char *out = pl_str_alloc(total);
+    long long k = 0;
+    if (neg) out[k++] = '-';
+    for (long long i = nd - 1; i >= 0; i--) {
+        out[k++] = digits[i];
+        if (prec > 0 && i == prec) out[k++] = '.';
+    }
+    out[k] = '\0';
+    return out;
+}
+
 char *pl_str_from_float(double v) {
     char buf[64];
     long long n = pl_ftoa(v, buf);
@@ -1543,6 +1635,25 @@ void pl_list_clear(PlList *l) { l->len = 0; }
 
 // 中身を丸ごと写した新しい list
 PlList *pl_list_copy(PlList *l) { return pl_list_slice(l, 0, l->len); }
+
+// 要素も複製して写した新しい list（A-44）。
+//
+// ★ elem_copy は「要素 1 つを複製する関数」。要素がコピー型（int / bool /
+//   float）なら NULL を渡します——そのときは中身をそのまま写すだけです
+//   （pl_drop_list と同じ形にしてあります）。
+//
+// 注意: **浅い写し（pl_list_copy）と別物です。** あちらは要素の中身を
+//   共有するので、str の list を写すと同じ文字列を 2 つの list が指します。
+void pl_list_push_ptr(PlList *l, void *v);   // 下で定義
+
+PlList *pl_list_copy_with(PlList *l, void *(*elem_copy)(void *)) {
+    if (!l) return NULL;
+    if (!elem_copy) return pl_list_copy(l);
+    PlList *out = pl_list_new();
+    void **items = (void **)l->data;
+    for (long long i = 0; i < l->len; i++) pl_list_push_ptr(out, elem_copy(items[i]));
+    return out;
+}
 
 // 別の list の中身を末尾に足す
 void pl_list_extend(PlList *l, PlList *o) {

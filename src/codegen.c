@@ -4174,8 +4174,11 @@ static char *gen_lowlevel(Emitter *e, Node *n) {
         return t;
     }
 
-    bool is8 = strstr(n->name, "8") != NULL;
-    const char *ity = is8 ? "i8" : "i64";
+    // 幅は名前の末尾の数字（peek8 / peek16 / peek32 / peek64）
+    const char *w = n->name + 4;
+    int bits = strcmp(w, "8") == 0 ? 8 : strcmp(w, "16") == 0 ? 16 : strcmp(w, "32") == 0 ? 32 : 64;
+    bool narrow = bits != 64;
+    const char *ity = bits == 8 ? "i8" : bits == 16 ? "i16" : bits == 32 ? "i32" : "i64";
     char *p = gen_expr(e, a0);
     char *off = gen_expr(e, a1);
     char *addr = new_tmp(e);
@@ -4184,17 +4187,17 @@ static char *gen_lowlevel(Emitter *e, Node *n) {
     if (strncmp(n->name, "peek", 4) == 0) {
         char *v = new_tmp(e);
         sb_printf(&e->fn, "  %s = load volatile %s, ptr %s\n", v, ity, addr);
-        if (!is8) return v;
+        if (!narrow) return v;
         char *z = new_tmp(e);
-        sb_printf(&e->fn, "  %s = zext i8 %s to i64\n", z, v);
+        sb_printf(&e->fn, "  %s = zext %s %s to i64\n", z, ity, v);
         return z;
     }
 
-    // poke8 / poke64
+    // poke8 / poke16 / poke32 / poke64
     char *val = gen_expr(e, a2);
-    if (is8) {
+    if (narrow) {
         char *tr = new_tmp(e);
-        sb_printf(&e->fn, "  %s = trunc i64 %s to i8\n", tr, val);
+        sb_printf(&e->fn, "  %s = trunc i64 %s to %s\n", tr, val, ity);
         val = tr;
     }
     sb_printf(&e->fn, "  store volatile %s %s, ptr %s\n", ity, val, addr);

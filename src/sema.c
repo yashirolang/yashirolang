@@ -3482,8 +3482,9 @@ static Type *check_new(Sema *s, Node *n, Class *c) {
 //
 //   ptr_at(addr)        番地からポインタを作る
 //   addr_of(p)          ポインタを番地に戻す
-//   peek8/peek64(p, i)  読む（volatile）
-//   poke8/poke64(p,i,v) 書く（volatile）
+//   peek8/16/32/64(p, i)   読む（volatile。符号なしで読んで int にする）
+//   poke8/16/32/64(p,i,v)  書く（volatile。下位のビットだけを書く）
+//   ★ i は「その幅の何個目か」です（peek32(p, 1) は p + 4 バイト目）。
 typedef struct {
     const char *name;
     int nargs;   // ポインタを除く引数の数（ptr_at は 0 で特別）
@@ -3503,8 +3504,12 @@ static const LowLevel LOWLEVEL[] = {
     {"ptr_at", 1, true, false},
     {"addr_of", 1, false, true},
     {"peek8", 2, false, true},
+    {"peek16", 2, false, true},
+    {"peek32", 2, false, true},
     {"peek64", 2, false, true},
     {"poke8", 3, false, true},
+    {"poke16", 3, false, true},
+    {"poke32", 3, false, true},
     {"poke64", 3, false, true},
     {NULL, 0, false, false},
 };
@@ -3561,8 +3566,7 @@ static Type *check_lowlevel_call(Sema *s, Node *n, const LowLevel *ll) {
 
     n->builtin = NULL;
     if (ll->ret_ptr) return type_ptr(ty_int);
-    if (strcmp(n->name, "poke8") == 0 || strcmp(n->name, "poke64") == 0)
-        return ty_none;
+    if (strncmp(n->name, "poke", 4) == 0) return ty_none;
     if (strcmp(n->name, "asm") == 0 || strcmp(n->name, "asm_in") == 0) return ty_none;
     return ty_int;
 }

@@ -971,6 +971,21 @@ def use_expr(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
                     arefs.append(rc(ArgRef(node_of_opt(nn.args), False, WR_ARG)))
                 check_arg_aliases(o, arefs)
                 return
+        # xs.insert(i, v) … append と同じく、コンテナが v の所有権を受け取る。
+        #   ★ ここが無かったので v が関数の出口で解放され、リストには
+        #     解放済みの値が残っていました。
+        if lh is not None and nn.name == "insert" and nn.args is not None:
+            lt2: rc[ast.Type] | None = node_type(lh)
+            a0: rc[ast.Node] = node_of_opt(nn.args)
+            if lt2 is not None and lt2.kind == ast.TY_LIST and a0.next is not None:
+                use_expr(o, f, nn.lhs)
+                use_expr(o, f, a0)
+                move_expr(o, f, a0.next, MV_APPEND)
+                check_mut(o, lh, lh, WR_APPEND)
+                arefs2: list[rc[ArgRef]] = [rc(ArgRef(lh, True, WR_APPEND))]
+                arefs2.append(rc(ArgRef(node_of_opt(a0.next), False, WR_ARG)))
+                check_arg_aliases(o, arefs2)
+                return
         # 注意: 'mod.f(args)'（他モジュールの関数・クラス）は ND_METHOD ですが
         #   self を取りません。第 1 引数をずらすかは
         #   「モジュール修飾か」「インスタンス生成か」で決まります。
@@ -1119,6 +1134,18 @@ def move_expr(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None, ctx: int) -> 
     nt: rc[ast.Type] | None = node_type(nn)
     if nt is not None and ty_is_rc(nt):
         use_expr(o, f, nn)
+        return True
+
+    # ★ タプルのリテラル `(a, b)` は、要素ごとに移動です。
+    #   タプルそのものは一時値なので、ここで要素を 1 つずつ動かさないと、
+    #   `return (n, s)` の s が関数の出口で解放され、呼び出し側には
+    #   解放済みの文字列が渡っていました。
+    if nn.kind == ast.ND_TUPLE:
+        el: rc[ast.Node] | None = nn.body
+        while el is not None:
+            e1: rc[ast.Node] = el
+            move_expr(o, f, e1, ctx)
+            el = e1.next
         return True
 
     p: rc[Place] | None = place_of(nn)

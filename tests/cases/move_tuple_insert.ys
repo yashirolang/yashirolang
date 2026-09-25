@@ -1,0 +1,55 @@
+# OUTPUT: 2 libapk.so.3.0.0
+# OUTPUT: 1 one
+# OUTPUT: 3 three
+# OUTPUT: 5 five
+# EXIT: 0
+# タプルで返す値と list.insert に渡す値は「移動」（0.37.2）
+#
+#   ★ どちらも所有権の検査が移動として記録していなかったので、関数の出口で
+#     解放され、呼び出し側（リスト）には解放済みの値が残っていました。
+#     間に確保を挟んで、解放済みの領域が上書きされる状況を作ります。
+
+def split_last(path: str) -> (int, str):
+    parts: list[str] = []
+    cur: str = ""
+    for c in path:
+        if c == "/":
+            if len(cur) > 0:
+                parts.append(cur)
+            cur = ""
+        else:
+            cur = cur + c
+    return (len(parts), cur)
+
+class V:
+    a: int
+    name: str
+    def init(self, a: int, name: own str) -> None:
+        self.a = a
+        self.name = name
+
+def ins(vs: mut list[V], v: own V) -> None:
+    i: int = 0
+    while i < len(vs) and vs[i].a < v.a:
+        i = i + 1
+    vs.insert(i, v)
+
+def churn() -> None:
+    junk: list[str] = []
+    k: int = 0
+    while k < 100:
+        junk.append("filler" + str(k))
+        k = k + 1
+
+def main() -> int:
+    d, base = split_last("usr/lib/libapk.so.3.0.0")
+    churn()
+    print(str(d) + " " + base)
+    vs: list[V] = []
+    ins(vs, V(5, "five"))
+    ins(vs, V(1, "one"))
+    ins(vs, V(3, "three"))
+    churn()
+    for v in vs:
+        print(str(v.a) + " " + v.name)
+    return 0

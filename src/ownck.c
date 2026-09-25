@@ -1176,6 +1176,19 @@ static void use_expr(Own *o, Flow *f, Node *n) {
                 check_call_borrows(o, n, recv);
                 return;
             }
+            // xs.insert(i, v) … append と同じく、コンテナが v の所有権を受け取る。
+            //   ★ ここが無かったので v が関数の出口で解放され、リストには
+            //     解放済みの値が残っていました。
+            if (n->lhs && n->lhs->type && n->lhs->type->kind == TY_LIST &&
+                strcmp(n->name, "insert") == 0 && n->args && n->args->next) {
+                use_expr(o, f, n->lhs);
+                use_expr(o, f, n->args);
+                move_expr(o, f, n->args->next, MV_APPEND);
+                ArgRef *recv = arg_ref(n->lhs, NULL, true, WR_APPEND);
+                recv->next = arg_ref(n->args->next, NULL, false, WR_ARG);
+                check_call_borrows(o, n, recv);
+                return;
+            }
             // 注意: 'mod.f(args)'（他モジュールの関数・クラス）は ND_METHOD ですが
             //    self を取りません。第 1 引数をずらすかどうかは
             //    「モジュール修飾か」「インスタンス生成か」で決まります。
@@ -1214,6 +1227,15 @@ static bool move_expr(Own *o, Flow *f, Node *n, MoveCtx ctx) {
     //   移行しても指摘が減りませんでした（実測 345 → 340）。
     if (ty_is_rc(n->type)) {
         use_expr(o, f, n);
+        return true;
+    }
+
+    // ★ タプルのリテラル `(a, b)` は、要素ごとに移動です。
+    //   タプルそのものは一時値なので、ここで要素を 1 つずつ動かさないと、
+    //   `return (n, s)` の s が関数の出口で解放され、呼び出し側には
+    //   解放済みの文字列が渡っていました。
+    if (n->kind == ND_TUPLE) {
+        for (Node *el = n->body; el; el = el->next) move_expr(o, f, el, ctx);
         return true;
     }
 

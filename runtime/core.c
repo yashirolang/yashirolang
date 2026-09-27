@@ -30,6 +30,7 @@
 // （-9223372036854775808 と直に書くと、まず正の定数を作ってから否定する規則の
 //   ため、そのままでは long long に収まりません）。
 #define PL_LLONG_MIN (-9223372036854775807LL - 1)
+#define PL_LLONG_MAX 9223372036854775807LL
 
 // ── 自前の小道具（libc の代わり）────────────────────────────
 //
@@ -1032,6 +1033,18 @@ long long pl_floordiv(long long a, long long b) {
 //
 // 引数は演算の種類です。文字列を渡すと演算のたびに大域定数が増えるので、
 // 番号にしてメッセージはこちら側に持ちます。
+// シフト量が 0..63 の外だったとき（codegen の gen_shift_check から呼ばれます）。
+// 注意: **戻りません。** 宣言には noreturn と cold が付きます。
+void pl_shift_fail(long long n) {
+    char buf[64];
+    char *w = buf;
+    const char *m = "shift count out of range: ";
+    while (*m) *w++ = *m++;
+    w += pl_itoa(n, w);
+    *w = '\0';
+    pl_panic(buf);
+}
+
 void pl_overflow_fail(long long op) {
     if (op == 0) pl_panic("integer overflow in +");
     if (op == 1) pl_panic("integer overflow in -");
@@ -1527,7 +1540,14 @@ long long pl_hash_f64(double v) {
 }
 
 // 組み込み関数
-long long pl_iabs(long long v) { return v < 0 ? -v : v; }
+//
+// ★ abs(-9223372036854775808) は 64 ビットで表せません。以前は `-v` がそのまま
+//   折り返して**負の値を返していました**（C では符号付きの桁あふれで未定義動作）。
+//   単項 `-` と同じく、桁あふれとして止めます。
+long long pl_iabs(long long v) {
+    if (v == PL_LLONG_MIN) pl_panic("integer overflow in abs");
+    return v < 0 ? -v : v;
+}
 double pl_fabs(double v) { return v < 0.0 ? -v : v; }
 
 // ── 負の添字の正規化 ────────────────────────────────────
@@ -1543,9 +1563,19 @@ long long pl_norm_index(long long i, long long len) {
 // list[int] の総和
 // 注意: **int のリストだけ**です。float の総和は要素の型で命令が変わるので、
 //   linalg.vsum を使ってください（sema が型を見て弾きます）。
+//
+// ★ `+` と同じく、桁あふれしたら止めます。以前は C の `s += …` で足していたので、
+//   あふれると折り返していました（C では符号付きの桁あふれで**未定義動作**）。
+//   注意: __builtin_add_overflow は使いません（pl_mul_ovf と同じ理由。
+//     ベアメタルでライブラリ呼び出しに化けないことを保証したいため）。
 long long pl_list_sum(PlList *l) {
     long long s = 0;
-    for (long long i = 0; i < l->len; i++) s += ((long long *)l->data)[i];
+    for (long long i = 0; i < l->len; i++) {
+        long long v = ((long long *)l->data)[i];
+        if ((v > 0 && s > PL_LLONG_MAX - v) || (v < 0 && s < PL_LLONG_MIN - v))
+            pl_panic("integer overflow in sum");
+        s += v;
+    }
     return s;
 }
 

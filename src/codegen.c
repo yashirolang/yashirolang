@@ -996,6 +996,7 @@ static void gen_ensures(Emitter *e, const char *val);
 static bool prove_verify_here(Emitter *e);
 static void gen_prove_fail(Emitter *e);
 static const char *ovf_intr(OpKind op);
+static void gen_shift_check(Emitter *e, const char *r);
 
 static char *gen_expr(Emitter *e, Node *n) {
     switch (n->kind) {
@@ -1177,6 +1178,13 @@ static char *gen_expr(Emitter *e, Node *n) {
                     e->verify_kind = saved_vk;
                     return rv;
                 }
+                // ★ シフト量が 0..63 の外だと、LLVM の shl / ashr は poison
+                //   （未定義動作）です。量がリテラルで範囲内なら何も出しません。
+                //   注意: 未定義動作を防ぐ検査なので、添字の検査と同じく
+                //     --no-overflow-check でも外しません。
+                if ((n->op == OP_SHL || n->op == OP_SHR) && ot->kind == TY_INT &&
+                    !(n->rhs->kind == ND_INT && n->rhs->ival >= 0 && n->rhs->ival <= 63))
+                    gen_shift_check(e, r);
                 sb_printf(&e->fn, "  %s = %s %s %s, %s\n", t, llvm_binop(n),
                           llvm_type(ot), l, r);
             }
@@ -2044,6 +2052,32 @@ static char *gen_checked_fdiv(Emitter *e, const char *l, const char *r) {
     char *t = new_tmp(e);
     sb_printf(&e->fn, "  %s = fdiv double %s, %s\n", t, l, r);
     return t;
+}
+
+// ★ シフト量の検査（0..63 の外なら止める）。
+//
+//   注意: 以前は shl / ashr をそのまま出していたので、`1 << 70` や `1 << -1` が
+//     **未定義動作**でした（x86 ではたまたまシフト量の下位 6 ビットが使われ、
+//     `1 << 70` が 64 になっていた）。kagami（証明器）を作っていて見つけました。
+//   ★ 形は桁あふれの検査と同じです（比較 1 つと、cold な外れの経路）。
+static void gen_shift_check(Emitter *e, const char *r) {
+    declare_rt(e, "void @pl_shift_fail(i64) noreturn cold");
+    char *bad = new_tmp(e);
+    // 注意: 符号なしで比べると、負の量も「63 より大きい」側に入ります
+    sb_printf(&e->fn, "  %s = icmp ugt i64 %s, 63\n", bad, r);
+
+    int id = e->label_counter++;  // ★ 番号は最初に 1 回だけ確保する
+    char ok_l[32], bad_l[32];
+    snprintf(ok_l, sizeof(ok_l), "shf.ok.%d", id);
+    snprintf(bad_l, sizeof(bad_l), "shf.bad.%d", id);
+    emit_cond_br(e, bad, bad_l, ok_l);
+
+    emit_label(e, bad_l);
+    sb_printf(&e->fn, "  call void @pl_shift_fail(i64 %s)\n", r);
+    sb_printf(&e->fn, "  unreachable\n");
+    e->terminated = true;
+
+    emit_label(e, ok_l);
 }
 
 // 貯めた「あふれの旗」で 1 回だけ分岐する（相乗りできる範囲検査が無いとき）。

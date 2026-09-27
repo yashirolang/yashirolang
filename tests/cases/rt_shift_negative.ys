@@ -1,0 +1,6 @@
+# EXIT: 1
+# 負のシフト量も panic（>> も同じ）
+def main() -> int:
+    n: int = -1
+    print(8 >> n)
+    return 0

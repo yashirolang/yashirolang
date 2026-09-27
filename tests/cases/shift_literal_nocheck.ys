@@ -1,0 +1,10 @@
+# EXIT: 0
+# IR-NOT: pl_shift_fail
+# EXACT-IR: シフト量がリテラルで 0..63 なら、検査を出さないことを見るため
+# シフト量の検査は、量がリテラルで範囲内なら出しません（命令 1 つのまま）
+def main() -> int:
+    x: int = 5
+    y: int = (x << 3) + (x >> 1) + (x << 63)
+    if y == 0:
+        return 1
+    return 0

@@ -1366,6 +1366,8 @@ print(1.0e-9)       # 1.0e-9
 | メモリ確保失敗 | `runtime error: out of memory` |
 | 範囲型の範囲外（A-28） | `runtime error: value out of range: Percent accepts 0..100 but got 101` |
 | 契約違反（A-29） | `runtime error: contract violated: requires of divide (line 2)` |
+| 整数の桁あふれ（`abs` / `sum` を含む） | `runtime error: integer overflow in +`（`abs` / `sum` なら `in abs` / `in sum`） |
+| シフト量が 0..63 の外 | `runtime error: shift count out of range: 70` |
 
 例外機構（`try`/`except`）は v1 では**採用しません**。回復不能エラーは即終了です。
 

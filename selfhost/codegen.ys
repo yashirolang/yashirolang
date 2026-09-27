@@ -1244,6 +1244,12 @@ class Emitter:
                 rv4: str = self.gen_checked_arith(intr, l, r, code)
                 self.verify_kind = saved_vk4
                 return rv4
+            # ★ シフト量が 0..63 の外だと、LLVM の shl / ashr は poison
+            #   （未定義動作）。量がリテラルで範囲内なら何も出さない。
+            #   注意: 未定義動作を防ぐ検査なので --no-overflow-check でも外さない。
+            if (n.op == ast.OP_SHL or n.op == ast.OP_SHR) and ot.kind == ast.TY_INT:
+                if not self.is_small_shift(n):
+                    self.gen_shift_check(r)
             self.emit("  " + t + " = " + self.llvm_binop(n.op) + " " +
                       self.llvm_type(ot) + " " + l + ", " + r + "\n")
         return t
@@ -2158,6 +2164,36 @@ class Emitter:
         t: str = self.new_tmp()
         self.emit("  " + t + " = fdiv double " + l + ", " + r + "\n")
         return t
+
+    # シフト量がリテラルの 0..63 か（検査が要らないか）
+    def is_small_shift(self, n: rc[ast.Node]) -> bool:
+        rn: rc[ast.Node] = node_of(n.rhs)
+        return rn.kind == ast.ND_INT and rn.ival >= 0 and rn.ival <= 63
+
+    # ★ シフト量の検査（0..63 の外なら止める）。
+    #
+    #   注意: 以前は shl / ashr をそのまま出していたので、`1 << 70` や `1 << -1` が
+    #     **未定義動作**だった（x86 ではたまたま下位 6 ビットが使われていた）。
+    #   ★ 形は桁あふれの検査と同じ（比較 1 つと、cold な外れの経路）。
+    #   対になる定義: src/codegen.c :: gen_shift_check
+    def gen_shift_check(mut self, r: str) -> None:
+        self.declare_rt("void @pl_shift_fail(i64) noreturn cold")
+        bad: str = self.new_tmp()
+        # 注意: 符号なしで比べると、負の量も「63 より大きい」側に入る
+        self.emit("  " + bad + " = icmp ugt i64 " + r + ", 63\n")
+
+        id_: int = self.label_counter    # ★ 番号は最初に 1 回だけ確保する
+        self.label_counter = self.label_counter + 1
+        ok_l: str = "shf.ok." + str(id_)
+        bad_l: str = "shf.bad." + str(id_)
+        self.emit_cond_br(bad, bad_l, ok_l)
+
+        self.emit_label(bad_l)
+        self.emit("  call void @pl_shift_fail(i64 " + r + ")\n")
+        self.emit("  unreachable\n")
+        self.terminated = True
+
+        self.emit_label(ok_l)
 
     # 貯めた「あふれの旗」で 1 回だけ分岐する（相乗りできる範囲検査が無いとき）。
     # op は 4 ＝「添字の計算」。

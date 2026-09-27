@@ -1,0 +1,19 @@
+# OUTPUT: 1
+# OUTPUT: 8
+# OUTPUT: -9223372036854775808
+# OUTPUT: -2
+# OUTPUT: -1
+# OUTPUT: 5
+# OUTPUT: 3
+# シフト量が 0..63 なら今までどおり（折り返しも今までどおり）。abs と sum の普通の使い方も
+def main() -> int:
+    for n in [0, 3, 63]:
+        print(1 << n)
+    k: int = 3
+    print(-16 >> k)
+    k = 63
+    print(-16 >> k)
+    print(abs(-5))
+    xs: list[int] = [1, 2]
+    print(sum(xs))
+    return 0

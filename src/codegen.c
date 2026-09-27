@@ -1615,7 +1615,7 @@ static char *gen_list_lit(Emitter *e, Node *n) {
 //   list は作りません。E が偽（any なら真）になった時点で止めます（Python と同じ短絡）。
 //   結果は φ で合流します：最後まで回った道は all なら true / any なら false、
 //   途中で止まった道はその逆です。
-//   注意: 対になる定義は selfhost/codegen.ys の gen_quant です（IR は 1 バイトも違えません）。
+//   注意: 対になる定義は selfhost/codegen の gen_quant です（IR は 1 バイトも違えません）。
 static char *gen_quant(Emitter *e, Node *n) {
     Node *lv = n->body;
     Node *res = lv->next;

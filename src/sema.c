@@ -2438,7 +2438,7 @@ static Type *check_list_lit(Sema *s, Node *n) {
 //     隠し変数 old.N を読み飛ばします。
 //   注意: 型は右辺から推論します（for の隠し変数と同じ）。値型だけに限る検査は
 //     ND_ENSURES の検査でします（list を控えると所有権が移ってしまうため）。
-//   対になる定義: selfhost/sema.ys の rewrite_old
+//   対になる定義: selfhost/sema の rewrite_old
 #define OLD_MAX 256
 
 // 式をたどり、old(e) を見つけるたびに隠し変数の宣言を作って decls に足す。

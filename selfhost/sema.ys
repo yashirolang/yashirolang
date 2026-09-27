@@ -2360,6 +2360,8 @@ class Sema:
             ct: rc[ast.Type] = self.check_expr(unwrap_node(n.lhs))
             if n.kind == ast.ND_ENSURES:
                 self.ensures_depth = self.ensures_depth - 1
+            if n.kind == ast.ND_ENSURES:
+                self.check_old_types(n.lhs)
             if ct.kind != ast.TY_BOOL:
                 kw: str = "ensures"
                 if n.kind == ast.ND_REQUIRES:
@@ -2784,6 +2786,111 @@ class Sema:
     #
     # 注意: 隠し宣言 3 つ（ループ変数 / 結果の list / 添字）は構文解析器が並べている。
     #   ここで型を入れて宣言し、**alloca の名前**を用意する。
+    # ── 旧値 old(式)（ensures の中だけ）──
+    #
+    # ★ ensures の中の old(e) を「入口で控える隠し変数 old.N」に書き換え、
+    #   先頭の契約を「requires → 隠し変数 → ensures」に並べ直す。
+    #   対になる定義: src/sema.c の rewrite_old / old_walk（番号の振り方も同じ）
+    def old_walk(mut self, first: rc[ast.Node] | None, decls: mut list[rc[ast.Node]],
+                 inside: bool) -> None:
+        cur: rc[ast.Node] | None = first
+        while cur is not None:
+            n: rc[ast.Node] = cur
+            if n.kind == ast.ND_CALL and n.name == "old" and len(n.mod_name) == 0:
+                if inside:
+                    diag.error_at_hint(unwrap_tok(n.tok), "old(...) の中に old は書けません",
+                                       "old の入れ子です")
+                a0: rc[ast.Node] | None = n.args
+                if a0 is None:
+                    diag.error_at_hint(unwrap_tok(n.tok),
+                                       "old には式を 1 つだけ渡します（例: old(len(xs))）",
+                                       "old の引数の数が違います")
+                arg: rc[ast.Node] = unwrap_node(a0)
+                if arg.next is not None:
+                    diag.error_at_hint(unwrap_tok(n.tok),
+                                       "old には式を 1 つだけ渡します（例: old(len(xs))）",
+                                       "old の引数の数が違います")
+                if len(decls) >= 256:
+                    diag.error_at_hint(unwrap_tok(n.tok), "old は 1 つの関数に 256 個までです",
+                                       "old が多すぎます")
+                self.old_walk(arg, decls, True)   # 入れ子を見つけるため
+                d: rc[ast.Node] = ast.new_node(ast.ND_VARDECL, unwrap_tok(n.tok))
+                d.name = "old." + str(len(decls))
+                d.rhs = arg
+                decls.append(d)
+                # 呼び出しの節点を、その場で隠し変数の参照に変える
+                n.kind = ast.ND_VAR
+                n.name = "old." + str(len(decls) - 1)
+                n.args = None
+            else:
+                self.old_walk(n.lhs, decls, inside)
+                self.old_walk(n.rhs, decls, inside)
+                self.old_walk(n.els, decls, inside)
+                self.old_walk(n.args, decls, inside)
+            cur = n.next
+
+    def rewrite_old(mut self, body: mut rc[ast.Node]) -> None:
+        decls: list[rc[ast.Node]] = []
+        st: rc[ast.Node] | None = body.body
+        while st is not None:
+            sn: rc[ast.Node] = st
+            if sn.kind != ast.ND_REQUIRES and sn.kind != ast.ND_ENSURES:
+                st = None
+            else:
+                if sn.kind == ast.ND_ENSURES:
+                    self.old_walk(sn.lhs, decls, False)
+                st = sn.next
+        if len(decls) == 0:
+            return
+
+        # 先頭の契約を「requires → 隠し変数 → ensures」に並べ直す
+        order: list[rc[ast.Node]] = []
+        ens: list[rc[ast.Node]] = []
+        rest: rc[ast.Node] | None = body.body
+        going: bool = True
+        while going:
+            if rest is None:
+                going = False
+            else:
+                rn: rc[ast.Node] = rest
+                if rn.kind == ast.ND_REQUIRES:
+                    order.append(rn)
+                    rest = rn.next
+                elif rn.kind == ast.ND_ENSURES:
+                    ens.append(rn)
+                    rest = rn.next
+                else:
+                    going = False
+        for i in range(len(decls)):
+            order.append(decls[i])
+        for j in range(len(ens)):
+            order.append(ens[j])
+        for k in range(len(order) - 1):
+            a: rc[ast.Node] = order[k]
+            a.next = order[k + 1]
+        last: rc[ast.Node] = order[len(order) - 1]
+        last.next = rest
+        body.body = order[0]
+
+    # old(e) の e は値型（int / bool / float）に限る（list を控えると所有権が移るため）
+    #   対になる定義: src/sema.c の check_old_types
+    def check_old_types(self, first: rc[ast.Node] | None) -> None:
+        cur: rc[ast.Node] | None = first
+        while cur is not None:
+            n: rc[ast.Node] = cur
+            if n.kind == ast.ND_VAR and ast.is_old_name(n.name) and n.type is not None:
+                t: rc[ast.Type] = unwrap_type(n.type)
+                if t.kind != ast.TY_INT and t.kind != ast.TY_BOOL and t.kind != ast.TY_FLOAT:
+                    diag.error_full(unwrap_tok(n.tok),
+                                    "old(...) に書けるのは int / bool / float の式です",
+                                    "これは '" + ast.type_name(t) + "' 型です", None, "",
+                                    "list なら old(len(xs)) のように、比べたい数にして書いてください")
+            self.check_old_types(n.lhs)
+            self.check_old_types(n.rhs)
+            self.check_old_types(n.els)
+            self.check_old_types(n.args)
+            cur = n.next
+
     def check_listcomp(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
         lv: rc[ast.Node] = unwrap_node(n.body)          # ループ変数
         res: rc[ast.Node] = unwrap_node(lv.next)        # 結果の list
@@ -2835,6 +2942,22 @@ class Sema:
                                    "内包表記の 'if' には bool が必要です",
                                    "これは '" + ast.type_name(ct) + "' 型です")
         self.scope_pop()
+
+        # ★ 量化子 all(E for …) / any(E for …)。E は bool で、結果も bool
+        #   対になる定義: src/sema.c の check_listcomp
+        if len(n.name) > 0:
+            if et.kind != ast.TY_BOOL:
+                diag.error_full(unwrap_tok(unwrap_node(n.lhs).tok),
+                                n.name + "(...) の中の式は bool でなければなりません",
+                                "これは '" + ast.type_name(et) + "' 型です", None, "",
+                                "例: " + n.name + "(xs[i] >= 0 for i in range(len(xs)))")
+            res.type = self.ty_bool()
+            vq: rc[types.VarEntry] = self.declare(res.name, self.ty_bool(), res.tok)
+            res.ir_name = copy(vq.ir_name)
+            ix.type = self.ty_int()
+            vqi: rc[types.VarEntry] = self.declare(ix.name, self.ty_int(), ix.tok)
+            ix.ir_name = copy(vqi.ir_name)
+            return self.ty_bool()
 
         # ── 隠し変数（結果の list と添字）──
         lt: rc[ast.Type] = ast.type_list(et)
@@ -5781,6 +5904,8 @@ class Sema:
             if not is_contract:
                 seen_other = True
             cs = cn.next
+
+        self.rewrite_old(body)
 
         self.check_stmt_list(body.body)
         self.scope_pop()

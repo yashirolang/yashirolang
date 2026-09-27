@@ -1,0 +1,6 @@
+# EXIT: 1
+# 止まらずに回れば、範囲外で止まる
+def main() -> int:
+    xs: list[int] = [1, 2, 3]
+    print(all(xs[i] > 0 for i in range(5)))
+    return 0

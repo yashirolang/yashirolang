@@ -539,6 +539,7 @@ static Type *check_call(Sema *s, Node *n);
 static Type *check_list_lit(Sema *s, Node *n);
 static Type *check_index_expr(Sema *s, Node *n);
 static Type *check_listcomp(Sema *s, Node *n);
+static void rewrite_old(Node *fn);
 static Type *check_method(Sema *s, Node *n);
 static Type *check_class_method(Sema *s, Node *n, Class *c);
 static Type *check_field(Sema *s, Node *n);
@@ -2419,6 +2420,112 @@ static Type *check_list_lit(Sema *s, Node *n) {
 //
 // 注意: 隠し宣言 3 つ（ループ変数 / 結果の list / 添字）は構文解析器が並べています。
 //   ここで型を入れて宣言し、**alloca の名前**を用意します。
+// ── 旧値 old(式)（ensures の中だけ）──────────────────────────
+//
+// ★ ensures の中の old(e) は「関数の入口での e の値」です（Ada の 'Old）。
+//   **意味解析の前に書き換えます**：
+//
+//     def push(xs: mut list[int], v: int) -> None:      def push(...):
+//         ensures len(xs) == old(len(xs)) + 1     →        requires …（あれば）
+//         xs.append(v)                                     old.0 = len(xs)        ← 入口で控える
+//                                                          ensures len(xs) == old.0 + 1
+//                                                          xs.append(v)
+//
+//   先頭の契約は「requires → 隠し変数 → ensures」の順に並べ直します。requires を
+//   確かめてから控えるので、old(xs[i]) を requires i < len(xs) で守れます。
+//   注意: requires と ensures の相対順は実行に影響しません（requires は入口、
+//     ensures は出口で確かめるため）。codegen は先頭の契約を集めるときに
+//     隠し変数 old.N を読み飛ばします。
+//   注意: 型は右辺から推論します（for の隠し変数と同じ）。値型だけに限る検査は
+//     ND_ENSURES の検査でします（list を控えると所有権が移ってしまうため）。
+//   対になる定義: selfhost/sema.ys の rewrite_old
+#define OLD_MAX 256
+
+// 式をたどり、old(e) を見つけるたびに隠し変数の宣言を作って decls に足す。
+// 順序は「lhs → rhs → els → args」の前順です（セルフホスト版と同じ番号にするため）。
+static void old_walk(Node *n, Node **decls, int *nd, bool inside) {
+    for (; n; n = n->next) {
+        if (n->kind == ND_CALL && n->name && strcmp(n->name, "old") == 0 && !n->mod_name) {
+            if (inside)
+                error_at_hint(n->tok, "old(...) の中に old は書けません", "old の入れ子です");
+            if (!n->args || n->args->next)
+                error_at_hint(n->tok, "old には式を 1 つだけ渡します（例: old(len(xs))）",
+                              "old の引数の数が違います");
+            if (*nd >= OLD_MAX)
+                error_at_hint(n->tok, "old は 1 つの関数に 256 個までです", "old が多すぎます");
+            Node *arg = n->args;
+            old_walk(arg, decls, nd, true);   // 入れ子を見つけるため
+            StrBuf sb;
+            sb_init(&sb);
+            sb_printf(&sb, "old.%d", *nd);
+            Node *d = new_node(ND_VARDECL, n->tok);
+            d->name = sb_str(&sb);
+            d->rhs = arg;
+            decls[(*nd)++] = d;
+            // 呼び出しの節点を、その場で隠し変数の参照に変えます
+            n->kind = ND_VAR;
+            n->name = d->name;
+            n->args = NULL;
+            continue;
+        }
+        old_walk(n->lhs, decls, nd, inside);
+        old_walk(n->rhs, decls, nd, inside);
+        old_walk(n->els, decls, nd, inside);
+        old_walk(n->args, decls, nd, inside);
+    }
+}
+
+// old(e) の e は値型（int / bool / float）に限ります。list や str を控えると、
+// 隠し変数へ所有権が移ってしまうためです（len(xs) のように数にして書きます）。
+static void check_old_types(Node *n) {
+    for (; n; n = n->next) {
+        if (n->kind == ND_VAR && n->name && strncmp(n->name, "old.", 4) == 0 && n->type) {
+            TypeKind k = n->type->kind;
+            if (k != TY_INT && k != TY_BOOL && k != TY_FLOAT) {
+                Diag d = {0};
+                d.message = diag_fmt("old(...) に書けるのは int / bool / float の式です");
+                d.primary.tok = n->tok;
+                d.primary.label = diag_fmt("これは '%s' 型です", type_name(n->type));
+                d.hint = "list なら old(len(xs)) のように、比べたい数にして書いてください";
+                diag_fail(&d);
+            }
+        }
+        check_old_types(n->lhs);
+        check_old_types(n->rhs);
+        check_old_types(n->els);
+        check_old_types(n->args);
+    }
+}
+
+static void rewrite_old(Node *fn) {
+    Node *decls[OLD_MAX];
+    int nd = 0;
+    for (Node *st = fn->body->body; st && (st->kind == ND_REQUIRES || st->kind == ND_ENSURES);
+         st = st->next)
+        if (st->kind == ND_ENSURES) old_walk(st->lhs, decls, &nd, false);
+    if (nd == 0) return;
+
+    // 先頭の契約を「requires → 隠し変数 → ensures」に並べ直す
+    Node rq = {0}, en = {0};
+    Node *rt = &rq, *et = &en;
+    Node *st = fn->body->body;
+    while (st && (st->kind == ND_REQUIRES || st->kind == ND_ENSURES)) {
+        Node *nx = st->next;
+        st->next = NULL;
+        if (st->kind == ND_REQUIRES) { rt->next = st; rt = st; }
+        else { et->next = st; et = st; }
+        st = nx;
+    }
+    for (int i = 0; i < nd; i++) {
+        rt->next = decls[i];
+        rt = decls[i];
+    }
+    rt->next = en.next;
+    if (en.next) et->next = st;
+    else rt->next = st;
+    fn->body->body = rq.next;
+}
+
 static Type *check_listcomp(Sema *s, Node *n) {
     Node *lv = n->body;          // ループ変数
     Node *res = lv->next;        // 結果の list
@@ -2472,6 +2579,26 @@ static Type *check_listcomp(Sema *s, Node *n) {
                           "これは '%s' 型です", type_name(ct));
     }
     scope_pop(s);
+
+    // ★ 量化子 all(E for …) / any(E for …)。E は bool で、結果も bool です
+    //   注意: 隠し変数の宣言は内包表記と同じにしておきます（箱の並びを揃えるため）。
+    if (n->name) {
+        if (et->kind != TY_BOOL) {
+            Diag d = {0};
+            d.message = diag_fmt("%s(...) の中の式は bool でなければなりません", n->name);
+            d.primary.tok = n->lhs->tok;
+            d.primary.label = diag_fmt("これは '%s' 型です", type_name(et));
+            d.hint = diag_fmt("例: %s(xs[i] >= 0 for i in range(len(xs)))", n->name);
+            diag_fail(&d);
+        }
+        res->type = ty_bool;
+        VarEntry *vq = declare(s, res->name, ty_bool, res->tok);
+        res->ir_name = vq->ir_name;
+        ix->type = ty_int;
+        VarEntry *vqi = declare(s, ix->name, ty_int, ix->tok);
+        ix->ir_name = vqi->ir_name;
+        return ty_bool;
+    }
 
     // ── 隠し変数（結果の list と添字）──
     Type *lt = type_list(et);
@@ -4892,6 +5019,7 @@ static void check_stmt(Sema *s, Node *n) {
             if (n->kind == ND_ENSURES) s->ensures_depth++;
             Type *t = check_expr(s, n->lhs);
             if (n->kind == ND_ENSURES) s->ensures_depth--;
+            if (n->kind == ND_ENSURES) check_old_types(n->lhs);
             if (t->kind != TY_BOOL) {
                 Diag d = {0};
                 d.message = diag_fmt("%s には bool の式を書きます",
@@ -6301,6 +6429,8 @@ static void check_func(Sema *s, Node *n) {
             if (!is_contract) seen_other = true;
         }
     }
+
+    rewrite_old(n);
 
     check_stmt_list(s, n->body->body);
     scope_pop(s);

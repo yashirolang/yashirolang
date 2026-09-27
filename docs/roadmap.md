@@ -48,7 +48,7 @@
 | 型 | `int` / `float` / `bool` / `str` / `None` / `list[T]` / タプル / `class`（**ジェネリック可**）/ `interface` / **`enum`（中身を持つ枝あり）** / `T \| None` / `rc[T]` / `ptr[T]` / `fn(…) -> T` / 範囲型 |
 | 式 | 算術・比較・論理（短絡）・ビット演算・添字・スライス・フィールド・メソッド・三項演算子・`in`・f-string・内包表記・演算子の多重定義・既定引数とキーワード引数・**`lambda`（捕獲あり）** |
 | 文 | 宣言・代入・累算代入・`if` / `while` / `for`（`range` / `enumerate`）・**`match` / `case`**・`break` / `continue`・`return`・`pass`・`assert`・`scope:`・`unsafe:` |
-| 安全性 | 所有権（`own`）・借用・可変性（`mut`）・解放（`drop`）・共有（`rc[T]`）・範囲型・契約（`requires` / `ensures`） |
+| 安全性 | 所有権（`own`）・借用・可変性（`mut`）・解放（`drop`）・共有（`rc[T]`）・範囲型・契約（`requires` / `ensures`・`old(式)`・量化子 `all` / `any`） |
 | 並行 | `spawn` / `join` / `mutex[T]` / `scope:` と、送出可能性の検査（`E-SEND-1`〜`4`） |
 | エラー処理 | `raises` / `try` / `except` / `raise`（アンワインドなし。戻り値検査） |
 | 低レベル | `unsafe:` ブロック・生ポインタ・volatile 読み書き・インライン `asm`・`extern`（C のライブラリを呼ぶ） |

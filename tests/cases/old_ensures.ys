@@ -1,0 +1,23 @@
+# OUTPUT: 3
+# OUTPUT: 7
+# old(式) は ensures の中で「関数の入口での値」を指す（Ada の 'Old）
+def push(xs: mut list[int], v: int) -> None:
+    ensures len(xs) == old(len(xs)) + 1
+    xs.append(v)
+
+
+def bump(xs: mut list[int], i: int) -> None:
+    requires 0 <= i and i < len(xs)
+    requires xs[i] < 1000
+    ensures xs[i] == old(xs[i]) + 1       # requires を確かめてから控えるので、範囲内
+    xs[i] = xs[i] + 1
+
+
+def main() -> int:
+    xs: list[int] = [1, 2]
+    push(xs, 5)
+    print(len(xs))
+    bump(xs, 2)
+    bump(xs, 2)
+    print(xs[2])
+    return 0

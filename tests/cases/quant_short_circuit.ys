@@ -1,0 +1,8 @@
+# OUTPUT: False
+# OUTPUT: True
+# 決まった時点で止まる（Python と同じ）。xs[1] 以降は読まないので範囲外にならない
+def main() -> int:
+    xs: list[int] = [20]
+    print(all(xs[i] < 10 for i in range(5)))
+    print(any(xs[i] > 10 for i in range(5)))
+    return 0

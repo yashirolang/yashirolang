@@ -1610,7 +1610,96 @@ static char *gen_list_lit(Emitter *e, Node *n) {
 //   comp.body.N:  x = %it[%i]、条件が真なら push、comp.next.N へ
 //   comp.next.N:  %i = %i + 1、comp.cond.N へ
 //   comp.end.N:   %res を返す
+// ★ 量化子 all(E for …) / any(E for …)。
+//
+//   list は作りません。E が偽（any なら真）になった時点で止めます（Python と同じ短絡）。
+//   結果は φ で合流します：最後まで回った道は all なら true / any なら false、
+//   途中で止まった道はその逆です。
+//   注意: 対になる定義は selfhost/codegen.ys の gen_quant です（IR は 1 バイトも違えません）。
+static char *gen_quant(Emitter *e, Node *n) {
+    Node *lv = n->body;
+    Node *res = lv->next;
+    Node *ix = res->next;
+    (void)res;
+    bool is_all = strcmp(n->name, "all") == 0;
+    Type *elem = lv->type;
+    const char *sty = slot_ty(elem);
+
+    int id = e->label_counter++;
+    char cond_l[40], body_l[40], next_l[40], end_l[40], keep_l[40], stop_l[40];
+    snprintf(cond_l, sizeof(cond_l), "quant.cond.%d", id);
+    snprintf(body_l, sizeof(body_l), "quant.body.%d", id);
+    snprintf(next_l, sizeof(next_l), "quant.next.%d", id);
+    snprintf(end_l, sizeof(end_l), "quant.end.%d", id);
+    snprintf(keep_l, sizeof(keep_l), "quant.keep.%d", id);
+    snprintf(stop_l, sizeof(stop_l), "quant.stop.%d", id);
+
+    char *it = NULL, *stop = NULL;
+    if (n->args) {
+        char *start = gen_expr(e, n->args);
+        stop = gen_expr(e, n->args->next);
+        sb_printf(&e->fn, "  store i64 %s, ptr %s\n", start, ix->ir_name);
+    } else {
+        it = gen_expr(e, n->rhs);
+        sb_printf(&e->fn, "  store i64 0, ptr %s\n", ix->ir_name);
+    }
+
+    emit_label(e, cond_l);
+    char *i = new_tmp(e);
+    sb_printf(&e->fn, "  %s = load i64, ptr %s\n", i, ix->ir_name);
+    char *go = new_tmp(e);
+    if (n->args) {
+        sb_printf(&e->fn, "  %s = icmp %s i64 %s, %s\n", go, n->ival > 0 ? "slt" : "sgt", i, stop);
+    } else {
+        char *lenp = new_tmp(e);
+        sb_printf(&e->fn, "  %s = getelementptr i8, ptr %s, i64 8\n", lenp, it);
+        char *len = new_tmp(e);
+        sb_printf(&e->fn, "  %s = load i64, ptr %s" TBAA_LISTHDR "\n", len, lenp);
+        sb_printf(&e->fn, "  %s = icmp slt i64 %s, %s\n", go, i, len);
+    }
+    emit_cond_br(e, go, body_l, end_l);
+
+    emit_label(e, body_l);
+    if (n->args) {
+        sb_printf(&e->fn, "  store i64 %s, ptr %s\n", i, lv->ir_name);
+    } else {
+        char *ep = gen_index_addr(e, it, i, sty, false, NULL);
+        char *v = new_tmp(e);
+        sb_printf(&e->fn, "  %s = load %s, ptr %s" TBAA_LISTELEM "\n", v, sty, ep);
+        gen_store(e, elem, slot_to_elem(e, elem, v), lv->ir_name);
+    }
+    if (n->els) {
+        char *c = gen_expr(e, n->els);
+        emit_cond_br(e, c, keep_l, next_l);
+        emit_label(e, keep_l);
+    }
+    char *val = gen_expr(e, n->lhs);
+    // all は偽で止まる／any は真で止まる
+    if (is_all) emit_cond_br(e, val, next_l, stop_l);
+    else emit_cond_br(e, val, stop_l, next_l);
+
+    emit_label(e, next_l);
+    char *i2 = new_tmp(e);
+    sb_printf(&e->fn, "  %s = load i64, ptr %s\n", i2, ix->ir_name);
+    char *i3 = new_tmp(e);
+    sb_printf(&e->fn, "  %s = add i64 %s, %lld\n", i3, i2, n->args ? n->ival : 1);
+    sb_printf(&e->fn, "  store i64 %s, ptr %s\n", i3, ix->ir_name);
+    sb_printf(&e->fn, "  br label %%%s\n", cond_l);
+    e->terminated = true;
+
+    emit_label(e, stop_l);
+    sb_printf(&e->fn, "  br label %%%s\n", end_l);
+    e->terminated = true;
+
+    emit_label(e, end_l);
+    char *out = new_tmp(e);
+    sb_printf(&e->fn, "  %s = phi i1 [ %s, %%%s ], [ %s, %%%s ]\n", out,
+              is_all ? "true" : "false", cond_l, is_all ? "false" : "true", stop_l);
+    return out;
+}
+
 static char *gen_listcomp(Emitter *e, Node *n) {
+    if (n->name) return gen_quant(e, n);
     Node *lv = n->body;      // ループ変数
     Node *res = lv->next;    // 結果の list
     Node *ix = res->next;    // 添字（range のときは数える変数そのもの）
@@ -1991,6 +2080,7 @@ static void gen_ensures(Emitter *e, const char *val) {
     for (Node *st = e->fn_node->body->body; st; st = st->next) {
         // 注意: 契約は本体の先頭に並んでいます（sema が保証）。
         //   先頭以外に出てきたら、そこで止めます。
+        if (is_old_decl(st)) continue;
         if (st->kind != ND_REQUIRES && st->kind != ND_ENSURES) break;
         if (st->kind == ND_ENSURES)
             gen_contract_check(e, st, e->fn_node->name);
@@ -5184,6 +5274,7 @@ static void gen_func(Emitter *e, Node *n) {
     //     まず「その型に入るか」、次に「契約を満たすか」の順になります。
     e->fn_node = n;
     for (Node *st = n->body->body; st; st = st->next) {
+        if (is_old_decl(st)) continue;
         if (st->kind != ND_REQUIRES && st->kind != ND_ENSURES) break;
         if (st->kind == ND_REQUIRES) gen_contract_check(e, st, n->name);
     }

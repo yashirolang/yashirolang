@@ -1,0 +1,17 @@
+# OUTPUT: True
+# OUTPUT: True
+# OUTPUT: False
+# OUTPUT: False
+# OUTPUT: True
+# OUTPUT: False
+# 量化子 all(E for …) / any(E for …)（Python と同じ書き方）
+def main() -> int:
+    xs: list[int] = [3, 1, 4]
+    print(all(xs[i] > 0 for i in range(len(xs))))
+    print(any(x == 4 for x in xs))
+    print(all(x > 2 for x in xs))
+    print(any(x > 10 for x in xs if x % 2 == 0))
+    empty: list[int] = []
+    print(all(x > 100 for x in empty))
+    print(any(x > 100 for x in empty))
+    return 0

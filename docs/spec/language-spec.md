@@ -334,10 +334,41 @@ def divide(a: int, b: int) -> int:
 - 破ると止まります：`contract violated: requires of divide (line 2)`
 - **検査を外すオプションはありません**
 - 注意: 引数が範囲型なら、**範囲の検査が先**です（まず型、次に契約）
-- 注意: `ensures` は `return` の**直前**に評価されます（Ada の `'Old` はありません）
+- 注意: `ensures` は `return` の**直前**に評価されます
+- **`ensures` の中の `old(式)` は「関数の入口での値」**を指します（Ada の `'Old`。0.39.0）。
+  入口で `requires` を確かめたあとに値を控えるので、`old(xs[i])` を `requires i < len(xs)` で守れます。
+  書けるのは `int` / `bool` / `float` の式だけです（list なら `old(len(xs))` のように数にします）。
+  `old` の中に `old` は書けません
+
+```python
+def push(xs: mut list[int], v: int) -> None:
+    ensures len(xs) == old(len(xs)) + 1
+    xs.append(v)
+```
 
 注意: `requires` も `ensures` も**予約語ではありません**。次のトークンが
 代入・修飾・呼び出し・添字の記号なら、今までどおりの文として読みます。
+
+### 3.4.6.1 量化子 `all` / `any`（0.39.0）
+
+**Python と同じ書き方**で、「すべての〜について」「ある〜について」を書けます。
+契約の中でも、ふつうの式としても使えます。
+
+```python
+def all_positive(xs: list[int]) -> bool:
+    return all(xs[i] > 0 for i in range(len(xs)))
+
+def fill(xs: mut list[int], v: int) -> None:
+    ensures all(x == v for x in xs)
+    for i in range(len(xs)):
+        xs[i] = v
+```
+
+- 形は内包表記と同じです：`all(式 for 変数 in 対象 [if 条件])`（対象は `range(...)` か list）
+- 式は `bool` でなければなりません。結果も `bool` です
+- **決まった時点で止まります**（Python と同じ）。`all` は偽が出たら、`any` は真が出たら、残りを評価しません
+- 空なら `all` は `True`、`any` は `False` です
+- 注意: 契約に書くと、実行時には毎回その長さぶん回って確かめます
 
 ### 3.4.7 列挙（A-37）
 

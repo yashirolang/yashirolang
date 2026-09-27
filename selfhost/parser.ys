@@ -622,7 +622,7 @@ class Parser:
                     #     三項演算子や and / or の右側に書かれたときに
                     #     「評価されないはずのもの」を評価してしまう。
                     if first_el and self.peek().is_kw("for"):
-                        return self.list_comp(t, cur)
+                        return self.list_comp(t, cur, "]")
                     first_el = False
 
                     if self.consume(",") is None:
@@ -662,7 +662,7 @@ class Parser:
     # ★ ここでは**形を作るだけ**。型は意味解析（check_listcomp）が決める。
     # 注意: 隠し宣言 3 つを body に並べておく。alloca の収集が body をたどる。
     def list_comp(mut self, open_tok: rc[token.Token],
-                  elem: mut rc[ast.Node]) -> rc[ast.Node]:
+                  elem: mut rc[ast.Node], close: str) -> rc[ast.Node]:
         ft: rc[token.Token] = self.peek()
         self.advance()   # 'for'
 
@@ -751,7 +751,7 @@ class Parser:
                            "変数に入れてください）",
                            "内包表記の 'for' が 2 つあります")
 
-        self.expect_close("]", open_tok)
+        self.expect_close(close, open_tok)
 
         # 隠し宣言 3 つ：ループ変数 / 結果の list / 添字
         lv: rc[ast.Node] = ast.new_node(ast.ND_VARDECL, var)
@@ -843,7 +843,19 @@ class Parser:
 
             call: rc[ast.Node] = ast.new_node(ast.ND_CALL, n.tok)
             call.name = copy(n.name)
-            call.args = self.arg_list(open_tok)
+            # ★ 量化子 all(E for i in range(a, b)) / any(...)（Python と同じ書き方）
+            #   内包表記と同じ節点にして、name に "all" / "any" を入れる。
+            #   対になる定義: src/parser.c の postfix
+            if (n.name == "all" or n.name == "any") and not self.peek().is_punct(")"):
+                first: rc[ast.Node] = self.call_arg()
+                if len(first.arg_name) == 0 and self.peek().is_kw("for"):
+                    q: rc[ast.Node] = self.list_comp(open_tok, first, ")")
+                    q.name = copy(n.name)
+                    n = q
+                    continue
+                call.args = self.arg_list_after(open_tok, first)
+            else:
+                call.args = self.arg_list(open_tok)
             n = call
         return n
 
@@ -885,6 +897,20 @@ class Parser:
                     break
         self.expect_close(")", open_tok)
         return head.next
+
+    # 最初の実引数を読んだあとの残り（量化子でなかったとき）
+    def arg_list_after(mut self, open_tok: rc[token.Token],
+                       first: rc[ast.Node]) -> rc[ast.Node] | None:
+        cur: rc[ast.Node] = first
+        while self.consume(",") is not None:
+            cur.next = self.call_arg()
+            nx: rc[ast.Node] | None = cur.next
+            if nx is None:
+                panic("parser: unreachable")
+            else:
+                cur = nx
+        self.expect_close(")", open_tok)
+        return first
 
     # power ::= postfix [ "**" unary ]（右結合）
     def power(mut self) -> rc[ast.Node]:

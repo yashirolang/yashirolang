@@ -1,6 +1,7 @@
 #include "ast.h"
 
 #include <stdio.h>
+#include <string.h>
 
 // インタフェース・メソッドの総数（sema が数え、codegen が読む）
 int pl_iface_slots = 0;
@@ -537,4 +538,8 @@ Node *ast_clone(Node *n) {
     c->incr = ast_clone(n->incr);
     c->next = ast_clone(n->next);
     return c;
+}
+
+bool is_old_decl(Node *st) {
+    return st && st->kind == ND_VARDECL && st->name && strncmp(st->name, "old.", 4) == 0;
 }

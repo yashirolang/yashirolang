@@ -1359,7 +1359,9 @@ def prove_func(pr: mut Prove, fn: rc[ast.Node]) -> None:
     st: rc[ast.Node] | None = body.body
     while st is not None:
         sn: rc[ast.Node] = st
-        if sn.kind != ast.ND_REQUIRES and sn.kind != ast.ND_ENSURES:
+        if ast.is_old_decl(sn):
+            st = sn.next
+        elif sn.kind != ast.ND_REQUIRES and sn.kind != ast.ND_ENSURES:
             st = None
         else:
             if sn.kind == ast.ND_ENSURES:

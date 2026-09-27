@@ -1,0 +1,8 @@
+# ERROR: old(...) の中に old は書けません
+def f(n: int) -> int:
+    ensures result == old(old(n))
+    return n
+
+
+def main() -> int:
+    return 0

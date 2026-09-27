@@ -148,7 +148,7 @@ static Token *expect(Parser *p, TokenKind kind, const char *what,
 
 static Node *expr(Parser *p);
 static Node *call_arg(Parser *p);   // 実引数 1 つ（キーワード引数を含む。A-38）
-static Node *list_comp(Parser *p, Token *open, Node *elem);
+static Node *list_comp(Parser *p, Token *open, Node *elem, const char *close);
 static char *hidden_name(Parser *p, const char *tag);
 static Node *or_expr(Parser *p);
 static Node *unary(Parser *p);
@@ -478,7 +478,7 @@ static Node *primary(Parser *p) {
                 //     だから節点（ND_LISTCOMP）にして、意味解析と codegen が
                 //     その場でループを組み立てます。
                 if (cur == head.next && tok_is_kw(peek(p), "for"))
-                    return list_comp(p, t, cur);
+                    return list_comp(p, t, cur, "]");
 
                 if (!consume(p, ",")) break;
                 if (tok_is(peek(p), "]")) break;  // 末尾のカンマを許す
@@ -528,7 +528,7 @@ static Node *primary(Parser *p) {
 //
 // 注意: 隠し変数の宣言 3 つを body に並べておきます。alloca の収集
 //   （codegen の collect_allocas）が body をたどるので、これで箱が用意されます。
-static Node *list_comp(Parser *p, Token *open, Node *elem) {
+static Node *list_comp(Parser *p, Token *open, Node *elem, const char *close) {
     Token *ft = peek(p);
     advance(p);  // 'for'
 
@@ -613,7 +613,7 @@ static Node *list_comp(Parser *p, Token *open, Node *elem) {
                       "変数に入れてください）",
                       "内包表記の 'for' が 2 つあります");
 
-    expect_close(p, "]", open);
+    expect_close(p, close, open);
 
     // 隠し宣言 3 つ：ループ変数 / 結果の list / 添字
     Node *lv = new_node(ND_VARDECL, var);
@@ -737,12 +737,27 @@ static Node *postfix(Parser *p) {
 
         Node head = {0};
         Node *cur = &head;
+        Node *quant = NULL;
         if (!tok_is(peek(p), ")")) {
             for (;;) {
                 cur->next = call_arg(p);
                 cur = cur->next;
+                // ★ 量化子 all(E for i in range(a, b)) / any(...)（Python と同じ書き方）
+                //   注意: 内包表記と同じ節点（ND_LISTCOMP）にして、name に "all" / "any" を
+                //     入れます。意味解析は bool を返し、codegen は list を作らずに
+                //     **短絡する**ループを出します（Python と同じく、決まった時点で止まる）。
+                if (cur == head.next && !cur->arg_name && tok_is_kw(peek(p), "for") &&
+                    (strcmp(n->name, "all") == 0 || strcmp(n->name, "any") == 0)) {
+                    quant = list_comp(p, open, cur, ")");
+                    quant->name = n->name;
+                    break;
+                }
                 if (!consume(p, ",")) break;
             }
+        }
+        if (quant) {
+            n = quant;
+            continue;
         }
         expect_close(p, ")", open);
         call->args = head.next;

@@ -1398,7 +1398,103 @@ class Emitter:
     #
     # 注意: 隠し変数の alloca は collect_allocas が n.body から拾っている。
     #   ここでは名前を使うだけ。
+    # ★ 量化子 all(E for …) / any(E for …)。list は作らず、決まった時点で止める。
+    #   結果は φ で合流する（最後まで回った道 / 途中で止まった道）。
+    #   対になる定義: src/codegen.c の gen_quant（IR は 1 バイトも違えない）
+    def gen_quant(mut self, n: rc[ast.Node]) -> str:
+        lv: rc[ast.Node] = node_of(n.body)
+        res: rc[ast.Node] = node_of(lv.next)
+        ix: rc[ast.Node] = node_of(res.next)
+        is_all: bool = n.name == "all"
+        elem: rc[ast.Type] = type_of(lv)
+        sty: str = self.slot_ty(elem)
+
+        id_: int = self.label_counter
+        self.label_counter = self.label_counter + 1
+        cond_l: str = "quant.cond." + str(id_)
+        body_l: str = "quant.body." + str(id_)
+        next_l: str = "quant.next." + str(id_)
+        end_l: str = "quant.end." + str(id_)
+        keep_l: str = "quant.keep." + str(id_)
+        stop_l: str = "quant.stop." + str(id_)
+
+        it: str = ""
+        stop: str = ""
+        if n.args is not None:
+            a1: rc[ast.Node] = node_of(n.args)
+            start: str = self.gen_expr(a1)
+            stop = self.gen_expr(node_of(a1.next))
+            self.emit("  store i64 " + start + ", ptr " + ix.ir_name + "\n")
+        else:
+            it = self.gen_expr(node_of(n.rhs))
+            self.emit("  store i64 0, ptr " + ix.ir_name + "\n")
+
+        self.emit_label(cond_l)
+        i: str = self.new_tmp()
+        self.emit("  " + i + " = load i64, ptr " + ix.ir_name + "\n")
+        go: str = self.new_tmp()
+        if n.args is not None:
+            pred: str = "sgt"
+            if n.ival > 0:
+                pred = "slt"
+            self.emit("  " + go + " = icmp " + pred + " i64 " + i + ", " + stop + "\n")
+        else:
+            lenp: str = self.new_tmp()
+            self.emit("  " + lenp + " = getelementptr i8, ptr " + it + ", i64 8\n")
+            ln: str = self.new_tmp()
+            self.emit("  " + ln + " = load i64, ptr " + lenp + TBAA_LISTHDR + "\n")
+            self.emit("  " + go + " = icmp slt i64 " + i + ", " + ln + "\n")
+        self.emit_cond_br(go, body_l, end_l)
+
+        self.emit_label(body_l)
+        if n.args is not None:
+            self.emit("  store i64 " + i + ", ptr " + lv.ir_name + "\n")
+        else:
+            ep: str = self.gen_index_addr(it, i, sty, False, "")
+            v: str = self.new_tmp()
+            self.emit("  " + v + " = load " + sty + ", ptr " + ep + TBAA_LISTELEM + "\n")
+            self.gen_store(elem, self.slot_to_elem(elem, v), lv.ir_name)
+        if n.els is not None:
+            c: str = self.gen_expr(node_of(n.els))
+            self.emit_cond_br(c, keep_l, next_l)
+            self.emit_label(keep_l)
+        val: str = self.gen_expr(node_of(n.lhs))
+        # all は偽で止まる／any は真で止まる
+        if is_all:
+            self.emit_cond_br(val, next_l, stop_l)
+        else:
+            self.emit_cond_br(val, stop_l, next_l)
+
+        self.emit_label(next_l)
+        i2: str = self.new_tmp()
+        self.emit("  " + i2 + " = load i64, ptr " + ix.ir_name + "\n")
+        i3: str = self.new_tmp()
+        stepv: int = 1
+        if n.args is not None:
+            stepv = n.ival
+        self.emit("  " + i3 + " = add i64 " + i2 + ", " + str(stepv) + "\n")
+        self.emit("  store i64 " + i3 + ", ptr " + ix.ir_name + "\n")
+        self.emit("  br label %" + cond_l + "\n")
+        self.terminated = True
+
+        self.emit_label(stop_l)
+        self.emit("  br label %" + end_l + "\n")
+        self.terminated = True
+
+        self.emit_label(end_l)
+        out: str = self.new_tmp()
+        done_v: str = "false"
+        cut_v: str = "true"
+        if is_all:
+            done_v = "true"
+            cut_v = "false"
+        self.emit("  " + out + " = phi i1 [ " + done_v + ", %" + cond_l + " ], [ " +
+                  cut_v + ", %" + stop_l + " ]\n")
+        return out
+
     def gen_listcomp(mut self, n: rc[ast.Node]) -> str:
+        if len(n.name) > 0:
+            return self.gen_quant(n)
         lv: rc[ast.Node] = node_of(n.body)       # ループ変数
         res: rc[ast.Node] = node_of(lv.next)     # 結果の list
         ix: rc[ast.Node] = node_of(res.next)     # 添字
@@ -2104,7 +2200,10 @@ class Emitter:
         while st is not None:
             sn: rc[ast.Node] = st
             # 注意: 契約は本体の先頭に並んでいる（sema が保証）。
-            if sn.kind != ast.ND_REQUIRES and sn.kind != ast.ND_ENSURES:
+            #   old(式) の隠し変数（old.N）はその間にあるので読み飛ばす。
+            if ast.is_old_decl(sn):
+                st = sn.next
+            elif sn.kind != ast.ND_REQUIRES and sn.kind != ast.ND_ENSURES:
                 st = None
             else:
                 if sn.kind == ast.ND_ENSURES:
@@ -4747,7 +4846,9 @@ class Emitter:
         cst: rc[ast.Node] | None = node_of(n.body).body
         while cst is not None:
             cn2: rc[ast.Node] = cst
-            if cn2.kind != ast.ND_REQUIRES and cn2.kind != ast.ND_ENSURES:
+            if ast.is_old_decl(cn2):
+                cst = cn2.next
+            elif cn2.kind != ast.ND_REQUIRES and cn2.kind != ast.ND_ENSURES:
                 cst = None
             else:
                 if cn2.kind == ast.ND_REQUIRES:

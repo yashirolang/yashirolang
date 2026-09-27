@@ -1,0 +1,8 @@
+# ERROR: old(...) に書けるのは int / bool / float の式です
+def f(xs: mut list[int]) -> None:
+    ensures len(xs) == len(old(xs))
+    xs.append(1)
+
+
+def main() -> int:
+    return 0

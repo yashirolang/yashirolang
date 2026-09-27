@@ -1190,6 +1190,7 @@ static void prove_func(Prove *pr, Node *fn) {
     // ① この関数の ensures を集める（本体の先頭に並んでいます）
     EnsRec *ens = NULL, **tail = &ens;
     for (Node *st = fn->body->body; st; st = st->next) {
+        if (is_old_decl(st)) continue;
         if (st->kind != ND_REQUIRES && st->kind != ND_ENSURES) break;
         if (st->kind != ND_ENSURES) continue;
         EnsRec *r = xmalloc(sizeof(EnsRec));

@@ -626,6 +626,16 @@ OP_NOTIN: int = 27   # x not in xs
 def is_compare(op: int) -> bool:
     return op >= OP_EQ and op <= OP_GE
 
+# old(式) の隠し変数の名前か（"old.0" など。sema の rewrite_old が作る）
+def is_old_name(name: str) -> bool:
+    return len(name) > 4 and name[0:4] == "old."
+
+# 先頭の契約の並びに置かれる、old(式) の隠し変数の宣言か。
+# ★ 契約をなめる場所（codegen の入口と出口・prove）は、これを読み飛ばす。
+#   対になる定義: src/ast.c の is_old_decl
+def is_old_decl(st: rc[Node]) -> bool:
+    return st.kind == ND_VARDECL and is_old_name(st.name)
+
 # 演算子の記号（エラーメッセージと --dump-ast 用）
 def op_symbol(op: int) -> str:
     if op == OP_ADD:

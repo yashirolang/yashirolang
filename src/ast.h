@@ -598,6 +598,10 @@ Node *new_unary_node(Token *tok, OpKind op, Node *operand);
 // AST の深い複製（ジェネリクスの単相化）
 Node *ast_clone(Node *n);
 
+// 先頭の契約の並びに置かれる、old(式) の隠し変数の宣言か（sema の rewrite_old が作ります）。
+// ★ 契約をなめる場所（codegen の入口と出口・prove）は、これを読み飛ばします。
+bool is_old_decl(Node *st);
+
 // ★ プログラム全体のインタフェース・メソッド数（vtable の長さ）。
 //   注意: sema が数え、codegen が読みます。codegen の引数を増やさないための
 //     割り切りです（引数を増やすと 2 つの実装の両方に手が要るため）。

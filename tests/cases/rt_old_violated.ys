@@ -1,0 +1,11 @@
+# EXIT: 1
+# old を使った ensures も、破れば止まる
+def push(xs: mut list[int], v: int) -> None:
+    ensures len(xs) == old(len(xs)) + 2
+    xs.append(v)
+
+
+def main() -> int:
+    xs: list[int] = [1]
+    push(xs, 2)
+    return 0

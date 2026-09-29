@@ -1,0 +1,34 @@
+# OUTPUT: 5
+# OUTPUT: yo! yo!
+# OUTPUT: 0.5
+# EXIT: 0
+# 外へ出す関数も、モジュールの中からはふつうの関数として呼べる。
+#         ★ 入口（C の ABI）を足しても、本体の呼び方は変わらない
+class BadInput:
+    message: str
+
+    def init(self, message: own str) -> None:
+        self.message = message
+
+extern def add(a: int, b: int) -> int:
+    return a + b
+
+extern def greet(name: str, times: int = 1) -> str:
+    return (name + "! ") * times
+
+extern def ratio(a: float, b: float) -> float raises BadInput:
+    if b == 0.0:
+        raise BadInput("b が 0 です")
+    return a / b
+
+def main() -> int:
+    print(add(2, 3))
+    print(strings_strip(greet("yo", times=2)))
+    try:
+        print(ratio(1.0, 2.0))
+    except BadInput as e:
+        print(e.message)
+    return 0
+
+def strings_strip(s: str) -> str:
+    return s[0:len(s) - 1]

@@ -1,0 +1,7 @@
+# ERROR: error[E-EXPORT-6]: メソッドは外へ出せません
+# クラスを外に見せるのは段階 3（ffi.md §8）
+class P:
+    v: int
+
+    extern def get(self) -> int:
+        return self.v

@@ -3031,6 +3031,10 @@ static const char *default_value(Type *t) {
         case TY_NONE: return NULL;  // void（値を返さない）
         case TY_INT: return "0";
         case TY_BOOL: return "false";
+        // 注意: float と名前だけの列挙が抜けていて、それを返す raises 関数が
+        //   `ret double null` という壊れた IR になっていました（ffi.md の例で発覚）。
+        case TY_FLOAT: return "0.0";
+        case TY_ENUM: return t->en && t->en->has_payload ? "null" : "0";
         default: return "null";  // str / list / class / T | None
     }
 }
@@ -5411,6 +5415,235 @@ static void gen_c_main(Emitter *e, const char *main_ir_name) {
     sb_printf(&e->body, "}\n");
 }
 
+// ── 外へ出す関数の入口（設計 ffi.md §4）──────────────────────
+//
+// ★ 本体つきの extern def 1 つにつき、関数を 2 つ足します。
+//
+//     @<m>_<f>        入口。C の ABI（int64_t / double / ポインタと長さ）で受け、
+//                     値を**写して**から本体を呼ぶ。戻り値は状態（0 / 1 / 2）
+//     @<m>_<f>.thunk  本体を呼ぶだけの小関数。pl_ffi_call がこれを呼ぶ
+//
+//   本体（@<m>.<f>）は**ふつうの関数のまま**です。モジュールの中からの呼び出しは
+//   いままでどおり本体へ行きます。
+//
+// なぜ thunk を挟むのか
+//   panic を入口で受け止めるには setjmp が要ります。setjmp を IR に書くと
+//   returns_twice の扱いが要るので、C のランタイム（pl_ffi_call）に置き、
+//   そこから呼べる形（ptr 1 本を取る関数）に本体の呼び出しを包みます。
+//
+// 注意: 受け渡しの枠（ctx）の中の bool は i64 で持ちます。境界の ABI と同じ形に
+//   しておけば、入口では変換が要らず、thunk で 1 回だけ i1 に直せば済みます。
+
+// 境界での値の型（枠の中の型でもあります）
+static const char *export_slot_type(Type *t) {
+    switch (t->kind) {
+        case TY_FLOAT: return "double";
+        case TY_STR:
+        case TY_LIST: return "ptr";
+        default: return "i64";  // int / bool
+    }
+}
+
+static void gen_export(Emitter *e, Node *n, const char *mod_name) {
+    char *sym = export_symbol(mod_name, n->name);
+    bool raises = n->raises != NULL;
+    bool has_ret = n->type->kind != TY_NONE;
+    if (raises) ensure_err_type(e);
+
+    // 枠の型 { 引数…, 戻り値, %pl.err }
+    StrBuf ct;
+    sb_init(&ct);
+    sb_printf(&ct, "{ ");
+    int nslot = 0;
+    for (Node *pm = n->params; pm; pm = pm->next)
+        sb_printf(&ct, "%s%s", nslot++ ? ", " : "", export_slot_type(pm->type));
+    int ret_slot = -1, err_slot = -1;
+    if (has_ret) {
+        ret_slot = nslot;
+        sb_printf(&ct, "%s%s", nslot++ ? ", " : "", export_slot_type(n->type));
+    }
+    if (raises) {
+        err_slot = nslot;
+        sb_printf(&ct, "%s%%pl.err", nslot++ ? ", " : "");
+    }
+    if (nslot == 0) sb_printf(&ct, "i8");  // 空の構造体を避ける
+    sb_printf(&ct, " }");
+    const char *ctx_ty = sb_str(&ct);
+
+    // ── ① thunk ──
+    e->tmp_counter = 0;
+    sb_init(&e->fn);
+    StrBuf args;
+    sb_init(&args);
+    int k = 0;
+    for (Node *pm = n->params; pm; pm = pm->next, k++) {
+        char *g = new_tmp(e);
+        sb_printf(&e->fn, "  %s = getelementptr %s, ptr %%ctx, i32 0, i32 %d\n", g,
+                  ctx_ty, k);
+        char *v = new_tmp(e);
+        sb_printf(&e->fn, "  %s = load %s, ptr %s\n", v, export_slot_type(pm->type), g);
+        if (pm->type->kind == TY_BOOL) {
+            char *b = new_tmp(e);
+            sb_printf(&e->fn, "  %s = icmp ne i64 %s, 0\n", b, v);
+            v = b;
+        }
+        sb_printf(&args, "%s%s %s", k ? ", " : "", llvm_type(pm->type), v);
+    }
+    if (raises) {
+        char *g = new_tmp(e);
+        sb_printf(&e->fn, "  %s = getelementptr %s, ptr %%ctx, i32 0, i32 %d\n", g,
+                  ctx_ty, err_slot);
+        sb_printf(&args, "%sptr %s", k ? ", " : "", g);
+    }
+    if (has_ret) {
+        char *r = new_tmp(e);
+        sb_printf(&e->fn, "  %s = call %s @%s(%s)\n", r, llvm_type(n->type), n->ir_name,
+                  sb_str(&args));
+        if (n->type->kind == TY_BOOL) {
+            char *z = new_tmp(e);
+            sb_printf(&e->fn, "  %s = zext i1 %s to i64\n", z, r);
+            r = z;
+        }
+        char *g = new_tmp(e);
+        sb_printf(&e->fn, "  %s = getelementptr %s, ptr %%ctx, i32 0, i32 %d\n", g,
+                  ctx_ty, ret_slot);
+        sb_printf(&e->fn, "  store %s %s, ptr %s\n", export_slot_type(n->type), r, g);
+    } else {
+        sb_printf(&e->fn, "  call void @%s(%s)\n", n->ir_name, sb_str(&args));
+    }
+    sb_printf(&e->body, "\ndefine internal void @%s.thunk(ptr %%ctx) {\nentry:\n%s"
+                        "  ret void\n}\n", sym, sb_str(&e->fn));
+
+    // ── ② 入口 ──
+    e->tmp_counter = 0;
+    sb_init(&e->fn);
+    StrBuf params;
+    sb_init(&params);
+    bool first = true;
+    // 写した引数の値（後で解放するために控える）
+    char **vals = xmalloc(sizeof(char *) * (size_t)(nslot + 1));
+    k = 0;
+    for (Node *pm = n->params; pm; pm = pm->next, k++) {
+        Type *t = pm->type;
+        char *v = NULL;
+        if (t->kind == TY_STR) {
+            sb_printf(&params, "%sptr %%p.%s, i64 %%p.%s.len", first ? "" : ", ",
+                      pm->name, pm->name);
+            declare_rt(e, "ptr @pl_ffi_str_in(ptr, i64)");
+            v = new_tmp(e);
+            sb_printf(&e->fn, "  %s = call ptr @pl_ffi_str_in(ptr %%p.%s, i64 %%p.%s.len)\n",
+                      v, pm->name, pm->name);
+        } else if (t->kind == TY_LIST && t->elem->kind == TY_STR) {
+            sb_printf(&params, "%sptr %%p.%s, ptr %%p.%s.lens, i64 %%p.%s.len",
+                      first ? "" : ", ", pm->name, pm->name, pm->name);
+            declare_rt(e, "ptr @pl_ffi_list_str_in(ptr, ptr, i64)");
+            v = new_tmp(e);
+            sb_printf(&e->fn,
+                      "  %s = call ptr @pl_ffi_list_str_in(ptr %%p.%s, ptr %%p.%s.lens, "
+                      "i64 %%p.%s.len)\n", v, pm->name, pm->name, pm->name);
+        } else if (t->kind == TY_LIST) {
+            sb_printf(&params, "%sptr %%p.%s, i64 %%p.%s.len", first ? "" : ", ",
+                      pm->name, pm->name);
+            declare_rt(e, "ptr @pl_ffi_list_in(ptr, i64)");
+            v = new_tmp(e);
+            sb_printf(&e->fn, "  %s = call ptr @pl_ffi_list_in(ptr %%p.%s, i64 %%p.%s.len)\n",
+                      v, pm->name, pm->name);
+        } else {
+            sb_printf(&params, "%s%s %%p.%s", first ? "" : ", ", export_slot_type(t),
+                      pm->name);
+            v = diag_fmt("%%p.%s", pm->name);
+        }
+        first = false;
+        char *g = new_tmp(e);
+        sb_printf(&e->fn, "  %s = getelementptr %s, ptr %%ctx, i32 0, i32 %d\n", g,
+                  ctx_ty, k);
+        sb_printf(&e->fn, "  store %s %s, ptr %s\n", export_slot_type(t), v, g);
+        vals[k] = v;
+    }
+    if (has_ret) sb_printf(&params, "%sptr %%out", first ? "" : ", ");
+    if (raises) {
+        char *g = new_tmp(e);
+        sb_printf(&e->fn, "  %s = getelementptr %s, ptr %%ctx, i32 0, i32 %d\n", g,
+                  ctx_ty, err_slot);
+        sb_printf(&e->fn, "  store %%pl.err zeroinitializer, ptr %s\n", g);
+    }
+    declare_rt(e, "i64 @pl_ffi_call(ptr, ptr)");
+    char *st = new_tmp(e);
+    sb_printf(&e->fn, "  %s = call i64 @pl_ffi_call(ptr @%s.thunk, ptr %%ctx)\n", st, sym);
+
+    // ★ 写して渡した引数は、入口が持ち主です。own で渡したものは本体が
+    //   持ち主になったので解放しません（panic した場合は漏れます。ffi.md §5.2）。
+    //   注意: 借用で渡したものは、panic した後でも解放してかまいません。
+    //     本体は借りていただけで、手放してはいないためです。
+    if (e->drop) {
+        k = 0;
+        for (Node *pm = n->params; pm; pm = pm->next, k++) {
+            if (pm->mode == PM_OWN) continue;
+            const char *fn = drop_fn_for(e, pm->type);
+            if (fn) sb_printf(&e->fn, "  call void %s(ptr %s)\n", fn, vals[k]);
+        }
+    }
+    char *ok = new_tmp(e);
+    sb_printf(&e->fn, "  %s = icmp eq i64 %s, 0\n", ok, st);
+    sb_printf(&e->fn, "  br i1 %s, label %%done, label %%panicked\n", ok);
+    sb_printf(&e->fn, "panicked:\n  ret i64 2\n");
+    sb_printf(&e->fn, "done:\n");
+
+    if (raises) {
+        char *g = new_tmp(e);
+        sb_printf(&e->fn, "  %s = getelementptr %s, ptr %%ctx, i32 0, i32 %d\n", g,
+                  ctx_ty, err_slot);
+        char *tag = load_tag(e, g);
+        char *bad = new_tmp(e);
+        sb_printf(&e->fn, "  %s = icmp ne i64 %s, 0\n", bad, tag);
+        sb_printf(&e->fn, "  br i1 %s, label %%raised, label %%returned\n", bad);
+        sb_printf(&e->fn, "raised:\n");
+        char *obj = load_payload(e, g);
+        declare_rt(e, "void @pl_ffi_raised(ptr, ptr)");
+        int j = 0;
+        for (Node *r = n->raises; r; r = r->next, j++) {
+            Class *c = r->type->cls;
+            char *is = new_tmp(e);
+            sb_printf(&e->fn, "  %s = icmp eq i64 %s, %d\n", is, tag, r->err_tag);
+            sb_printf(&e->fn, "  br i1 %s, label %%err.%d, label %%err.%d.no\n", is, j, j);
+            sb_printf(&e->fn, "err.%d:\n", j);
+            // ★ 文面は「message: str」があればその中身、無ければクラス名（ffi.md §5.1）
+            const char *msg = "null";
+            for (Field *f = c->fields; f; f = f->next) {
+                if (strcmp(f->name, "message") != 0 || f->type->kind != TY_STR) continue;
+                char *fp = new_tmp(e);
+                sb_printf(&e->fn, "  %s = getelementptr %%%s.type, ptr %s, i32 0, i32 %d\n",
+                          fp, class_type(e, c), obj, f->index);
+                char *mv = new_tmp(e);
+                sb_printf(&e->fn, "  %s = load ptr, ptr %s\n", mv, fp);
+                msg = mv;
+            }
+            char *kind = intern_str(e, c->name, (int)strlen(c->name));
+            sb_printf(&e->fn, "  call void @pl_ffi_raised(ptr %s, ptr %s)\n", kind, msg);
+            if (e->drop) {
+                const char *dfn = drop_fn_for(e, c->type);
+                if (dfn) sb_printf(&e->fn, "  call void %s(ptr %s)\n", dfn, obj);
+            }
+            sb_printf(&e->fn, "  ret i64 1\n");
+            sb_printf(&e->fn, "err.%d.no:\n", j);
+        }
+        sb_printf(&e->fn, "  unreachable\n");
+        sb_printf(&e->fn, "returned:\n");
+    }
+    if (has_ret) {
+        char *g = new_tmp(e);
+        sb_printf(&e->fn, "  %s = getelementptr %s, ptr %%ctx, i32 0, i32 %d\n", g,
+                  ctx_ty, ret_slot);
+        char *v = new_tmp(e);
+        const char *rt = export_slot_type(n->type);
+        sb_printf(&e->fn, "  %s = load %s, ptr %s\n", v, rt, g);
+        sb_printf(&e->fn, "  store %s %s, ptr %%out\n", rt, v);
+    }
+    sb_printf(&e->fn, "  ret i64 0\n");
+    sb_printf(&e->body, "\ndefine i64 @%s(%s) {\nentry:\n  %%ctx = alloca %s\n%s}\n", sym,
+              sb_str(&params), ctx_ty, sb_str(&e->fn));
+}
+
 // ── 入口 ───────────────────────────────────────────────────
 
 // モジュール 1 つぶんの IR を作る。
@@ -5491,6 +5724,8 @@ char *codegen(Module *mod, const char *main_ir_name, bool drop, bool no_ovf,
         }
         // 注意: ジェネリックなテンプレートは出しません
         if (d->kind == ND_FUNC && !d->targs) gen_func(&e, d);
+        // ★ 外へ出す関数には入口を足します（設計 ffi.md §4）
+        if (d->kind == ND_FUNC && d->is_export) gen_export(&e, d, mod->name);
         // メソッドも、ふつうの関数とまったく同じ関数で出します。
         // 違うのは名前（@lexer.Token.show）と、第 1 引数が self であることだけ。
         if (d->kind == ND_CLASS && !d->targs)

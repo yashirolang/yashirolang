@@ -1,0 +1,5 @@
+# ERROR: error[E-EXPORT-2]: 外へ出す関数の引数 'xs' は mut にできません
+# ERROR: 書き換えた結果は戻り値で返してください
+# 境界では写すので、書き換えても外には戻らない（ffi.md §3.1）
+extern def fill(xs: mut list[int]) -> None:
+    xs.append(1)

@@ -1,0 +1,9 @@
+# ERROR: error[E-EXPORT-4]: 外へ出す関数 'f' からスレッドを始めています
+# ERROR: ここで spawn（または scope:）を使っています
+# 段階 1 では、外へ出す関数からスレッドを使えない（ffi.md §5.3）
+def work(n: int) -> int:
+    return n * 2
+
+extern def f(x: int) -> int:
+    t: Thread[int] = spawn(work, x)
+    return t.join()

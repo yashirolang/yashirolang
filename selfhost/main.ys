@@ -22,6 +22,7 @@ import token
 import codegen
 import ownck
 import prove
+import pygen
 
 # 実行するステージ（C 版の Stage と同じ）
 STAGE_ALL: int = 0          # 実行ファイルまで作る
@@ -53,6 +54,9 @@ class Options:
     deny_store_borrow: bool
     jobs: int        # -j N（clang を同時に何本走らせるか。0 = コア数）
     inc: list[str]   # -I <dir>（import を探す場所。何度でも書ける）
+    shared: bool     # --shared（共有ライブラリを作る。設計 ffi.md §6）
+    python: bool     # --python（共有ライブラリ + ctypes の .py）
+    output_set: bool # -o を書いたか（--shared / --python の既定の名前を決める）
 
     def init(self) -> None:
         self.input_ = ""
@@ -75,6 +79,9 @@ class Options:
         self.deny_store_borrow = True
         self.jobs = 0
         self.inc = []
+        self.shared = False
+        self.python = False
+        self.output_set = False
 
 
 # ★ --version が出す内容。対になる定義: src/main.c の print_version
@@ -113,6 +120,10 @@ def usage(status: int) -> None:
     print("  --no-overflow-check")
     print("                  数の実行時検査を外す（既定は検査する）:")
     print("                  整数の + - * の桁あふれ／float の 0 除算")
+    print("  --shared        共有ライブラリを作る（extern def を C から呼べる形で出す）")
+    print("                  -o を省くと lib<モジュール名>.<拡張子>")
+    print("  --python        Python のライブラリを作る（-o はディレクトリ。既定は .）")
+    print("                  _<モジュール名>.<拡張子> と <モジュール名>.py を置きます")
     print("  -I <dir>        import を探す場所を足す（何度でも書ける）")
     print("                  パッケージマネージャ " + langinfo.pm() + " が使います")
     print("  -j <N>          clang を同時に何本走らせるか（既定: コア数）")
@@ -152,6 +163,12 @@ def parse_args(args: list[str]) -> Options:
             #   ここから作るので、**入口で 1 回**確かめれば足ります。
             check_shell_safe(args[i], "出力ファイル名")
             o.output = copy(args[i])
+            o.output_set = True
+        elif a == "--shared":
+            o.shared = True
+        elif a == "--python":
+            o.python = True
+            o.shared = True
         # ★ import を探す場所を足す（-I deps / -Ideps のどちらでも）
         elif a == "-I":
             if i + 1 >= len(args):
@@ -448,6 +465,36 @@ def main() -> int:
     # 入口モジュールの main の IR 名（@main のラッパが呼ぶ相手）
     main_ir: str = entry.name + ".main"
 
+    # ── ライブラリか（設計 ffi.md §6）。対になる定義: src/main.c ──
+    has_main: bool = codegen.entry_has_main(entry)
+    has_export: bool = codegen.any_export(mods)
+    if opt.shared and not has_export:
+        panic("--shared / --python には、外へ出す関数（本体つきの extern def）が" +
+              "少なくとも 1 つ要ります")
+    if not has_main and not opt.shared and opt.stage == STAGE_ALL:
+        panic("main がありません。ライブラリにするなら --shared か --python を" +
+              "付けてください（実行ファイルには main が要ります）")
+
+    # ── 共有ライブラリの名前（ffi.md §6）──
+    triple0: str = target_triple()
+    so_ext: str = ".so"
+    if strings.contains(triple0, "apple"):
+        so_ext = ".dylib"
+    elif strings.contains(triple0, "windows"):
+        so_ext = ".dll"
+    py_path: str = ""
+    py_libname: str = ""
+    if opt.python:
+        dir: str = "."
+        if opt.output_set:
+            dir = copy(opt.output)
+        io.mkdir(dir)
+        py_libname = "_" + entry.name + so_ext
+        py_path = dir + "/" + entry.name + ".py"
+        opt.output = dir + "/" + py_libname
+    elif opt.shared and not opt.output_set:
+        opt.output = "lib" + entry.name + so_ext
+
     multi: bool = False
     if mods is not None:
         head: rc[module.Module] = mods
@@ -460,7 +507,8 @@ def main() -> int:
     while m is not None:
         mm: rc[module.Module] = m
         name: str = ""
-        if mm.name == entry.name:
+        # ★ ライブラリには @main を出さない（入口は呼ぶ側が持つ。ffi.md §6）
+        if mm.name == entry.name and has_main and not opt.shared:
             name = copy(main_ir)
         ir: str = codegen.codegen(mm, name, triple, opt.no_ovf, opt.drop,
                                   opt.debug, opt.verify_prove)
@@ -486,7 +534,8 @@ def main() -> int:
     # ★ Windows では拡張子が無いと実行できないので、`.` を含まない出力名には
     #   .exe を足します（gcc / clang と同じふるまい。C 版 src/main.c と対）。
     out_path: str = opt.output
-    if strings.contains(triple, "windows") and not strings.contains(out_path, "."):
+    if (strings.contains(triple, "windows") and not opt.shared and
+            not strings.contains(out_path, ".")):
         out_path = out_path + ".exe"
 
     # 注意: 引用は "…" にします。Windows の system() は cmd.exe を通すので、
@@ -508,6 +557,9 @@ def main() -> int:
         gflag: str = ""
         if opt.debug:
             gflag = " -g"
+        # ★ 共有ライブラリは位置に依らないコードにする（Linux では必須）
+        if opt.shared:
+            gflag = gflag + " -fPIC"
         cmds.append(clang_cmd() + " " + opt.opt_level + gflag + " -c \"" +
                     mm2.ll_path + "\" -o \"" + obj + "\"")
         objs.append(obj)
@@ -521,6 +573,8 @@ def main() -> int:
         gflag2: str = ""
         if opt.debug:
             gflag2 = " -g"
+        if opt.shared:
+            gflag2 = gflag2 + " -shared"
         parts.append(clang_cmd() + " " + opt.opt_level + gflag2)
         for ob in objs:
             parts.append(" \"" + ob + "\"")
@@ -577,6 +631,10 @@ def main() -> int:
             mm4: rc[module.Module] = m4
             io.remove(mm4.ll_path)
             m4 = mm4.next
+
+    # ★ Python から呼ぶための .py を隣に置く（ffi.md §6.2）
+    if len(py_path) > 0:
+        io.write_file(py_path, pygen.pygen(mods, py_libname))
     return 0
 
 

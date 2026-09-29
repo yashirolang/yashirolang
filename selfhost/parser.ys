@@ -2676,6 +2676,14 @@ class Parser:
                 cur = f
                 continue
 
+            # ★ メソッドは外へ出せません（設計 ffi.md §7。クラスは段階 3）
+            if t.is_kw("extern"):
+                d: diag.Diag = diag.Diag("メソッドは外へ出せません")
+                d.code = "E-EXPORT-6"
+                d.primary = diag.Label(t, "extern はモジュールの一番外側にだけ書けます")
+                d.hint = "モジュールの一番外側に extern def を書き、その中からクラスを使ってください"
+                diag.fail(d)
+
             self.fail_full(t, "クラスの中に書けるのはフィールドとメソッドだけです",
                            "ここには書けません",
                            "フィールドは「名前: 型」、メソッドは 'def' で始めます:\n" +
@@ -2692,7 +2700,36 @@ class Parser:
     # extern_def ::= "extern" "def" IDENT "(" [ params ] ")" "->" type NEWLINE
     #
     # ★ 新しいノード種別は作らない。body が None——「宣言はあるが定義がない」
+    #
+    # 「extern の行が ':' で終わるか」（＝本体つき。外へ出す関数）。
+    # ★ 引数の型注釈にも ':' があるので、括弧の深さが 0 のところで改行の
+    #   直前を見ます。対になる定義: src/parser.c の extern_has_body
+    def extern_has_body(self) -> bool:
+        depth: int = 0
+        last_colon: bool = False
+        k: int = 1
+        while True:
+            t: rc[token.Token] = self.peek_at(k)
+            if t.kind == token.TK_EOF:
+                return False
+            if depth == 0 and t.kind == token.TK_NEWLINE:
+                return last_colon
+            if t.is_punct("(") or t.is_punct("["):
+                depth = depth + 1
+            if (t.is_punct(")") or t.is_punct("]")) and depth > 0:
+                depth = depth - 1
+            last_colon = t.is_punct(":")
+            k = k + 1
+        return False
+
     def extern_def(mut self) -> rc[ast.Node]:
+        # ★ 本体つきの extern def は「外へ出す関数」です（設計 ffi.md §2）。
+        if self.peek_at(1).is_kw("def") and self.extern_has_body():
+            self.advance()   # "extern"
+            fn: rc[ast.Node] = self.func_def(False)
+            fn.is_export = True
+            return fn
+
         self.advance()   # "extern"
 
         if not self.peek().is_kw("def"):
@@ -2724,11 +2761,13 @@ class Parser:
         n.params = params
         n.type_ref = self.type_ref("戻り型を書いてください（例: -> int）")
 
-        # 注意: 本体は読まない
+        # 注意: 本体は読まない。ここに来る ':' は「1 行に本体を書いた」形
+        #   （本体つきの extern def は行末が ':' なので、extern_has_body が先に拾う）
         if self.peek().is_punct(":"):
             self.fail_hint(self.peek(),
-                           "extern 宣言は本体を持ちません（改行で終わります）",
-                           "extern def に ':' は書けません")
+                           "本体を書くなら ':' の後で改行して字下げしてください" +
+                           "（外へ出す関数になります）。宣言だけなら ':' は要りません",
+                           "extern def の本体は ':' の次の行から書きます")
         self.expect_newline()
 
         return n   # body は None のまま（★ extern の印）

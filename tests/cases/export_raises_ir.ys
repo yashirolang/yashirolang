@@ -1,0 +1,18 @@
+# IR: store %pl.err zeroinitializer, ptr
+# IR: call void @pl_ffi_raised(ptr
+# IR: call void @drop.export_raises_ir.BadInput(ptr
+# IR: ret i64 1
+# IR: ret i64 2
+# raises した外へ出す関数は、エラーのクラス名と message を控えて 1 を返す（ffi.md §5.1）。
+#         ★ エラーオブジェクトは境界で解放する（Python には渡さない）
+#         ★ float を返す raises 関数（失敗時の既定値 0.0。以前は壊れた IR になっていた）
+class BadInput:
+    message: str
+
+    def init(self, message: own str) -> None:
+        self.message = message
+
+extern def ratio(a: float, b: float) -> float raises BadInput:
+    if b == 0.0:
+        raise BadInput("b が 0 です")
+    return a / b

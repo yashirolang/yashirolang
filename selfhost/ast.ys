@@ -483,6 +483,12 @@ def ty_is_range(t: rc[Type] | None) -> bool:
     return tt.kind == TY_INT and len(tt.name) > 0
 
 
+# 外へ出す関数の C のシンボル名（`pkg.mod` の `f` → `pkg_mod_f`。設計 ffi.md §4.1）
+# ★ 対になる定義: src/sema.c の export_symbol
+def export_symbol(mod: str, fn: str) -> str:
+    return strings.replace(copy(mod), ".", "_") + "_" + fn
+
+
 def type_name_list() -> str:
     return "int, float, bool, str, None, list[T], T | None, fn(...) -> T, (A, B)"
 
@@ -768,6 +774,8 @@ class Node:
 
     # 参照先が別のモジュールにあるか
     is_extern: bool
+    # ★ 本体つきの extern def（外へ出す関数。設計 ffi.md）。ND_FUNC に付きます。
+    is_export: bool
     is_global: bool
 
     # sema が解決した記録
@@ -882,6 +890,7 @@ class Node:
         self.ir_name = ""
         self.builtin = ""
         self.is_extern = False
+        self.is_export = False
         self.is_global = False
         self.is_func_ref = False
         self.is_indirect = False
@@ -1140,7 +1149,11 @@ def dump(n: rc[Node] | None, depth: int) -> None:
         dump(n.lhs, depth + 1)
         print(pad + ")")
     elif n.kind == ND_FUNC:
-        print(pad + "(func " + n.name)
+        # ★ 外へ出す関数（ffi.md）だけ印を付けます（既存の比較を壊さないため）
+        if n.is_export:
+            print(pad + "(func " + n.name + " export")
+        else:
+            print(pad + "(func " + n.name)
         dump(n.type_ref, depth + 1)
         # ★ raises 節（無ければ何も出さない）
         r: rc[Node] | None = n.err_types

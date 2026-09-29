@@ -1,0 +1,19 @@
+# IR: define i64 @export_lib_ir_add(i64 %p.a, i64 %p.b, ptr %out)
+# IR: define internal void @export_lib_ir_add.thunk(ptr %ctx)
+# IR: call i64 @pl_ffi_call(ptr @export_lib_ir_add.thunk, ptr %ctx)
+# IR: define i64 @export_lib_ir_greet(ptr %p.name, i64 %p.name.len, ptr %out)
+# IR: call ptr @pl_ffi_str_in(ptr %p.name, i64 %p.name.len)
+# IR: define i64 @export_lib_ir_log(ptr %p.xs, ptr %p.xs.lens, i64 %p.xs.len)
+# IR-NOT: define i32 @main
+# 外へ出す関数（本体つきの extern def。設計 ffi.md）。
+#         ★ main が無くても通る（ライブラリ）。@main の包みは出さない
+#         ★ 入口は C の ABI（int64_t / ポインタと長さ）で、戻り値は状態、結果は %out へ
+#         ★ 戻り値が None なら %out を取らない
+extern def add(a: int, b: int) -> int:
+    return a + b
+
+extern def greet(name: str) -> str:
+    return "hi " + name
+
+extern def log(xs: list[str]) -> None:
+    pass

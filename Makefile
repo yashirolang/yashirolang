@@ -46,6 +46,12 @@ endif
 CLANG ?= clang
 CFLAGS  := -std=c11 -g -O0 -Wall -Wextra -Wno-unused-parameter
 RUNTIME_CFLAGS := -std=c11 -O2 -Wall -Wextra
+# ★ ランタイムは位置に依らないコードで建てます。--shared / --python（設計 ffi.md）で
+#   共有ライブラリに入れるためです（Linux では必須。macOS は元から PIC です）。
+#   注意: 実行ファイルにリンクするときも害はありません。
+ifeq ($(IS_WIN),)
+  RUNTIME_CFLAGS += -fPIC
+endif
 
 # ★ POSIX ではスレッドのリンクに -pthread が要ります。
 ifeq ($(IS_WIN),)
@@ -75,7 +81,7 @@ LANG_NAME := yashirolang
 LANG_EXT  := .ys
 LANG_CC   := yashirolang
 LANG_PM   := ysm
-LANG_VERSION := 0.40.0
+LANG_VERSION := 0.41.0
 LANG_REPO := https://github.com/yashirolang/yashirolang
 CFLAGS  += -DPLC_LANG_NAME='"$(LANG_NAME)"' \
            -DPLC_LANG_EXT='"$(LANG_EXT)"' \
@@ -386,7 +392,13 @@ test: $(TARGET) $(RUNTIME_OBJ) $(PM)
 	@tests/drop_asan.sh
 	@tests/selfhost.sh
 	@tests/pm.sh
+	@tests/python.sh
 	@tests/tls.sh
+
+# Python から呼ぶ試験だけ（設計 docs/design/ffi.md。python3 が無ければ飛ばします）
+.PHONY: python-test
+python-test: $(TARGET) $(RUNTIME_OBJ)
+	@tests/python.sh
 
 # TLS の受け入れテストだけ（自己署名の証明書を作って自分に繋ぎます）。
 #   注意: TLS を組み込んでいないビルドでは飛ばします（失敗ではありません）。

@@ -1,7 +1,9 @@
-# ERROR: extern def に ':' は書けません
-# ERROR: extern 宣言は本体を持ちません（改行で終わります）
-extern def pl_str_len(s: str) -> int:
-    return 0
+# ERROR: extern def の本体は ':' の次の行から書きます
+# ERROR: 宣言だけなら ':' は要りません
+# 1 行に本体を書く形は、宣言としても外へ出す関数としても読めない。
+#         ★ 本体つきの extern def（行末が ':'）は外へ出す関数です（設計 ffi.md。0.41.0）。
+#           0.40 まではその形もここで断っていました
+extern def pl_str_len(s: str) -> int: return 0
 
 def main() -> int:
     return 0

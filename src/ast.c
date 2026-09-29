@@ -354,7 +354,8 @@ static void dump(Node *n, int depth) {
             printf(")\n");
             break;
         case ND_FUNC:
-            printf("(func %s\n", n->name);
+            // ★ 外へ出す関数（ffi.md）だけ印を付けます（既存の比較を壊さないため）
+            printf("(func %s%s\n", n->name, n->is_export ? " export" : "");
             dump(n->type_ref, depth + 1);
             // ★ raises 節（無ければ何も出さない。既存の AST 比較を壊さないため）
             for (Node *r = n->raises; r; r = r->next) {

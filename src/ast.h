@@ -487,6 +487,9 @@ struct Node {
     // 参照先が別のモジュールにあるか（codegen が declare / external を出す判断）
     bool is_extern;
 
+    // ★ 本体つきの extern def（外へ出す関数。設計 ffi.md）。ND_FUNC に付きます。
+    bool is_export;
+
     // ND_FUNC の仮引数リスト / ND_CALL の実引数リスト（next で連結）。
     Node *params;
     Node *args;

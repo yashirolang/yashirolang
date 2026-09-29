@@ -122,6 +122,10 @@ default    ::= [ "-" | "+" ] ( INT | FLOAT )
 
 (* ── extern 宣言 ── *)
 extern_def ::= "extern" "def" IDENT "(" [ param_list ] ")" "->" type NEWLINE
+             | "extern" func_def                      (* 本体つき＝外へ出す関数。ffi.md *)
+
+(* 注意: どちらかは「extern の行が ':' で終わるか」で決めます（括弧の深さ 0 の
+   改行の直前を見る）。引数の型注釈にも ':' があるので、1 行を先読みします。 *)
 
 (* ── クラス定義 ── *)
 class_def  ::= "class" IDENT ":" NEWLINE INDENT class_body DEDENT

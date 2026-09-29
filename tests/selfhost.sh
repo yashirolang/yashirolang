@@ -273,6 +273,11 @@ for f in "${FILES[@]}"; do
     if grep -q '^; ── module:' "$TMP/c.ll"; then
         continue
     fi
+    # ★ main の無いライブラリ（外へ出す関数だけのファイル。設計 ffi.md）は
+    #   実行ファイルにできないので、ここまで（IR の一致）で合格にします。
+    if ! grep -q '^define i32 @main' "$TMP/c.ll"; then
+        continue
+    fi
 
     # 注意: **`--deny-*` のケースは走らせません**（IR までは比べます）。
     #

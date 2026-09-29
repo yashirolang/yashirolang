@@ -1,0 +1,8 @@
+# ERROR: error[E-EXPORT-1]: 'P' は外へ出す関数の引数に使えません
+# ERROR: 使えるのは int / float / bool / str と、その list です
+# 境界に出せるのは「写して意味が変わらない型」だけ（ffi.md §3）
+class P:
+    v: int
+
+extern def f(p: P) -> int:
+    return 1

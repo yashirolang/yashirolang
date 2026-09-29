@@ -1,0 +1,6 @@
+# ERROR: error[E-EXPORT-5]: 外へ出す関数 'mean' が 2 つあります
+# Python から見ると 1 つの名前空間なので、関数名が重なると断る（ffi.md §4.1）
+import mstats
+
+extern def mean(xs: list[float]) -> float:
+    return mstats.mean(xs)

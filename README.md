@@ -37,6 +37,7 @@ yashirolang fizzbuzz.ys -o fizzbuzz && ./fizzbuzz
 | **数もあふれません** | 整数の桁あふれ・0 除算・範囲外アクセスを常に検査して停止します |
 | **範囲型と契約** | `type Percent = int range(0, 100)`、`requires` / `ensures`（Ada の部分型・Pre/Post） |
 | **データ競合も型で止める** | `spawn` / `join` / `mutex[T]`。**注釈は 1 つも増えません** |
+| **Python のライブラリが書ける** | `extern def` に本体を書いて `--python` で建てると `import` できます。panic も Python の例外になり、Python ごと落ちません（[docs/design/ffi.md](docs/design/ffi.md)） |
 | **必要なのは clang だけ** | LLVM IR のテキストを出力し、アセンブルとリンクは clang に任せます |
 | **ベアメタルでも動く** | RISC-V（QEMU virt）でカーネルが動きます。`unsafe:` と生ポインタあり |
 | 拡張子 / コマンド | `.ys` / `yashirolang`（コンパイラ）・`ysm`（パッケージマネージャ） |

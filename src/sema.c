@@ -5855,6 +5855,52 @@ static void check_extern_type(Type *t, Token *tok, const char *what) {
 }
 
 
+// 境界に出せる型か（設計 ffi.md §3）。
+//
+// ★ 出せるのは「写して意味が変わらない型」だけです。範囲型は int の形でも
+//   断ります（外から来た値に範囲の検査を挟む口が、段階 1 には無いため）。
+static bool export_scalar_ok(Type *t) {
+    if (ty_is_range(t)) return false;
+    return t->kind == TY_INT || t->kind == TY_FLOAT || t->kind == TY_BOOL ||
+           t->kind == TY_STR;
+}
+
+static bool export_type_ok(Type *t, bool is_ret) {
+    if (is_ret && t->kind == TY_NONE) return true;
+    if (t->kind == TY_LIST) return t->elem && export_scalar_ok(t->elem);
+    return export_scalar_ok(t);
+}
+
+static void check_export_type(Type *t, Token *tok, const char *what) {
+    Diag d = {0};
+    d.code = "E-EXPORT-1";
+    d.message = diag_fmt("'%s' は外へ出す関数の%sに使えません", type_name(t), what);
+    d.primary.tok = tok;
+    d.primary.label = "この型は境界を越えられません";
+    d.hint = "使えるのは int / float / bool / str と、その list です"
+             "（クラスなどは外へ出さず、この関数の中で使ってください）";
+    diag_fail(&d);
+}
+
+static void check_export_sig(Node *n, FuncSig *f) {
+    if (!export_type_ok(f->ret, true)) check_export_type(f->ret, n->tok, "戻り値");
+    int i = 0;
+    for (Node *pm = n->params; pm; pm = pm->next, i++) {
+        if (!export_type_ok(f->params[i], false))
+            check_export_type(f->params[i], pm->tok, "引数");
+        // ★ 境界では写すので、書き換えても外には戻りません（ffi.md §3.1）
+        if (pm->mode == PM_MUT) {
+            Diag d = {0};
+            d.code = "E-EXPORT-2";
+            d.message = diag_fmt("外へ出す関数の引数 '%s' は mut にできません", pm->name);
+            d.primary.tok = pm->tok;
+            d.primary.label = "外から来た値は写しなので、書き換えても呼んだ側には戻りません";
+            d.hint = "書き換えた結果は戻り値で返してください";
+            diag_fail(&d);
+        }
+    }
+}
+
 // raises 節を解決する。
 //
 // ★ エラー型は「ふつうのクラス」です（仕様 §8.3。継承はありません）。
@@ -5880,7 +5926,9 @@ static void resolve_raises(Sema *s, Node *fn, FuncSig *f) {
             diag_fail(&d);
         }
         f->raises[i] = t->cls;
-        err_tag_of(s, t->cls);  // ★ ここで ID を確定させる
+        // ★ ここで ID を確定させる。外へ出す関数の入口がエラーを見分けるために、
+        //   節のノードにも書き写します（ffi.md §5.1）。
+        r->err_tag = err_tag_of(s, t->cls);
         r->type = t;
     }
 }
@@ -5918,6 +5966,15 @@ static void declare_func(Sema *s, Node *n) {
     //   T が何なのかまだ決まっていないためです。名前だけ登録して、
     //   呼ばれたときに実引数から決めて実体を作ります。
     if (n->targs) {
+        if (n->is_export) {
+            Diag d = {0};
+            d.code = "E-EXPORT-1";
+            d.message = "型引数を持つ関数は外へ出せません";
+            d.primary.tok = n->tok;
+            d.primary.label = "外から見ると、型が決まりません";
+            d.hint = "型を決めた関数を extern def で書き、その中からこの関数を呼んでください";
+            diag_fail(&d);
+        }
         FuncSig *t = xmalloc(sizeof(FuncSig));
         t->name = n->name;
         t->ir_name = n->name;
@@ -5969,6 +6026,8 @@ static void declare_func(Sema *s, Node *n) {
         for (Node *pm = n->params; pm; pm = pm->next)
             check_extern_type(pm->type, pm->tok, "引数");
     }
+
+    if (n->is_export) check_export_sig(n, f);
 
     resolve_raises(s, n, f);
     if (is_extern_decl && f->nraises)
@@ -6448,9 +6507,59 @@ static void check_func(Sema *s, Node *n) {
     s->cur_func = NULL;
 }
 
+// 外へ出す名前（C のシンボル）を作る。`pkg.mod` の `f` なら `pkg_mod_f`。
+// ★ 対になる定義: codegen が同じ規則で名前を付けます（export_symbol）。
+char *export_symbol(const char *mod, const char *fn) {
+    StrBuf b;
+    sb_init(&b);
+    for (const char *c = mod; *c; c++) sb_printf(&b, "%c", *c == '.' ? '_' : *c);
+    sb_printf(&b, "_%s", fn);
+    return sb_str(&b);
+}
+
+// 外へ出す名前が重ならないか（E-EXPORT-5）。
+//
+// ★ 見るのは 2 つです。C のシンボル（`a_b.c` と `a.b_c` は同じ `a_b_c` になる）と、
+//   Python から見た名前（関数名そのもの。生成する .py は 1 つの名前空間です）。
+static void check_export_names(Module *mods) {
+    for (Module *m = mods; m; m = m->next) {
+        for (Node *d = m->ast->body; d; d = d->next) {
+            if (d->kind != ND_FUNC || !d->is_export) continue;
+            char *sym = export_symbol(m->name, d->name);
+            for (Module *m2 = mods; m2; m2 = m2->next) {
+                for (Node *e = m2->ast->body; e; e = e->next) {
+                    if (e == d) goto next_d;  // 自分より前だけ比べる（1 回だけ報告する）
+                    if (e->kind != ND_FUNC || !e->is_export) continue;
+                    bool same_sym = strcmp(sym, export_symbol(m2->name, e->name)) == 0;
+                    if (!same_sym && strcmp(d->name, e->name) != 0) continue;
+                    Diag g = {0};
+                    g.code = "E-EXPORT-5";
+                    g.message = same_sym
+                        ? diag_fmt("外へ出す名前 '%s' が重なっています", sym)
+                        : diag_fmt("外へ出す関数 '%s' が 2 つあります", d->name);
+                    g.primary.tok = d->tok;
+                    g.primary.label = "こちらと";
+                    g.related.tok = e->tok;
+                    g.related.label = "こちらが同じ名前になります";
+                    g.hint = "どちらかの名前を変えてください（Python からは関数名で、"
+                             "C からは「モジュール名_関数名」で呼びます）";
+                    diag_fail(&g);
+                }
+            }
+        next_d:;
+        }
+    }
+}
+
 // main の検査（言語仕様 6.1）
 static void check_main(Sema *s, Node *ast) {
     FuncSig *m = lookup_func(s, "main");
+    // ★ 外へ出す関数があれば、それはライブラリです（設計 ffi.md §6）。
+    //   入口は外から呼ぶ側が持つので、main は要りません。
+    if (!m) {
+        for (Node *d = ast->body; d; d = d->next)
+            if (d->kind == ND_FUNC && d->is_export) return;
+    }
     if (!m) {
         Diag d = {0};
         d.message = "main 関数がありません";
@@ -6743,4 +6852,6 @@ void sema_program(Module *mods, Module *entry) {
     // main は入口モジュールにだけ要る（他のモジュールにあっても構わない）
     enter_module(&s, entry->syms);
     check_main(&s, entry->ast);
+
+    check_export_names(mods);
 }

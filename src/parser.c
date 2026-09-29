@@ -2979,6 +2979,17 @@ static Node *class_def(Parser *p) {
             continue;
         }
 
+        // ★ メソッドは外へ出せません（設計 ffi.md §7。クラスは段階 3）
+        if (tok_is_kw(t, "extern")) {
+            Diag d = {0};
+            d.code = "E-EXPORT-6";
+            d.message = "メソッドは外へ出せません";
+            d.primary.tok = t;
+            d.primary.label = "extern はモジュールの一番外側にだけ書けます";
+            d.hint = "モジュールの一番外側に extern def を書き、その中からクラスを使ってください";
+            diag_fail(&d);
+        }
+
         Diag d = {0};
         d.message = "クラスの中に書けるのはフィールドとメソッドだけです";
         d.primary.tok = t;
@@ -3005,7 +3016,34 @@ static Node *class_def(Parser *p) {
 //
 // ★ 新しいノード種別は作りません。ND_FUNC の body が NULL——
 //   「宣言はあるが定義がない」という意味そのものです。
+// 「extern の行が ':' で終わるか」（＝本体つき。外へ出す関数）。
+//
+// ★ 1 行を先読みして決めます。引数の型注釈にも ':' があるので、
+//   括弧の深さが 0 のところで改行の直前を見ます。raises 節は ':' の
+//   手前に来るので邪魔になりません。
+static bool extern_has_body(Parser *p) {
+    int depth = 0;
+    Token *last = NULL;
+    for (int k = 1;; k++) {
+        Token *t = peek_at(p, k);
+        if (t->kind == TK_EOF) return false;
+        if (depth == 0 && t->kind == TK_NEWLINE) return last && tok_is(last, ":");
+        if (tok_is(t, "(") || tok_is(t, "[")) depth++;
+        if ((tok_is(t, ")") || tok_is(t, "]")) && depth > 0) depth--;
+        last = t;
+    }
+}
+
 static Node *extern_def(Parser *p) {
+    // ★ 本体つきの extern def は「外へ出す関数」です（設計 ffi.md §2）。
+    //   中身はふつうの def と同じなので、同じ読み手に任せます。
+    if (tok_is_kw(peek_at(p, 1), "def") && extern_has_body(p)) {
+        advance(p);  // "extern"
+        Node *fn = func_def(p, false);
+        fn->is_export = true;
+        return fn;
+    }
+
     advance(p);  // "extern"
 
     if (!tok_is_kw(peek(p), "def"))
@@ -3046,9 +3084,12 @@ static Node *extern_def(Parser *p) {
     n->type_ref = type_ref(p, "戻り型を書いてください（例: -> int）");
 
     // 注意: 本体は読みません。':' を書いていたらここで気づけるようにします。
+    //   ここに来る ':' は「1 行に本体を書いた」形です（本体つきの extern def は
+    //   行末が ':' なので、上の extern_has_body が先に拾います）。
     if (tok_is(peek(p), ":"))
-        error_at_hint(peek(p), "extern 宣言は本体を持ちません（改行で終わります）",
-                      "extern def に ':' は書けません");
+        error_at_hint(peek(p), "本体を書くなら ':' の後で改行して字下げしてください"
+                               "（外へ出す関数になります）。宣言だけなら ':' は要りません",
+                      "extern def の本体は ':' の次の行から書きます");
     expect_newline(p);
 
     n->body = NULL;  // ★ extern の印

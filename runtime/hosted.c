@@ -82,6 +82,36 @@ typedef struct PlList PlList;
 PlList *pl_list_new(void);
 void pl_list_push_ptr(PlList *l, void *v);
 
+#if defined(_WIN32)
+#define PL_TLS __declspec(thread)
+#else
+#define PL_TLS _Thread_local
+#endif
+
+// ── 外へ出す関数の入口（設計 ffi.md §5）────────────────────
+//
+// ★ 入口（pl_ffi_call）にいる間だけ、panic と exit を**入口へ戻す**ために使います。
+//   スレッドごとに持つのは、Python の複数のスレッドが同時に呼べるからです。
+#include <setjmp.h>
+static PL_TLS jmp_buf *g_pl_ffi_guard;
+static PL_TLS char *g_pl_ffi_kind;   // raises したエラーのクラス名（panic なら ""）
+static PL_TLS char *g_pl_ffi_msg;    // 文面
+
+static char *pl_ffi_dup(const char *s, long long n) {
+    char *p = (char *)malloc((size_t)n + 1);
+    if (!p) return NULL;
+    memcpy(p, s, (size_t)n);
+    p[n] = '\0';
+    return p;
+}
+
+static void pl_ffi_set(const char *kind, const char *msg) {
+    free(g_pl_ffi_kind);
+    free(g_pl_ffi_msg);
+    g_pl_ffi_kind = pl_ffi_dup(kind, (long long)strlen(kind));
+    g_pl_ffi_msg = pl_ffi_dup(msg, (long long)strlen(msg));
+}
+
 // ── ① フックの実装（libc で）────────────────────────────────
 
 void *pl_hook_alloc(long long size) { return calloc(1, (size_t)size); }
@@ -101,6 +131,12 @@ void pl_hook_write(const char *s, long long len) {
 }
 
 void pl_hook_panic(const char *msg) {
+    // ★ 外へ出す関数の中なら、プロセスを終わらせずに入口へ戻ります（ffi.md §5.2）。
+    //   注意: 途中の後始末（drop）は走りません。この呼び出しで確保したものは漏れます。
+    if (g_pl_ffi_guard) {
+        pl_ffi_set("", msg);
+        longjmp(*g_pl_ffi_guard, 1);
+    }
     fprintf(stderr, "runtime error: %s\n", msg);
     exit(1);
 }
@@ -121,7 +157,17 @@ void pl_eprint(const char *s) {
     fputs(s, stderr);
 }
 
-_Noreturn void pl_exit(long long code) { exit((int)code); }
+_Noreturn void pl_exit(long long code) {
+    // ★ ライブラリの中から呼ぶと、呼んだ側（Python）ごと終わってしまいます。
+    //   入口にいる間は panic と同じく入口へ戻します（ffi.md §5.4）。
+    if (g_pl_ffi_guard) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "exit(%lld) が呼ばれました", code);
+        pl_ffi_set("", buf);
+        longjmp(*g_pl_ffi_guard, 1);
+    }
+    exit((int)code);
+}
 
 char *pl_read_file(const char *path) {
     FILE *fp = fopen(path, "rb");
@@ -625,12 +671,6 @@ struct PlScope {
     long long   cap;
     PlScope    *outer;
 };
-
-#if defined(_WIN32)
-#define PL_TLS __declspec(thread)
-#else
-#define PL_TLS _Thread_local
-#endif
 
 static PL_TLS PlScope *g_pl_scope;
 
@@ -1329,3 +1369,82 @@ void pl_sock_close(long long fd) {
     if (fd < 0) return;
     closesocket((int)fd);
 }
+
+
+// ── 外へ出す関数の境界（設計 ffi.md §4）────────────────────
+//
+// ★ codegen が外へ出す関数ごとに「入口」を作り、その中から pl_ffi_call を呼びます。
+//   ここにあるのは、どの関数にも共通する部分だけです。
+//
+// 注意: ここの名前は**外から呼ばれる約束**です（Python の生成コードが使います）。
+//   変えるときは codegen と生成コードの両方を直してください。
+
+long long pl_list_len(PlList *l);
+void *pl_list_data(PlList *l);
+void pl_list_push_i64(PlList *l, long long v);
+void pl_drop_str(char *s);
+void pl_drop_list(PlList *l, void (*elem_drop)(void *));
+
+// 本体（thunk）を呼ぶ。0 = 戻ってきた / 2 = panic（文面は pl_ffi_error_message）
+//
+// ★ setjmp を置くのは C の中だけです。生成する IR には returns_twice の
+//   関数を持ち込みません（規約 R10: 制御の難しいところは C に置く）。
+long long pl_ffi_call(void (*thunk)(void *), void *ctx) {
+    jmp_buf jb;
+    jmp_buf *volatile outer = g_pl_ffi_guard;
+    PlScope *volatile scope = g_pl_scope;
+    if (setjmp(jb)) {
+        g_pl_ffi_guard = outer;
+        g_pl_scope = scope;
+        return 2;
+    }
+    g_pl_ffi_guard = &jb;
+    thunk(ctx);
+    g_pl_ffi_guard = outer;
+    return 0;
+}
+
+// raises したエラーを控える（codegen の入口が呼ぶ）。msg は str か NULL。
+void pl_ffi_raised(const char *kind, const char *msg) {
+    pl_ffi_set(kind, msg ? msg : kind);
+}
+
+const char *pl_ffi_error_kind(void) { return g_pl_ffi_kind ? g_pl_ffi_kind : ""; }
+const char *pl_ffi_error_message(void) { return g_pl_ffi_msg ? g_pl_ffi_msg : ""; }
+
+// ── 値の出し入れ ──
+//
+// ★ 入れるときは**必ず写します**（ffi.md §3.1）。外の値を借りたまま中で使いません。
+char *pl_ffi_str_in(const char *p, long long n) {
+    char *s = pl_str_alloc(n);
+    memcpy(s, p, (size_t)n);
+    s[n] = '\0';
+    return s;
+}
+
+long long pl_ffi_str_len(const char *s) { return pl_str_len(s); }
+const char *pl_ffi_str_data(const char *s) { return s; }
+void pl_ffi_free_str(char *s) { pl_drop_str(s); }
+
+// int / float / bool の list。どれも 8 バイトずつ並んでいます（float は double の並び）。
+PlList *pl_ffi_list_in(const long long *p, long long n) {
+    PlList *l = pl_list_new();
+    for (long long i = 0; i < n; i++) pl_list_push_i64(l, p[i]);
+    return l;
+}
+
+PlList *pl_ffi_list_str_in(const char *const *ps, const long long *ns, long long n) {
+    PlList *l = pl_list_new();
+    for (long long i = 0; i < n; i++) pl_list_push_ptr(l, pl_ffi_str_in(ps[i], ns[i]));
+    return l;
+}
+
+long long pl_ffi_list_len(PlList *l) { return pl_list_len(l); }
+void *pl_ffi_list_data(PlList *l) { return pl_list_data(l); }
+const char *pl_ffi_list_str_at(PlList *l, long long i) {
+    return ((const char *const *)pl_list_data(l))[i];
+}
+
+static void pl_ffi_drop_str_elem(void *p) { pl_drop_str((char *)p); }
+void pl_ffi_free_list(PlList *l) { pl_drop_list(l, NULL); }
+void pl_ffi_free_list_str(PlList *l) { pl_drop_list(l, pl_ffi_drop_str_elem); }

@@ -1,0 +1,75 @@
+# Python から呼ぶ試験の相手（tests/python.sh。設計 ffi.md）
+class EmptyError:
+    message: str
+
+    def init(self, message: own str) -> None:
+        self.message = message
+
+class Plain:
+    code: int
+
+    def init(self, code: int) -> None:
+        self.code = code
+
+extern def add(a: int, b: int) -> int:
+    return a + b
+
+extern def at(xs: list[int], i: int) -> int:
+    return xs[i]
+
+extern def mean(xs: list[float]) -> float raises EmptyError:
+    if len(xs) == 0:
+        raise EmptyError("空の list の平均は決まりません")
+    s: float = 0.0
+    for x in xs:
+        s = s + x
+    return s / float(len(xs))
+
+extern def check(n: int) -> int raises EmptyError | Plain:
+    if n < 0:
+        raise Plain(n)
+    if n == 0:
+        raise EmptyError("0 です")
+    return n
+
+extern def half(n: int) -> int:
+    requires n % 2 == 0
+    return n // 2
+
+extern def bye(code: int) -> None:
+    exit(code)
+
+extern def greet(name: str, times: int = 1, sep: str = "! ") -> str:
+    return (name + sep) * times
+
+extern def flip(xs: list[bool]) -> list[bool]:
+    out: list[bool] = []
+    for x in xs:
+        out.append(not x)
+    return out
+
+extern def twice(xs: list[str]) -> list[str]:
+    out: list[str] = []
+    for s in xs:
+        out.append(s + s)
+    return out
+
+extern def squares(n: int) -> list[float]:
+    out: list[float] = []
+    i: int = 0
+    while i < n:
+        out.append(float(i) * float(i))
+        i = i + 1
+    return out
+
+extern def total(xs: list[int]) -> int:
+    s: int = 0
+    for x in xs:
+        s = s + x
+    return s
+
+extern def is_even(n: int) -> bool:
+    return n % 2 == 0
+
+extern def scale(x: float = -1.5) -> float:
+    return x * 2.0

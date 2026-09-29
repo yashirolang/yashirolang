@@ -2552,7 +2552,9 @@ class Sema:
                                 "エラーはふつうのクラスとして定義してください")
             else:
                 f.raises_cls.append(unwrap_class(t.cls))
-                self.err_tag_of(unwrap_class(t.cls))
+                # ★ 外へ出す関数の入口がエラーを見分けるために、節のノードにも
+                #   書き写します（ffi.md §5.1）。対になる定義: src/sema.c
+                r.err_tag = self.err_tag_of(unwrap_class(t.cls))
             r.type = t
             r = r.next
 
@@ -5301,6 +5303,50 @@ class Sema:
                                   unwrap_tok(irn2.tok))
             ir2 = irn2.next
 
+    # 境界に出せる型か（設計 ffi.md §3）。対になる定義: src/sema.c の export_type_ok
+    def export_scalar_ok(self, t: rc[ast.Type]) -> bool:
+        if ast.ty_is_range(t):
+            return False
+        return (t.kind == ast.TY_INT or t.kind == ast.TY_FLOAT or
+                t.kind == ast.TY_BOOL or t.kind == ast.TY_STR)
+
+    def export_type_ok(self, t: rc[ast.Type], is_ret: bool) -> bool:
+        if is_ret and t.kind == ast.TY_NONE:
+            return True
+        if t.kind == ast.TY_LIST:
+            el: rc[ast.Type] | None = t.elem
+            if el is None:
+                return False
+            return self.export_scalar_ok(unwrap_type(el))
+        return self.export_scalar_ok(t)
+
+    def check_export_type(self, t: rc[ast.Type], tok: rc[token.Token] | None,
+                          what: str) -> None:
+        if self.export_type_ok(t, what == "戻り値"):
+            return
+        diag.error_code_full(unwrap_tok(tok), "E-EXPORT-1",
+                             "'" + ast.type_name(t) + "' は外へ出す関数の" + what +
+                             "に使えません",
+                             "この型は境界を越えられません", None, "",
+                             "使えるのは int / float / bool / str と、その list です" +
+                             "（クラスなどは外へ出さず、この関数の中で使ってください）")
+
+    def check_export_sig(self, n: rc[ast.Node], f: rc[types.FuncSig]) -> None:
+        self.check_export_type(unwrap_type(f.ret), n.tok, "戻り値")
+        i: int = 0
+        pm: rc[ast.Node] | None = n.params
+        while pm is not None:
+            p: rc[ast.Node] = pm
+            self.check_export_type(f.params[i], p.tok, "引数")
+            # ★ 境界では写すので、書き換えても外には戻りません（ffi.md §3.1）
+            if p.mode == ast.PM_MUT:
+                diag.error_code_full(unwrap_tok(p.tok), "E-EXPORT-2",
+                                     "外へ出す関数の引数 '" + p.name + "' は mut にできません",
+                                     "外から来た値は写しなので、書き換えても呼んだ側には戻りません",
+                                     None, "", "書き換えた結果は戻り値で返してください")
+            i = i + 1
+            pm = p.next
+
     # extern の引数と戻り値に使える型か
     def check_extern_type(self, t: rc[ast.Type], tok: rc[token.Token] | None,
                           what: str) -> None:
@@ -5750,6 +5796,12 @@ class Sema:
         #   T が何なのかまだ決まっていない。名前だけ登録して、呼ばれたときに
         #   実引数から決めて実体を作る。
         if n.targs is not None:
+            if n.is_export:
+                diag.error_code_full(unwrap_tok(n.tok), "E-EXPORT-1",
+                                     "型引数を持つ関数は外へ出せません",
+                                     "外から見ると、型が決まりません", None, "",
+                                     "型を決めた関数を extern def で書き、" +
+                                     "その中からこの関数を呼んでください")
             t0: rc[types.FuncSig] = rc(types.FuncSig(n.name, n.tok))
             t0.ir_name = copy(n.name)
             t0.owner = self.cur_syms()
@@ -5793,6 +5845,9 @@ class Sema:
                 p2: rc[ast.Node] = pm2
                 self.check_extern_type(unwrap_type(p2.type), p2.tok, "引数")
                 pm2 = p2.next
+
+        if n.is_export:
+            self.check_export_sig(n, f)
 
         self.resolve_raises(n, f)
         if is_extern_decl and len(f.raises_cls) > 0:
@@ -5923,6 +5978,14 @@ class Sema:
     # main の検査（言語仕様 6.1）
     def check_main(self, root: rc[ast.Node]) -> None:
         m: rc[types.FuncSig] | None = self.lookup_func("main")
+        # ★ 外へ出す関数があれば、それはライブラリです（設計 ffi.md §6）
+        if m is None:
+            d: rc[ast.Node] | None = root.body
+            while d is not None:
+                dn: rc[ast.Node] = d
+                if dn.kind == ast.ND_FUNC and dn.is_export:
+                    return
+                d = dn.next
         if m is None:
             diag.error_full(unwrap_tok(root.tok), "main 関数がありません",
                             "このファイルには入口がありません", None, "",
@@ -6218,6 +6281,54 @@ def sema_program(mods: rc[module.Module] | None, entry: rc[module.Module] | None
     if entry is not None:
         s.enter_module(s.syms_by_name(entry.name))
         s.check_main(unwrap_node(entry.ast))
+
+    check_export_names(mods)
+
+
+# 外へ出す名前が重ならないか（E-EXPORT-5）。対になる定義: src/sema.c
+def check_export_names(mods: rc[module.Module] | None) -> None:
+    m: rc[module.Module] | None = mods
+    while m is not None:
+        mm: rc[module.Module] = m
+        d: rc[ast.Node] | None = unwrap_node(mm.ast).body
+        while d is not None:
+            dn: rc[ast.Node] = d
+            if dn.kind == ast.ND_FUNC and dn.is_export:
+                check_export_one(mods, mm, dn)
+            d = dn.next
+        m = mm.next
+
+# dn を、それより前に出てくる外へ出す関数と比べる
+def check_export_one(mods: rc[module.Module] | None, dm: rc[module.Module],
+                     dn: rc[ast.Node]) -> None:
+    sym: str = ast.export_symbol(dm.name, dn.name)
+    m2: rc[module.Module] | None = mods
+    while m2 is not None:
+        mm2: rc[module.Module] = m2
+        e: rc[ast.Node] | None = unwrap_node(mm2.ast).body
+        while e is not None:
+            en: rc[ast.Node] = e
+            if en.kind == ast.ND_FUNC and same_node_tok(en, dn):
+                return      # 自分より前だけ比べる（1 回だけ報告する）
+            if en.kind == ast.ND_FUNC and en.is_export:
+                same_sym: bool = sym == ast.export_symbol(mm2.name, en.name)
+                if same_sym or dn.name == en.name:
+                    msg: str = "外へ出す関数 '" + dn.name + "' が 2 つあります"
+                    if same_sym:
+                        msg = "外へ出す名前 '" + sym + "' が重なっています"
+                    diag.error_code_full(unwrap_tok(dn.tok), "E-EXPORT-5", msg,
+                                         "こちらと", en.tok,
+                                         "こちらが同じ名前になります",
+                                         "どちらかの名前を変えてください（Python からは関数名で、" +
+                                         "C からは「モジュール名_関数名」で呼びます）")
+            e = en.next
+        m2 = mm2.next
+
+# 同じ宣言か（位置で見る。C 版はポインタ比較）
+def same_node_tok(a: rc[ast.Node], b: rc[ast.Node]) -> bool:
+    at: rc[token.Token] = unwrap_tok(a.tok)
+    bt: rc[token.Token] = unwrap_tok(b.tok)
+    return at.line == bt.line and at.col == bt.col and at.src.file == bt.src.file
 
 
 # ── 小道具 ─────────────────────────────────────────────────

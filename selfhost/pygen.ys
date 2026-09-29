@@ -1,0 +1,413 @@
+# pygen — 外へ出す関数を Python から呼ぶための .py を作る（設計 ffi.md §6）
+#
+# ★ 作るのは ctypes だけを使う素の Python です（Python の C API は使いません）。
+# ★ 対になる定義: src/pygen.c（**2 つの実装が 1 バイトも違わない .py を出します**）
+#   注意: 下の prelude は src/pygen.c の PY_PRELUDE を 1 行ずつ写したものです。
+#     片方を直したら、もう片方も同じに直してください。
+import strings
+import ast
+import module
+import langinfo
+
+
+# 16 進 2 桁（小文字）
+def hex2(b: int) -> str:
+    digits: str = "0123456789abcdef"
+    return strings.substr(digits, b // 16, 1) + strings.substr(digits, b % 16, 1)
+
+
+# Python の文字列リテラル。**必ず ASCII だけで書く**（どのバイトも \xNN で逃がす）
+def py_str_lit(s: str) -> str:
+    parts: list[str] = ["b\""]
+    i: int = 0
+    while i < len(s):
+        c: int = strings.byte_at(s, i)
+        if c >= 32 and c < 127 and c != 34 and c != 92:
+            parts.append(strings.substr(s, i, 1))
+        else:
+            parts.append("\\x" + hex2(c))
+        i = i + 1
+    parts.append("\".decode(\"utf-8\")")
+    return strings.join(parts, "")
+
+
+# 既定値を Python の式にする（リテラルだけ。A-38 がそう縛っている）
+def py_default(d: rc[ast.Node]) -> str:
+    if d.kind == ast.ND_UNARY:
+        return "-" + py_default(node_of(d.lhs))
+    if d.kind == ast.ND_INT:
+        return str(d.ival)
+    if d.kind == ast.ND_FLOAT:
+        return copy(d.sval)
+    if d.kind == ast.ND_BOOL:
+        if d.ival != 0:
+            return "True"
+        return "False"
+    if d.kind == ast.ND_STR:
+        return py_str_lit(d.sval)
+    return "None"
+
+
+def elem_kind(t: rc[ast.Type]) -> int:
+    e: rc[ast.Type] | None = t.elem
+    if e is None:
+        return ast.TY_NONE
+    return e.kind
+
+
+def py_conv(t: rc[ast.Type]) -> str:
+    if t.kind == ast.TY_INT:
+        return "_int"
+    if t.kind == ast.TY_FLOAT:
+        return "_float"
+    if t.kind == ast.TY_BOOL:
+        return "_bool"
+    if t.kind == ast.TY_STR:
+        return "_str"
+    k: int = elem_kind(t)
+    if k == ast.TY_INT:
+        return "_list_int"
+    if k == ast.TY_FLOAT:
+        return "_list_float"
+    if k == ast.TY_BOOL:
+        return "_list_bool"
+    return "_list_str"
+
+
+def py_argtypes(t: rc[ast.Type]) -> str:
+    if t.kind == ast.TY_INT or t.kind == ast.TY_BOOL:
+        return "_c.c_int64, "
+    if t.kind == ast.TY_FLOAT:
+        return "_c.c_double, "
+    if t.kind == ast.TY_STR:
+        return "_c.c_char_p, _c.c_int64, "
+    k: int = elem_kind(t)
+    if k == ast.TY_FLOAT:
+        return "_c.POINTER(_c.c_double), _c.c_int64, "
+    if k == ast.TY_STR:
+        return "_c.POINTER(_c.c_char_p), _c.POINTER(_c.c_int64), _c.c_int64, "
+    return "_c.POINTER(_c.c_int64), _c.c_int64, "
+
+
+def py_out_type(t: rc[ast.Type]) -> str:
+    if t.kind == ast.TY_FLOAT:
+        return "_c.c_double"
+    if t.kind == ast.TY_STR or t.kind == ast.TY_LIST:
+        return "_c.c_void_p"
+    return "_c.c_int64"
+
+
+def py_take(t: rc[ast.Type]) -> str:
+    if t.kind == ast.TY_INT or t.kind == ast.TY_FLOAT:
+        return "_out.value"
+    if t.kind == ast.TY_BOOL:
+        return "_out.value != 0"
+    if t.kind == ast.TY_STR:
+        return "_take_str(_out.value)"
+    k: int = elem_kind(t)
+    if k == ast.TY_INT:
+        return "_take_list(_out.value, _c.c_int64, int)"
+    if k == ast.TY_FLOAT:
+        return "_take_list(_out.value, _c.c_double, float)"
+    if k == ast.TY_BOOL:
+        return "_take_list(_out.value, _c.c_int64, bool)"
+    return "_take_list_str(_out.value)"
+
+
+# ── 共通の部分（どのライブラリでも同じ。src/pygen.c の PY_PRELUDE と同じ）──
+def prelude() -> str:
+    parts: list[str] = []
+    parts.append("import ctypes as _c\n")
+    parts.append("import os as _os\n")
+    parts.append("import sys as _sys\n")
+    parts.append("\n")
+    parts.append("_here = _os.path.dirname(_os.path.abspath(__file__))\n")
+    parts.append("if _sys.platform == \"win32\":\n")
+    parts.append("    _os.add_dll_directory(_here)\n")
+    parts.append("_lib = _c.CDLL(_os.path.join(_here, _LIBNAME))\n")
+    parts.append("\n")
+    parts.append("\n")
+    parts.append("class Error(Exception):\n")
+    parts.append("    \"\"\"raises に書かれたエラーの共通の親\"\"\"\n")
+    parts.append("\n")
+    parts.append("\n")
+    parts.append("class Panic(Exception):\n")
+    parts.append("    \"\"\"panic（範囲外・桁あふれ・0 除算・契約違反など。プログラムの誤りです）\"\"\"\n")
+    parts.append("\n")
+    parts.append("\n")
+    parts.append("def _sig(f, res, args):\n")
+    parts.append("    f.restype = res\n")
+    parts.append("    f.argtypes = args\n")
+    parts.append("    return f\n")
+    parts.append("\n")
+    parts.append("\n")
+    parts.append("_sig(_lib.pl_ffi_error_kind, _c.c_char_p, [])\n")
+    parts.append("_sig(_lib.pl_ffi_error_message, _c.c_char_p, [])\n")
+    parts.append("_sig(_lib.pl_ffi_str_len, _c.c_int64, [_c.c_void_p])\n")
+    parts.append("_sig(_lib.pl_ffi_str_data, _c.c_void_p, [_c.c_void_p])\n")
+    parts.append("_sig(_lib.pl_ffi_list_len, _c.c_int64, [_c.c_void_p])\n")
+    parts.append("_sig(_lib.pl_ffi_list_data, _c.c_void_p, [_c.c_void_p])\n")
+    parts.append("_sig(_lib.pl_ffi_list_str_at, _c.c_void_p, [_c.c_void_p, _c.c_int64])\n")
+    parts.append("_sig(_lib.pl_ffi_free_str, None, [_c.c_void_p])\n")
+    parts.append("_sig(_lib.pl_ffi_free_list, None, [_c.c_void_p])\n")
+    parts.append("_sig(_lib.pl_ffi_free_list_str, None, [_c.c_void_p])\n")
+    parts.append("\n")
+    parts.append("_I64_MIN = -(1 << 63)\n")
+    parts.append("_I64_MAX = (1 << 63) - 1\n")
+    parts.append("\n")
+    parts.append("\n")
+    parts.append("def _fail(st, fn):\n")
+    parts.append("    kind = _lib.pl_ffi_error_kind().decode(\"utf-8\")\n")
+    parts.append("    msg = _lib.pl_ffi_error_message().decode(\"utf-8\", \"replace\")\n")
+    parts.append("    if st == 2:\n")
+    parts.append("        raise Panic(fn + \": \" + msg)\n")
+    parts.append("    raise _ERRORS.get(kind, Error)(msg)\n")
+    parts.append("\n")
+    parts.append("\n")
+    parts.append("def _what(v):\n")
+    parts.append("    return type(v).__name__\n")
+    parts.append("\n")
+    parts.append("\n")
+    parts.append("# ★ bool は int の子ですが、int としては受けません（型の取り違えを防ぐため）\n")
+    parts.append("def _int(v, fn, name):\n")
+    parts.append("    if type(v) is not int:\n")
+    parts.append("        raise TypeError(fn + \": '\" + name + \"' は int です（\" + _what(v) + \" が渡されました）\")\n")
+    parts.append("    if v < _I64_MIN or v > _I64_MAX:\n")
+    parts.append("        raise OverflowError(fn + \": '\" + name + \"' が 64 ビットの int に収まりません\")\n")
+    parts.append("    return (v,)\n")
+    parts.append("\n")
+    parts.append("\n")
+    parts.append("# ★ int は float として受けません（暗黙の型変換はしない）\n")
+    parts.append("def _float(v, fn, name):\n")
+    parts.append("    if type(v) is not float:\n")
+    parts.append("        raise TypeError(fn + \": '\" + name + \"' は float です（\" + _what(v) +\n")
+    parts.append("                        \" が渡されました。float(x) にしてください）\")\n")
+    parts.append("    return (v,)\n")
+    parts.append("\n")
+    parts.append("\n")
+    parts.append("def _bool(v, fn, name):\n")
+    parts.append("    if type(v) is not bool:\n")
+    parts.append("        raise TypeError(fn + \": '\" + name + \"' は bool です（\" + _what(v) + \" が渡されました）\")\n")
+    parts.append("    return (1 if v else 0,)\n")
+    parts.append("\n")
+    parts.append("\n")
+    parts.append("def _str(v, fn, name):\n")
+    parts.append("    if not isinstance(v, str):\n")
+    parts.append("        raise TypeError(fn + \": '\" + name + \"' は str です（\" + _what(v) + \" が渡されました）\")\n")
+    parts.append("    b = v.encode(\"utf-8\")\n")
+    parts.append("    return (b, len(b))\n")
+    parts.append("\n")
+    parts.append("\n")
+    parts.append("def _list(v, fn, name):\n")
+    parts.append("    if not isinstance(v, list):\n")
+    parts.append("        raise TypeError(fn + \": '\" + name + \"' は list です（\" + _what(v) + \" が渡されました）\")\n")
+    parts.append("    return v\n")
+    parts.append("\n")
+    parts.append("\n")
+    parts.append("def _elem(fn, name, i):\n")
+    parts.append("    return name + \"[\" + str(i) + \"]\"\n")
+    parts.append("\n")
+    parts.append("\n")
+    parts.append("def _list_int(v, fn, name):\n")
+    parts.append("    xs = [_int(x, fn, _elem(fn, name, i))[0] for i, x in enumerate(_list(v, fn, name))]\n")
+    parts.append("    return ((_c.c_int64 * len(xs))(*xs), len(xs))\n")
+    parts.append("\n")
+    parts.append("\n")
+    parts.append("def _list_float(v, fn, name):\n")
+    parts.append("    xs = [_float(x, fn, _elem(fn, name, i))[0] for i, x in enumerate(_list(v, fn, name))]\n")
+    parts.append("    return ((_c.c_double * len(xs))(*xs), len(xs))\n")
+    parts.append("\n")
+    parts.append("\n")
+    parts.append("def _list_bool(v, fn, name):\n")
+    parts.append("    xs = [_bool(x, fn, _elem(fn, name, i))[0] for i, x in enumerate(_list(v, fn, name))]\n")
+    parts.append("    return ((_c.c_int64 * len(xs))(*xs), len(xs))\n")
+    parts.append("\n")
+    parts.append("\n")
+    parts.append("def _list_str(v, fn, name):\n")
+    parts.append("    bs = [_str(x, fn, _elem(fn, name, i))[0] for i, x in enumerate(_list(v, fn, name))]\n")
+    parts.append("    return ((_c.c_char_p * len(bs))(*bs), (_c.c_int64 * len(bs))(*[len(b) for b in bs]),\n")
+    parts.append("            len(bs))\n")
+    parts.append("\n")
+    parts.append("\n")
+    parts.append("# ★ 取っ手は読んだらすぐ写して解放します（Python 側に中の値を残しません）\n")
+    parts.append("def _take_str(h):\n")
+    parts.append("    try:\n")
+    parts.append("        n = _lib.pl_ffi_str_len(h)\n")
+    parts.append("        return _c.string_at(_lib.pl_ffi_str_data(h), n).decode(\"utf-8\")\n")
+    parts.append("    finally:\n")
+    parts.append("        _lib.pl_ffi_free_str(h)\n")
+    parts.append("\n")
+    parts.append("\n")
+    parts.append("def _take_list(h, ctype, conv):\n")
+    parts.append("    try:\n")
+    parts.append("        n = _lib.pl_ffi_list_len(h)\n")
+    parts.append("        if n == 0:\n")
+    parts.append("            return []\n")
+    parts.append("        arr = (ctype * n).from_address(_lib.pl_ffi_list_data(h))\n")
+    parts.append("        return [conv(x) for x in arr]\n")
+    parts.append("    finally:\n")
+    parts.append("        _lib.pl_ffi_free_list(h)\n")
+    parts.append("\n")
+    parts.append("\n")
+    parts.append("def _take_list_str(h):\n")
+    parts.append("    try:\n")
+    parts.append("        out = []\n")
+    parts.append("        for i in range(_lib.pl_ffi_list_len(h)):\n")
+    parts.append("            s = _lib.pl_ffi_list_str_at(h, i)\n")
+    parts.append("            n = _lib.pl_ffi_str_len(s)\n")
+    parts.append("            out.append(_c.string_at(_lib.pl_ffi_str_data(s), n).decode(\"utf-8\"))\n")
+    parts.append("        return out\n")
+    parts.append("    finally:\n")
+    parts.append("        _lib.pl_ffi_free_list_str(h)\n")
+    return strings.join(parts, "")
+
+
+# 宣言をそのまま見せる（docstring 用）
+def py_decl(fn: rc[ast.Node]) -> str:
+    parts: list[str] = ["extern def " + fn.name + "("]
+    first: bool = True
+    pm: rc[ast.Node] | None = fn.params
+    while pm is not None:
+        p: rc[ast.Node] = pm
+        if not first:
+            parts.append(", ")
+        own_: str = ""
+        if p.mode == ast.PM_OWN:
+            own_ = "own "
+        parts.append(p.name + ": " + own_ + ast.type_name(type_of(p)))
+        first = False
+        pm = p.next
+    parts.append(") -> " + ast.type_name(type_of(fn)))
+    r: rc[ast.Node] | None = fn.err_types
+    firstr: bool = True
+    while r is not None:
+        rn: rc[ast.Node] = r
+        if firstr:
+            parts.append(" raises ")
+        else:
+            parts.append(" | ")
+        parts.append(copy(type_of(rn).name))
+        firstr = False
+        r = rn.next
+    return strings.join(parts, "")
+
+
+def py_func(m: rc[module.Module], fn: rc[ast.Node]) -> str:
+    sym: str = ast.export_symbol(m.name, fn.name)
+    ret: rc[ast.Type] = type_of(fn)
+    has_ret: bool = ret.kind != ast.TY_NONE
+    b: list[str] = []
+
+    # C の関数の形
+    b.append("\n\n_f_" + fn.name + " = _sig(_lib." + sym + ", _c.c_int64, [")
+    pm: rc[ast.Node] | None = fn.params
+    while pm is not None:
+        p: rc[ast.Node] = pm
+        b.append(py_argtypes(type_of(p)))
+        pm = p.next
+    if has_ret:
+        b.append("_c.POINTER(" + py_out_type(ret) + ")")
+    b.append("])\n\n\n")
+
+    # Python の関数（引数名と既定値は宣言のまま）
+    b.append("def " + fn.name + "(")
+    first: bool = True
+    pm2: rc[ast.Node] | None = fn.params
+    while pm2 is not None:
+        p2: rc[ast.Node] = pm2
+        if not first:
+            b.append(", ")
+        b.append(copy(p2.name))
+        if p2.rhs is not None:
+            b.append("=" + py_default(node_of(p2.rhs)))
+        first = False
+        pm2 = p2.next
+    b.append("):\n    \"\"\"" + py_decl(fn) + "\"\"\"\n")
+    k: int = 0
+    pm3: rc[ast.Node] | None = fn.params
+    while pm3 is not None:
+        p3: rc[ast.Node] = pm3
+        b.append("    _a" + str(k) + " = " + py_conv(type_of(p3)) + "(" + p3.name + ", \"" +
+                 fn.name + "\", \"" + p3.name + "\")\n")
+        k = k + 1
+        pm3 = p3.next
+    if has_ret:
+        b.append("    _out = " + py_out_type(ret) + "()\n")
+    b.append("    _st = _f_" + fn.name + "(")
+    j: int = 0
+    while j < k:
+        if j > 0:
+            b.append(", ")
+        b.append("*_a" + str(j))
+        j = j + 1
+    if has_ret:
+        if k > 0:
+            b.append(", ")
+        b.append("_c.byref(_out)")
+    b.append(")\n")
+    b.append("    if _st != 0:\n        _fail(_st, \"" + fn.name + "\")\n")
+    if has_ret:
+        b.append("    return " + py_take(ret) + "\n")
+    return strings.join(b, "")
+
+
+# 全モジュールの「外へ出す関数」を呼ぶ .py の中身を返す
+def pygen(mods: rc[module.Module] | None, libname: str) -> str:
+    b: list[str] = []
+    b.append("# " + langinfo.cc() + " " + langinfo.VERSION +
+             " が生成しました（--python）。手で書き換えないでください。\n")
+    b.append("_LIBNAME = \"" + libname + "\"\n\n")
+    b.append(prelude())
+
+    # エラーのクラス（raises に出てくるものを 1 回ずつ。出てきた順）
+    errs: list[str] = []
+    seen: list[str] = []
+    m: rc[module.Module] | None = mods
+    while m is not None:
+        mm: rc[module.Module] = m
+        d: rc[ast.Node] | None = node_of(mm.ast).body
+        while d is not None:
+            dn: rc[ast.Node] = d
+            if dn.kind == ast.ND_FUNC and dn.is_export:
+                r: rc[ast.Node] | None = dn.err_types
+                while r is not None:
+                    rn: rc[ast.Node] = r
+                    nm: str = copy(type_of(rn).name)
+                    dup: bool = False
+                    for s0 in seen:
+                        if s0 == nm:
+                            dup = True
+                    if not dup and len(seen) < 256:
+                        b.append("\n\nclass " + nm + "(Error):\n    pass\n")
+                        errs.append("    \"" + nm + "\": " + nm + ",\n")
+                        seen.append(nm)
+                    r = rn.next
+            d = dn.next
+        m = mm.next
+    b.append("\n\n_ERRORS = {\n" + strings.join(errs, "") + "}\n")
+
+    m2: rc[module.Module] | None = mods
+    while m2 is not None:
+        mm2: rc[module.Module] = m2
+        d2: rc[ast.Node] | None = node_of(mm2.ast).body
+        while d2 is not None:
+            dn2: rc[ast.Node] = d2
+            if dn2.kind == ast.ND_FUNC and dn2.is_export:
+                b.append(py_func(mm2, dn2))
+            d2 = dn2.next
+        m2 = mm2.next
+    return strings.join(b, "")
+
+
+# ── 小道具 ──
+def node_of(n: rc[ast.Node] | None) -> rc[ast.Node]:
+    if n is None:
+        panic("pygen: ノードがありません")
+    return n
+
+
+def type_of(n: rc[ast.Node]) -> rc[ast.Type]:
+    t: rc[ast.Type] | None = n.type
+    if t is None:
+        panic("pygen: 型がありません")
+    return t

@@ -1,0 +1,4 @@
+# ERROR: error[E-EXPORT-1]: 'str | None' は外へ出す関数の戻り値に使えません
+# T | None はまだ出せない（段階 2。ffi.md §8）
+extern def f(x: int) -> str | None:
+    return None

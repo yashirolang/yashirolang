@@ -4056,6 +4056,14 @@ class Emitter:
             return "0"
         if t.kind == ast.TY_BOOL:
             return "false"
+        # 注意: float と名前だけの列挙が抜けていました（C 版 default_value と対）
+        if t.kind == ast.TY_FLOAT:
+            return "0.0"
+        if t.kind == ast.TY_ENUM:
+            en: rc[ast.EnumDef] | None = t.en
+            if en is not None and en.has_payload:
+                return "null"
+            return "0"
         return "null"
 
     def emit_default_ret(mut self) -> None:
@@ -4959,6 +4967,238 @@ class Emitter:
                              self.llvm_mem_type(type_of(n)) + " " +
                              str(rhs.ival) + "\n")
 
+    # ── 外へ出す関数の入口（設計 ffi.md §4）──────────────────
+    #
+    # ★ 本体つきの extern def 1 つにつき、入口（@<m>_<f>）と thunk（@<m>_<f>.thunk）を
+    #   足す。本体（@<m>.<f>）はふつうの関数のまま。
+    # ★ 対になる定義: src/codegen.c の gen_export（IR は 1 バイトも違わないこと）
+    def export_slot_type(self, t: rc[ast.Type]) -> str:
+        if t.kind == ast.TY_FLOAT:
+            return "double"
+        if t.kind == ast.TY_STR or t.kind == ast.TY_LIST:
+            return "ptr"
+        return "i64"   # int / bool
+
+    def gen_export(mut self, n: rc[ast.Node], mod_name: str) -> None:
+        sym: str = ast.export_symbol(mod_name, n.name)
+        has_err: bool = n.err_types is not None
+        ret: rc[ast.Type] = type_of(n)
+        has_ret: bool = ret.kind != ast.TY_NONE
+        if has_err:
+            self.ensure_err_type()
+
+        # 枠の型 { 引数…, 戻り値, %pl.err }
+        ct: list[str] = ["{ "]
+        nslot: int = 0
+        pm: rc[ast.Node] | None = n.params
+        while pm is not None:
+            p: rc[ast.Node] = pm
+            if nslot > 0:
+                ct.append(", ")
+            ct.append(self.export_slot_type(type_of(p)))
+            nslot = nslot + 1
+            pm = p.next
+        ret_slot: int = -1
+        err_slot: int = -1
+        if has_ret:
+            ret_slot = nslot
+            if nslot > 0:
+                ct.append(", ")
+            ct.append(self.export_slot_type(ret))
+            nslot = nslot + 1
+        if has_err:
+            err_slot = nslot
+            if nslot > 0:
+                ct.append(", ")
+            ct.append("%pl.err")
+            nslot = nslot + 1
+        if nslot == 0:
+            ct.append("i8")    # 空の構造体を避ける
+        ct.append(" }")
+        ctx_ty: str = strings.join(ct, "")
+
+        # ── ① thunk ──
+        self.tmp_counter = 0
+        self.fn = []
+        args: list[str] = []
+        k: int = 0
+        pm2: rc[ast.Node] | None = n.params
+        while pm2 is not None:
+            p2: rc[ast.Node] = pm2
+            pt: rc[ast.Type] = type_of(p2)
+            g: str = self.new_tmp()
+            self.emit("  " + g + " = getelementptr " + ctx_ty + ", ptr %ctx, i32 0, i32 " +
+                      str(k) + "\n")
+            v: str = self.new_tmp()
+            self.emit("  " + v + " = load " + self.export_slot_type(pt) + ", ptr " + g + "\n")
+            if pt.kind == ast.TY_BOOL:
+                b: str = self.new_tmp()
+                self.emit("  " + b + " = icmp ne i64 " + v + ", 0\n")
+                v = b
+            if k > 0:
+                args.append(", ")
+            args.append(self.llvm_type(pt) + " " + v)
+            k = k + 1
+            pm2 = p2.next
+        if has_err:
+            ge: str = self.new_tmp()
+            self.emit("  " + ge + " = getelementptr " + ctx_ty + ", ptr %ctx, i32 0, i32 " +
+                      str(err_slot) + "\n")
+            if k > 0:
+                args.append(", ")
+            args.append("ptr " + ge)
+        if has_ret:
+            r: str = self.new_tmp()
+            self.emit("  " + r + " = call " + self.llvm_type(ret) + " @" + n.ir_name + "(" +
+                      strings.join(args, "") + ")\n")
+            if ret.kind == ast.TY_BOOL:
+                z: str = self.new_tmp()
+                self.emit("  " + z + " = zext i1 " + r + " to i64\n")
+                r = z
+            gr: str = self.new_tmp()
+            self.emit("  " + gr + " = getelementptr " + ctx_ty + ", ptr %ctx, i32 0, i32 " +
+                      str(ret_slot) + "\n")
+            self.emit("  store " + self.export_slot_type(ret) + " " + r + ", ptr " + gr + "\n")
+        else:
+            self.emit("  call void @" + n.ir_name + "(" + strings.join(args, "") + ")\n")
+        self.body.append("\ndefine internal void @" + sym + ".thunk(ptr %ctx) {\nentry:\n" +
+                         strings.join(self.fn, "") + "  ret void\n}\n")
+
+        # ── ② 入口 ──
+        self.tmp_counter = 0
+        self.fn = []
+        params: list[str] = []
+        vals: list[str] = []      # 写した引数の値（後で解放するために控える）
+        k = 0
+        pm3: rc[ast.Node] | None = n.params
+        while pm3 is not None:
+            p3: rc[ast.Node] = pm3
+            t: rc[ast.Type] = type_of(p3)
+            sep: str = ", "
+            if k == 0:
+                sep = ""
+            v3: str = ""
+            if t.kind == ast.TY_STR:
+                params.append(sep + "ptr %p." + p3.name + ", i64 %p." + p3.name + ".len")
+                self.declare_rt("ptr @pl_ffi_str_in(ptr, i64)")
+                v3 = self.new_tmp()
+                self.emit("  " + v3 + " = call ptr @pl_ffi_str_in(ptr %p." + p3.name +
+                          ", i64 %p." + p3.name + ".len)\n")
+            elif t.kind == ast.TY_LIST and type_or_none(t.elem).kind == ast.TY_STR:
+                params.append(sep + "ptr %p." + p3.name + ", ptr %p." + p3.name +
+                              ".lens, i64 %p." + p3.name + ".len")
+                self.declare_rt("ptr @pl_ffi_list_str_in(ptr, ptr, i64)")
+                v3 = self.new_tmp()
+                self.emit("  " + v3 + " = call ptr @pl_ffi_list_str_in(ptr %p." + p3.name +
+                          ", ptr %p." + p3.name + ".lens, i64 %p." + p3.name + ".len)\n")
+            elif t.kind == ast.TY_LIST:
+                params.append(sep + "ptr %p." + p3.name + ", i64 %p." + p3.name + ".len")
+                self.declare_rt("ptr @pl_ffi_list_in(ptr, i64)")
+                v3 = self.new_tmp()
+                self.emit("  " + v3 + " = call ptr @pl_ffi_list_in(ptr %p." + p3.name +
+                          ", i64 %p." + p3.name + ".len)\n")
+            else:
+                params.append(sep + self.export_slot_type(t) + " %p." + p3.name)
+                v3 = "%p." + p3.name
+            g3: str = self.new_tmp()
+            self.emit("  " + g3 + " = getelementptr " + ctx_ty + ", ptr %ctx, i32 0, i32 " +
+                      str(k) + "\n")
+            self.emit("  store " + self.export_slot_type(t) + " " + v3 + ", ptr " + g3 + "\n")
+            vals.append(v3)
+            k = k + 1
+            pm3 = p3.next
+        if has_ret:
+            if k > 0:
+                params.append(", ")
+            params.append("ptr %out")
+        if has_err:
+            ge2: str = self.new_tmp()
+            self.emit("  " + ge2 + " = getelementptr " + ctx_ty + ", ptr %ctx, i32 0, i32 " +
+                      str(err_slot) + "\n")
+            self.emit("  store %pl.err zeroinitializer, ptr " + ge2 + "\n")
+        self.declare_rt("i64 @pl_ffi_call(ptr, ptr)")
+        st: str = self.new_tmp()
+        self.emit("  " + st + " = call i64 @pl_ffi_call(ptr @" + sym + ".thunk, ptr %ctx)\n")
+
+        # ★ 写して渡した引数は、入口が持ち主です（own で渡したものを除く）
+        if self.drop:
+            k = 0
+            pm4: rc[ast.Node] | None = n.params
+            while pm4 is not None:
+                p4: rc[ast.Node] = pm4
+                if p4.mode != ast.PM_OWN:
+                    dfn: str = self.drop_fn_for(type_of(p4))
+                    if len(dfn) > 0:
+                        self.emit("  call void " + dfn + "(ptr " + vals[k] + ")\n")
+                k = k + 1
+                pm4 = p4.next
+        ok: str = self.new_tmp()
+        self.emit("  " + ok + " = icmp eq i64 " + st + ", 0\n")
+        self.emit("  br i1 " + ok + ", label %done, label %panicked\n")
+        self.emit("panicked:\n  ret i64 2\n")
+        self.emit("done:\n")
+
+        if has_err:
+            ge3: str = self.new_tmp()
+            self.emit("  " + ge3 + " = getelementptr " + ctx_ty + ", ptr %ctx, i32 0, i32 " +
+                      str(err_slot) + "\n")
+            tag: str = self.load_tag(ge3)
+            bad: str = self.new_tmp()
+            self.emit("  " + bad + " = icmp ne i64 " + tag + ", 0\n")
+            self.emit("  br i1 " + bad + ", label %raised, label %returned\n")
+            self.emit("raised:\n")
+            obj: str = self.load_payload(ge3)
+            self.declare_rt("void @pl_ffi_raised(ptr, ptr)")
+            j: int = 0
+            r5: rc[ast.Node] | None = n.err_types
+            while r5 is not None:
+                rn: rc[ast.Node] = r5
+                et: rc[ast.Type] = type_of(rn)
+                c: rc[ast.Class] = class_of(et.cls)
+                js: str = str(j)
+                isv: str = self.new_tmp()
+                self.emit("  " + isv + " = icmp eq i64 " + tag + ", " + str(rn.err_tag) + "\n")
+                self.emit("  br i1 " + isv + ", label %err." + js + ", label %err." + js +
+                          ".no\n")
+                self.emit("err." + js + ":\n")
+                # ★ 文面は「message: str」があればその中身、無ければクラス名（ffi.md §5.1）
+                msg: str = "null"
+                f: rc[ast.Field] | None = c.fields
+                while f is not None:
+                    ff: rc[ast.Field] = f
+                    if ff.name == "message" and type_of_field(ff).kind == ast.TY_STR:
+                        fp: str = self.new_tmp()
+                        self.emit("  " + fp + " = getelementptr %" + self.class_type(c) +
+                                  ".type, ptr " + obj + ", i32 0, i32 " + str(ff.index) + "\n")
+                        mv: str = self.new_tmp()
+                        self.emit("  " + mv + " = load ptr, ptr " + fp + "\n")
+                        msg = mv
+                    f = ff.next
+                kind: str = self.intern_str(c.name)
+                self.emit("  call void @pl_ffi_raised(ptr " + kind + ", ptr " + msg + ")\n")
+                if self.drop:
+                    edfn: str = self.drop_fn_for(et)
+                    if len(edfn) > 0:
+                        self.emit("  call void " + edfn + "(ptr " + obj + ")\n")
+                self.emit("  ret i64 1\n")
+                self.emit("err." + js + ".no:\n")
+                j = j + 1
+                r5 = rn.next
+            self.emit("  unreachable\n")
+            self.emit("returned:\n")
+        if has_ret:
+            gr2: str = self.new_tmp()
+            self.emit("  " + gr2 + " = getelementptr " + ctx_ty + ", ptr %ctx, i32 0, i32 " +
+                      str(ret_slot) + "\n")
+            rv: str = self.new_tmp()
+            rt: str = self.export_slot_type(ret)
+            self.emit("  " + rv + " = load " + rt + ", ptr " + gr2 + "\n")
+            self.emit("  store " + rt + " " + rv + ", ptr %out\n")
+        self.emit("  ret i64 0\n")
+        self.body.append("\ndefine i64 @" + sym + "(" + strings.join(params, "") +
+                         ") {\nentry:\n  %ctx = alloca " + ctx_ty + "\n" +
+                         strings.join(self.fn, "") + "}\n")
+
     # C の main を出力する（ir-conventions.md 7 節の方式 A）
     #
     # 注意: これを出すのは入口モジュールだけ
@@ -4992,6 +5232,32 @@ class Emitter:
         out.append("  ret i32 " + t2 + "\n")
         out.append("}\n")
         self.body.append(strings.join(out, ""))
+
+
+# 入口モジュールに main（本体つき）があるか（無ければライブラリ。ffi.md §6）
+def entry_has_main(entry: rc[module.Module]) -> bool:
+    d: rc[ast.Node] | None = node_of(entry.ast).body
+    while d is not None:
+        dn: rc[ast.Node] = d
+        if dn.kind == ast.ND_FUNC and dn.body is not None and dn.name == "main":
+            return True
+        d = dn.next
+    return False
+
+
+# どこかのモジュールに外へ出す関数があるか
+def any_export(mods: rc[module.Module] | None) -> bool:
+    m: rc[module.Module] | None = mods
+    while m is not None:
+        mm: rc[module.Module] = m
+        d: rc[ast.Node] | None = node_of(mm.ast).body
+        while d is not None:
+            dn: rc[ast.Node] = d
+            if dn.kind == ast.ND_FUNC and dn.is_export:
+                return True
+            d = dn.next
+        m = mm.next
+    return False
 
 
 # ── 入口 ───────────────────────────────────────────────────
@@ -5070,6 +5336,9 @@ def codegen(mod: rc[module.Module], main_ir_name: str, triple: str,
             elif n3.targs is None:
                 # 注意: ジェネリックなテンプレートは出さない
                 e.gen_func(n3)
+                # ★ 外へ出す関数には入口を足す（設計 ffi.md §4）
+                if n3.is_export:
+                    e.gen_export(n3, mod.name)
         elif n3.kind == ast.ND_CLASS and n3.targs is None:
             m: rc[ast.Node] | None = n3.body
             while m is not None:

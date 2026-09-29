@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 // ★ モジュールごとの clang を並列に走らせるため（下の run_jobs）。
@@ -19,6 +20,9 @@
 #include <sys/wait.h>
 extern char **environ;
 #endif
+#ifdef _WIN32
+#include <direct.h>   // _mkdir（--python の置き場所を作る）
+#endif
 
 #include "ast.h"
 #include "codegen.h"
@@ -26,6 +30,7 @@ extern char **environ;
 #include "module.h"
 #include "ownck.h"
 #include "prove.h"
+#include "pygen.h"
 #include "parser.h"
 #include "langinfo.h"
 #include "sema.h"
@@ -148,6 +153,10 @@ static void usage(int status) {
             "  -I <dir>        import を探す場所を足す（何度でも書ける）\n"
             "                  パッケージマネージャ " PLC_LANG_PM " が使います\n"
             "  -c              リンクせずオブジェクト（.o）を出す\n"
+            "  --shared        共有ライブラリを作る（extern def を C から呼べる形で出す）\n"
+            "                  -o を省くと lib<モジュール名>.<拡張子>\n"
+            "  --python        Python のライブラリを作る（-o はディレクトリ。既定は .）\n"
+            "                  _<モジュール名>.<拡張子> と <モジュール名>.py を置きます\n"
             "  -j <N>          clang を同時に何本走らせるか（既定: コア数）\n"
             "                  注意: 出来上がる実行ファイルは並列度で変わりません\n"
             "  --target=<t>    生成する IR の target triple を指定する\n"
@@ -192,6 +201,9 @@ typedef struct {
     int nlink;
     const char *target;  // --target=<triple>（ベアメタル向け）
     int emit_obj;        // -c（リンクせずオブジェクトを出す）
+    int shared;          // --shared（共有ライブラリを作る。設計 ffi.md §6）
+    int python;          // --python（共有ライブラリ + ctypes の .py）
+    int output_set;      // -o を書いたか（--shared / --python の既定の名前を決める）
     int jobs;            // -j N（clang を同時に何本走らせるか。0 = コア数）
     // -I <dir>（import を探す場所を足す。何度でも書ける）
     const char **inc;
@@ -246,8 +258,11 @@ static Options parse_args(int argc, char **argv) {
             //   ここから作るので、**入口で 1 回**確かめれば足ります。
             check_shell_safe(argv[i + 1], "出力ファイル名");
             o.output = argv[++i];
+            o.output_set = 1;
             continue;
         }
+        if (strcmp(a, "--shared") == 0) { o.shared = 1; continue; }
+        if (strcmp(a, "--python") == 0) { o.python = 1; o.shared = 1; continue; }
         if (strcmp(a, "-S") == 0) { o.stage = STAGE_EMIT_IR; continue; }
         if (strcmp(a, "--dump-tokens") == 0) { o.stage = STAGE_DUMP_TOKENS; continue; }
         if (strcmp(a, "--dump-ast") == 0) { o.stage = STAGE_DUMP_AST; continue; }
@@ -639,9 +654,67 @@ int main(int argc, char **argv) {
     sb_init(&main_ir);
     sb_printf(&main_ir, "%s.main", entry->name);
 
+    // ── ライブラリか（設計 ffi.md §6）──
+    //
+    // ★ main が無くても sema が通るのは「外へ出す関数があるとき」だけです。
+    //   その形を実行ファイルにしようとしたら、ここで断ります（リンカの
+    //   「_main が無い」より、何を付ければよいかを言うほうが親切です）。
+    bool has_main = false, has_export = false;
+    for (Node *d = entry->ast->body; d; d = d->next)
+        if (d->kind == ND_FUNC && d->body && strcmp(d->name, "main") == 0) has_main = true;
+    for (Module *m = mods; m; m = m->next)
+        for (Node *d = m->ast->body; d; d = d->next)
+            if (d->kind == ND_FUNC && d->is_export) has_export = true;
+    if (opt.shared && !has_export)
+        error("--shared / --python には、外へ出す関数（本体つきの extern def）が"
+              "少なくとも 1 つ要ります");
+    if (!has_main && !opt.shared && opt.stage == STAGE_ALL && !opt.emit_obj)
+        error("main がありません。ライブラリにするなら --shared か --python を"
+              "付けてください（実行ファイルには main が要ります）");
+
+    // ── 共有ライブラリの名前（ffi.md §6）──
+    //
+    //   --shared  … -o があればそれ、無ければ lib<モジュール名>.<拡張子>
+    //   --python  … -o はディレクトリ。_<モジュール名>.<拡張子> と <モジュール名>.py
+#if defined(__APPLE__)
+    const char *so_ext = ".dylib";
+#elif defined(_WIN32)
+    const char *so_ext = ".dll";
+#else
+    const char *so_ext = ".so";
+#endif
+    const char *py_path = NULL;
+    const char *py_libname = NULL;
+    if (opt.python) {
+        const char *dir = opt.output_set ? opt.output : ".";
+        // ★ 置き場所が無ければ作ります（1 段だけ。失敗はリンクのときに分かります）
+#ifdef _WIN32
+        _mkdir(dir);
+#else
+        mkdir(dir, 0755);
+#endif
+        StrBuf ln, lp, pp;
+        sb_init(&ln);
+        sb_init(&lp);
+        sb_init(&pp);
+        sb_printf(&ln, "_%s%s", entry->name, so_ext);
+        sb_printf(&lp, "%s/%s", dir, sb_str(&ln));
+        sb_printf(&pp, "%s/%s.py", dir, entry->name);
+        py_libname = sb_str(&ln);
+        py_path = sb_str(&pp);
+        opt.output = sb_str(&lp);
+    } else if (opt.shared && !opt.output_set) {
+        StrBuf lp;
+        sb_init(&lp);
+        sb_printf(&lp, "lib%s%s", entry->name, so_ext);
+        opt.output = sb_str(&lp);
+    }
+
     // ── ④ コード生成（モジュールごとに 1 本の .ll）──
     for (Module *m = mods; m; m = m->next) {
-        const char *entry_main = (m == entry && !no_runtime) ? sb_str(&main_ir) : NULL;
+        // ★ ライブラリには @main を出しません（入口は呼ぶ側が持つ。ffi.md §6）
+        const char *entry_main =
+            (m == entry && !no_runtime && has_main && !opt.shared) ? sb_str(&main_ir) : NULL;
         char *ir = codegen(m, entry_main, opt.drop != 0, opt.no_ovf != 0, triple,
                            opt.debug != 0, opt.verify_prove != 0);
 
@@ -698,7 +771,7 @@ int main(int argc, char **argv) {
     //   出力名には .exe を足します（gcc / clang と同じふるまい）。
     const char *out_path = opt.output;
 #ifdef _WIN32
-    if (!strchr(opt.output, '.')) {
+    if (!opt.shared && !strchr(opt.output, '.')) {
         StrBuf w;
         sb_init(&w);
         sb_printf(&w, "%s.exe", opt.output);
@@ -729,8 +802,10 @@ int main(int argc, char **argv) {
         StrBuf c;
         sb_init(&c);
         // ★ -g のときは clang にも渡します（DWARF を実際に作らせるため。A-30）
-        sb_printf(&c, "%s %s%s -c \"%s\" -o \"%s\"", clang_cmd(), opt.opt_level,
-                  opt.debug ? " -g" : "", m->ll_path, objs[k]);
+        // ★ 共有ライブラリは位置に依らないコードにします（Linux では必須）
+        sb_printf(&c, "%s %s%s%s -c \"%s\" -o \"%s\"", clang_cmd(), opt.opt_level,
+                  opt.debug ? " -g" : "", opt.shared ? " -fPIC" : "", m->ll_path,
+                  objs[k]);
         jobs[k].cmd = sb_str(&c);
         jobs[k].rc = 0;
     }
@@ -740,8 +815,8 @@ int main(int argc, char **argv) {
         // ── リンク ──
         StrBuf cmd;
         sb_init(&cmd);
-        sb_printf(&cmd, "%s %s%s", clang_cmd(), opt.opt_level,
-                  opt.debug ? " -g" : "");
+        sb_printf(&cmd, "%s %s%s%s", clang_cmd(), opt.opt_level,
+                  opt.debug ? " -g" : "", opt.shared ? " -shared" : "");
         for (int i = 0; i < nmods; i++) sb_printf(&cmd, " \"%s\"", objs[i]);
         // ★ ランタイム（runtime/runtime.c をコンパイルしたもの）をリンクする。
         sb_printf(&cmd, " \"%s\"", runtime_o());
@@ -804,5 +879,8 @@ int main(int argc, char **argv) {
 
     if (!opt.keep_ll)
         for (Module *m = mods; m; m = m->next) unlink(m->ll_path);
+
+    // ★ Python から呼ぶための .py を隣に置きます（ffi.md §6.2）
+    if (py_path) write_file(py_path, pygen(mods, py_libname));
     return 0;
 }

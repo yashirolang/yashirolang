@@ -988,27 +988,41 @@ struct SeenFn {
     SeenFn *next;
 };
 
-static Node *scan_global_write(Own *o, Node *n, SeenFn **seen);
+//
+// ★ 同じ走査で「スレッドを始めているか」も探します（E-EXPORT-4。設計 ffi.md §5.3）。
+//   探すものが違うだけで、呼び先へ降りる理由も同じだからです。
+typedef enum {
+    HZ_GLOBAL_WRITE,  // グローバルへの代入（E-SEND-3 / E-EXPORT-3）
+    HZ_THREAD,        // spawn / scope:（E-EXPORT-4）
+} Hazard;
 
-static Node *scan_global_write_list(Own *o, Node *n, SeenFn **seen) {
+static Node *scan_global_write(Own *o, Node *n, SeenFn **seen, Hazard what);
+
+static Node *scan_global_write_list(Own *o, Node *n, SeenFn **seen, Hazard what) {
     for (; n; n = n->next) {
-        Node *hit = scan_global_write(o, n, seen);
+        Node *hit = scan_global_write(o, n, seen, what);
         if (hit) return hit;
     }
     return NULL;
 }
 
-static Node *scan_global_write(Own *o, Node *n, SeenFn **seen) {
+static Node *scan_global_write(Own *o, Node *n, SeenFn **seen, Hazard what) {
     if (!n) return NULL;
 
     // ① グローバルへの代入そのもの
-    if (n->kind == ND_ASSIGN && n->lhs) {
+    if (what == HZ_GLOBAL_WRITE && n->kind == ND_ASSIGN && n->lhs) {
         Place *p = place_of(n->lhs);
         if (p) {
             Place *root = p;
             while (root->base) root = root->base;
             if (root->kind == PL_GLOBAL) return n;
         }
+    }
+    // ①' スレッドを始めるところ（spawn の呼び出しと scope: ブロック）
+    if (what == HZ_THREAD) {
+        if (n->kind == ND_SCOPE) return n;
+        if (n->kind == ND_CALL && n->type && n->type->kind == TY_THREAD && !n->ir_name)
+            return n;
     }
 
     // ② 呼び先へ降りる（同じ関数は 1 回だけ）
@@ -1023,7 +1037,7 @@ static Node *scan_global_write(Own *o, Node *n, SeenFn **seen) {
                 q->fn = callee;
                 q->next = *seen;
                 *seen = q;
-                Node *hit = scan_global_write_list(o, callee->body->body, seen);
+                Node *hit = scan_global_write_list(o, callee->body->body, seen, what);
                 if (hit) return hit;
             }
         }
@@ -1032,12 +1046,12 @@ static Node *scan_global_write(Own *o, Node *n, SeenFn **seen) {
     // ③ 子をたどる
     Node *kids[] = {n->lhs, n->rhs, n->incr, n->els};
     for (unsigned i = 0; i < sizeof(kids) / sizeof(kids[0]); i++) {
-        Node *hit = scan_global_write(o, kids[i], seen);
+        Node *hit = scan_global_write(o, kids[i], seen, what);
         if (hit) return hit;
     }
     Node *lists[] = {n->body, n->args};
     for (unsigned i = 0; i < sizeof(lists) / sizeof(lists[0]); i++) {
-        Node *hit = scan_global_write_list(o, lists[i], seen);
+        Node *hit = scan_global_write_list(o, lists[i], seen, what);
         if (hit) return hit;
     }
     return NULL;
@@ -1195,7 +1209,8 @@ static void check_spawn(Own *o, Flow *f, Node *n) {
         SeenFn *seen = xmalloc(sizeof(SeenFn));
         seen->fn = spawned;
         seen->next = NULL;
-        Node *hit = scan_global_write_list(o, spawned->body->body, &seen);
+        Node *hit = scan_global_write_list(o, spawned->body->body, &seen,
+                                           HZ_GLOBAL_WRITE);
         if (hit) {
             Diag d = {0};
             d.code = "E-SEND-3";
@@ -2096,6 +2111,43 @@ static void collect_funcs(Own *o, Node *ast) {
 }
 
 
+// 外へ出す関数（本体つきの extern def）の検査（設計 ffi.md §5.3）。
+//
+// ★ 外へ出す関数は「どのスレッドから呼ばれるか分からない関数」で、spawn で
+//   始める関数と同じ立場です（ctypes は呼び出しのあいだ GIL を手放します）。
+//   だから E-SEND-3 と同じ走査で、グローバルに書かないことを確かめます。
+//   同じ性質が、panic から境界へ戻ったあとに壊れた状態が残らないことも守ります。
+static void check_export(Own *o, Node *fn) {
+    if (!fn->body) return;
+    Hazard kinds[] = {HZ_GLOBAL_WRITE, HZ_THREAD};
+    for (unsigned k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
+        SeenFn *seen = xmalloc(sizeof(SeenFn));
+        seen->fn = fn;
+        seen->next = NULL;
+        Node *hit = scan_global_write_list(o, fn->body->body, &seen, kinds[k]);
+        if (!hit) continue;
+        Diag d = {0};
+        d.primary.tok = fn->tok;
+        d.primary.label = "外から、どのスレッドからでも呼ばれる関数です";
+        d.related.tok = hit->tok;
+        if (kinds[k] == HZ_GLOBAL_WRITE) {
+            d.code = "E-EXPORT-3";
+            d.message = diag_fmt("外へ出す関数 '%s' はグローバル変数を書き換えます",
+                                 fn->name);
+            d.related.label = "ここでグローバルに書いています";
+            d.hint = "状態は引数と戻り値で受け渡してください"
+                     "（同時に呼ばれると競合し、panic したときに書きかけで残ります）";
+        } else {
+            d.code = "E-EXPORT-4";
+            d.message = diag_fmt("外へ出す関数 '%s' からスレッドを始めています", fn->name);
+            d.related.label = "ここで spawn（または scope:）を使っています";
+            d.hint = "いまは外へ出す関数からスレッドを使えません"
+                     "（panic したときに、動いているスレッドを安全に止められないためです）";
+        }
+        emit_ownck(o, &d, true);
+    }
+}
+
 // この式の木のどこかに spawn があるか。
 // 注意: next は**ループで**たどります。再帰にすると、木の深さではなく
 //    ノードの総数ぶんスタックを積むことになり、大きいファイルで落ちます。
@@ -2139,6 +2191,7 @@ void ownck_program(Module *mods, const OwnckOptions *opt) {
 
     for (Module *m = mods; m; m = m->next) {
         for (Node *d = m->ast->body; d; d = d->next) {
+            if (d->kind == ND_FUNC && d->is_export) check_export(&o, d);
             if (d->kind == ND_FUNC) check_func(&o, d);
             if (d->kind == ND_CLASS)
                 for (Node *mm = d->body; mm; mm = mm->next)

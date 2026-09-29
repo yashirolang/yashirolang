@@ -1,0 +1,4 @@
+# ERROR: error[E-EXPORT-1]: 型引数を持つ関数は外へ出せません
+# 外から見ると型が決まらない
+extern def first[T](xs: list[T]) -> T:
+    return xs[0]

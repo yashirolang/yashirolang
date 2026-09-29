@@ -1,0 +1,12 @@
+# ERROR: error[E-EXPORT-3]: 外へ出す関数 'f' はグローバル変数を書き換えます
+# ERROR: ここでグローバルに書いています
+# 呼び先までたどって、グローバルに書かないことを確かめる（ffi.md §5.3）。
+#         ★ Python の複数のスレッドから同時に呼ばれうる（spawn の E-SEND-3 と同じ理由）
+calls: int = 0
+
+def bump() -> None:
+    calls = calls + 1
+
+extern def f(x: int) -> int:
+    bump()
+    return x

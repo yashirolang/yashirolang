@@ -50,4 +50,7 @@ bool is_lowlevel_name(const char *name);
 // ★ 単位が「1 つの AST」から「依存順に並んだモジュール列」になりました。
 void sema_program(Module *mods, Module *entry);
 
+// 外へ出す関数の C のシンボル名（`pkg.mod` の `f` → `pkg_mod_f`。設計 ffi.md §4.1）
+char *export_symbol(const char *mod, const char *fn);
+
 #endif  // PLC_SEMA_H

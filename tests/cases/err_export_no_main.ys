@@ -1,0 +1,4 @@
+# ERROR: main がありません。ライブラリにするなら --shared か --python を付けてください
+# 外へ出す関数だけのファイルは、実行ファイルにはできない（ffi.md §6）
+extern def f(x: int) -> int:
+    return x

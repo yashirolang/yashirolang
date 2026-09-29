@@ -1,0 +1,26 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# ERROR: error[E-BORROW-9]: 'q' が借りている 'b.p' は、解放されているかもしれません
+# ERROR: ここで 'b' を書き換えました（古い値は解放されえます）
+# フィールドを借りた別名は、持ち主を mut self で書き換えた後には使えない。
+#         ★ reset は古い b.p を解放するので、q は解放済みの領域を指します
+#           （0.39.1 までは診断なしでゴミ値を読んでいました）
+class P:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+class Box:
+    p: P
+
+    def init(self, p: own P) -> None:
+        self.p = p
+
+    def reset(mut self) -> None:
+        self.p = P(7)
+
+def main() -> int:
+    b: Box = Box(P(1))
+    q: P = b.p
+    b.reset()
+    return q.v

@@ -518,8 +518,12 @@ class Lexer:
     def read_punct(mut self) -> bool:
         i: int = 0
         while i < len(self.puncts):
-            op: str = self.puncts[i]
-            if strings.matches_at(self.source.text, op, self.pos):
+            if strings.matches_at(self.source.text, self.puncts[i], self.pos):
+                # ★ 手元に写してから使います（E-BORROW-9）。self.puncts[i] を
+                #   借りたまま mut self の push を呼ぶと、push が self.puncts を
+                #   入れ替えたときに op が宙に浮くためです。写すのは一致した
+                #   1 回だけなので、試すたびに確保することはありません。
+                op: str = copy(self.puncts[i])
                 at_op: int = self.pos
                 self.push(token.TK_PUNCT, at_op, op)
 

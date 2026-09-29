@@ -1,0 +1,13 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# ERROR: error[E-BORROW-9]: for で回している 'xs' を、回している途中で入れ替えています
+# ERROR: ここで 'xs' を入れ替えています
+# 回している list を、回している途中で入れ替えない。
+#         ★ for は入口で xs を 1 回だけ読むので、次の周は解放済みの list を
+#           読みます（0.39.1 までは診断なしで segfault していました）
+def main() -> int:
+    xs: list[str] = ["a" + str(1), "b" + str(2)]
+    n: int = 0
+    for s in xs:
+        xs = ["z" + str(n)]
+        n = n + len(s)
+    return n

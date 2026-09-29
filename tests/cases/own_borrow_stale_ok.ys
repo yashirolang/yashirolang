@@ -1,0 +1,53 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# OUTPUT: 1
+# OUTPUT: 3
+# OUTPUT: 7
+# OUTPUT: 2
+# OUTPUT: 9
+# EXIT: 0
+# 別名が宙に浮かない書き換えは、これまでどおり通る（E-BORROW-9 の誤検出が無いこと）。
+#         ★ append は要素を足すだけで、いまある要素を解放しない
+#         ★ 借りた要素そのものの mut self は、その要素を入れ替えない
+#         ★ 書き換えた後に読み直せば、また使える
+#         ★ コピー型（int）は借りものではない
+class P:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+    def bump(mut self) -> None:
+        self.v = self.v + 2
+
+class Box:
+    p: P
+
+    def init(self, p: own P) -> None:
+        self.p = p
+
+    def reset(mut self) -> None:
+        self.p = P(7)
+
+def main() -> int:
+    xs: list[P] = [P(1)]
+    p: P = xs[0]
+    xs.append(P(2))
+    print(p.v)
+    p.bump()
+    print(p.v)
+
+    b: Box = Box(P(1))
+    q: P = b.p
+    b.reset()
+    q = b.p
+    print(q.v)
+
+    n: int = xs[1].v
+    xs.clear()
+    print(n)
+
+    ys: list[P] = [P(9)]
+    for y in ys:
+        print(y.v)
+    ys.clear()
+    return 0

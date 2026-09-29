@@ -2214,7 +2214,9 @@ class Emitter:
     def gen_checked_arith(mut self, intr: str, l: str, r: str, op: int) -> str:
         self.declare_rt("void @pl_overflow_fail(i64) noreturn cold")
         val: str = self.gen_arith_ovf(intr, l, r)
-        bad: str = self.last_ovf
+        # ★ 写して持ちます（E-BORROW-9 / E-BORROW-5）。self.last_ovf を
+        #   借りたまま mut self の emit_cond_br に渡すと、借り先が入れ替わりうるためです。
+        bad: str = copy(self.last_ovf)
 
         id_: int = self.label_counter    # ★ 番号は最初に 1 回だけ確保する
         self.label_counter = self.label_counter + 1
@@ -2448,13 +2450,15 @@ class Emitter:
             r = self.gen_index_expr(node_of(n.rhs))
 
         val: str = self.gen_arith_ovf(intr, l, r)
-        bad: str = self.last_ovf
+        # ★ 写して持ちます（E-BORROW-9）。self.last_ovf を借りたまま
+        #   mut self の new_tmp を呼ぶと、借り先が入れ替わりうるためです。
+        bad: str = copy(self.last_ovf)
         if self.ovf_flag != "":
             o: str = self.new_tmp()
             self.emit("  " + o + " = or i1 " + self.ovf_flag + ", " + bad + "\n")
             self.ovf_flag = o
         else:
-            self.ovf_flag = copy(bad)
+            self.ovf_flag = bad
         return val
 
     def gen_index(mut self, n: rc[ast.Node]) -> str:

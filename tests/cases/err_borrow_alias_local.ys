@@ -1,0 +1,22 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# ERROR: error[E-BORROW-5]: 'self' を可変借用と共有借用で同時に渡しています
+# 別名を付けても、同じ場所を可変と共有で同時に渡したことになる。
+#         ★ self.put(self.names[0]) が止まるのに、名前を付けると通る、という穴でした
+class Reg:
+    names: list[str]
+
+    def init(self) -> None:
+        self.names = ["a" + str(1)]
+
+    def put(mut self, s: str) -> None:
+        self.names = []
+        print(s)
+
+    def run(mut self) -> None:
+        first: str = self.names[0]
+        self.put(first)
+
+def main() -> int:
+    r: Reg = Reg()
+    r.run()
+    return 0

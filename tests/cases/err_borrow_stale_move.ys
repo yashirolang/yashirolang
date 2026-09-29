@@ -1,0 +1,26 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# ERROR: error[E-BORROW-9]: 'q' が借りている 'b.p' は、解放されているかもしれません
+# ERROR: ここで 'b' を手放しました
+# ERROR: 'b' を手放す前に使い終えるか
+# 持ち主を own 引数へ渡すと、その中を借りていた別名は使えない
+#         ★ eat の出口で b ごと b.p が解放されます
+class P:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+class Box:
+    p: P
+
+    def init(self, p: own P) -> None:
+        self.p = p
+
+def eat(b: own Box) -> None:
+    pass
+
+def main() -> int:
+    b: Box = Box(P(5))
+    q: P = b.p
+    eat(b)
+    return q.v

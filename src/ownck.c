@@ -170,6 +170,13 @@ struct Ent {
     Place *pl;
     OwnState st;
     Token *at;  // 移動した位置（診断の note: に出す）
+    // ★ 「移動」ではなく「借りていた先が書き換えられた」ことで使えなくなった
+    //   別名なら、書き換えた場所を持ちます（E-BORROW-9。NULL なら普通の移動）。
+    //   格子は移動と同じものを使います——分岐・ループでの合流の規則が
+    //   まったく同じだからです。
+    Place *by;
+    Place *src;       // その別名が借りていた場所（by の中のどこか）
+    bool by_move;     // by は書き換えではなく「手放した」（移動）
     Ent *next;
 };
 
@@ -234,8 +241,20 @@ static void flow_move(Flow *f, Place *p, Token *at) {
     e->pl = p;
     e->st = ST_MOVED;
     e->at = at;
+    e->by = NULL;
+    e->src = NULL;
+    e->by_move = false;
     e->next = f->ents;
     f->ents = e;
+}
+
+// 別名 p が借りていた先（by）が at で書き換えられた、と記録する（E-BORROW-9）。
+static void flow_stale(Flow *f, Place *p, Place *by, Place *src, bool by_move,
+                       Token *at) {
+    flow_move(f, p, at);
+    f->ents->by = by;
+    f->ents->src = src;
+    f->ents->by_move = by_move;
 }
 
 // dst ← dst ⊔ src（合流）
@@ -251,8 +270,12 @@ static void flow_join(Flow *dst, const Flow *src) {
         Ent *s = flow_find(src, e->pl);
         OwnState other = s ? s->st : ST_VALID;
         OwnState joined = st_join(e->st, other);
-        if (joined != e->st && s && s->at)
+        if (joined != e->st && s && s->at) {
             e->at = s->at;  // 位置は「片方の枝」を指せれば足りる
+            e->by = s->by;
+            e->src = s->src;
+            e->by_move = s->by_move;
+        }
         e->st = joined;
     }
 
@@ -322,6 +345,21 @@ struct DeclEnt {
     DeclEnt *next;
 };
 
+// 局所変数が「どの場所を」借りているか（E-BORROW-9）。
+//
+// ★ BorrowRoot が答えるのは「誰の持ち物か」（根の宣言）だけです。
+//   `q: P = b.p` のあとで `b.reset()` が b.p を解放すると q は宙に浮きますが、
+//   それを言うには「q が指しているのは b.p だ」という**経路**が要ります。
+//   ここに持つのはその経路で、別名の別名（`r = q.x`）は貸し手まで
+//   たどり直して持ちます（r → b.p.x）。
+typedef struct Loan Loan;
+struct Loan {
+    const char *key;   // 別名の変数の IR 名（%q）
+    const char *disp;  // 診断に出す名前（q）
+    Place *src;        // 借りている場所（b.p / xs[…]）
+    Loan *next;
+};
+
 // ループ 1 つぶんの出口情報（break / continue が積む場所）
 typedef struct Loop Loop;
 struct Loop {
@@ -345,6 +383,7 @@ typedef struct {
     int nmore;         // 上限を超えて省略した件数
     Loop *loop;
     BorrowRoot *roots;  // いま検査中の関数で「借りている」変数
+    Loan *loans;        // いま検査中の関数の別名と、その借り先（E-BORROW-9）
     struct DeclEnt *decls;  // いま検査中の関数の変数宣言
     int depth;          // 今いるスコープの深さ（借用の寿命の検査に使う）
     Node *cur_fn;       // いま検査中の関数（診断の「直し方」に名前が要る）
@@ -352,6 +391,9 @@ typedef struct {
 } Own;
 
 static DeclEnt *find_decl(Own *o, const char *ir_name);
+static Place *resolve_place(Own *o, Place *p);
+static void invalidate_loans(Own *o, Flow *f, Place *w, bool strict, bool by_move,
+                             Node *at);
 
 // 場所の根が借用引数なら、その根を返す。
 //
@@ -683,7 +725,7 @@ static const char *callee_label(Node *n) {
     return n->name ? n->name : "この呼び出し";
 }
 
-static void check_call_borrows(Own *o, Node *n, ArgRef *args) {
+static void check_call_borrows(Own *o, Flow *f, Node *n, ArgRef *args) {
     const char *callee = NULL;
 
     // ① 可変で渡すものが、読み取り専用の借用でないか（B3）
@@ -701,14 +743,31 @@ static void check_call_borrows(Own *o, Node *n, ArgRef *args) {
     // ★ 設計 ownership.md §5.1 に書いたとおり、これは二重ループだけです。
     //   借用の寿命が「呼び出しの間」に固定されているので、
     //   比べる範囲が 1 つの呼び出しの中に閉じています。
+    //
+    // ★ 別名は貸し手の場所に直してから比べます（E-BORROW-9 と同じ表）。
+    //   `q = b.p` のあとの `f(b, q)` は、b と b.p を同時に渡しているのと同じです。
     for (ArgRef *a = args; a; a = a->next) {
         for (ArgRef *b = a->next; b; b = b->next) {
             if (!a->is_mut && !b->is_mut) continue;
             Place *pa = place_of(a->expr);
             Place *pb = place_of(b->expr);
-            if (!pa || !pb || !place_overlaps(pa, pb)) continue;
+            if (!pa || !pb) continue;
+            if (!place_overlaps(pa, pb) &&
+                !place_overlaps(resolve_place(o, pa), resolve_place(o, pb)))
+                continue;
             report_alias(o, a->is_mut ? a : b, a->is_mut ? b : a, pa);
         }
+    }
+
+    // ③ 可変で渡した場所の「中」を借りている別名は、呼び出しの後では使えない
+    //   （E-BORROW-9）。呼び先が中身を入れ替えて、古い値を解放しうるためです。
+    //
+    // 注意: append / insert は対象外です。要素を足すだけで、いまある要素を
+    //   解放しません（`q = xs[0]` のあとで `xs.append(v)` しても q は無事です）。
+    for (ArgRef *a = args; a; a = a->next) {
+        if (!a->is_mut || a->kind == WR_APPEND) continue;
+        Place *p = place_of(a->expr);
+        if (p) invalidate_loans(o, f, p, true, false, a->expr);
     }
 }
 
@@ -722,10 +781,133 @@ static ArgRef *arg_ref(Node *expr, Node *param, bool is_mut, WriteKind kind) {
     return a;
 }
 
+// 借りていた先が書き換えられた別名を使った（E-BORROW-9）。
+//
+// ★ なぜ危ないか
+//     q: P = b.p      ← q は b.p を指しているだけ（借用。解放しない）
+//     b.reset()       ← reset が古い b.p を解放する
+//     print(q.v)      ← 解放済みの領域を読む
+//   q を解放しないのは「持ち主（b）が生きている間しか使わない」からですが、
+//   持ち主が中身を入れ替えると、その前提が崩れます。
+static void report_stale(Own *o, Place *p, Ent *who, Node *at) {
+    if (o->quiet) return;
+
+    bool maybe = who->st == ST_MAYBE;
+    Diag d = {0};
+    d.code = "E-BORROW-9";
+    // ★ for の隠し変数（for.it.N）なら、回している最中に対象を入れ替えた形です。
+    //   隠し変数の名前は利用者に見せても意味が通らないので、言い換えます。
+    if (strncmp(who->pl->disp, "for.", 4) == 0) {
+        d.message = diag_fmt("for で回している '%s' を、回している途中で入れ替えています",
+                             who->by->disp);
+        d.primary.tok = at->tok;
+        d.primary.label = "次の周で、入れ替える前の（解放済みの）リストを読みます";
+        d.related.tok = who->at;
+        d.related.label = diag_fmt("ここで '%s' を入れ替えています", who->by->disp);
+        d.hint = "入れ替えた後のリストを回したいなら、ループを抜けてから回し直してください"
+                 "（回しながら作るなら、別のリストに append します）";
+        emit_ownck(o, &d, o->opt.deny_borrow);
+        return;
+    }
+    const char *verb = who->by_move ? "手放しました" : "書き換えました";
+    d.message = diag_fmt("'%s' が借りている '%s' は、%s解放されているかもしれません",
+                         who->pl->disp, who->src->disp,
+                         maybe ? "分岐によっては" : "");
+    d.primary.tok = at->tok;
+    d.primary.label = "ここで使われています";
+    d.related.tok = who->at;
+    d.related.label = maybe
+        ? diag_fmt("分岐によっては、ここで '%s' を%s", who->by->disp, verb)
+        : diag_fmt("ここで '%s' を%s（古い値は解放されえます）", who->by->disp, verb);
+    d.hint = who->by_move
+        ? diag_fmt("'%s' を手放す前に使い終えるか、copy(...) で手元に写してください",
+                   who->by->disp)
+        : diag_fmt("書き換えた後で使うなら、読み直してください"
+                   "（例: %s = %s）。書き換える前の値が要るなら copy(...) で"
+                   "手元に写してください",
+                   who->pl->disp, who->src->disp);
+    emit_ownck(o, &d, o->opt.deny_borrow);
+}
+
 // p を「読む」。移動済みならその場で報告する。
 static void check_use(Own *o, Flow *f, Place *p, Node *at) {
     Ent *who = NULL;
-    if (state_of(f, p, &who) != ST_VALID && who) report_use(o, p, who, at);
+    if (state_of(f, p, &who) == ST_VALID || !who) return;
+    if (who->by) report_stale(o, p, who, at);
+    else report_use(o, p, who, at);
+}
+
+static Loan *find_loan(Own *o, const char *key) {
+    for (Loan *l = o->loans; l; l = l->next)
+        if (strcmp(l->key, key) == 0) return l;
+    return NULL;
+}
+
+// p の根を root に差し替えた場所を作る（q.x で q → b.p なら b.p.x）。
+static Place *splice_place(Place *p, Place *root) {
+    if (!p->base) return root;
+    Place *base = splice_place(p->base, root);
+    return new_place(p->kind, base, p->key,
+                     p->kind == PL_INDEX ? diag_fmt("%s[…]", base->disp)
+                                         : diag_fmt("%s.%s", base->disp, p->key));
+}
+
+// 別名を通した場所を、貸し手の場所に直す。
+//
+// ★ `c = b.p` のあとの `c.reset()` は b.p を書き換えています。
+//   別名のまま比べると、`r = b.p.x` が宙に浮くことを見落とします。
+static Place *resolve_place(Own *o, Place *p) {
+    if (!p) return NULL;
+    Place *root = p;
+    while (root->base) root = root->base;
+    if (root->kind != PL_LOCAL) return p;
+    Loan *l = find_loan(o, root->key);
+    return l ? splice_place(p, l->src) : p;
+}
+
+static void forget_loan(Own *o, const char *key) {
+    Loan **link = &o->loans;
+    while (*link) {
+        if (strcmp((*link)->key, key) == 0) *link = (*link)->next;
+        else link = &(*link)->next;
+    }
+}
+
+// target が rhs の場所を「借りて」束縛した、と記録する。
+//
+// 注意: 呼ぶのは**所有しなかった束縛**だけです（move_expr が false を返したもの・
+//   for の隠し変数）。所有した値はもう誰からも借りていません。
+static void record_loan(Own *o, Node *target, Node *rhs) {
+    if (!target->ir_name) return;
+    if (target->type && !ty_is_owned(target->type)) return;  // コピー型
+    if (rhs && ty_is_rc(rhs->type)) return;                   // rc は独立した参照
+    Place *rp = place_of(rhs);
+    if (!rp) return;
+    Loan *l = xmalloc(sizeof(Loan));
+    l->key = target->ir_name;
+    l->disp = target->name;
+    l->src = resolve_place(o, rp);  // ★ 付け替える前の表で引く（q = q.next の形）
+    forget_loan(o, target->ir_name);
+    l->next = o->loans;
+    o->loans = l;
+}
+
+// 場所 w が書き換えられた。w（またはその中）を借りている別名を無効にする。
+//
+//   strict … w **そのもの**を借りている別名は残す。`q = b.p` のあとの
+//            `b.p.bump()`（mut self）は b.p の中身を変えるだけで、
+//            b.p そのものは解放しません。代入（`b.p = …`）や移動は
+//            w そのものを手放すので、strict にしません。
+static void invalidate_loans(Own *o, Flow *f, Place *w, bool strict, bool by_move,
+                             Node *at) {
+    w = resolve_place(o, w);
+    if (!w) return;
+    for (Loan *l = o->loans; l; l = l->next) {
+        if (!place_prefix_of(w, l->src)) continue;
+        if (strict && place_eq(w, l->src)) continue;
+        Place *alias = new_place(PL_LOCAL, NULL, l->key, l->disp);
+        flow_stale(f, alias, w, l->src, by_move, at->tok);
+    }
 }
 
 // ── ⑥ 式をたどる ───────────────────────────────────────────
@@ -1040,6 +1222,18 @@ static void call_args(Own *o, Flow *f, Node *n, bool skip_self) {
     Node *fn = callee_of(o, n);
     if (!fn) {  // 組み込み関数・定義が引けないもの → すべて借用として扱う
         for (Node *a = n->args; a; a = a->next) use_expr(o, f, a);
+
+        // ★ list の組み込みメソッドのうち、要素を**手放す**もの（E-BORROW-9）。
+        //   pop / remove は取り出した要素を呼び出し側へ渡し（使わなければ
+        //   その場で解放されます）、clear は要素をまとめて捨てます。
+        //   どれも `q = xs[0]` の q を宙に浮かせます。
+        if (n->kind == ND_METHOD && n->lhs && n->lhs->type &&
+            n->lhs->type->kind == TY_LIST &&
+            (strcmp(n->name, "pop") == 0 || strcmp(n->name, "remove") == 0 ||
+             strcmp(n->name, "clear") == 0)) {
+            Place *p = place_of(n->lhs);
+            if (p) invalidate_loans(o, f, p, true, false, n->lhs);
+        }
         return;
     }
 
@@ -1068,7 +1262,7 @@ static void call_args(Own *o, Flow *f, Node *n, bool skip_self) {
         tail = tail->next = arg_ref(a, pm, pm && pm->mode == PM_MUT, WR_ARG);
         if (pm) pm = pm->next;
     }
-    check_call_borrows(o, n, head.next);
+    check_call_borrows(o, f, n, head.next);
 }
 
 // 値を「読む」文脈で式をたどる（借用）。
@@ -1173,7 +1367,7 @@ static void use_expr(Own *o, Flow *f, Node *n) {
                 //   xs.append(xs) のような自己参照も、ここで B1 に引っかかります。
                 ArgRef *recv = arg_ref(n->lhs, NULL, true, WR_APPEND);
                 if (n->args) recv->next = arg_ref(n->args, NULL, false, WR_ARG);
-                check_call_borrows(o, n, recv);
+                check_call_borrows(o, f, n, recv);
                 return;
             }
             // xs.insert(i, v) … append と同じく、コンテナが v の所有権を受け取る。
@@ -1186,7 +1380,7 @@ static void use_expr(Own *o, Flow *f, Node *n) {
                 move_expr(o, f, n->args->next, MV_APPEND);
                 ArgRef *recv = arg_ref(n->lhs, NULL, true, WR_APPEND);
                 recv->next = arg_ref(n->args->next, NULL, false, WR_ARG);
-                check_call_borrows(o, n, recv);
+                check_call_borrows(o, f, n, recv);
                 return;
             }
             // 注意: 'mod.f(args)'（他モジュールの関数・クラス）は ND_METHOD ですが
@@ -1313,6 +1507,9 @@ static bool move_expr(Own *o, Flow *f, Node *n, MoveCtx ctx) {
 
     check_use(o, f, p, n);  // 移動済みのものを再び移動するのもエラー
     flow_move(f, p, n->tok);
+    // ★ 手放した値の中を借りている別名は、もう使えません（E-BORROW-9）。
+    //   `q = b.p` のあとで `eat(b)` すると、b.p は eat の出口で解放されます。
+    invalidate_loans(o, f, p, false, true, n);
 
     // ★ codegen はこの印を見て drop フラグを 0 にします。
     if (n->kind == ND_VAR) n->moved_out = true;
@@ -1559,6 +1756,8 @@ static void stmt(Own *o, Flow *f, Node *n) {
             if (!owns && ty_is_owned(n->type)) n->binds_borrow = true;
             remember_decl(o, n);
             bind_alias(o, n, n->rhs);
+            if (owns) forget_loan(o, n->ir_name ? n->ir_name : "");
+            else record_loan(o, n, n->rhs);
             if (n->ir_name) {
                 Place *p = new_place(n->ir_name[0] == '@' ? PL_GLOBAL : PL_LOCAL,
                                      NULL, n->ir_name, n->name);
@@ -1569,6 +1768,22 @@ static void stmt(Own *o, Flow *f, Node *n) {
 
         case ND_ASSIGN:
             {
+                // ── 書き換える場所の中を借りている別名を無効にする（E-BORROW-9）──
+                //
+                // ★ 右辺より先に「何を手放すか」を決めておきます
+                //   （右辺の評価で別名の表が変わる前に）。
+                //   変数への代入で古い値を解放するのは、その変数が**自分で
+                //   所有しているとき**だけです。借りものを束縛した変数や
+                //   借用引数への代入は、何も解放しません。
+                Place *w = NULL;
+                if (n->lhs->kind != ND_VAR) {
+                    w = place_of(n->lhs);
+                } else if (n->lhs->ir_name && !is_hidden_var(n->lhs->name) &&
+                           !find_loan(o, n->lhs->ir_name)) {
+                    Place *v = place_of(n->lhs);
+                    if (v && !borrow_root_of(o, v)) w = v;
+                }
+
                 bool owns = false;
                 if (n->lhs->kind == ND_VAR && is_hidden_var(n->lhs->name))
                     use_expr(o, f, n->rhs);
@@ -1583,6 +1798,11 @@ static void stmt(Own *o, Flow *f, Node *n) {
                 // 借りものを入れ直した変数は、もう自分のものではない
                 if (n->lhs->kind == ND_VAR && !owns && ty_is_owned(n->rhs->type))
                     mark_borrow_bind(o, n->lhs->ir_name);
+                if (w) invalidate_loans(o, f, w, false, false, n->lhs);
+                if (n->lhs->kind == ND_VAR && n->lhs->ir_name) {
+                    if (owns) forget_loan(o, n->lhs->ir_name);
+                    else record_loan(o, n->lhs, n->rhs);
+                }
             }
             if (n->lhs->kind == ND_VAR) bind_alias(o, n->lhs, n->rhs);
             assign_to(o, f, n->lhs);
@@ -1742,6 +1962,7 @@ static void check_func(Own *o, Node *fn) {
     //   コピー型（int / bool）はそもそも移動しないので、入れても意味がありません。
     o->roots = NULL;
     o->decls = NULL;
+    o->loans = NULL;
     o->depth = 0;
     for (Node *pm = fn->params; pm; pm = pm->next) remember_decl(o, pm);
     for (Node *pm = fn->params; pm; pm = pm->next) {
@@ -1774,6 +1995,7 @@ static void check_func(Own *o, Node *fn) {
     o->cur_fn = NULL;
     o->roots = NULL;
     o->decls = NULL;
+    o->loans = NULL;
 }
 
 // この式は「引数に根ざした場所」か（self を含む）。

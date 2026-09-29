@@ -1,0 +1,15 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# ERROR: error[E-BORROW-9]: 'p' が借りている 'xs[…]' は、解放されているかもしれません
+# ERROR: ここで 'xs' を書き換えました
+# pop / remove / clear は要素を手放す。借りていた別名はもう使えない
+class P:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+def main() -> int:
+    xs: list[P] = [P(1)]
+    p: P = xs[0]
+    xs.pop()
+    return p.v

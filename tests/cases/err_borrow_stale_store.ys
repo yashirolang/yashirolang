@@ -1,0 +1,15 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# ERROR: error[E-BORROW-9]: 'p' が借りている 'xs[…]' は、解放されているかもしれません
+# ERROR: ここで 'xs[…]' を書き換えました
+# 要素を借りた別名は、その要素を入れ替えた後には使えない（添字は区別しない）
+class P:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+def main() -> int:
+    xs: list[P] = [P(1), P(2)]
+    p: P = xs[0]
+    xs[1] = P(9)
+    return p.v

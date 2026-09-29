@@ -84,11 +84,25 @@ class Ent:
     pl: rc[Place]
     st: int
     at: rc[ast.Node] | None   # 移動した位置（診断の note: に出す）
+    # ★ 「借りていた先が書き換えられた」ことで使えなくなった別名なら、
+    #   書き換えた場所を持ちます（E-BORROW-9。None なら普通の移動）。
+    by: rc[Place] | None
+    src: rc[Place] | None     # その別名が借りていた場所
+    by_move: bool             # by は書き換えではなく「手放した」（移動）
 
     def init(self, pl: rc[Place], st: int, at: rc[ast.Node] | None) -> None:
         self.pl = pl
         self.st = st
         self.at = at
+        self.by = None
+        self.src = None
+        self.by_move = False
+
+# 別名の記録（by / src / by_move）を写す
+def ent_copy_stale(dst: mut rc[Ent], src: rc[Ent]) -> None:
+    dst.by = src.by
+    dst.src = src.src
+    dst.by_move = src.by_move
 
 # ある時点での「全ての場所の状態」。
 #
@@ -177,7 +191,9 @@ def flow_copy(src: rc[Flow]) -> rc[Flow]:
     i: int = 0
     while i < len(src.ents):
         e: rc[Ent] = src.ents[i]
-        out.ents.append(rc(Ent(e.pl, e.st, e.at)))
+        c: rc[Ent] = rc(Ent(e.pl, e.st, e.at))
+        ent_copy_stale(c, e)
+        out.ents.append(c)
         i = i + 1
     return out
 
@@ -238,6 +254,16 @@ def flow_move(f: mut rc[Flow], p: rc[Place], at: rc[ast.Node] | None) -> None:
     flow_clear(f, p)
     f.ents.append(rc(Ent(p, ST_MOVED, at)))
 
+# 別名 p が借りていた先（by）が at で書き換えられた、と記録する（E-BORROW-9）。
+# ★ 対になる定義: src/ownck.c の flow_stale
+def flow_stale(f: mut rc[Flow], p: rc[Place], by: rc[Place], src: rc[Place],
+               by_move: bool, at: rc[ast.Node]) -> None:
+    flow_move(f, p, at)
+    e: rc[Ent] = f.ents[len(f.ents) - 1]
+    e.by = by
+    e.src = src
+    e.by_move = by_move
+
 # dst ← dst ⊔ src（合流）
 def flow_join(dst: mut rc[Flow], src: rc[Flow]) -> None:
     if src.dead:
@@ -263,6 +289,7 @@ def flow_join(dst: mut rc[Flow], src: rc[Flow]) -> None:
             sf: rc[Ent] = sfound
             if sf.at is not None:
                 e.at = sf.at   # 位置は「片方の枝」を指せれば足りる
+                ent_copy_stale(e, sf)
         e.st = joined
         i = i + 1
 
@@ -272,7 +299,9 @@ def flow_join(dst: mut rc[Flow], src: rc[Flow]) -> None:
         se: rc[Ent] = src.ents[k]
         if se.st != ST_VALID and flow_find(dst, se.pl) is None:
             # 片方が Valid なので MaybeMoved
-            dst.ents.append(rc(Ent(se.pl, st_join(ST_VALID, se.st), se.at)))
+            ne: rc[Ent] = rc(Ent(se.pl, st_join(ST_VALID, se.st), se.at))
+            ent_copy_stale(ne, se)
+            dst.ents.append(ne)
         k = k + 1
 
 def flow_eq(a: rc[Flow], b: rc[Flow]) -> bool:
@@ -591,6 +620,57 @@ class Reporter:
 
 
 
+    # ── E-BORROW-9: 借りていた先が書き換えられた別名を使った ──
+    #
+    # ★ 対になる定義: src/ownck.c の report_stale。
+    #   注意: **文面を 1 文字でも変えたら向こうも変えること。**
+    def report_stale(mut self, p: rc[Place], who: rc[Ent],
+                     at: rc[token.Token]) -> None:
+        if self.opt.quiet:
+            return
+        by: rc[Place] = place_opt(who.by)
+        src: rc[Place] = place_opt(who.src)
+        maybe: bool = who.st == ST_MAYBE
+        wt: rc[token.Token] | None = tok_of_node(who.at)
+        d: diag.Diag = diag.Diag("")
+        # ★ for の隠し変数（for.it.N）なら、回している最中に対象を入れ替えた形です。
+        if strings.startswith(who.pl.disp, "for."):
+            d = diag.Diag("for で回している '" + by.disp +
+                          "' を、回している途中で入れ替えています")
+            d.code = "E-BORROW-9"
+            d.primary = diag.Label(at, "次の周で、入れ替える前の（解放済みの）リストを読みます")
+            if wt is not None:
+                d.related = diag.Label(wt, "ここで '" + by.disp + "' を入れ替えています")
+            d.hint = ("入れ替えた後のリストを回したいなら、ループを抜けてから回し直してください" +
+                      "（回しながら作るなら、別のリストに append します）")
+            deny0: bool = self.opt.deny_borrow
+            self.emit(d, deny0)
+            return
+        verb: str = "書き換えました"
+        if who.by_move:
+            verb = "手放しました"
+        cond: str = ""
+        if maybe:
+            cond = "分岐によっては"
+        d = diag.Diag("'" + who.pl.disp + "' が借りている '" + src.disp + "' は、" +
+                      cond + "解放されているかもしれません")
+        d.code = "E-BORROW-9"
+        d.primary = diag.Label(at, "ここで使われています")
+        rel: str = "ここで '" + by.disp + "' を" + verb + "（古い値は解放されえます）"
+        if maybe:
+            rel = "分岐によっては、ここで '" + by.disp + "' を" + verb
+        if wt is not None:
+            d.related = diag.Label(wt, rel)
+        if who.by_move:
+            d.hint = ("'" + by.disp + "' を手放す前に使い終えるか、" +
+                      "copy(...) で手元に写してください")
+        else:
+            d.hint = ("書き換えた後で使うなら、読み直してください（例: " + who.pl.disp +
+                      " = " + src.disp + "）。書き換える前の値が要るなら copy(...) で" +
+                      "手元に写してください")
+        deny: bool = self.opt.deny_borrow
+        self.emit(d, deny)
+
     # ── E-BORROW-5: 同じ場所を可変借用と他の借用で同時に渡した ──
     #
     # ★ 対になる定義: src/ownck.c の report_alias
@@ -701,6 +781,23 @@ class DeclEnt:
         self.depth = depth
 
 
+# ── 別名の借り先（E-BORROW-9）──────────────────────────
+#
+# ★ BorrowRoot が答えるのは「誰の持ち物か」だけです。`q: P = b.p` のあとで
+#   `b.reset()` が b.p を解放すると q は宙に浮くので、「q が指しているのは
+#   b.p だ」という**経路**を持ちます。別名の別名は貸し手までたどり直します。
+# ★ 対になる定義: src/ownck.c の struct Loan
+class Loan:
+    key: str          # 別名の変数の IR 名（%q）
+    disp: str         # 診断に出す名前（q）
+    src: rc[Place]    # 借りている場所（b.p / xs[…]）
+
+    def init(self, key: own str, disp: own str, src: rc[Place]) -> None:
+        self.key = key
+        self.disp = disp
+        self.src = src
+
+
 # ── 検査中の文脈 ────────────────────────────────────────
 #
 # ★ 対になる定義: src/ownck.c の struct Own
@@ -709,6 +806,7 @@ class Own:
     quiet_depth: int         # >0 なら診断を出さない（while の不動点反復中）
     roots: list[rc[BorrowRoot]]  # いま検査中の関数で「借りている」変数
     decls: list[rc[DeclEnt]]     # いま検査中の関数の変数宣言
+    loans: list[rc[Loan]]        # いま検査中の関数の別名と、その借り先（E-BORROW-9）
     depth: int               # 今いるスコープの深さ（借用の寿命の検査に使う）
     cur_fn: rc[ast.Node] | None  # いま検査中の関数（診断の「直し方」に名前が要る）
     scope_depth: int         # scope: の中にいる深さ（0 なら外）
@@ -722,6 +820,7 @@ class Own:
         self.quiet_depth = 0
         self.roots = []
         self.decls = []
+        self.loans = []
         self.depth = 0
         self.cur_fn = None
         self.scope_depth = 0
@@ -856,7 +955,101 @@ def check_use(o: mut Own, f: rc[Flow], p: rc[Place], at: rc[token.Token]) -> Non
     if state_of(f, p) != ST_VALID:
         who: rc[Ent] | None = mover_of(f, p)
         if who is not None:
-            o.rep.report_use(p, who, at)
+            w: rc[Ent] = who
+            if w.by is not None:
+                o.rep.report_stale(p, w, at)
+            else:
+                o.rep.report_use(p, w, at)
+
+# None でない前提で取り出す小道具（Place 版）
+def place_opt(p: rc[Place] | None) -> rc[Place]:
+    if p is None:
+        panic("ownck: 場所がありません（呼び出し側の条件が誤っています）")
+    return p
+
+# ── 別名の借り先（E-BORROW-9）の道具 ───────────────────────
+#
+# ★ 対になる定義: src/ownck.c の find_loan / splice_place / resolve_place /
+#   forget_loan / record_loan / invalidate_loans
+def find_loan(o: Own, key: str) -> rc[Loan] | None:
+    i: int = 0
+    while i < len(o.loans):
+        l: rc[Loan] = o.loans[i]
+        if l.key == key:
+            return l
+        i = i + 1
+    return None
+
+# p の根を root に差し替えた場所を作る（q.x で q → b.p なら b.p.x）
+def splice_place(p: rc[Place], root: rc[Place]) -> rc[Place]:
+    pb: rc[Place] | None = p.base
+    if pb is None:
+        return root
+    base: rc[Place] = splice_place(place_opt(pb), root)
+    disp: str = base.disp + "." + p.key
+    if p.kind == PL_INDEX:
+        disp = base.disp + "[…]"
+    return rc(Place(p.kind, base, copy(p.key), disp))
+
+# 別名を通した場所を、貸し手の場所に直す
+def resolve_place(o: Own, p: rc[Place]) -> rc[Place]:
+    root: rc[Place] = p
+    nxt: rc[Place] | None = root.base
+    while nxt is not None:
+        root = nxt
+        nxt = root.base
+    if root.kind != PL_LOCAL:
+        return p
+    l: rc[Loan] | None = find_loan(o, root.key)
+    if l is None:
+        return p
+    return splice_place(p, place_opt(l.src))
+
+def forget_loan(o: mut Own, key: str) -> None:
+    keep: list[rc[Loan]] = []
+    i: int = 0
+    while i < len(o.loans):
+        l: rc[Loan] = o.loans[i]
+        if l.key != key:
+            keep.append(l)
+        i = i + 1
+    o.loans = keep
+
+# target が rhs の場所を「借りて」束縛した、と記録する。
+# 注意: 呼ぶのは**所有しなかった束縛**だけです。
+def record_loan(o: mut Own, target: rc[ast.Node], rhs: rc[ast.Node] | None) -> None:
+    if len(target.ir_name) == 0:
+        return
+    tt: rc[ast.Type] | None = node_type(target)
+    if tt is not None and not ty_is_owned(tt):
+        return          # コピー型
+    if rhs is not None:
+        rt: rc[ast.Type] | None = node_type(node_of_opt(rhs))
+        if rt is not None and ty_is_rc(rt):
+            return      # rc は独立した参照
+    rp: rc[Place] | None = place_of(rhs)
+    if rp is None:
+        return
+    # ★ 付け替える前の表で引く（q = q.next の形）
+    src: rc[Place] = resolve_place(o, place_opt(rp))
+    forget_loan(o, target.ir_name)
+    o.loans.append(rc(Loan(copy(target.ir_name), copy(target.name), src)))
+
+# 場所 w が書き換えられた。w（またはその中）を借りている別名を無効にする。
+#   strict … w **そのもの**を借りている別名は残す（mut self は中身を変えるだけ）
+def invalidate_loans(o: mut Own, f: mut rc[Flow], w0: rc[Place], strict: bool,
+                     by_move: bool, at: rc[ast.Node]) -> None:
+    w: rc[Place] = resolve_place(o, w0)
+    i: int = 0
+    while i < len(o.loans):
+        l: rc[Loan] = o.loans[i]
+        i = i + 1
+        if not place_prefix_of(w, l.src):
+            continue
+        if strict and place_eq(w, l.src):
+            continue
+        alias: rc[Place] = rc(Place(PL_LOCAL, None, copy(l.key), copy(l.disp)))
+        flow_stale(f, alias, w, l.src, by_move, at)
 
 # 読むだけ（所有権は動かない）
 def use_expr(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
@@ -1114,6 +1307,28 @@ def call_args(o: mut Own, f: mut rc[Flow], n: rc[ast.Node], skip_self: bool) -> 
     # ② 同じ場所を可変借用と他の借用で同時に渡していないか（B1）
     check_arg_aliases(o, refs)
 
+    # ③ 可変で渡した場所の「中」を借りている別名は、呼び出しの後では使えない
+    #   （E-BORROW-9）。対になる定義: src/ownck.c の check_call_borrows ③
+    ri: int = 0
+    while ri < len(refs):
+        r: rc[ArgRef] = refs[ri]
+        ri = ri + 1
+        if r.is_mut and r.kind != WR_APPEND:
+            rpl: rc[Place] | None = place_of(r.expr)
+            if rpl is not None:
+                invalidate_loans(o, f, place_opt(rpl), True, False, r.expr)
+
+    # ★ list の組み込みメソッドのうち、要素を**手放す**もの（E-BORROW-9）。
+    #   対になる定義: src/ownck.c の call_args（定義が引けない呼び出し）
+    if fn is None and n.kind == ast.ND_METHOD and n.lhs is not None:
+        ln: rc[ast.Node] = node_of_opt(n.lhs)
+        lt: rc[ast.Type] | None = node_type(ln)
+        if lt is not None and lt.kind == ast.TY_LIST:
+            if n.name == "pop" or n.name == "remove" or n.name == "clear":
+                lpl: rc[Place] | None = place_of(ln)
+                if lpl is not None:
+                    invalidate_loans(o, f, place_opt(lpl), True, False, ln)
+
 
 # ── 所有権を動かす（移動したら True）────────────────────────
 #
@@ -1210,6 +1425,8 @@ def move_expr(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None, ctx: int) -> 
     if tk is not None:
         check_use(o, f, pp, tk)   # 移動済みのものを再び移動するのもエラー
     flow_move(f, pp, nn)
+    # ★ 手放した値の中を借りている別名は、もう使えません（E-BORROW-9）。
+    invalidate_loans(o, f, pp, False, True, nn)
 
     # ★ codegen はこの印を見て drop フラグを 0 にします。
     if nn.kind == ast.ND_VAR:
@@ -1530,6 +1747,10 @@ def stmt(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
             nn.binds_borrow = True
         remember_decl(o, nn)
         bind_alias(o, nn, nn.rhs)
+        if owns:
+            forget_loan(o, nn.ir_name)
+        else:
+            record_loan(o, nn, nn.rhs)
         if len(nn.ir_name) > 0:
             pk: int = PL_LOCAL
             if strings.startswith(nn.ir_name, "@"):
@@ -1539,6 +1760,16 @@ def stmt(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
 
     if k == ast.ND_ASSIGN:
         lhs: rc[ast.Node] = node_of_opt(nn.lhs)
+        # ── 書き換える場所の中を借りている別名を無効にする（E-BORROW-9）──
+        #   対になる定義: src/ownck.c の stmt（ND_ASSIGN）
+        w: rc[Place] | None = None
+        if lhs.kind != ast.ND_VAR:
+            w = place_of(lhs)
+        elif (len(lhs.ir_name) > 0 and not is_hidden_var(lhs.name) and
+                find_loan(o, lhs.ir_name) is None):
+            v: rc[Place] | None = place_of(lhs)
+            if v is not None and o.borrow_root_of(place_opt(v)) is None:
+                w = v
         owns2: bool = False
         if lhs.kind == ast.ND_VAR and is_hidden_var(lhs.name):
             use_expr(o, f, nn.rhs)
@@ -1554,6 +1785,13 @@ def stmt(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
             rt: rc[ast.Type] | None = node_type(node_of_opt(nn.rhs))
             if rt is not None and ty_is_owned(rt):
                 mark_borrow_bind(o, lhs.ir_name)
+        if w is not None:
+            invalidate_loans(o, f, place_opt(w), False, False, lhs)
+        if lhs.kind == ast.ND_VAR and len(lhs.ir_name) > 0:
+            if owns2:
+                forget_loan(o, lhs.ir_name)
+            else:
+                record_loan(o, lhs, nn.rhs)
         if lhs.kind == ast.ND_VAR:
             bind_alias(o, lhs, nn.rhs)
         assign_to(o, f, lhs)
@@ -1832,6 +2070,7 @@ def check_func(o: mut Own, fn: rc[ast.Node]) -> None:
     #   コピー型（int / bool）はそもそも移動しないので、入れても意味がありません。
     o.roots = []
     o.decls = []
+    o.loans = []
     o.depth = 0
 
     pm: rc[ast.Node] | None = fn.params
@@ -1870,6 +2109,7 @@ def check_func(o: mut Own, fn: rc[ast.Node]) -> None:
     o.cur_fn = None
     o.roots = []
     o.decls = []
+    o.loans = []
 
 # モジュール 1 つのトップレベルを検査する
 def check_module(o: mut Own, root: rc[ast.Node]) -> None:
@@ -2152,7 +2392,9 @@ def check_arg_aliases(o: mut Own, args: list[rc[ArgRef]]) -> None:
                 if pa is not None and pb is not None:
                     ppa: rc[Place] = pa
                     ppb: rc[Place] = pb
-                    if place_overlaps(ppa, ppb):
+                    # ★ 別名は借り先に直してから比べます（E-BORROW-9 と同じ表）。
+                    if (place_overlaps(ppa, ppb) or
+                            place_overlaps(resolve_place(o, ppa), resolve_place(o, ppb))):
                         if a.is_mut:
                             o.rep.report_alias(a, b, ppa)
                         else:

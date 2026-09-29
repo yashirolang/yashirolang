@@ -1,0 +1,25 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# ERROR: error[E-BORROW-9]: 'q' が借りている 'b.p' は、分岐によっては解放されているかもしれません
+# ERROR: 分岐によっては、ここで 'b' を書き換えました
+# 片方の枝で書き換えれば、合流した後は使えない（移動と同じ合流の規則）
+class P:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+class Box:
+    p: P
+
+    def init(self, p: own P) -> None:
+        self.p = p
+
+    def reset(mut self) -> None:
+        self.p = P(7)
+
+def main() -> int:
+    b: Box = Box(P(1))
+    q: P = b.p
+    if len(str(q.v)) > 5:
+        b.reset()
+    return q.v

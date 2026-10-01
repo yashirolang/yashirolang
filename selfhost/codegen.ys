@@ -4884,20 +4884,6 @@ class Emitter:
         # ③ 本体
         self.gen_stmt(node_of(n.body))
 
-        # ── 伝播ブロック（呼び出し元へエラーをそのまま返す）──
-        #
-        # ★ 使われたときだけ出します（使わないブロックは LLVM が嫌がる）
-        if self.prop_used:
-            self.emit_label("err.propagate")
-            # ★ 伝播で抜けるときも、抜けるスコープを全部解放します。
-            if self.drop:
-                self.emit_drops_until(None)
-            self.ensure_err_type()
-            ev: str = self.new_tmp()
-            self.emit("  " + ev + " = load %pl.err, ptr %err.slot\n")
-            self.emit("  store %pl.err " + ev + ", ptr %err.out\n")
-            self.emit_default_ret()
-
         # ④ 終端されていなければ終端する（規約 R6）
         if not self.terminated:
             # ★ 契約（A-29）：**最後まで落ちてくる出口**でも ensures を確かめる。
@@ -4914,6 +4900,25 @@ class Emitter:
             else:
                 # 全経路 return は sema が保証済み
                 self.emit("  unreachable\n")
+            self.terminated = True
+
+        # 注意: **④ は伝播ブロックより先に出します。** 逆にすると、末尾まで落ちてくる
+        #   出口が伝播ブロックへそのまま流れ込み、成功したのに初期化されていない
+        #   err.slot を呼び出し元へ写して返します（0.42.0 まで）。
+        #   対になる定義: src/codegen.c の gen_func
+        # ── 伝播ブロック（呼び出し元へエラーをそのまま返す）──
+        #
+        # ★ 使われたときだけ出します（使わないブロックは LLVM が嫌がる）
+        if self.prop_used:
+            self.emit_label("err.propagate")
+            # ★ 伝播で抜けるときも、抜けるスコープを全部解放します。
+            if self.drop:
+                self.emit_drops_until(None)
+            self.ensure_err_type()
+            ev: str = self.new_tmp()
+            self.emit("  " + ev + " = load %pl.err, ptr %err.slot\n")
+            self.emit("  store %pl.err " + ev + ", ptr %err.out\n")
+            self.emit_default_ret()
 
         # ⑤ 組み立て
         out: list[str] = []

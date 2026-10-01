@@ -1,0 +1,38 @@
+# OUTPUT: 0 回: ok
+# OUTPUT: 1 回: ok
+# OUTPUT: 失敗: だめ
+# raises する None の関数が、raises する呼び出しを 1 度も通らずに末尾まで落ちても成功になる。
+#         ★ 0.42.0 までは、末尾まで落ちる出口が伝播ブロックへ流れ込み、
+#           初期化されていない err.slot（ゴミのエラー番号）を返していました。
+#           except の振り分けがどれにも当たらず unreachable（SIGILL）で落ちます
+class Oops:
+    message: str
+
+    def init(self, message: own str) -> None:
+        self.message = message
+
+def check(x: int) -> None raises Oops:
+    if x < 0:
+        raise Oops("だめ")
+
+def repeat_check(n: int) -> None raises Oops:
+    i: int = 0
+    while i < n:
+        check(i)
+        i = i + 1
+
+def run(n: int) -> None:
+    try:
+        repeat_check(n)
+        print(str(n) + " 回: ok")
+    except Oops as e:
+        print("失敗: " + e.message)
+
+def main() -> int:
+    run(0)
+    run(1)
+    try:
+        check(-1)
+    except Oops as e:
+        print("失敗: " + e.message)
+    return 0

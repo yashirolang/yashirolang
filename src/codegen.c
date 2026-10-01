@@ -5295,19 +5295,6 @@ static void gen_func(Emitter *e, Node *n) {
     // ③ 本体
     gen_stmt(e, n->body);
 
-    // ── 伝播ブロック（呼び出し元へエラーをそのまま返す）──
-    //
-    // ★ 使われたときだけ出します（使わないブロックがあると LLVM が警告します）。
-    if (e->prop_used) {
-        emit_label(e, e->prop_label);
-        if (e->drop) emit_drops_until(e, NULL);
-        ensure_err_type(e);
-        char *ev = new_tmp(e);
-        sb_printf(&e->fn, "  %s = load %%pl.err, ptr %%err.slot\n", ev);
-        sb_printf(&e->fn, "  store %%pl.err %s, ptr %%err.out\n", ev);
-        emit_default_ret(e);
-    }
-
     // ④ 終端されていなければ終端する（規約 R6）
     if (!e->terminated) {
         // ★ 契約（A-29）：**最後まで落ちてくる出口**でも ensures を確かめます。
@@ -5322,7 +5309,27 @@ static void gen_func(Emitter *e, Node *n) {
             // 「if/else の両方が return して合流点が到達不能」の場合。
             sb_printf(&e->fn, "  unreachable\n");
         }
+        e->terminated = true;
     }
+
+    // 注意: **④ は伝播ブロックより先に出します。** 逆にすると、末尾まで落ちてくる
+    //   出口が伝播ブロックのラベルへ「そのまま流れ込み」（emit_label が br を補う）、
+    //   成功したのに err.slot を呼び出し元へ写して返します。中で raises する呼び出しを
+    //   1 度も通らなかった経路では err.slot は初期化されていないので、**ゴミのエラー番号**
+    //   が返り、呼び出し側の except の振り分けが unreachable に落ちていました（0.42.0 まで）。
+    // ── 伝播ブロック（呼び出し元へエラーをそのまま返す）──
+    //
+    // ★ 使われたときだけ出します（使わないブロックがあると LLVM が警告します）。
+    if (e->prop_used) {
+        emit_label(e, e->prop_label);
+        if (e->drop) emit_drops_until(e, NULL);
+        ensure_err_type(e);
+        char *ev = new_tmp(e);
+        sb_printf(&e->fn, "  %s = load %%pl.err, ptr %%err.slot\n", ev);
+        sb_printf(&e->fn, "  store %%pl.err %s, ptr %%err.out\n", ev);
+        emit_default_ret(e);
+    }
+
     e->scope = NULL;
 
     // ⑤ 組み立て

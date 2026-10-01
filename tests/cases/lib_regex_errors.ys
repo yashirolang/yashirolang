@@ -1,0 +1,54 @@
+# OUTPUT: (a -> 正規表現の 0 バイト目: '(' に対応する ')' がありません
+# OUTPUT: a) -> 正規表現の 1 バイト目: ')' に対応する '(' がありません
+# OUTPUT: [ab -> 正規表現の 0 バイト目: '[' に対応する ']' がありません
+# OUTPUT: *a -> 正規表現の 0 バイト目: 繰り返す相手がありません（'*'）
+# OUTPUT: a** -> 正規表現の 2 バイト目: 繰り返しを重ねて書けません（'*'）
+# OUTPUT: a{3,1} -> 正規表現の 6 バイト目: {m,n} の n が m より小さくなっています
+# OUTPUT: a{1001} -> 正規表現の 7 バイト目: 繰り返しの数は 1000 までです
+# OUTPUT: [z-a] -> 正規表現の 4 バイト目: 範囲の向きが逆です（右の文字が左より小さい）
+# OUTPUT: \q -> 正規表現の 2 バイト目: 知らない \ の書き方です（\q）
+# OUTPUT: (a)\1 -> 正規表現の 5 バイト目: 後方参照（\1）は書けません。後戻りが要り、入力の長さに比例する時間で終わる約束が守れなくなります
+# OUTPUT: (?=a) -> 正規表現の 2 バイト目: 先読み・後読みは書けません。後戻りが要り、入力の長さに比例する時間で終わる約束が守れなくなります
+# OUTPUT: (?<!a)b -> 正規表現の 2 バイト目: 先読み・後読みは書けません。後戻りが要り、入力の長さに比例する時間で終わる約束が守れなくなります
+# OUTPUT: ^* -> 正規表現の 2 バイト目: 位置（^ $ \b \B）は繰り返せません
+# OUTPUT: (?P<n>a)(?P<n>b) -> 正規表現の 14 バイト目: 組の名前 'n' が 2 回出てきます
+# OUTPUT: (?:a{1000}){1000} -> 正規表現が大きすぎます（命令が 20000 を超えます。{m,n} の数を小さくしてください）
+# OUTPUT: 置き換え: 置き換え文字列の \5: 組 5 はありません
+# OUTPUT: 置き換え: 置き換え文字列の \g<z>: その名前の組はありません
+# 正規表現の誤りは panic ではなく RegexError で返す（パターンは外から来ることがある）。
+# ★ 後方参照と先読み・後読みは「書けない」と、なぜかまで言う
+import regex
+
+def try_compile(pat: str) -> None:
+    try:
+        r: regex.Regex = regex.compile(pat)
+        print(pat + " -> 通りました")
+    except regex.RegexError as e:
+        print(pat + " -> " + e.message)
+
+def try_sub(pat: str, repl: str) -> None:
+    try:
+        r: regex.Regex = regex.compile(pat)
+        print(r.sub("ab", repl))
+    except regex.RegexError as e:
+        print("置き換え: " + e.message)
+
+def main() -> int:
+    try_compile("(a")
+    try_compile("a)")
+    try_compile("[ab")
+    try_compile("*a")
+    try_compile("a**")
+    try_compile("a{3,1}")
+    try_compile("a{1001}")
+    try_compile("[z-a]")
+    try_compile("\\q")
+    try_compile("(a)\\1")
+    try_compile("(?=a)")
+    try_compile("(?<!a)b")
+    try_compile("^*")
+    try_compile("(?P<n>a)(?P<n>b)")
+    try_compile("(?:a{1000}){1000}")
+    try_sub("(a)", "\\5")
+    try_sub("(a)", "\\g<z>")
+    return 0

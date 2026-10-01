@@ -1,0 +1,86 @@
+# OUTPUT: abc 2 5
+# OUTPUT: 03-1234 03 1234
+# OUTPUT: なし なし [b]
+# OUTPUT: [abc] [あいう] [bc]
+# OUTPUT: [aaa] [aaab] [foo]
+# OUTPUT: full 2026-10-01 年=2026 None
+# OUTPUT: 1/22/333 | [0] | [b] | [0]
+# OUTPUT: 壊れた UTF-8 でも止まらない 1
+# 正規表現（lib/regex）。位置はバイトで返し、単位は UTF-8 の 1 文字。
+import regex
+
+def show(r: regex.Regex, s: str) -> str:
+    m: regex.Match | None = r.search(s)
+    if m is None:
+        return "なし"
+    mm: regex.Match = m
+    return "[" + mm.text + "]"
+
+def run() -> None raises regex.RegexError:
+    r1: regex.Regex = regex.compile("abc")
+    m1: regex.Match | None = r1.search("xxabcxx")
+    if m1 is not None:
+        mm1: regex.Match = m1
+        print(mm1.text + " " + str(mm1.start) + " " + str(mm1.end))
+
+    r2: regex.Regex = regex.compile("(\\d+)-(\\d+)")
+    m2: regex.Match | None = r2.search("tel: 03-1234")
+    if m2 is not None:
+        mm2: regex.Match = m2
+        a: str | None = mm2.group(1)
+        b: str | None = mm2.group(2)
+        if a is not None and b is not None:
+            print(mm2.text + " " + a + " " + b)
+
+    # ^ $ は文字列の先頭・末尾だけ
+    print(show(regex.compile("^ab"), "cab") + " " + show(regex.compile("a$"), "ab") + " " +
+          show(regex.compile("b$"), "ab"))
+    # 否定クラス・UTF-8 の 1 文字・選択（左が優先）
+    print(show(regex.compile("[^0-9]+"), "123abc456") + " " +
+          show(regex.compile("あ.う"), "xあいう") + " " +
+          show(regex.compile("a|bc|d"), "xbcd"))
+    # 回数・最短一致・単語の境目
+    print(show(regex.compile("a{2,3}"), "aaaa") + " " + show(regex.compile("a*?b"), "aaab") +
+          " " + show(regex.compile("\\bfoo\\b"), "a foo b"))
+
+    # fullmatch と名前つきの組。加わらなかった組は None
+    r3: regex.Regex = regex.compile("(?P<y>\\d{4})-(\\d\\d)-(\\d\\d)(x)?")
+    m3: regex.Match | None = r3.fullmatch("2026-10-01")
+    if m3 is not None:
+        mm3: regex.Match = m3
+        y: str | None = mm3.named("y")
+        x: str | None = mm3.group(4)
+        ys: str = "?"
+        if y is not None:
+            ys = y
+        xs: str = "None"
+        if x is not None:
+            xs = x
+        print("full " + mm3.text + " 年=" + ys + " " + xs)
+
+    # findall は一致した部分全体
+    r4: regex.Regex = regex.compile("\\d+")
+    got: list[str] = r4.findall("a1b22c333")
+    out: str = ""
+    for g in got:
+        if len(out) > 0:
+            out = out + "/"
+        out = out + g
+    none: list[str] = r4.findall("abc")
+    print(out + " | [" + str(len(none)) + "] | " + show(regex.compile("[]b]"), "ab") +
+          " | [" + str(len(regex.compile("x").findall(""))) + "]")
+
+    # 壊れた UTF-8（0xFF）でも 1 バイトを 1 文字として進む
+    bad: str = "a" + chr(255) + "b"
+    mb: regex.Match | None = regex.compile(".b").search(bad)
+    if mb is not None:
+        mmb: regex.Match = mb
+        print("壊れた UTF-8 でも止まらない " + str(mmb.start))
+
+def main() -> int:
+    try:
+        run()
+    except regex.RegexError as e:
+        print("RegexError: " + e.message)
+        return 1
+    return 0

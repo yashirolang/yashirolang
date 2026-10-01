@@ -1,0 +1,26 @@
+# OUTPUT: (a+)+$ 見つからない
+# OUTPUT: (a|aa)*c 見つからない
+# OUTPUT: (.*a){12} 見つからない
+# ★ 後戻りする方式（Python の re・PCRE）なら指数時間になる形を、5 万文字で通す。
+#   Pike VM は「命令の数 × 入力の長さ」で終わるので、1 秒もかかりません
+#   （Python の re は (a+)+$ に a を 24 個渡すだけで 1.6 秒かかります）。
+import regex
+import strings
+
+def check(pat: str, s: str) -> None raises regex.RegexError:
+    r: regex.Regex = regex.compile(pat)
+    if r.search(s) is None:
+        print(pat + " 見つからない")
+    else:
+        print(pat + " 見つかった")
+
+def main() -> int:
+    s: str = strings.repeat("a", 50000) + "b"
+    try:
+        check("(a+)+$", s)
+        check("(a|aa)*c", s)
+        check("(.*a){12}", strings.repeat("a", 11) + strings.repeat("b", 5000))
+    except regex.RegexError as e:
+        print(e.message)
+        return 1
+    return 0

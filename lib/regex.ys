@@ -1,0 +1,970 @@
+# regex — 正規表現
+#
+# 使い方:
+#
+#   r: regex.Regex = regex.compile("(\\d+)-(\\d+)")     # 失敗は raises RegexError
+#   m: regex.Match | None = r.search("tel: 03-1234")
+#   if m is not None:
+#       print(m.text)            # 03-1234
+#       print(m.start)           # 5（バイト位置。s[m.start:m.end] で切り出せます）
+#       g: str | None = m.group(2)
+#
+#   r.fullmatch(s)               # 全体が一致したときだけ Match
+#   r.findall(s)                 # 一致した部分の list[str]
+#   r.sub(s, "<\\1>")            # 置き換え（\1〜\9 と \g<名前> が使えます）
+#   r.split(s)                   # 一致した部分で分ける
+#
+# ★ **どんな入力でも、入力の長さに比例する時間で終わります。**
+#   後戻りする方式（Python の re・PCRE）は、`(a+)+$` に "aaaa…ab" を渡すだけで
+#   指数時間になり、外から来た 1 行でプログラムが止まります（ReDoS）。
+#   ここは Pike VM（すべての候補を 1 文字ずつ並べて進める方式）なので、
+#   かかる時間は「命令の数 × 入力の長さ」で抑えられます（Go の regexp・RE2 と同じ）。
+#
+# 注意: **後方参照（\1）と先読み・後読み（(?= (?! (?<= (?<!）は書けません。**
+#   どちらも後戻りが要り、上の約束が守れなくなるためです。書くと RegexError です。
+#
+# 注意: 単位は **UTF-8 の 1 文字**です（`.` は「あ」1 文字に当たります）。
+#   位置（start / end）は**バイト**で返します。`s[m.start:m.end]` がそのまま使えます。
+#
+# 注意: `\d` `\w` `\s` は **ASCII だけ**です（Python は既定で Unicode 全体）。
+#   日本語の文字は `[ぁ-ん]` のように範囲で書いてください。
+#
+# 注意: `$` は**文字列の末尾だけ**に当たります（Python のように末尾の改行の前には
+#   当たりません）。複数行モード・大文字小文字の無視はまだありません。
+#
+# 注意: Python の `re.match` に当たる名前はありません（`match` は予約語です）。
+#   先頭からの一致は `^` を付けて `search` してください。
+import strings
+
+# 命令が増えすぎるパターンを断る上限（{m,n} の展開で増えます）
+MAX_PROG: int = 20000
+# {m,n} に書ける数の上限
+MAX_REPEAT: int = 1000
+
+
+# パターンの誤り
+class RegexError:
+    message: str
+
+    def init(self, message: own str) -> None:
+        self.message = message
+
+
+# ── 構文木 ────────────────────────────────────────────────
+
+N_EMPTY: int = 0
+N_LIT: int = 1      # cp
+N_ANY: int = 2      # 改行以外の 1 文字
+N_CLASS: int = 3    # cls（文字クラスの番号）
+N_CAT: int = 4      # kids を順に
+N_ALT: int = 5      # kids のどれか（左が優先）
+N_GROUP: int = 6    # cap（捕まえる番号。-1 なら捕まえない）, kids[0]
+N_REPEAT: int = 7   # lo, hi（-1 は上限なし）, greedy, kids[0]
+N_BOL: int = 8      # ^
+N_EOL: int = 9      # $
+N_WORDB: int = 10   # \b
+N_NWORDB: int = 11  # \B
+
+
+class Node:
+    kind: int
+    cp: int
+    cls: int
+    cap: int
+    lo: int
+    hi: int
+    greedy: bool
+    kids: list[rc[Node]]
+
+    def init(self, kind: int) -> None:
+        self.kind = kind
+        self.cp = 0
+        self.cls = 0
+        self.cap = -1
+        self.lo = 0
+        self.hi = 0
+        self.greedy = True
+        self.kids = []
+
+
+# ── 命令 ──────────────────────────────────────────────────
+
+OP_CHAR: int = 0     # a が今の文字なら次へ
+OP_ANY: int = 1      # 改行以外なら次へ
+OP_CLASS: int = 2    # 文字クラス a に入っていれば次へ
+OP_SPLIT: int = 3    # a と b の両方へ（a が優先）
+OP_JMP: int = 4      # a へ
+OP_SAVE: int = 5     # 位置を捕獲の a 番目に書く
+OP_MATCH: int = 6
+OP_BOL: int = 7
+OP_EOL: int = 8
+OP_WORDB: int = 9
+OP_NWORDB: int = 10
+
+
+# 文字クラス。範囲（両端を含む）の並びと、否定かどうか。
+class CharClass:
+    los: list[int]
+    his: list[int]
+    neg: bool
+
+    def init(self) -> None:
+        self.los = []
+        self.his = []
+        self.neg = False
+
+    def add(mut self, lo: int, hi: int) -> None:
+        self.los.append(lo)
+        self.his.append(hi)
+
+    def has(self, cp: int) -> bool:
+        i: int = 0
+        inside: bool = False
+        while i < len(self.los):
+            if cp >= self.los[i] and cp <= self.his[i]:
+                inside = True
+                break
+            i = i + 1
+        return inside != self.neg
+
+
+# ── 字句の小道具 ──────────────────────────────────────────
+
+# 位置 i の文字（コードポイント）と、そのバイト数。
+# 注意: 壊れた UTF-8 でも止まらないよう、足りなければ 1 バイトを 1 文字にします。
+def char_len(s: str, i: int) -> int:
+    n: int = strings.char_len_at(s, i)
+    if i + n > len(s):
+        return 1
+    return n
+
+def cp_at(s: str, i: int, n: int) -> int:
+    if n == 1:
+        return strings.byte_at(s, i)
+    return strings.code_point_at(s, i, n)
+
+def is_digit(cp: int) -> bool:
+    return cp >= 48 and cp <= 57
+
+def is_word(cp: int) -> bool:
+    return ((cp >= 48 and cp <= 57) or (cp >= 65 and cp <= 90) or
+            (cp >= 97 and cp <= 122) or cp == 95)
+
+def is_space_cp(cp: int) -> bool:
+    return cp == 32 or (cp >= 9 and cp <= 13)
+
+# \d \w \s（と大文字の否定）をクラスに足す。否定は「補集合の範囲」で足します。
+def add_shorthand(c: mut rc[CharClass], letter: str) -> None:
+    if letter == "d":
+        c.add(48, 57)
+    elif letter == "w":
+        c.add(48, 57)
+        c.add(65, 90)
+        c.add(95, 95)
+        c.add(97, 122)
+    elif letter == "s":
+        c.add(9, 13)
+        c.add(32, 32)
+    elif letter == "D":
+        c.add(0, 47)
+        c.add(58, 1114111)
+    elif letter == "W":
+        c.add(0, 47)
+        c.add(58, 64)
+        c.add(91, 94)
+        c.add(96, 96)
+        c.add(123, 1114111)
+    elif letter == "S":
+        c.add(0, 8)
+        c.add(14, 31)
+        c.add(33, 1114111)
+
+
+# ── 構文解析 ──────────────────────────────────────────────
+#
+#   alt    ::= cat ("|" cat)*
+#   cat    ::= repeat*
+#   repeat ::= atom ("*" | "+" | "?" | "{m}" | "{m,}" | "{m,n}") "?"?
+#   atom   ::= 文字 | "." | "^" | "$" | "\" 何か | "[" クラス "]" | "(" alt ")"
+class Parser:
+    pat: str
+    pos: int
+    ncap: int                 # 捕まえる組の数（0 番は全体）
+    names: list[str]          # 名前つきの組（(?P<名前>…)）の名前
+    name_caps: list[int]      # その番号
+    classes: list[rc[CharClass]]
+
+    def init(self, pat: own str) -> None:
+        self.pat = pat
+        self.pos = 0
+        self.ncap = 1
+        self.names = []
+        self.name_caps = []
+        self.classes = []
+
+    def at_end(self) -> bool:
+        return self.pos >= len(self.pat)
+
+    def peek(self) -> str:
+        n: int = char_len(self.pat, self.pos)
+        return self.pat[self.pos:self.pos + n]
+
+    def next_cp(mut self) -> int:
+        n: int = char_len(self.pat, self.pos)
+        cp: int = cp_at(self.pat, self.pos, n)
+        self.pos = self.pos + n
+        return cp
+
+    def fail(self, what: str) -> RegexError:
+        return RegexError(f"正規表現の {self.pos} バイト目: {what}")
+
+    def parse_alt(mut self) -> rc[Node] raises RegexError:
+        first: rc[Node] = self.parse_cat()
+        if self.at_end() or self.peek() != "|":
+            return first
+        alt: rc[Node] = rc(Node(N_ALT))
+        alt.kids.append(first)
+        while not self.at_end() and self.peek() == "|":
+            self.pos = self.pos + 1
+            alt.kids.append(self.parse_cat())
+        return alt
+
+    def parse_cat(mut self) -> rc[Node] raises RegexError:
+        cat: rc[Node] = rc(Node(N_CAT))
+        while not self.at_end():
+            c: str = self.peek()
+            if c == "|" or c == ")":
+                break
+            cat.kids.append(self.parse_repeat())
+        return cat
+
+    # 数を読む（無ければ -1）
+    def read_int(mut self) -> int:
+        v: int = -1
+        while not self.at_end():
+            b: int = strings.byte_at(self.pat, self.pos)
+            if b < 48 or b > 57:
+                break
+            if v < 0:
+                v = 0
+            v = v * 10 + (b - 48)
+            if v > MAX_REPEAT:
+                v = MAX_REPEAT + 1   # これ以上は数えない（下で断ります）
+            self.pos = self.pos + 1
+        return v
+
+    def parse_repeat(mut self) -> rc[Node] raises RegexError:
+        atom: rc[Node] = self.parse_atom()
+        while not self.at_end():
+            c: str = self.peek()
+            lo: int = 0
+            hi: int = 0
+            if c == "*":
+                lo = 0
+                hi = -1
+                self.pos = self.pos + 1
+            elif c == "+":
+                lo = 1
+                hi = -1
+                self.pos = self.pos + 1
+            elif c == "?":
+                lo = 0
+                hi = 1
+                self.pos = self.pos + 1
+            elif c == "{":
+                save: int = self.pos
+                self.pos = self.pos + 1
+                lo = self.read_int()
+                if lo < 0:
+                    # Python と同じく、数で始まらない { はただの文字です
+                    self.pos = save
+                    return atom
+                hi = lo
+                if not self.at_end() and self.peek() == ",":
+                    self.pos = self.pos + 1
+                    hi = self.read_int()
+                if self.at_end() or self.peek() != "}":
+                    raise self.fail("'{' に対応する '}' がありません")
+                self.pos = self.pos + 1
+                if lo > MAX_REPEAT or hi > MAX_REPEAT:
+                    raise self.fail(f"繰り返しの数は {MAX_REPEAT} までです")
+                if hi >= 0 and hi < lo:
+                    raise self.fail("{m,n} の n が m より小さくなっています")
+            else:
+                return atom
+            if atom.kind == N_BOL or atom.kind == N_EOL or atom.kind == N_WORDB or atom.kind == N_NWORDB:
+                raise self.fail("位置（^ $ \\b \\B）は繰り返せません")
+            rep: rc[Node] = rc(Node(N_REPEAT))
+            rep.lo = lo
+            rep.hi = hi
+            if not self.at_end() and self.peek() == "?":
+                rep.greedy = False
+                self.pos = self.pos + 1
+            if not self.at_end():
+                c2: str = self.peek()
+                if c2 == "*" or c2 == "+" or c2 == "?":
+                    raise self.fail("繰り返しを重ねて書けません（'" + c2 + "'）")
+            rep.kids.append(atom)
+            atom = rep
+        return atom
+
+    def new_class(mut self) -> int:
+        self.classes.append(rc(CharClass()))
+        return len(self.classes) - 1
+
+    def class_node(mut self, letter: str) -> rc[Node]:
+        k: int = self.new_class()
+        c: rc[CharClass] = self.classes[k]
+        add_shorthand(c, letter)
+        n: rc[Node] = rc(Node(N_CLASS))
+        n.cls = k
+        return n
+
+    def lit(self, cp: int) -> rc[Node]:
+        n: rc[Node] = rc(Node(N_LIT))
+        n.cp = cp
+        return n
+
+    # \ の次の 1 文字（クラスの外）
+    def parse_escape(mut self) -> rc[Node] raises RegexError:
+        if self.at_end():
+            raise self.fail("'\\' で終わっています")
+        c: str = self.peek()
+        self.pos = self.pos + len(c)
+        if c == "d" or c == "w" or c == "s" or c == "D" or c == "W" or c == "S":
+            return self.class_node(c)
+        if c == "b":
+            return rc(Node(N_WORDB))
+        if c == "B":
+            return rc(Node(N_NWORDB))
+        cp: int = self.escape_cp(c)
+        return self.lit(cp)
+
+    # 1 文字を表す \ の続き（n t r と記号）。それ以外は断る。
+    def escape_cp(self, c: str) -> int raises RegexError:
+        if c == "n":
+            return 10
+        if c == "t":
+            return 9
+        if c == "r":
+            return 13
+        if c == "f":
+            return 12
+        if c == "v":
+            return 11
+        if c == "0":
+            return 0
+        b: int = strings.byte_at(c, 0)
+        if b >= 49 and b <= 57:
+            raise self.fail("後方参照（\\" + c + "）は書けません。" +
+                            "後戻りが要り、入力の長さに比例する時間で終わる約束が守れなくなります")
+        if is_word(b) or b >= 128:
+            raise self.fail("知らない \\ の書き方です（\\" + c + "）")
+        return b
+
+    def parse_atom(mut self) -> rc[Node] raises RegexError:
+        c: str = self.peek()
+        if c == "(":
+            return self.parse_group()
+        if c == "[":
+            return self.parse_class()
+        if c == "\\":
+            self.pos = self.pos + 1
+            return self.parse_escape()
+        if c == "*" or c == "+" or c == "?":
+            raise self.fail("繰り返す相手がありません（'" + c + "'）")
+        if c == ")":
+            raise self.fail("')' に対応する '(' がありません")
+        self.pos = self.pos + len(c)
+        if c == ".":
+            return rc(Node(N_ANY))
+        if c == "^":
+            return rc(Node(N_BOL))
+        if c == "$":
+            return rc(Node(N_EOL))
+        n: int = len(c)
+        return self.lit(cp_at(c, 0, n))
+
+    def parse_group(mut self) -> rc[Node] raises RegexError:
+        start: int = self.pos
+        self.pos = self.pos + 1
+        g: rc[Node] = rc(Node(N_GROUP))
+        if not self.at_end() and self.peek() == "?":
+            self.pos = self.pos + 1
+            if self.at_end():
+                raise self.fail("'(?' で終わっています")
+            k: str = self.peek()
+            if k == ":":
+                self.pos = self.pos + 1
+            elif k == "P":
+                self.pos = self.pos + 1
+                if self.at_end() or self.peek() != "<":
+                    raise self.fail("名前つきの組は (?P<名前>…) と書きます")
+                self.pos = self.pos + 1
+                ns: int = self.pos
+                while not self.at_end() and self.peek() != ">":
+                    b: int = strings.byte_at(self.pat, self.pos)
+                    if not is_word(b):
+                        raise self.fail("組の名前に使えるのは英数字と _ だけです")
+                    self.pos = self.pos + 1
+                if self.at_end() or self.pos == ns:
+                    raise self.fail("組の名前が閉じていないか、空です")
+                name: str = self.pat[ns:self.pos]
+                self.pos = self.pos + 1
+                for nm in self.names:
+                    if nm == name:
+                        raise self.fail("組の名前 '" + name + "' が 2 回出てきます")
+                g.cap = self.ncap
+                self.ncap = self.ncap + 1
+                self.names.append(name)
+                self.name_caps.append(g.cap)
+            elif k == "=" or k == "!" or k == "<":
+                raise self.fail("先読み・後読みは書けません。" +
+                                "後戻りが要り、入力の長さに比例する時間で終わる約束が守れなくなります")
+            else:
+                raise self.fail("知らない (? の書き方です")
+        else:
+            g.cap = self.ncap
+            self.ncap = self.ncap + 1
+        g.kids.append(self.parse_alt())
+        if self.at_end() or self.peek() != ")":
+            self.pos = start
+            raise self.fail("'(' に対応する ')' がありません")
+        self.pos = self.pos + 1
+        return g
+
+    # [ … ] の中の 1 文字（\ を解いたもの）。\d などは -1 を返してクラスへ直に足す。
+    def class_cp(mut self, c: mut rc[CharClass]) -> int raises RegexError:
+        if self.peek() == "\\":
+            self.pos = self.pos + 1
+            if self.at_end():
+                raise self.fail("'\\' で終わっています")
+            e: str = self.peek()
+            self.pos = self.pos + len(e)
+            if e == "d" or e == "w" or e == "s" or e == "D" or e == "W" or e == "S":
+                add_shorthand(c, e)
+                return -1
+            if e == "b":
+                return 8      # クラスの中の \b は後退文字（Python と同じ）
+            return self.escape_cp(e)
+        return self.next_cp()
+
+    def parse_class(mut self) -> rc[Node] raises RegexError:
+        start: int = self.pos
+        self.pos = self.pos + 1
+        k: int = self.new_class()
+        c: rc[CharClass] = self.classes[k]
+        if not self.at_end() and self.peek() == "^":
+            c.neg = True
+            self.pos = self.pos + 1
+        first: bool = True
+        while True:
+            if self.at_end():
+                self.pos = start
+                raise self.fail("'[' に対応する ']' がありません")
+            # ★ 先頭の ] はただの文字です（Python と同じ。[]a] は "]" か "a"）
+            if self.peek() == "]" and not first:
+                break
+            first = False
+            lo: int = self.class_cp(c)
+            if lo < 0:
+                continue
+            if (not self.at_end() and self.peek() == "-" and self.pos + 1 < len(self.pat) and
+                    self.pat[self.pos + 1:self.pos + 2] != "]"):
+                self.pos = self.pos + 1
+                hi: int = self.class_cp(c)
+                if hi < 0:
+                    raise self.fail("範囲の端に \\d などは書けません")
+                if hi < lo:
+                    raise self.fail("範囲の向きが逆です（右の文字が左より小さい）")
+                c.add(lo, hi)
+            else:
+                c.add(lo, lo)
+        self.pos = self.pos + 1
+        n: rc[Node] = rc(Node(N_CLASS))
+        n.cls = k
+        return n
+
+
+# ── 命令へ ────────────────────────────────────────────────
+class Prog:
+    ops: list[int]
+    as_: list[int]
+    bs: list[int]
+
+    def init(self) -> None:
+        self.ops = []
+        self.as_ = []
+        self.bs = []
+
+    def emit(mut self, op: int, a: int, b: int) -> int raises RegexError:
+        if len(self.ops) >= MAX_PROG:
+            raise RegexError(f"正規表現が大きすぎます（命令が {MAX_PROG} を超えます。" +
+                             "{m,n} の数を小さくしてください）")
+        self.ops.append(op)
+        self.as_.append(a)
+        self.bs.append(b)
+        return len(self.ops) - 1
+
+    def gen(mut self, n: rc[Node]) -> None raises RegexError:
+        k: int = n.kind
+        if k == N_EMPTY:
+            return
+        if k == N_LIT:
+            self.emit(OP_CHAR, n.cp, 0)
+        elif k == N_ANY:
+            self.emit(OP_ANY, 0, 0)
+        elif k == N_CLASS:
+            self.emit(OP_CLASS, n.cls, 0)
+        elif k == N_BOL:
+            self.emit(OP_BOL, 0, 0)
+        elif k == N_EOL:
+            self.emit(OP_EOL, 0, 0)
+        elif k == N_WORDB:
+            self.emit(OP_WORDB, 0, 0)
+        elif k == N_NWORDB:
+            self.emit(OP_NWORDB, 0, 0)
+        elif k == N_CAT:
+            for kid in n.kids:
+                self.gen(kid)
+        elif k == N_GROUP:
+            if n.cap >= 0:
+                self.emit(OP_SAVE, 2 * n.cap, 0)
+            self.gen(n.kids[0])
+            if n.cap >= 0:
+                self.emit(OP_SAVE, 2 * n.cap + 1, 0)
+        elif k == N_ALT:
+            # SPLIT L1, L2 / L1: 1 つめ / JMP end / L2: SPLIT … / 最後: そのまま
+            jumps: list[int] = []
+            i: int = 0
+            while i < len(n.kids):
+                if i + 1 < len(n.kids):
+                    sp: int = self.emit(OP_SPLIT, 0, 0)
+                    self.as_[sp] = len(self.ops)
+                    self.gen(n.kids[i])
+                    jumps.append(self.emit(OP_JMP, 0, 0))
+                    self.bs[sp] = len(self.ops)
+                else:
+                    self.gen(n.kids[i])
+                i = i + 1
+            for j in jumps:
+                self.as_[j] = len(self.ops)
+        elif k == N_REPEAT:
+            self.gen_repeat(n)
+
+    # 1 回ぶんの「あってもなくてもよい」（x?）
+    def gen_optional(mut self, body: rc[Node], greedy: bool) -> None raises RegexError:
+        sp: int = self.emit(OP_SPLIT, 0, 0)
+        start: int = len(self.ops)
+        self.gen(body)
+        end: int = len(self.ops)
+        if greedy:
+            self.as_[sp] = start
+            self.bs[sp] = end
+        else:
+            self.as_[sp] = end
+            self.bs[sp] = start
+
+    def gen_repeat(mut self, n: rc[Node]) -> None raises RegexError:
+        body: rc[Node] = n.kids[0]
+        i: int = 0
+        while i < n.lo:
+            self.gen(body)
+            i = i + 1
+        if n.hi < 0:
+            # L: SPLIT body, out / body / JMP L
+            sp: int = self.emit(OP_SPLIT, 0, 0)
+            start: int = len(self.ops)
+            self.gen(body)
+            self.emit(OP_JMP, sp, 0)
+            end: int = len(self.ops)
+            if n.greedy:
+                self.as_[sp] = start
+                self.bs[sp] = end
+            else:
+                self.as_[sp] = end
+                self.bs[sp] = start
+            return
+        while i < n.hi:
+            self.gen_optional(body, n.greedy)
+            i = i + 1
+
+
+# ── 一致 ──────────────────────────────────────────────────
+
+# 一致した結果。位置はすべて**バイト**です。
+class Match:
+    start: int
+    end: int
+    text: str                  # 一致した部分全体（group(0) と同じ）
+    spans: list[int]           # 組 i の始まりが 2i、終わりが 2i+1（加わらなかった組は -1）
+    groups: list[str]          # 組 i の中身（加わらなかった組は ""）
+    names: list[str]
+    name_caps: list[int]
+
+    def init(self, s: str, caps: list[int], names: list[str],
+             name_caps: list[int]) -> None:
+        self.start = caps[0]
+        self.end = caps[1]
+        self.text = s[caps[0]:caps[1]]
+        self.spans = copy(caps)
+        self.groups = []
+        i: int = 0
+        while i + 1 < len(caps):
+            if caps[i] >= 0 and caps[i + 1] >= 0:
+                self.groups.append(s[caps[i]:caps[i + 1]])
+            else:
+                self.groups.append("")
+            i = i + 2
+        self.names = copy(names)
+        self.name_caps = copy(name_caps)
+
+    # 組の数（全体の 0 番を含む）
+    def count(self) -> int:
+        return len(self.groups)
+
+    # 組 i の中身。その組が一致に加わっていなければ None。
+    def group(self, i: int) -> str | None:
+        if i < 0 or i >= len(self.groups):
+            panic(f"Match.group: 組 {i} はありません（0〜{len(self.groups) - 1}）")
+        if self.spans[2 * i] < 0 or self.spans[2 * i + 1] < 0:
+            return None
+        return copy(self.groups[i])
+
+    # 名前つきの組（(?P<名前>…)）の中身
+    def named(self, name: str) -> str | None:
+        k: int = 0
+        while k < len(self.names):
+            if self.names[k] == name:
+                return self.group(self.name_caps[k])
+            k = k + 1
+        panic("Match.named: 組 '" + name + "' はありません")
+        return None
+
+    # 組 i の始まりと終わり（加わらなかった組は -1）
+    def span_start(self, i: int) -> int:
+        return self.spans[2 * i]
+
+    def span_end(self, i: int) -> int:
+        return self.spans[2 * i + 1]
+
+
+# Pike VM の候補の並び。候補 k の命令は pcs[k]、捕獲は caps[k*ncap:(k+1)*ncap]。
+class Threads:
+    pcs: list[int]
+    caps: list[int]
+    mark: list[int]   # 命令ごとに「この世代で足したか」（同じ命令は 1 回だけ）
+    gen: int
+
+    def init(self, nprog: int) -> None:
+        self.pcs = []
+        self.caps = []
+        self.mark = []
+        i: int = 0
+        while i < nprog:
+            self.mark.append(-1)
+            i = i + 1
+        self.gen = 0
+
+    def reset(mut self) -> None:
+        self.pcs.clear()
+        self.caps.clear()
+        self.gen = self.gen + 1
+
+
+class Regex:
+    pattern: str
+    prog: Prog
+    classes: list[rc[CharClass]]
+    ncap: int
+    names: list[str]
+    name_caps: list[int]
+
+    def init(self, pattern: own str, prog: own Prog, classes: own list[rc[CharClass]],
+             ncap: int, names: own list[str], name_caps: own list[int]) -> None:
+        self.pattern = pattern
+        self.prog = prog
+        self.classes = classes
+        self.ncap = ncap
+        self.names = names
+        self.name_caps = name_caps
+
+    # 組の数（全体の 0 番を含む）
+    def groups(self) -> int:
+        return self.ncap
+
+    # 位置 pos で、命令 pc から辿れる候補を（優先順に）足す。
+    # ★ 同じ命令は 1 世代に 1 回だけ足します。これが「命令の数 × 入力の長さ」の上限です。
+    def add(self, t: mut rc[Threads], pc: int, caps: list[int], s: str, pos: int) -> None:
+        if t.mark[pc] == t.gen:
+            return
+        t.mark[pc] = t.gen
+        op: int = self.prog.ops[pc]
+        if op == OP_JMP:
+            self.add(t, self.prog.as_[pc], caps, s, pos)
+        elif op == OP_SPLIT:
+            self.add(t, self.prog.as_[pc], caps, s, pos)
+            self.add(t, self.prog.bs[pc], caps, s, pos)
+        elif op == OP_SAVE:
+            c2: list[int] = copy(caps)
+            c2[self.prog.as_[pc]] = pos
+            self.add(t, pc + 1, c2, s, pos)
+        elif op == OP_BOL:
+            if pos == 0:
+                self.add(t, pc + 1, caps, s, pos)
+        elif op == OP_EOL:
+            if pos == len(s):
+                self.add(t, pc + 1, caps, s, pos)
+        elif op == OP_WORDB or op == OP_NWORDB:
+            before: bool = pos > 0 and is_word(strings.byte_at(s, pos - 1))
+            after: bool = pos < len(s) and is_word(strings.byte_at(s, pos))
+            at_b: bool = before != after
+            if at_b == (op == OP_WORDB):
+                self.add(t, pc + 1, caps, s, pos)
+        else:
+            t.pcs.append(pc)
+            for v in caps:
+                t.caps.append(v)
+
+    # s の pos から先で、いちばん左の一致を探す。
+    #   anchored … pos でだけ始める
+    #   full     … 末尾まで一致したものだけ
+    #   no_empty … この位置で始まる**空の**一致は採らない（-1 なら制限なし）。
+    #              空の一致のあと、同じ位置から空でない一致を探すために使います
+    # 見つからなければ空の list。
+    def run(self, s: str, pos0: int, anchored: bool, full: bool,
+            no_empty: int = -1) -> list[int]:
+        n: int = len(self.prog.ops)
+        cur: rc[Threads] = rc(Threads(n))
+        nxt: rc[Threads] = rc(Threads(n))
+        empty: list[int] = []
+        i: int = 0
+        while i < 2 * self.ncap:
+            empty.append(-1)
+            i = i + 1
+        best: list[int] = []
+        pos: int = pos0
+        cur.reset()
+        self.add(cur, 0, empty, s, pos)
+        while True:
+            if len(cur.pcs) == 0 and (len(best) > 0 or anchored):
+                break
+            clen: int = 0
+            cp: int = -1
+            if pos < len(s):
+                clen = char_len(s, pos)
+                cp = cp_at(s, pos, clen)
+            nxt.reset()
+            k: int = 0
+            while k < len(cur.pcs):
+                pc: int = cur.pcs[k]
+                base: int = k * 2 * self.ncap
+                op: int = self.prog.ops[pc]
+                ok: bool = False
+                if op == OP_MATCH:
+                    empty_here: bool = pos == no_empty and cur.caps[base] == no_empty
+                    if (not full or pos == len(s)) and not empty_here:
+                        best = cur.caps[base:base + 2 * self.ncap]
+                        best[1] = pos
+                        break     # ★ これより優先度の低い候補は捨てる（左が優先）
+                elif cp >= 0:
+                    if op == OP_CHAR:
+                        ok = cp == self.prog.as_[pc]
+                    elif op == OP_ANY:
+                        ok = cp != 10
+                    elif op == OP_CLASS:
+                        ok = self.classes[self.prog.as_[pc]].has(cp)
+                if ok:
+                    self.add(nxt, pc + 1, cur.caps[base:base + 2 * self.ncap], s, pos + clen)
+                k = k + 1
+            if pos >= len(s):
+                break
+            pos = pos + clen
+            # まだ何も見つかっていなければ、次の位置からも始める（優先度はいちばん低い）
+            if len(best) == 0 and not anchored:
+                start: list[int] = copy(empty)
+                self.add(nxt, 0, start, s, pos)
+            tmp: rc[Threads] = cur
+            cur = nxt
+            nxt = tmp
+        return best
+
+    # 先頭の SAVE 0 を前置した命令で走るので、caps[0] は始まりの位置です。
+    def make_match(self, s: str, caps: list[int]) -> Match:
+        return Match(s, caps, self.names, self.name_caps)
+
+    # s の中で最初に一致する部分
+    def search(self, s: str) -> Match | None:
+        return self.search_from(s, 0)
+
+    # s の pos バイト目から先で最初に一致する部分（^ は文字列の先頭にだけ当たります）
+    def search_from(self, s: str, pos: int) -> Match | None:
+        if pos < 0 or pos > len(s):
+            return None
+        caps: list[int] = self.run(s, pos, False, False)
+        if len(caps) == 0:
+            return None
+        return self.make_match(s, caps)
+
+    # s 全体が一致するときだけ
+    def fullmatch(self, s: str) -> Match | None:
+        caps: list[int] = self.run(s, 0, True, True)
+        if len(caps) == 0:
+            return None
+        return self.make_match(s, caps)
+
+    # 重ならない一致を左から順に（一致した部分全体の list）
+    #
+    # 注意: Python の findall は組があると組の中身を返しますが、ここは**常に全体**です
+    #   （返す型が組の有無で変わらないように）。組が要るときは matches を使ってください。
+    def findall(self, s: str) -> list[str]:
+        out: list[str] = []
+        for m in self.matches(s):
+            out.append(copy(m.text))
+        return out
+
+    # 重ならない一致を左から順に（Match の list）
+    def matches(self, s: str) -> list[Match]:
+        out: list[Match] = []
+        pos: int = 0
+        no_empty: int = -1
+        while pos <= len(s):
+            caps: list[int] = self.run(s, pos, False, False, no_empty)
+            if len(caps) == 0:
+                break
+            st: int = caps[0]
+            en: int = caps[1]
+            out.append(self.make_match(s, caps))
+            # ★ 空の一致のあとは、**同じ位置から空でない一致**を探します
+            #   （Python 3.7 以降と同じ。"b" に [a-c]?? を当てると "" と "b" の 2 つ）。
+            #   空の一致は同じ位置で 2 度採らないので、必ず先へ進みます。
+            pos = en
+            if en == st:
+                no_empty = en
+            else:
+                no_empty = -1
+        return out
+
+    # 一致した部分を repl で置き換える（count が 0 なら全部）。
+    # repl の中の \1〜\9 と \g<名前> / \g<番号> は組の中身、\\ は \ です。
+    def sub(self, s: str, repl: str, count: int = 0) -> str raises RegexError:
+        parts: list[str] = []
+        last: int = 0
+        done: int = 0
+        for m in self.matches(s):
+            if count > 0 and done >= count:
+                break
+            parts.append(s[last:m.start])
+            parts.append(self.expand(m, repl))
+            last = m.end
+            done = done + 1
+        parts.append(s[last:len(s)])
+        return strings.join(parts, "")
+
+    # 置き換え文字列を組み立てる
+    def expand(self, m: Match, repl: str) -> str raises RegexError:
+        parts: list[str] = []
+        i: int = 0
+        lit: int = 0
+        while i < len(repl):
+            if strings.byte_at(repl, i) != 92:   # '\'
+                i = i + 1
+                continue
+            parts.append(repl[lit:i])
+            if i + 1 >= len(repl):
+                raise RegexError("置き換え文字列が '\\' で終わっています")
+            b: int = strings.byte_at(repl, i + 1)
+            if b >= 48 and b <= 57:
+                k: int = b - 48
+                if k >= m.count():
+                    raise RegexError(f"置き換え文字列の \\{k}: 組 {k} はありません")
+                g: str | None = m.group(k)
+                if g is not None:
+                    parts.append(g)
+                i = i + 2
+            elif b == 103:   # 'g'
+                close: int = i + 2
+                if close >= len(repl) or strings.byte_at(repl, close) != 60:
+                    raise RegexError("置き換え文字列の \\g は \\g<名前> と書きます")
+                e: int = close + 1
+                while e < len(repl) and strings.byte_at(repl, e) != 62:
+                    e = e + 1
+                if e >= len(repl):
+                    raise RegexError("置き換え文字列の \\g<…> が閉じていません")
+                name: str = repl[close + 1:e]
+                parts.append(self.group_by_name(m, name))
+                i = e + 1
+            elif b == 92:
+                parts.append("\\")
+                i = i + 2
+            elif b == 110:
+                parts.append("\n")
+                i = i + 2
+            elif b == 116:
+                parts.append("\t")
+                i = i + 2
+            else:
+                raise RegexError("置き換え文字列に知らない \\ の書き方があります（\\" +
+                                 repl[i + 1:i + 2] + "）")
+            lit = i
+        parts.append(repl[lit:len(repl)])
+        return strings.join(parts, "")
+
+    def group_by_name(self, m: Match, name: str) -> str raises RegexError:
+        k: int = 0
+        while k < len(self.names):
+            if self.names[k] == name:
+                g: str | None = m.group(self.name_caps[k])
+                if g is None:
+                    return ""
+                return g
+            k = k + 1
+        # 数字だけなら番号として読む
+        v: int = 0
+        if len(name) == 0:
+            raise RegexError("置き換え文字列の \\g<> が空です")
+        j: int = 0
+        while j < len(name):
+            d: int = strings.byte_at(name, j)
+            if d < 48 or d > 57:
+                raise RegexError("置き換え文字列の \\g<" + name + ">: その名前の組はありません")
+            v = v * 10 + (d - 48)
+            if v >= m.count():
+                raise RegexError("置き換え文字列の \\g<" + name + ">: その番号の組はありません")
+            j = j + 1
+        g2: str | None = m.group(v)
+        if g2 is None:
+            return ""
+        return g2
+
+    # 一致した部分で分ける（maxsplit が 0 なら全部）。
+    # 注意: Python の split は組の中身も結果に混ぜますが、ここは混ぜません。
+    def split(self, s: str, maxsplit: int = 0) -> list[str]:
+        out: list[str] = []
+        last: int = 0
+        done: int = 0
+        for m in self.matches(s):
+            if maxsplit > 0 and done >= maxsplit:
+                break
+            out.append(s[last:m.start])
+            last = m.end
+            done = done + 1
+        out.append(s[last:len(s)])
+        return out
+
+
+# パターンを読んで Regex を作る。誤りは RegexError。
+def compile(pattern: str) -> Regex raises RegexError:
+    p: Parser = Parser(copy(pattern))
+    tree: rc[Node] = p.parse_alt()
+    if not p.at_end():
+        raise p.fail("')' に対応する '(' がありません")
+    # 全体を組 0 で包む
+    top: rc[Node] = rc(Node(N_GROUP))
+    top.cap = 0
+    top.kids.append(tree)
+    prog: Prog = Prog()
+    prog.gen(top)
+    prog.emit(OP_MATCH, 0, 0)
+    return Regex(copy(pattern), prog, move_out(p.classes), p.ncap,
+                 move_out(p.names), move_out(p.name_caps))

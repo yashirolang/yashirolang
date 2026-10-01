@@ -1,0 +1,41 @@
+# OUTPUT: <03>-<1234> tel
+# OUTPUT: 1234-03
+# OUTPUT: 2026年10月01日
+# OUTPUT: a-b-c | a,b,c
+# OUTPUT: -a-b--d-
+# OUTPUT: ['', 'b', '', '']
+# OUTPUT: |a|b|c|
+# OUTPUT: x\y
+# 置き換え（\1〜\9・\g<名前>・\\）と分割。空の一致の扱いは Python 3.7 以降と同じ
+import regex
+import strings
+
+def show_list(xs: list[str]) -> str:
+    parts: list[str] = []
+    for x in xs:
+        parts.append("'" + x + "'")
+    return "[" + strings.join(parts, ", ") + "]"
+
+def run() -> None raises regex.RegexError:
+    d: regex.Regex = regex.compile("\\d+")
+    print(d.sub("03-1234 tel", "<\\g<0>>"))
+    print(regex.compile("(\\d+)-(\\d+)").sub("03-1234", "\\2-\\1"))
+    date: regex.Regex = regex.compile("(?P<y>\\d{4})-(?P<m>\\d\\d)-(?P<d>\\d\\d)")
+    print(date.sub("2026-10-01", "\\g<y>年\\g<m>月\\g<d>日"))
+    sep: regex.Regex = regex.compile("[,;]\\s*")
+    print(strings.join(sep.split("a, b;c"), "-") + " | " +
+          strings.join(sep.split("a, b,c", 1), ","))
+    # 空の一致：Python の re.sub('x*', '-', 'abxd') と同じ
+    print(regex.compile("x*").sub("abxd", "-"))
+    # 空の一致のあと、同じ位置から空でない一致を探す（Python と同じ）
+    print(show_list(regex.compile("[a-c]??").findall("b.")))
+    print(strings.join(regex.compile("").split("abc"), "|"))
+    print(regex.compile("-").sub("x-y", "\\\\"))
+
+def main() -> int:
+    try:
+        run()
+    except regex.RegexError as e:
+        print("RegexError: " + e.message)
+        return 1
+    return 0

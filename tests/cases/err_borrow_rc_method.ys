@@ -1,0 +1,26 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# ERROR: error[E-BORROW-10]: 'q' が借りている 'a.p' は、解放されているかもしれません
+# ERROR: ここで 'b' を書き換えています（同じ物体を指しうる rc 越し）
+# 別の rc 越しに mut self のメソッドを呼んでも同じ（reset が p を入れ替える）
+class P:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+class Box:
+    p: P
+
+    def init(self, p: own P) -> None:
+        self.p = p
+
+    def reset(mut self) -> None:
+        self.p = P(7)
+
+def main() -> int:
+    a: rc[Box] = rc(Box(P(1)))
+    b: rc[Box] = a
+    q: P = a.p
+    b.reset()
+    x: list[int] = [1, 2, 3, 4, 5, 6, 7, 8]
+    return q.v

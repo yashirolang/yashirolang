@@ -1,0 +1,55 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# EXIT: 21
+# rc 越しの書き換えでも、借りている場所に届かないものは止めない（E-BORROW-10 の誤検出の番人）
+class P:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+    def __copy__(self) -> P:
+        return P(self.v)
+
+class Box:
+    p: P
+    name: str
+    next: rc[Box] | None
+
+    def init(self, p: own P) -> None:
+        self.p = p
+        self.name = "box"
+        self.next = None
+
+# Box に手が届かない関数（引数は int だけ。中で作った Box に書くのは関係ない）
+def fresh(n: int) -> int:
+    b: rc[Box] = rc(Box(P(n)))
+    b.p = P(n + 1)
+    return b.p.v
+
+# Box の別のフィールドだけを書く
+def rename(b: rc[Box]) -> None:
+    c: rc[Box] = b
+    c.name = "renamed"
+
+def main() -> int:
+    a: rc[Box] = rc(Box(P(1)))
+    b: rc[Box] = a
+    q: P = a.p
+    # ① 別のフィールドへの書き込み
+    b.name = "other"
+    rename(b)
+    # ② Box に手が届かない呼び出し
+    k: int = fresh(5)
+    # ③ rc の場所そのものを差し替えるだけ（中身は変わらない）
+    b.next = a
+    b.next = None
+    s: int = q.v
+    # ④ 書き換えたあとで読み直す
+    b.p = P(7)
+    q = a.p
+    s = s + q.v
+    # ⑤ 書き換える前の値が要るなら copy で写す
+    keep: P = copy(a.p)
+    b.p = P(9)
+    s = s + keep.v
+    return s + k

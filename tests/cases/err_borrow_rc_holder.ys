@@ -1,0 +1,33 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# ERROR: error[E-BORROW-10]: 'q' が借りている 'a.p' は、解放されているかもしれません
+# ERROR: この 'smash(…)' の中で、同じ物体を指しうる rc 越しに書き換えられます
+# 同じ Box を指す rc を持っている別の物体を書き換える形。
+#         ★ smash は Holder.other 越しに Box.p を書きます（呼び先までたどって見ます）
+class P:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+class Box:
+    p: P
+
+    def init(self, p: own P) -> None:
+        self.p = p
+
+class Holder:
+    other: rc[Box]
+
+    def init(self, o: rc[Box]) -> None:
+        self.other = o
+
+    def smash(mut self) -> None:
+        self.other.p = P(5)
+
+def main() -> int:
+    a: rc[Box] = rc(Box(P(1)))
+    h: Holder = Holder(a)
+    q: P = a.p
+    h.smash()
+    x: list[int] = [1, 2, 3, 4, 5, 6, 7, 8]
+    return q.v

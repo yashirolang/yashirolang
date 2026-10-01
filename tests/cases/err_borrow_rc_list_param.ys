@@ -1,0 +1,29 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# ERROR: error[E-BORROW-10]: 'q' が借りている 'xs[…]' は、解放されているかもしれません
+# ERROR: ここで 'c.items' を書き換えています（同じ物体を指しうる rc 越し）
+# 借りている list の引数も、呼び出し側では rc の中身のフィールドかもしれない。
+#         ★ xs は a.items で、c.items = [] がその list ごと解放します
+class P:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+class Holder:
+    items: list[P]
+
+    def init(self) -> None:
+        self.items = []
+
+def bad(xs: list[P], other: rc[Holder]) -> int:
+    q: P = xs[0]
+    c: rc[Holder] = other
+    c.items = []
+    x: list[int] = [1, 2, 3, 4, 5, 6, 7, 8]
+    return q.v
+
+def main() -> int:
+    a: rc[Holder] = rc(Holder())
+    a.items.append(P(1))
+    b: rc[Holder] = a
+    return bad(a.items, b)

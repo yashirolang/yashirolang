@@ -177,6 +177,7 @@ struct Ent {
     Place *by;
     Place *src;       // その別名が借りていた場所（by の中のどこか）
     bool by_move;     // by は書き換えではなく「手放した」（移動）
+    bool by_rc;       // 同じ物体を指しうる別の rc 越しの書き換え（E-BORROW-10）
     Ent *next;
 };
 
@@ -244,6 +245,7 @@ static void flow_move(Flow *f, Place *p, Token *at) {
     e->by = NULL;
     e->src = NULL;
     e->by_move = false;
+    e->by_rc = false;
     e->next = f->ents;
     f->ents = e;
 }
@@ -275,6 +277,7 @@ static void flow_join(Flow *dst, const Flow *src) {
             e->by = s->by;
             e->src = s->src;
             e->by_move = s->by_move;
+            e->by_rc = s->by_rc;
         }
         e->st = joined;
     }
@@ -352,11 +355,41 @@ struct DeclEnt {
 //   それを言うには「q が指しているのは b.p だ」という**経路**が要ります。
 //   ここに持つのはその経路で、別名の別名（`r = q.x`）は貸し手まで
 //   たどり直して持ちます（r → b.p.x）。
+// 借りている場所が「ほかから指されうる物体」の中を通っているとき、
+// その物体のクラスと、そこから先の経路（E-BORROW-10）。
+//
+// ★ 名前の経路（Place）だけでは、同じ物体を指す**別の rc** が見えません。
+//     a: rc[Box] = …;  b = a;  q = a.p;  b.p = P(7)   ← q が宙に浮く
+//   そこで「a の指す物体（Box）の中の .p」という形でも覚えておき、
+//   書き換えを**クラスとフィールド**で突き合わせます。
+//
+// ほかから指されうる物体は 3 つです。
+//   ・rc[T] の中身
+//   ・借りている引数（self を含む）の指すクラスと list——呼び出し側では
+//     rc[T] の中身（か、その中）かもしれません
+//   ・上の 2 つの中を通って届くクラスと list
+typedef struct RcStep RcStep;
+struct RcStep {
+    Type *cls;          // フィールドを持つクラス
+    const char *field;  // そのフィールド
+    RcStep *next;
+};
+
+typedef struct RcHop RcHop;
+struct RcHop {
+    Type *t;        // 物体の型（クラスか list）
+    Place *rest;    // 物体から先の経路（根は "<obj>"）
+    RcStep *steps;  // 物体から先で通るフィールド（クラスごと）
+    bool via_rc;    // rc[T] の中身として見つけたもの（根を置き換えても中身は残る）
+    RcHop *next;
+};
+
 typedef struct Loan Loan;
 struct Loan {
     const char *key;   // 別名の変数の IR 名（%q）
     const char *disp;  // 診断に出す名前（q）
     Place *src;        // 借りている場所（b.p / xs[…]）
+    RcHop *hops;       // 借りている場所が通る「ほかから指されうる物体」（E-BORROW-10）
     Loan *next;
 };
 
@@ -394,6 +427,9 @@ static DeclEnt *find_decl(Own *o, const char *ir_name);
 static Place *resolve_place(Own *o, Place *p);
 static void invalidate_loans(Own *o, Flow *f, Place *w, bool strict, bool by_move,
                              Node *at);
+static RcHop *hops_of(Own *o, Node *n);
+static void rc_invalidate(Own *o, Flow *f, Place *w, bool strict, bool by_move,
+                          Node *at);
 
 // 場所の根が借用引数なら、その根を返す。
 //
@@ -809,6 +845,31 @@ static void report_stale(Own *o, Place *p, Ent *who, Node *at) {
         emit_ownck(o, &d, o->opt.deny_borrow);
         return;
     }
+    // ★ 同じ物体を指しうる別の rc 越しの書き換え（E-BORROW-10）。
+    //   名前の経路では別物に見えるので、「なぜそれで壊れるのか」を言います。
+    if (who->by_rc) {
+        d.code = "E-BORROW-10";
+        d.message = diag_fmt("'%s' が借りている '%s' は、%s解放されているかもしれません",
+                             who->pl->disp, who->src->disp,
+                             maybe ? "分岐によっては" : "");
+        d.primary.tok = at->tok;
+        d.primary.label = "ここで使われています";
+        d.related.tok = who->at;
+        d.related.label =
+            strcmp(who->by->key, "<call>") == 0
+                ? diag_fmt("%sこの '%s' の中で、同じ物体を指しうる rc 越しに"
+                           "書き換えられます",
+                           maybe ? "分岐によっては、" : "", who->by->disp)
+                : diag_fmt("%sここで '%s' を書き換えています（同じ物体を指しうる rc 越し）",
+                           maybe ? "分岐によっては、" : "", who->by->disp);
+        d.hint = diag_fmt("rc は同じ物体を何か所からでも指せるので、別の名前からの"
+                          "書き換えでも '%s' の古い値は解放されえます。"
+                          "書き換えた後で使うなら読み直し、書き換える前の値が要るなら"
+                          " copy(...) で手元に写してください",
+                          who->src->disp);
+        emit_ownck(o, &d, o->opt.deny_borrow);
+        return;
+    }
     const char *verb = who->by_move ? "手放しました" : "書き換えました";
     d.message = diag_fmt("'%s' が借りている '%s' は、%s解放されているかもしれません",
                          who->pl->disp, who->src->disp,
@@ -865,6 +926,140 @@ static Place *resolve_place(Own *o, Place *p) {
     return l ? splice_place(p, l->src) : p;
 }
 
+
+// ── 同じ物体を指しうる別の rc 越しの書き換え（E-BORROW-10）─────────
+
+// rc[T] / rc[T] | None なら T
+static Type *rc_target(Type *t) {
+    if (t && t->kind == TY_OPT) t = t->elem;
+    return t && t->kind == TY_RC ? t->elem : NULL;
+}
+
+// フィールドを持つ物体のクラス（T / rc[T] / その | None）
+static Type *obj_class(Type *t) {
+    if (t && t->kind == TY_OPT) t = t->elem;
+    if (t && t->kind == TY_RC) t = t->elem;
+    return t && t->kind == TY_CLASS ? t : NULL;
+}
+
+// ほかから指されうる「入れ物」になる型（クラスか list。T | None は中身）。
+// ★ rc[T] は含めません。rc は rc_target で中身として扱います。
+static Type *container_of(Type *t) {
+    if (t && t->kind == TY_OPT) t = t->elem;
+    return t && (t->kind == TY_CLASS || t->kind == TY_LIST) ? t : NULL;
+}
+
+static RcHop *hop_new(Type *t, Place *rest, RcStep *steps, RcHop *next) {
+    RcHop *h = xmalloc(sizeof(RcHop));
+    h->t = t;
+    h->rest = rest;
+    h->steps = steps;
+    h->via_rc = false;
+    h->next = next;
+    return h;
+}
+
+static RcStep *step_new(Type *cls, const char *field, RcStep *next) {
+    RcStep *s = xmalloc(sizeof(RcStep));
+    s->cls = cls;
+    s->field = field;
+    s->next = next;
+    return s;
+}
+
+static Place *obj_root(void) { return new_place(PL_LOCAL, NULL, "<obj>", "<obj>"); }
+
+// 式 n の指す場所が通る「ほかから指されうる物体」を並べる。
+static RcHop *hops_of(Own *o, Node *n) {
+    if (!n) return NULL;
+    RcHop *hs = NULL;
+    switch (n->kind) {
+        case ND_VAR: {
+            if (!n->ir_name || n->ir_name[0] == '@') break;
+            // 別名なら、貸し手が通っていたものを引き継ぐ（r = q.x で q → a.p）
+            Loan *l = find_loan(o, n->ir_name);
+            if (l)
+                for (RcHop *h = l->hops; h; h = h->next) {
+                    hs = hop_new(h->t, h->rest, h->steps, hs);
+                    hs->via_rc = h->via_rc;
+                }
+            // 借りている引数は、呼び出し側では rc[T] の中身（か、その中）かもしれない。
+            // ★ init の self だけは除きます。作ったばかりで、まだ誰も指していません。
+            Type *c = container_of(n->type);
+            Place *v = c ? place_of(n) : NULL;
+            BorrowRoot *b = v ? borrow_root_of(o, v) : NULL;
+            if (b && b->is_param && !v->base &&
+                !(b->is_self && o->cur_fn && strcmp(o->cur_fn->name, "init") == 0))
+                hs = hop_new(c, obj_root(), NULL, hs);
+            break;
+        }
+        case ND_FIELD:
+        case ND_INDEX: {
+            if (n->kind == ND_FIELD && n->mod_name) break;
+            if (n->kind == ND_INDEX && n->lhs->type && n->lhs->type->kind == TY_STR)
+                break;
+            Type *oc = n->kind == ND_FIELD ? obj_class(n->lhs->type) : NULL;
+            for (RcHop *h = hops_of(o, n->lhs); h; h = h->next) {
+                Place *r = n->kind == ND_FIELD
+                    ? new_place(PL_FIELD, h->rest, n->name,
+                                diag_fmt("%s.%s", h->rest->disp, n->name))
+                    : new_place(PL_INDEX, h->rest, "[]",
+                                diag_fmt("%s[…]", h->rest->disp));
+                RcStep *st = oc ? step_new(oc, n->name, h->steps) : h->steps;
+                hs = hop_new(h->t, r, st, hs);
+                hs->via_rc = h->via_rc;
+            }
+            // ほかから指されうる物体の中にあるクラス・list も、また指されえます
+            // （借りている引数がこれを指しているかもしれません）。
+            Type *c = container_of(n->type);
+            if (hs && c) hs = hop_new(c, obj_root(), NULL, hs);
+            break;
+        }
+        default: break;
+    }
+    Type *t = rc_target(n->type);
+    if (t) {
+        hs = hop_new(t, obj_root(), NULL, hs);
+        hs->via_rc = true;
+    }
+    return hs;
+}
+
+// 別名 l を「rc 越しに書き換えられた」として無効にする。
+static void rc_stale(Flow *f, Loan *l, Place *by, bool by_move, Token *at) {
+    Place *alias = new_place(PL_LOCAL, NULL, l->key, l->disp);
+    Ent *cur = flow_find(f, alias);
+    if (cur && cur->st == ST_MOVED) return;  // 名前の経路でもう捕まえている
+    flow_stale(f, alias, by, l->src, by_move, at);
+    f->ents->by_rc = true;
+}
+
+// 場所 w（式 at）の書き換え。w が「ほかから指されうる物体」の中なら、
+// 同じクラスの物体の同じ場所（かその中）を借りている別名を無効にする。
+//
+//   strict … invalidate_loans と同じ（w そのものを借りている別名は残す）
+static void rc_invalidate(Own *o, Flow *f, Place *w, bool strict, bool by_move,
+                          Node *at) {
+    RcHop *ws = hops_of(o, at);
+    if (!ws) return;
+    for (Loan *l = o->loans; l; l = l->next) {
+        bool hit = false;
+        for (RcHop *lh = l->hops; lh && !hit; lh = lh->next)
+            for (RcHop *wh = ws; wh && !hit; wh = wh->next) {
+                // ★ 代入・移動で rc の場所そのもの（`self.cur = n`）を書くのは、
+                //   参照を差し替えるだけで、指している物体の中身は変えません。
+                //   中身を変えるのは mut で渡したとき（strict）だけです。
+                //   注意: クラス・list の場所の置き換えは、古い物体を**解放します**。
+                if (!strict && !wh->rest->base && wh->via_rc) continue;
+                if (!type_equal(lh->t, wh->t)) continue;
+                if (!place_prefix_of(wh->rest, lh->rest)) continue;
+                if (strict && place_eq(wh->rest, lh->rest)) continue;
+                hit = true;
+            }
+        if (hit) rc_stale(f, l, w, by_move, at->tok);
+    }
+}
+
 static void forget_loan(Own *o, const char *key) {
     Loan **link = &o->loans;
     while (*link) {
@@ -887,6 +1082,7 @@ static void record_loan(Own *o, Node *target, Node *rhs) {
     l->key = target->ir_name;
     l->disp = target->name;
     l->src = resolve_place(o, rp);  // ★ 付け替える前の表で引く（q = q.next の形）
+    l->hops = hops_of(o, rhs);      // ★ 同じく付け替える前に
     forget_loan(o, target->ir_name);
     l->next = o->loans;
     o->loans = l;
@@ -908,6 +1104,7 @@ static void invalidate_loans(Own *o, Flow *f, Place *w, bool strict, bool by_mov
         Place *alias = new_place(PL_LOCAL, NULL, l->key, l->disp);
         flow_stale(f, alias, w, l->src, by_move, at->tok);
     }
+    rc_invalidate(o, f, w, strict, by_move, at);
 }
 
 // ── ⑥ 式をたどる ───────────────────────────────────────────
@@ -1226,6 +1423,311 @@ static void check_spawn(Own *o, Flow *f, Node *n) {
     }
 }
 
+
+// ── 呼び出しが書き換えうるフィールド（E-BORROW-10）──────────────
+//
+// ★ rc の中身は、`mut` で受けていない関数からも書き換えられます
+//   （`c: rc[Box] = b` と写せば、c は独立した参照なので書けます）。
+//   だから「mut で渡したか」ではなく「呼び先が（呼び先までたどって）
+//   どのクラスのどのフィールドを書くか」で決めます。E-EXPORT-3 と同じ走査です。
+//
+// 注意: 関数の値・インタフェース越しの呼び出しの先は見ません
+//   （E-SEND-3 / E-EXPORT-3 と同じ限界。名前でたどれないため）。
+typedef struct FnEff FnEff;
+struct FnEff {
+    Node *fn;
+    RcStep *direct;   // 本体が直に書くフィールド
+    Node **callees;   // 本体から呼ぶ関数
+    Node **calls;     // その呼び出しのノード（引数の型を見るため。callees と同じ並び）
+    int ncallees, cap;
+    RcStep *all;      // 呼び先までたどった全体（求めたら埋まる）
+    RcHop *globals;   // 本体が触るグローバルの型（t だけ使う）
+    RcHop *gall;      // 呼び先までたどった全体
+    bool done;
+    FnEff *next;
+};
+
+static FnEff *fn_effs;
+
+// 並びを倍に広げる（xmalloc で取り直して写す）
+static void *grow(void *old, size_t used, size_t size) {
+    void *p = xmalloc(size);
+    if (old) memcpy(p, old, used);
+    return p;
+}
+
+static bool step_has(RcStep *s, Type *cls, const char *field) {
+    for (; s; s = s->next)
+        if (strcmp(s->field, field) == 0 && type_equal(s->cls, cls)) return true;
+    return false;
+}
+
+// 書き込み先の式から「どのクラスのどのフィールドか」を取り出す（xs[i] は xs）。
+static void eff_add_place(FnEff *e, Node *lhs, bool in_init) {
+    while (lhs && lhs->kind == ND_INDEX) lhs = lhs->lhs;
+    if (!lhs || lhs->kind != ND_FIELD || lhs->mod_name || !lhs->lhs) return;
+    Type *c = obj_class(lhs->lhs->type);
+    if (!c) return;
+    // ★ init の中の self.f = … は、作ったばかりの物体への書き込みです。
+    if (in_init && lhs->lhs->kind == ND_VAR && lhs->lhs->name &&
+        strcmp(lhs->lhs->name, "self") == 0)
+        return;
+    if (!step_has(e->direct, c, lhs->name)) e->direct = step_new(c, lhs->name, e->direct);
+}
+
+static void eff_add_callee(FnEff *e, Node *fn, Node *call) {
+    if (!fn || !fn->body) return;
+    if (e->ncallees == e->cap) {
+        e->cap = e->cap ? e->cap * 2 : 8;
+        e->callees = grow(e->callees, sizeof(Node *) * e->ncallees,
+                          sizeof(Node *) * e->cap);
+        e->calls = grow(e->calls, sizeof(Node *) * e->ncallees, sizeof(Node *) * e->cap);
+    }
+    e->callees[e->ncallees] = fn;
+    e->calls[e->ncallees++] = call;
+}
+
+static void eff_scan(Own *o, FnEff *e, Node *n, bool in_init);
+
+static void eff_scan_list(Own *o, FnEff *e, Node *n, bool in_init) {
+    for (; n; n = n->next) eff_scan(o, e, n, in_init);
+}
+
+static void eff_add_global(FnEff *e, Type *t) {
+    if (!t) return;
+    for (RcHop *h = e->globals; h; h = h->next)
+        if (type_equal(h->t, t)) return;
+    e->globals = hop_new(t, NULL, NULL, e->globals);
+}
+
+static void eff_scan(Own *o, FnEff *e, Node *n, bool in_init) {
+    if (!n) return;
+    // グローバル（と他モジュールのグローバル）を触るなら、その型から届く物体も書けます
+    if ((n->kind == ND_VAR || (n->kind == ND_FIELD && n->mod_name)) && n->ir_name &&
+        n->ir_name[0] == '@')
+        eff_add_global(e, n->type);
+    if (n->kind == ND_ASSIGN && n->lhs) eff_add_place(e, n->lhs, in_init);
+    // list の組み込みメソッドのうち要素を手放すもの（E-BORROW-9 と同じ 3 つ）
+    if (n->kind == ND_METHOD && n->lhs && n->lhs->type &&
+        n->lhs->type->kind == TY_LIST &&
+        (strcmp(n->name, "pop") == 0 || strcmp(n->name, "remove") == 0 ||
+         strcmp(n->name, "clear") == 0))
+        eff_add_place(e, n->lhs, in_init);
+    if (n->kind == ND_CALL || n->kind == ND_METHOD) eff_add_callee(e, callee_of(o, n), n);
+
+    Node *kids[] = {n->lhs, n->rhs, n->incr, n->els};
+    for (unsigned i = 0; i < sizeof(kids) / sizeof(kids[0]); i++)
+        eff_scan(o, e, kids[i], in_init);
+    eff_scan_list(o, e, n->body, in_init);
+    eff_scan_list(o, e, n->args, in_init);
+}
+
+static FnEff *eff_of(Own *o, Node *fn) {
+    for (FnEff *e = fn_effs; e; e = e->next)
+        if (e->fn == fn) return e;
+    FnEff *e = xmalloc(sizeof(FnEff));
+    memset(e, 0, sizeof(FnEff));
+    e->fn = fn;
+    e->next = fn_effs;
+    fn_effs = e;
+    bool in_init = fn->name && strcmp(fn->name, "init") == 0;
+    if (fn->body) eff_scan_list(o, e, fn->body->body, in_init);
+    return e;
+}
+
+// 型 t の値から（フィールド・要素・中身をたどって）クラス cls の物体に届くか。
+//
+// ★ 呼び先が書けるのは、**手の届く物体**だけです。引数にもグローバルにも
+//   Token が出てこない関数は、呼び出し側の借りている Token を書けません
+//   （その中で作った Token に書くのは、借りとは関係がありません）。
+// 注意: インタフェース・中身を持つ列挙・生ポインタは中が型から決まらないので、
+//   届くものとして扱います。
+typedef struct TySeen TySeen;
+struct TySeen {
+    Type *t;
+    TySeen *next;
+};
+
+static bool ty_reaches(Type *t, Type *cls, TySeen **seen) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_CLASS: {
+            if (type_equal(t, cls)) return true;
+            for (TySeen *q = *seen; q; q = q->next)
+                if (q->t == t) return false;
+            TySeen *q = xmalloc(sizeof(TySeen));
+            q->t = t;
+            q->next = *seen;
+            *seen = q;
+            if (!t->cls) return false;
+            for (Field *fl = t->cls->fields; fl; fl = fl->next)
+                if (ty_reaches(fl->type, cls, seen)) return true;
+            return false;
+        }
+        case TY_OPT:
+        case TY_LIST:
+        case TY_RC:
+        case TY_MUTEX:
+        case TY_THREAD: return ty_reaches(t->elem, cls, seen);
+        case TY_TUPLE:
+            for (int i = 0; i < t->nparams; i++)
+                if (ty_reaches(t->params[i], cls, seen)) return true;
+            return false;
+        case TY_IFACE:
+        case TY_PTR: return true;
+        case TY_ENUM: return t->en && t->en->has_payload;
+        default: return false;
+    }
+}
+
+// 呼び出し n の引数（受け手を含む）か、呼び先が触るグローバルから cls に届くか。
+static bool call_reaches(Node *n, RcHop *globals, Type *cls) {
+    TySeen *seen = NULL;
+    if (n->kind == ND_METHOD && n->lhs && ty_reaches(n->lhs->type, cls, &seen))
+        return true;
+    for (Node *a = n->args; a; a = a->next)
+        if (ty_reaches(a->type, cls, &seen)) return true;
+    for (RcHop *g = globals; g; g = g->next)
+        if (ty_reaches(g->t, cls, &seen)) return true;
+    return false;
+}
+
+// fn が呼び先までたどって書きうるフィールドの全体。
+//
+// ★ 呼び先の書き込みは、**その呼び出しの引数（とグローバル）から届く
+//   クラスのものだけ**を引き上げます。tokenize(str, str) の中で作った
+//   Token に書いても、呼び出し側の Token には届きません。
+//   段ごとに絞るので、再帰があっても合うように不動点まで回します。
+static bool eff_merge(Own *o, FnEff *dst, FnEff *src, Node *call) {
+    bool changed = false;
+    for (RcStep *s = src->all; s; s = s->next) {
+        if (step_has(dst->all, s->cls, s->field)) continue;
+        if (!call_reaches(call, src->gall, s->cls)) continue;
+        dst->all = step_new(s->cls, s->field, dst->all);
+        changed = true;
+    }
+    for (RcHop *g = src->gall; g; g = g->next) {
+        bool have = false;
+        for (RcHop *h = dst->gall; h; h = h->next)
+            if (type_equal(h->t, g->t)) { have = true; break; }
+        if (have) continue;
+        dst->gall = hop_new(g->t, NULL, NULL, dst->gall);
+        changed = true;
+    }
+    (void)o;
+    return changed;
+}
+
+static RcStep *eff_all(Own *o, Node *fn) {
+    FnEff *root = eff_of(o, fn);
+    if (root->done) return root->all;
+    // 呼び出しの木を集める（同じ関数は 1 回だけ。まだ求めていないものだけ）
+    int n = 0, cap = 16;
+    FnEff **q = xmalloc(sizeof(FnEff *) * cap);
+    q[n++] = root;
+    for (int i = 0; i < n; i++) {
+        for (int k = 0; k < q[i]->ncallees; k++) {
+            FnEff *c = eff_of(o, q[i]->callees[k]);
+            if (c->done) continue;
+            bool seen = false;
+            for (int j = 0; j < n; j++)
+                if (q[j] == c) { seen = true; break; }
+            if (seen) continue;
+            if (n == cap) {
+                q = grow(q, sizeof(FnEff *) * n, sizeof(FnEff *) * cap * 2);
+                cap *= 2;
+            }
+            q[n++] = c;
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        for (RcStep *s = q[i]->direct; s; s = s->next)
+            q[i]->all = step_new(s->cls, s->field, q[i]->all);
+        for (RcHop *g = q[i]->globals; g; g = g->next)
+            q[i]->gall = hop_new(g->t, NULL, NULL, q[i]->gall);
+    }
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (int i = 0; i < n; i++)
+            for (int k = 0; k < q[i]->ncallees; k++)
+                if (eff_merge(o, q[i], eff_of(o, q[i]->callees[k]), q[i]->calls[k]))
+                    changed = true;
+    }
+    for (int i = 0; i < n; i++) q[i]->done = true;
+    return root->all;
+}
+
+// 呼び出し n（呼び先 fn）が、借りている別名の通り道を書き換えうるなら無効にする。
+static void rc_invalidate_call(Own *o, Flow *f, Node *n, Node *fn) {
+    if (!o->loans || !fn) return;
+    RcStep *eff = NULL;
+    RcHop *gl = NULL;
+    bool got = false;
+    for (Loan *l = o->loans; l; l = l->next) {
+        const char *hitf = NULL;
+        for (RcHop *h = l->hops; h && !hitf; h = h->next) {
+            if (!h->steps) continue;
+            if (!got) {
+                eff = eff_all(o, fn);
+                gl = eff_of(o, fn)->gall;
+                got = true;
+            }
+            for (RcStep *s = h->steps; s && !hitf; s = s->next)
+                if (step_has(eff, s->cls, s->field) && call_reaches(n, gl, s->cls))
+                    hitf = s->field;
+        }
+        if (!hitf) continue;
+        Place *by = new_place(PL_LOCAL, NULL, "<call>",
+                              diag_fmt("%s(…)", fn->name ? fn->name : "?"));
+        rc_stale(f, l, by, false, n->tok);
+    }
+}
+
+// 呼び先が名前で決まらない呼び出し（インタフェース越し・関数の値）。
+//
+// ★ E-SEND-3 / E-EXPORT-3 はここを見ませんが、この検査は**見ます**。
+//   中身が分からないので「引数（受け手を含む）か、プログラムのどこかで触る
+//   グローバルから届く物体なら、どのフィールドでも書かれうる」とします。
+static RcHop *all_globals;
+static bool all_globals_done;
+
+static RcHop *program_globals(Own *o) {
+    if (all_globals_done) return all_globals;
+    all_globals_done = true;
+    for (FuncEnt *fe = o->funcs; fe; fe = fe->next) {
+        FnEff *e = eff_of(o, fe->fn);
+        for (RcHop *g = e->globals; g; g = g->next) {
+            bool have = false;
+            for (RcHop *h = all_globals; h; h = h->next)
+                if (type_equal(h->t, g->t)) { have = true; break; }
+            if (!have) all_globals = hop_new(g->t, NULL, NULL, all_globals);
+        }
+    }
+    return all_globals;
+}
+
+static void rc_invalidate_unknown(Own *o, Flow *f, Node *n) {
+    if (!o->loans) return;
+    RcHop *gl = NULL;
+    bool got = false;
+    for (Loan *l = o->loans; l; l = l->next) {
+        bool hit = false;
+        for (RcHop *h = l->hops; h && !hit; h = h->next)
+            for (RcStep *s = h->steps; s && !hit; s = s->next) {
+                if (!got) {
+                    gl = program_globals(o);
+                    got = true;
+                }
+                if (call_reaches(n, gl, s->cls)) hit = true;
+            }
+        if (!hit) continue;
+        Place *by = new_place(PL_LOCAL, NULL, "<call>",
+                              diag_fmt("%s(…)", n->name ? n->name : "…"));
+        rc_stale(f, l, by, false, n->tok);
+    }
+}
+
 static void call_args(Own *o, Flow *f, Node *n, bool skip_self) {
     // ★ spawn(f, a) は「引数 1 つを別スレッドへ手放す」呼び出しです。
     //   ふつうの呼び出しとは渡し方が違うので、ここで分けます。
@@ -1237,6 +1739,7 @@ static void call_args(Own *o, Flow *f, Node *n, bool skip_self) {
     Node *fn = callee_of(o, n);
     if (!fn) {  // 組み込み関数・定義が引けないもの → すべて借用として扱う
         for (Node *a = n->args; a; a = a->next) use_expr(o, f, a);
+        if (n->is_indirect || n->is_iface_call) rc_invalidate_unknown(o, f, n);
 
         // ★ list の組み込みメソッドのうち、要素を**手放す**もの（E-BORROW-9）。
         //   pop / remove は取り出した要素を呼び出し側へ渡し（使わなければ
@@ -1278,6 +1781,7 @@ static void call_args(Own *o, Flow *f, Node *n, bool skip_self) {
         if (pm) pm = pm->next;
     }
     check_call_borrows(o, f, n, head.next);
+    rc_invalidate_call(o, f, n, fn);
 }
 
 // 値を「読む」文脈で式をたどる（借用）。

@@ -1,0 +1,25 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# ERROR: error[E-BORROW-10]: 'q' が借りている 'a.p' は、解放されているかもしれません
+# ERROR: ここで 'b.p' を書き換えています（同じ物体を指しうる rc 越し）
+# 同じ物体を指す別の rc からフィールドを書き換えると、借りていた別名は使えない。
+#         ★ a と b は同じ Box を指すので、b.p = … が a.p の古い P を解放します
+#           （0.41.0 までは診断なしでゴミ値を読んでいました）
+class P:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+class Box:
+    p: P
+
+    def init(self, p: own P) -> None:
+        self.p = p
+
+def main() -> int:
+    a: rc[Box] = rc(Box(P(1)))
+    b: rc[Box] = a
+    q: P = a.p
+    b.p = P(7)
+    x: list[int] = [1, 2, 3, 4, 5, 6, 7, 8]
+    return q.v

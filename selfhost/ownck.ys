@@ -89,6 +89,7 @@ class Ent:
     by: rc[Place] | None
     src: rc[Place] | None     # その別名が借りていた場所
     by_move: bool             # by は書き換えではなく「手放した」（移動）
+    by_rc: bool               # 同じ物体を指しうる別の rc 越しの書き換え（E-BORROW-10）
 
     def init(self, pl: rc[Place], st: int, at: rc[ast.Node] | None) -> None:
         self.pl = pl
@@ -97,12 +98,14 @@ class Ent:
         self.by = None
         self.src = None
         self.by_move = False
+        self.by_rc = False
 
 # 別名の記録（by / src / by_move）を写す
 def ent_copy_stale(dst: mut rc[Ent], src: rc[Ent]) -> None:
     dst.by = src.by
     dst.src = src.src
     dst.by_move = src.by_move
+    dst.by_rc = src.by_rc
 
 # ある時点での「全ての場所の状態」。
 #
@@ -670,12 +673,36 @@ class Reporter:
             deny0: bool = self.opt.deny_borrow
             self.emit(d, deny0)
             return
-        verb: str = "書き換えました"
-        if who.by_move:
-            verb = "手放しました"
         cond: str = ""
         if maybe:
             cond = "分岐によっては"
+        # ★ 同じ物体を指しうる別の rc 越しの書き換え（E-BORROW-10）。
+        #   対になる定義: src/ownck.c の report_stale（文面も同じ）
+        if who.by_rc:
+            d = diag.Diag("'" + who.pl.disp + "' が借りている '" + src.disp + "' は、" +
+                          cond + "解放されているかもしれません")
+            d.code = "E-BORROW-10"
+            d.primary = diag.Label(at, "ここで使われています")
+            cond2: str = ""
+            if maybe:
+                cond2 = "分岐によっては、"
+            rel2: str = (cond2 + "ここで '" + by.disp +
+                         "' を書き換えています（同じ物体を指しうる rc 越し）")
+            if by.key == "<call>":
+                rel2 = (cond2 + "この '" + by.disp +
+                        "' の中で、同じ物体を指しうる rc 越しに書き換えられます")
+            if wt is not None:
+                d.related = diag.Label(wt, rel2)
+            d.hint = ("rc は同じ物体を何か所からでも指せるので、別の名前からの" +
+                      "書き換えでも '" + src.disp + "' の古い値は解放されえます。" +
+                      "書き換えた後で使うなら読み直し、書き換える前の値が要るなら" +
+                      " copy(...) で手元に写してください")
+            deny1: bool = self.opt.deny_borrow
+            self.emit(d, deny1)
+            return
+        verb: str = "書き換えました"
+        if who.by_move:
+            verb = "手放しました"
         d = diag.Diag("'" + who.pl.disp + "' が借りている '" + src.disp + "' は、" +
                       cond + "解放されているかもしれません")
         d.code = "E-BORROW-9"
@@ -815,11 +842,67 @@ class Loan:
     key: str          # 別名の変数の IR 名（%q）
     disp: str         # 診断に出す名前（q）
     src: rc[Place]    # 借りている場所（b.p / xs[…]）
+    hops: list[rc[RcHop]]  # 借りている場所が通る「ほかから指されうる物体」（E-BORROW-10）
 
-    def init(self, key: own str, disp: own str, src: rc[Place]) -> None:
+    def init(self, key: own str, disp: own str, src: rc[Place],
+             hops: own list[rc[RcHop]]) -> None:
         self.key = key
         self.disp = disp
         self.src = src
+        self.hops = hops
+
+
+# 借りている場所が「ほかから指されうる物体」の中を通っているとき、
+# その物体の型と、そこから先の経路（E-BORROW-10）。
+#
+# ★ 名前の経路（Place）だけでは、同じ物体を指す**別の rc** が見えません。
+#     a: rc[Box] = …;  b = a;  q = a.p;  b.p = P(7)   ← q が宙に浮く
+#   そこで「a の指す物体（Box）の中の .p」という形でも覚えておき、
+#   書き換えを**クラスとフィールド**で突き合わせます。
+#
+# ★ 対になる定義: src/ownck.c の struct RcStep / struct RcHop
+class RcStep:
+    cls: rc[ast.Type]   # フィールドを持つクラス
+    field: str          # そのフィールド
+
+    def init(self, cls: rc[ast.Type], field: own str) -> None:
+        self.cls = cls
+        self.field = field
+
+class RcHop:
+    t: rc[ast.Type]             # 物体の型（クラスか list）
+    rest: rc[Place]             # 物体から先の経路（根は "<obj>"）
+    steps: list[rc[RcStep]]     # 物体から先で通るフィールド（クラスごと）
+    via_rc: bool                # rc[T] の中身として見つけたもの
+
+    def init(self, t: rc[ast.Type], rest: rc[Place], steps: own list[rc[RcStep]],
+             via_rc: bool) -> None:
+        self.t = t
+        self.rest = rest
+        self.steps = steps
+        self.via_rc = via_rc
+
+# 呼び出しが書き換えうるフィールド（E-BORROW-10）。
+# ★ 対になる定義: src/ownck.c の struct FnEff
+class FnEff:
+    fn: rc[ast.Node]
+    direct: list[rc[RcStep]]       # 本体が直に書くフィールド
+    callees: list[rc[ast.Node]]    # 本体から呼ぶ関数
+    calls: list[rc[ast.Node]]      # その呼び出しのノード（callees と同じ並び）
+    all: list[rc[RcStep]]          # 呼び先までたどった全体
+    globals: list[rc[ast.Type]]    # 本体が触るグローバルの型
+    gall: list[rc[ast.Type]]       # 呼び先までたどった全体
+    done: bool
+
+    def init(self, fn: rc[ast.Node]) -> None:
+        self.fn = fn
+        self.direct = []
+        self.callees = []
+        self.calls = []
+        self.all = []
+        self.globals = []
+        self.gall = []
+        self.done = False
 
 
 # ── 検査中の文脈 ────────────────────────────────────────
@@ -838,6 +921,10 @@ class Own:
     # 関数の定義を IR 名から引く表（この引数は own か、を知るのに要る）
     func_keys: list[str]
     func_nodes: list[rc[ast.Node]]
+    # 呼び出しが書き換えうるフィールドの表（E-BORROW-10）
+    effs: list[rc[FnEff]]
+    all_globals: list[rc[ast.Type]]
+    all_globals_done: bool
 
     def init(self, rep: own Reporter) -> None:
         self.rep = rep
@@ -851,6 +938,9 @@ class Own:
         self.loop = None
         self.func_keys = []
         self.func_nodes = []
+        self.effs = []
+        self.all_globals = []
+        self.all_globals_done = False
 
     # 宣言を IR 名から引く
     def find_decl(self, ir_name: str) -> rc[DeclEnt] | None:
@@ -1056,8 +1146,9 @@ def record_loan(o: mut Own, target: rc[ast.Node], rhs: rc[ast.Node] | None) -> N
         return
     # ★ 付け替える前の表で引く（q = q.next の形）
     src: rc[Place] = resolve_place(o, place_opt(rp))
+    hops: list[rc[RcHop]] = hops_of(o, rhs)   # ★ 同じく付け替える前に
     forget_loan(o, target.ir_name)
-    o.loans.append(rc(Loan(copy(target.ir_name), copy(target.name), src)))
+    o.loans.append(rc(Loan(copy(target.ir_name), copy(target.name), src, hops)))
 
 # 場所 w が書き換えられた。w（またはその中）を借りている別名を無効にする。
 #   strict … w **そのもの**を借りている別名は残す（mut self は中身を変えるだけ）
@@ -1074,6 +1165,181 @@ def invalidate_loans(o: mut Own, f: mut rc[Flow], w0: rc[Place], strict: bool,
             continue
         alias: rc[Place] = rc(Place(PL_LOCAL, None, copy(l.key), copy(l.disp)))
         flow_stale(f, alias, w, l.src, by_move, at)
+    rc_invalidate(o, f, w, strict, by_move, at)
+
+# ── 同じ物体を指しうる別の rc 越しの書き換え（E-BORROW-10）─────────
+#
+# ★ 対になる定義: src/ownck.c の rc_target / obj_class / container_of /
+#   hops_of / rc_stale / rc_invalidate
+
+# rc[T] / rc[T] | None なら T
+def rc_target(t0: rc[ast.Type] | None) -> rc[ast.Type] | None:
+    if t0 is None:
+        return None
+    t: rc[ast.Type] = t0
+    if t.kind == ast.TY_OPT:
+        e: rc[ast.Type] | None = t.elem
+        if e is None:
+            return None
+        t = e
+    if t.kind == ast.TY_RC:
+        return t.elem
+    return None
+
+# フィールドを持つ物体のクラス（T / rc[T] / その | None）
+def obj_class(t0: rc[ast.Type] | None) -> rc[ast.Type] | None:
+    if t0 is None:
+        return None
+    t: rc[ast.Type] = t0
+    if t.kind == ast.TY_OPT:
+        e: rc[ast.Type] | None = t.elem
+        if e is None:
+            return None
+        t = e
+    if t.kind == ast.TY_RC:
+        e2: rc[ast.Type] | None = t.elem
+        if e2 is None:
+            return None
+        t = e2
+    if t.kind == ast.TY_CLASS:
+        return t
+    return None
+
+# ほかから指されうる「入れ物」になる型（クラスか list。T | None は中身）。
+# ★ rc[T] は含めません。rc は rc_target で中身として扱います。
+def container_of(t0: rc[ast.Type] | None) -> rc[ast.Type] | None:
+    if t0 is None:
+        return None
+    t: rc[ast.Type] = t0
+    if t.kind == ast.TY_OPT:
+        e: rc[ast.Type] | None = t.elem
+        if e is None:
+            return None
+        t = e
+    if t.kind == ast.TY_CLASS or t.kind == ast.TY_LIST:
+        return t
+    return None
+
+def obj_root() -> rc[Place]:
+    return rc(Place(PL_LOCAL, None, "<obj>", "<obj>"))
+
+def steps_copy(xs: list[rc[RcStep]]) -> list[rc[RcStep]]:
+    out: list[rc[RcStep]] = []
+    for x in xs:
+        out.append(x)
+    return out
+
+# 式 n の指す場所が通る「ほかから指されうる物体」を並べる。
+def hops_of(o: Own, n0: rc[ast.Node] | None) -> list[rc[RcHop]]:
+    hs: list[rc[RcHop]] = []
+    if n0 is None:
+        return hs
+    n: rc[ast.Node] = n0
+    if n.kind == ast.ND_VAR:
+        if len(n.ir_name) > 0 and not strings.startswith(n.ir_name, "@"):
+            # 別名なら、貸し手が通っていたものを引き継ぐ（r = q.x で q → a.p）
+            l: rc[Loan] | None = find_loan(o, n.ir_name)
+            if l is not None:
+                ll: rc[Loan] = l
+                for h in ll.hops:
+                    hs.append(rc(RcHop(h.t, h.rest, steps_copy(h.steps), h.via_rc)))
+            # 借りている引数は、呼び出し側では rc[T] の中身（か、その中）かもしれない。
+            # ★ init の self だけは除きます。作ったばかりで、まだ誰も指していません。
+            c: rc[ast.Type] | None = container_of(node_type(n))
+            if c is not None:
+                v: rc[Place] | None = place_of(n)
+                if v is not None:
+                    vv: rc[Place] = v
+                    b: rc[BorrowRoot] | None = o.borrow_root_of(vv)
+                    if b is not None and vv.base is None:
+                        bb: rc[BorrowRoot] = b
+                        in_init: bool = False
+                        cf: rc[ast.Node] | None = o.cur_fn
+                        if cf is not None:
+                            in_init = node_of_opt(cf).name == "init"
+                        if bb.is_param and not (bb.is_self and in_init):
+                            hs.append(rc(RcHop(c, obj_root(), [], False)))
+    elif n.kind == ast.ND_FIELD or n.kind == ast.ND_INDEX:
+        skip: bool = False
+        if n.kind == ast.ND_FIELD and len(n.mod_name) > 0:
+            skip = True
+        lhs: rc[ast.Node] | None = n.lhs
+        if lhs is None:
+            skip = True
+        if not skip and n.kind == ast.ND_INDEX:
+            lt: rc[ast.Type] | None = node_type(node_of_opt(lhs))
+            if lt is not None and lt.kind == ast.TY_STR:
+                skip = True
+        if not skip:
+            ln: rc[ast.Node] = node_of_opt(lhs)
+            oc: rc[ast.Type] | None = None
+            if n.kind == ast.ND_FIELD:
+                oc = obj_class(node_type(ln))
+            for h in hops_of(o, ln):
+                r: rc[Place] = rc(Place(PL_INDEX, h.rest, "[]", h.rest.disp + "[…]"))
+                if n.kind == ast.ND_FIELD:
+                    r = rc(Place(PL_FIELD, h.rest, copy(n.name), h.rest.disp + "." + n.name))
+                st: list[rc[RcStep]] = steps_copy(h.steps)
+                if oc is not None:
+                    st.append(rc(RcStep(oc, copy(n.name))))
+                hs.append(rc(RcHop(h.t, r, st, h.via_rc)))
+            # ほかから指されうる物体の中にあるクラス・list も、また指されえます
+            # （借りている引数がこれを指しているかもしれません）。
+            c2: rc[ast.Type] | None = container_of(node_type(n))
+            if len(hs) > 0 and c2 is not None:
+                hs.append(rc(RcHop(c2, obj_root(), [], False)))
+    t: rc[ast.Type] | None = rc_target(node_type(n))
+    if t is not None:
+        hs.append(rc(RcHop(t, obj_root(), [], True)))
+    return hs
+
+# 別名 l を「rc 越しに書き換えられた」として無効にする。
+def rc_stale(f: mut rc[Flow], l: rc[Loan], by: rc[Place], by_move: bool,
+             at: rc[ast.Node]) -> None:
+    alias: rc[Place] = rc(Place(PL_LOCAL, None, copy(l.key), copy(l.disp)))
+    cur: rc[Ent] | None = flow_find(f, alias)
+    if cur is not None:
+        if node_of_ent(cur).st == ST_MOVED:
+            return      # 名前の経路でもう捕まえている
+    flow_stale(f, alias, by, l.src, by_move, at)
+    e: rc[Ent] = f.ents[len(f.ents) - 1]
+    e.by_rc = True
+
+def node_of_ent(e: rc[Ent] | None) -> rc[Ent]:
+    if e is None:
+        panic("ownck: 記録がありません")
+    return e
+
+# 場所 w（式 at）の書き換え。w が「ほかから指されうる物体」の中なら、
+# 同じ型の物体の同じ場所（かその中）を借りている別名を無効にする。
+def rc_invalidate(o: mut Own, f: mut rc[Flow], w: rc[Place], strict: bool,
+                  by_move: bool, at: rc[ast.Node]) -> None:
+    ws: list[rc[RcHop]] = hops_of(o, at)
+    if len(ws) == 0:
+        return
+    i: int = 0
+    while i < len(o.loans):
+        l: rc[Loan] = o.loans[i]
+        i = i + 1
+        hit: bool = False
+        for lh in l.hops:
+            for wh in ws:
+                if hit:
+                    continue
+                # ★ 代入・移動で rc の場所そのもの（`self.cur = n`）を書くのは、
+                #   参照を差し替えるだけで、指している物体の中身は変えません。
+                #   注意: クラス・list の場所の置き換えは、古い物体を**解放します**。
+                if not strict and wh.rest.base is None and wh.via_rc:
+                    continue
+                if not ast.type_equal(lh.t, wh.t):
+                    continue
+                if not place_prefix_of(wh.rest, lh.rest):
+                    continue
+                if strict and place_eq(wh.rest, lh.rest):
+                    continue
+                hit = True
+        if hit:
+            rc_stale(f, l, w, by_move, at)
 
 # 読むだけ（所有権は動かない）
 def use_expr(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
@@ -1266,6 +1532,290 @@ def callee_of(o: Own, n: rc[ast.Node]) -> rc[ast.Node] | None:
         return None
     return o.lookup_func(n.ir_name)
 
+# ── 呼び出しが書き換えうるフィールド（E-BORROW-10）──────────────
+#
+# ★ rc の中身は、`mut` で受けていない関数からも書き換えられます
+#   （`c: rc[Box] = b` と写せば、c は独立した参照なので書けます）。
+#   だから「mut で渡したか」ではなく「呼び先が（呼び先までたどって）
+#   どのクラスのどのフィールドを書くか」で決めます。
+#
+# ★ 対になる定義: src/ownck.c の step_has / eff_add_place / eff_scan / eff_of /
+#   ty_reaches / call_reaches / eff_merge / eff_all / rc_invalidate_call /
+#   program_globals / rc_invalidate_unknown
+def step_has(xs: list[rc[RcStep]], cls: rc[ast.Type], field: str) -> bool:
+    for s in xs:
+        if s.field == field and ast.type_equal(s.cls, cls):
+            return True
+    return False
+
+def type_in(xs: list[rc[ast.Type]], t: rc[ast.Type]) -> bool:
+    for x in xs:
+        if ast.type_equal(x, t):
+            return True
+    return False
+
+# 書き込み先の式から「どのクラスのどのフィールドか」を取り出す（xs[i] は xs）。
+def eff_add_place(e: mut rc[FnEff], lhs0: rc[ast.Node] | None, in_init: bool) -> None:
+    cur: rc[ast.Node] | None = lhs0
+    while cur is not None and node_of_opt(cur).kind == ast.ND_INDEX:
+        cur = node_of_opt(cur).lhs
+    if cur is None:
+        return
+    lhs: rc[ast.Node] = cur
+    if lhs.kind != ast.ND_FIELD or len(lhs.mod_name) > 0 or lhs.lhs is None:
+        return
+    obj: rc[ast.Node] = node_of_opt(lhs.lhs)
+    c: rc[ast.Type] | None = obj_class(node_type(obj))
+    if c is None:
+        return
+    # ★ init の中の self.f = … は、作ったばかりの物体への書き込みです。
+    if in_init and obj.kind == ast.ND_VAR and obj.name == "self":
+        return
+    cc: rc[ast.Type] = c
+    if not step_has(e.direct, cc, lhs.name):
+        e.direct.append(rc(RcStep(cc, copy(lhs.name))))
+
+def eff_scan_list(o: Own, e: mut rc[FnEff], n: rc[ast.Node] | None, in_init: bool) -> None:
+    cur: rc[ast.Node] | None = n
+    while cur is not None:
+        c: rc[ast.Node] = cur
+        eff_scan(o, e, c, in_init)
+        cur = c.next
+
+def eff_scan_child(o: Own, e: mut rc[FnEff], n: rc[ast.Node] | None, in_init: bool) -> None:
+    if n is not None:
+        eff_scan(o, e, node_of_opt(n), in_init)
+
+def eff_scan(o: Own, e: mut rc[FnEff], n: rc[ast.Node], in_init: bool) -> None:
+    # グローバル（と他モジュールのグローバル）を触るなら、その型から届く物体も書けます
+    if (n.kind == ast.ND_VAR or (n.kind == ast.ND_FIELD and len(n.mod_name) > 0)):
+        if len(n.ir_name) > 0 and strings.startswith(n.ir_name, "@"):
+            gt: rc[ast.Type] | None = node_type(n)
+            if gt is not None and not type_in(e.globals, gt):
+                e.globals.append(gt)
+    if n.kind == ast.ND_ASSIGN and n.lhs is not None:
+        eff_add_place(e, n.lhs, in_init)
+    # list の組み込みメソッドのうち要素を手放すもの（E-BORROW-9 と同じ 3 つ）
+    if n.kind == ast.ND_METHOD and n.lhs is not None:
+        lt: rc[ast.Type] | None = node_type(node_of_opt(n.lhs))
+        if lt is not None and lt.kind == ast.TY_LIST:
+            if n.name == "pop" or n.name == "remove" or n.name == "clear":
+                eff_add_place(e, n.lhs, in_init)
+    if n.kind == ast.ND_CALL or n.kind == ast.ND_METHOD:
+        callee: rc[ast.Node] | None = callee_of(o, n)
+        if callee is not None and node_of_opt(callee).body is not None:
+            e.callees.append(node_of_opt(callee))
+            e.calls.append(n)
+    eff_scan_child(o, e, n.lhs, in_init)
+    eff_scan_child(o, e, n.rhs, in_init)
+    eff_scan_child(o, e, n.incr, in_init)
+    eff_scan_child(o, e, n.els, in_init)
+    eff_scan_list(o, e, n.body, in_init)
+    eff_scan_list(o, e, n.args, in_init)
+
+def eff_of(o: mut Own, fn: rc[ast.Node]) -> rc[FnEff]:
+    for x in o.effs:
+        if x.fn == fn:
+            return x
+    e: rc[FnEff] = rc(FnEff(fn))
+    o.effs.append(e)
+    in_init: bool = fn.name == "init"
+    if fn.body is not None:
+        eff_scan_list(o, e, node_of_opt(fn.body).body, in_init)
+    return e
+
+# 型 t の値から（フィールド・要素・中身をたどって）クラス cls の物体に届くか。
+# 注意: インタフェース・中身を持つ列挙・生ポインタは中が型から決まらないので、
+#   届くものとして扱います。
+def ty_reaches(t0: rc[ast.Type] | None, cls: rc[ast.Type], seen: mut list[str]) -> bool:
+    if t0 is None:
+        return False
+    t: rc[ast.Type] = t0
+    if t.kind == ast.TY_CLASS:
+        if ast.type_equal(t, cls):
+            return True
+        c: rc[ast.Class] | None = t.cls
+        if c is None:
+            return False
+        cc: rc[ast.Class] = c
+        for k in seen:
+            if k == cc.ir_name:
+                return False
+        seen.append(copy(cc.ir_name))
+        fl: rc[ast.Field] | None = cc.fields
+        while fl is not None:
+            ff: rc[ast.Field] = fl
+            if ty_reaches(ff.type, cls, seen):
+                return True
+            fl = ff.next
+        return False
+    if (t.kind == ast.TY_OPT or t.kind == ast.TY_LIST or t.kind == ast.TY_RC or
+            t.kind == ast.TY_MUTEX or t.kind == ast.TY_THREAD):
+        return ty_reaches(t.elem, cls, seen)
+    if t.kind == ast.TY_TUPLE:
+        for p in t.params:
+            if ty_reaches(p, cls, seen):
+                return True
+        return False
+    if t.kind == ast.TY_IFACE or t.kind == ast.TY_PTR:
+        return True
+    if t.kind == ast.TY_ENUM:
+        en: rc[ast.EnumDef] | None = t.en
+        return en is not None and node_of_enum(en).has_payload
+    return False
+
+def node_of_enum(e: rc[ast.EnumDef] | None) -> rc[ast.EnumDef]:
+    if e is None:
+        panic("ownck: 列挙の定義がありません")
+    return e
+
+# 呼び出し n の引数（受け手を含む）か、呼び先が触るグローバルから cls に届くか。
+def call_reaches(n: rc[ast.Node], globals: list[rc[ast.Type]], cls: rc[ast.Type]) -> bool:
+    seen: list[str] = []
+    if n.kind == ast.ND_METHOD and n.lhs is not None:
+        if ty_reaches(node_type(node_of_opt(n.lhs)), cls, seen):
+            return True
+    a: rc[ast.Node] | None = n.args
+    while a is not None:
+        an: rc[ast.Node] = a
+        if ty_reaches(node_type(an), cls, seen):
+            return True
+        a = an.next
+    for g in globals:
+        if ty_reaches(g, cls, seen):
+            return True
+    return False
+
+# ★ 呼び先の書き込みは、その呼び出しの引数（とグローバル）から届く
+#   クラスのものだけを引き上げます。段ごとに絞るので、不動点まで回します。
+def eff_merge(dst: mut rc[FnEff], src: rc[FnEff], call: rc[ast.Node]) -> bool:
+    changed: bool = False
+    for s in src.all:
+        if step_has(dst.all, s.cls, s.field):
+            continue
+        if not call_reaches(call, src.gall, s.cls):
+            continue
+        dst.all.append(s)
+        changed = True
+    for g in src.gall:
+        if type_in(dst.gall, g):
+            continue
+        dst.gall.append(g)
+        changed = True
+    return changed
+
+def eff_all(o: mut Own, fn: rc[ast.Node]) -> rc[FnEff]:
+    root: rc[FnEff] = eff_of(o, fn)
+    if root.done:
+        return root
+    # 呼び出しの木を集める（同じ関数は 1 回だけ。まだ求めていないものだけ）
+    q: list[rc[FnEff]] = [root]
+    i: int = 0
+    while i < len(q):
+        cur: rc[FnEff] = q[i]
+        i = i + 1
+        for cn in cur.callees:
+            c: rc[FnEff] = eff_of(o, cn)
+            if c.done:
+                continue
+            seen: bool = False
+            for x in q:
+                if x == c:
+                    seen = True
+            if seen:
+                continue
+            q.append(c)
+    for e in q:
+        for s in e.direct:
+            e.all.append(s)
+        for g in e.globals:
+            e.gall.append(g)
+    changed: bool = True
+    while changed:
+        changed = False
+        for e2 in q:
+            k: int = 0
+            while k < len(e2.callees):
+                src: rc[FnEff] = eff_of(o, e2.callees[k])
+                call: rc[ast.Node] = e2.calls[k]
+                if eff_merge(e2, src, call):
+                    changed = True
+                k = k + 1
+    for e3 in q:
+        e3.done = True
+    return root
+
+# 呼び出し n（呼び先 fn）が、借りている別名の通り道を書き換えうるなら無効にする。
+def rc_invalidate_call(o: mut Own, f: mut rc[Flow], n: rc[ast.Node], fn: rc[ast.Node]) -> None:
+    if len(o.loans) == 0:
+        return
+    got: bool = False
+    eff: rc[FnEff] = rc(FnEff(fn))
+    i: int = 0
+    while i < len(o.loans):
+        l: rc[Loan] = o.loans[i]
+        i = i + 1
+        hit: bool = False
+        for h in l.hops:
+            if hit or len(h.steps) == 0:
+                continue
+            if not got:
+                eff = eff_all(o, fn)
+                got = True
+            for s in h.steps:
+                if not hit and step_has(eff.all, s.cls, s.field) and call_reaches(n, eff.gall, s.cls):
+                    hit = True
+        if not hit:
+            continue
+        by: rc[Place] = rc(Place(PL_LOCAL, None, "<call>", fn.name + "(…)"))
+        rc_stale(f, l, by, False, n)
+
+# 呼び先が名前で決まらない呼び出し（インタフェース越し・関数の値）。
+# ★ 中身が分からないので「引数（受け手を含む）か、プログラムのどこかで触る
+#   グローバルから届く物体なら、どのフィールドでも書かれうる」とします。
+def program_globals(o: mut Own) -> list[rc[ast.Type]]:
+    if not o.all_globals_done:
+        o.all_globals_done = True
+        k: int = 0
+        while k < len(o.func_nodes):
+            fnk: rc[ast.Node] = o.func_nodes[k]
+            e: rc[FnEff] = eff_of(o, fnk)
+            k = k + 1
+            for g in e.globals:
+                if not type_in(o.all_globals, g):
+                    o.all_globals.append(g)
+    out: list[rc[ast.Type]] = []
+    for g2 in o.all_globals:
+        out.append(g2)
+    return out
+
+def rc_invalidate_unknown(o: mut Own, f: mut rc[Flow], n: rc[ast.Node]) -> None:
+    if len(o.loans) == 0:
+        return
+    gl: list[rc[ast.Type]] = []
+    got: bool = False
+    i: int = 0
+    while i < len(o.loans):
+        l: rc[Loan] = o.loans[i]
+        i = i + 1
+        hit: bool = False
+        for h in l.hops:
+            for s in h.steps:
+                if hit:
+                    continue
+                if not got:
+                    gl = program_globals(o)
+                    got = True
+                if call_reaches(n, gl, s.cls):
+                    hit = True
+        if not hit:
+            continue
+        nm: str = "…"
+        if len(n.name) > 0:
+            nm = n.name
+        by: rc[Place] = rc(Place(PL_LOCAL, None, "<call>", nm + "(…)"))
+        rc_stale(f, l, by, False, n)
+
 # 実引数を、仮引数の受け取り方（ParamMode）に従って評価する。
 #
 #   既定（借用）… 読むだけ。所有権は呼び出し側に残る
@@ -1352,6 +1902,13 @@ def call_args(o: mut Own, f: mut rc[Flow], n: rc[ast.Node], skip_self: bool) -> 
                 lpl: rc[Place] | None = place_of(ln)
                 if lpl is not None:
                     invalidate_loans(o, f, place_opt(lpl), True, False, ln)
+
+    # ★ 呼び先が（呼び先までたどって）書くフィールドを、rc 越しに借りている
+    #   別名は使えない（E-BORROW-10）。対になる定義: src/ownck.c の call_args
+    if fn is not None:
+        rc_invalidate_call(o, f, n, node_of_opt(fn))
+    elif n.is_indirect or n.is_iface_call:
+        rc_invalidate_unknown(o, f, n)
 
 
 # ── 所有権を動かす（移動したら True）────────────────────────

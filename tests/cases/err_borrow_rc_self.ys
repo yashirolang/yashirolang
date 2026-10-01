@@ -1,0 +1,31 @@
+# STAGE0-ONLY: 借用検査は C 版だけ
+# ERROR: error[E-BORROW-10]: 'q' が借りている 'self.p' は、分岐によっては解放されているかもしれません
+# ERROR: 分岐によっては、ここで 'l.p' を書き換えています（同じ物体を指しうる rc 越し）
+# 読み取り専用の self の中でも、rc を写せば書き換えられる。
+#         ★ self は呼び出し側では rc[Box] の中身かもしれないので、self.p の別名も無効になります
+class P:
+    v: int
+
+    def init(self, v: int) -> None:
+        self.v = v
+
+class Box:
+    p: P
+    link: rc[Box] | None
+
+    def init(self, p: own P) -> None:
+        self.p = p
+        self.link = None
+
+    def bad(self) -> int:
+        q: P = self.p
+        l: rc[Box] | None = self.link
+        if l is not None:
+            l.p = P(7)
+        x: list[int] = [1, 2, 3, 4, 5, 6, 7, 8]
+        return q.v
+
+def main() -> int:
+    a: rc[Box] = rc(Box(P(1)))
+    a.link = a
+    return a.bad()

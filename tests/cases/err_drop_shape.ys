@@ -1,0 +1,17 @@
+# ERROR: error[E-DROP-1]: drop はデストラクタです。形は 'def drop(self) -> None' か 'def drop(mut self) -> None' だけです
+# ERROR: 引数を取れません（解放のときは self だけで呼ばれます）
+# drop の形を確かめる（仕様 §6.2）。
+#         ★ 解放のときは self だけを渡して呼ぶので、引数のある drop は
+#           引数の数が合わないまま呼ばれ、メモリを壊していました（0.45.0 まで。segfault）
+class Table:
+    cols: list[str]
+
+    def init(self) -> None:
+        self.cols = ["a", "b"]
+
+    def drop(self, names: list[str]) -> None:
+        print(str(len(names)))
+
+def main() -> int:
+    t: Table = Table()
+    return len(t.cols)

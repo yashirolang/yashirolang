@@ -1,0 +1,17 @@
+# ERROR: error[E-DROP-2]: drop は自分で呼べません（解放のときに自動で呼ばれます）
+# ERROR: ここで呼ぶと、解放のときにもう一度呼ばれます
+# drop は自分で呼べない（仕様 §6.2）。
+#         ★ 0.45.0 までは呼べて、解放のときにもう一度呼ばれていました（後始末が 2 回走る）
+class File:
+    fd: int
+
+    def init(self, fd: int) -> None:
+        self.fd = fd
+
+    def drop(mut self) -> None:
+        print("閉じる " + str(self.fd))
+
+def main() -> int:
+    f: File = File(3)
+    f.drop()
+    return 0

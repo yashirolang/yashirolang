@@ -3319,6 +3319,14 @@ class Sema:
                             c.tok, "クラスの定義はここです", hint)
             return self.ty_int()
 
+        # ★ drop は自分で呼べません（仕様 §6.2。E-DROP-2）。
+        #   対になる定義: src/sema.c の check_class_method
+        if n.name == "drop":
+            diag.error_code_full(unwrap_tok(n.tok), "E-DROP-2",
+                                 "drop は自分で呼べません（解放のときに自動で呼ばれます）",
+                                 "ここで呼ぶと、解放のときにもう一度呼ばれます", None, "",
+                                 "早く後始末をしたいときは、別の名前のメソッド（close など）に分けてください（仕様 §6.2）")
+
         # ★ 並べ替えと既定値の穴埋め（A-38）。self のぶん 1 つ飛ばす。
         bind_args_sig(n, unwrap_sig(f), 1, "メソッド '" + mname + "'")
 
@@ -4905,6 +4913,22 @@ class Sema:
                                "（生成に失敗した値は誰も受け取れません）",
                                "init に raises は書けません")
 
+        # ★ drop はデストラクタです（仕様 §6.2。E-DROP-1）。
+        #   対になる定義: src/sema.c の declare_method
+        if fn.name == "drop":
+            dlabel: str = ""
+            if f.nparams != 1:
+                dlabel = "引数を取れません（解放のときは self だけで呼ばれます）"
+            elif ret.kind != ast.TY_NONE:
+                dlabel = "値を返せません（解放のときに受け取る相手がいません）"
+            elif len(f.raises_cls) > 0:
+                dlabel = "失敗できません（解放の途中の失敗は誰も受け取れません）"
+            if len(dlabel) > 0:
+                diag.error_code_full(unwrap_tok(fn.tok), "E-DROP-1",
+                                     "drop はデストラクタです。形は 'def drop(self) -> None' か 'def drop(mut self) -> None' だけです",
+                                     dlabel, None, "",
+                                     "解放とは別の処理なら、別の名前にしてください（仕様 §6.2）")
+
         f.ir_name = self.mangle(c.ir_name, fn.name)   # "lexer.Token.show"
         f.owner = self.cur_syms()
         ms: rc[types.ModuleSyms] = self.cur_syms()
@@ -5093,6 +5117,13 @@ class Sema:
                                     "（インタフェース越しには使えません）")
                 ip = ipp.next
 
+            # ★ インタフェースに drop は置けません（E-DROP-2）。
+            #   対になる定義: src/sema.c の declare_iface
+            if mn.name == "drop":
+                diag.error_code_full(unwrap_tok(mn.tok), "E-DROP-2",
+                                     "インタフェースに drop は宣言できません（drop はデストラクタの名前です）",
+                                     "インタフェース越しに呼べると、解放のときにもう一度呼ばれます", None, "",
+                                     "早く後始末をしたいときは、別の名前のメソッド（close など）に分けてください（仕様 §6.2）")
             ifc.methods.append(rc(ast.IMethod(mn.name, mn, self.next_slot)))
             self.next_slot = self.next_slot + 1
             m = mn.next

@@ -2984,6 +2984,18 @@ static Type *check_class_method(Sema *s, Node *n, Class *c) {
         diag_fail(&d);
     }
 
+    // ★ drop は自分で呼べません（仕様 §6.2）。呼べると、解放のときにもう一度
+    //   呼ばれます（E-DROP-2。0.45.0 までは呼べていました）。
+    if (strcmp(n->name, "drop") == 0) {
+        Diag d = {0};
+        d.code = "E-DROP-2";
+        d.message = "drop は自分で呼べません（解放のときに自動で呼ばれます）";
+        d.primary.tok = n->tok;
+        d.primary.label = "ここで呼ぶと、解放のときにもう一度呼ばれます";
+        d.hint = "早く後始末をしたいときは、別の名前のメソッド（close など）に分けてください（仕様 §6.2）";
+        diag_fail(&d);
+    }
+
     // ★ 並べ替えと既定値の穴埋め（A-38）。self のぶん 1 つ飛ばします。
     bind_args_sig(n, f, 1, diag_fmt("メソッド '%s'", mname));
 
@@ -5424,6 +5436,22 @@ static void declare_method(Sema *s, Class *c, Node *fn) {
         error_at_hint(fn->tok, "init は失敗できません（生成に失敗した値は誰も受け取れません）",
                       "init に raises は書けません");
 
+    // ★ drop はデストラクタです（仕様 §6.2）。解放のときに codegen が
+    //   **self だけを渡して**呼ぶので、形が違うと引数の数が合わないまま呼ばれ、
+    //   メモリを壊します（0.45.0 までは形を確かめていませんでした。E-DROP-1）。
+    if (strcmp(fn->name, "drop") == 0 &&
+        (nparams != 1 || ret->kind != TY_NONE || f->nraises)) {
+        Diag d = {0};
+        d.code = "E-DROP-1";
+        d.message = "drop はデストラクタです。形は 'def drop(self) -> None' か 'def drop(mut self) -> None' だけです";
+        d.primary.tok = fn->tok;
+        d.primary.label = nparams != 1        ? "引数を取れません（解放のときは self だけで呼ばれます）"
+                          : ret->kind != TY_NONE ? "値を返せません（解放のときに受け取る相手がいません）"
+                                                 : "失敗できません（解放の途中の失敗は誰も受け取れません）";
+        d.hint = "解放とは別の処理なら、別の名前にしてください（仕様 §6.2）";
+        diag_fail(&d);
+    }
+
     f->ir_name = mangle(c->ir_name, fn->name);  // "lexer.Token.show"
     f->owner = s->cur;
     f->next = s->funcs;
@@ -5600,6 +5628,18 @@ static void declare_iface(Sema *s, Node *n) {
                      "既定値を埋める人が決まりません。"
                      "既定値はクラス側のメソッドに書いてください"
                      "（インタフェース越しには使えません）";
+            diag_fail(&d);
+        }
+
+        // ★ インタフェースに drop は置けません（E-DROP-2）。置けると、実装の
+        //   デストラクタをインタフェース越しに呼べてしまいます。
+        if (strcmp(m->name, "drop") == 0) {
+            Diag d = {0};
+            d.code = "E-DROP-2";
+            d.message = "インタフェースに drop は宣言できません（drop はデストラクタの名前です）";
+            d.primary.tok = m->tok;
+            d.primary.label = "インタフェース越しに呼べると、解放のときにもう一度呼ばれます";
+            d.hint = "早く後始末をしたいときは、別の名前のメソッド（close など）に分けてください（仕様 §6.2）";
             diag_fail(&d);
         }
 

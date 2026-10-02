@@ -1,0 +1,15 @@
+# ERROR: error[E-DROP-1]: drop はデストラクタです。形は 'def drop(self) -> None' か 'def drop(mut self) -> None' だけです
+# ERROR: 値を返せません（解放のときに受け取る相手がいません）
+# 値を返す drop も断る（解放のときに戻り値を受け取る相手がいない）
+class Buf:
+    n: int
+
+    def init(self) -> None:
+        self.n = 1
+
+    def drop(self) -> int:
+        return self.n
+
+def main() -> int:
+    b: Buf = Buf()
+    return 0

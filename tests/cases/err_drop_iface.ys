@@ -1,0 +1,8 @@
+# ERROR: error[E-DROP-2]: インタフェースに drop は宣言できません（drop はデストラクタの名前です）
+# ERROR: インタフェース越しに呼べると、解放のときにもう一度呼ばれます
+# インタフェースに drop を置けると、実装のデストラクタをインタフェース越しに呼べてしまう
+interface Closer:
+    def drop(self) -> None
+
+def main() -> int:
+    return 0

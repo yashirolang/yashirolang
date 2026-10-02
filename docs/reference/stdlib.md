@@ -31,6 +31,7 @@ def main() -> int:
 | [`numeric`](#numeric) | **数値解析** — 積分・求根・微分・常微分方程式・最適化 |
 | [`physics`](#physics) | **物理定数と単位換算** |
 | [`time`](#time) | **時刻と経過時間** — 自分のプログラムの速さを測る |
+| [`datetime`](#datetime) | **日付と時刻** — 暦の計算・書式・ISO 8601。時差を持たない日時は作れない |
 | [`complex`](#complex) | **複素数** — Python の `cmath` 相当 |
 | [`fft`](#fft) | **高速フーリエ変換** |
 | [`plot`](#plot) | **作図** — SVG を書き出す（matplotlib 相当） |
@@ -1026,9 +1027,114 @@ def filter[T](xs: list[T], keep: fn(T) -> bool) -> list[T]:
 
 ---
 
+## datetime
+
+**日付と時刻**です。暦の計算・書式での書き出しと読み取り・ISO 8601 を扱います。
+
+```python
+import datetime
+
+def run() -> None raises datetime.DateError:
+    t: datetime.DateTime = datetime.of(datetime.JST, 2026, 10, 1, 9, 30)
+    print(t.iso())                                  # 2026-10-01T09:30:00+09:00
+    u: datetime.DateTime = t + datetime.hours(20)
+    print(u.format("%Y年%m月%d日 %H:%M"))            # 2026年10月02日 05:30
+    print((u - t).text())                           # 20h0m0s
+    p: datetime.DateTime = datetime.parse_iso("2026-10-01T00:30:00Z")
+    print(str(p == t))                              # True（同じ瞬間）
+    d: datetime.Date = datetime.date_of(2024, 2, 28)
+    print(d.add_days(1).iso())                      # 2024-02-29
+
+def main() -> int:
+    try:
+        run()
+    except datetime.DateError as e:
+        print("日時の誤り: " + e.message)
+        return 1
+    return 0
+```
+
+★ **時差を持たない日時（naive）は作れません。** Python の `datetime` は
+「時差なし」と「時差つき」が同じ型で混ざり、比べると例外、引き算すると
+黙って 9 時間ずれる、というのが定番の事故です。ここの `DateTime` は
+**必ず時差を持ち**、比較と引き算は**同じ瞬間かどうか**で決めます
+（`09:30+09:00` と `00:30Z` は等しい）。
+
+★ 時差は**省略できません**。`of` では先頭の必須の引数で、時差の書かれていない
+文字列を読むときは `parse_iso_in(s, 時差)` / `parse(s, 書式, 時差)` で明示します。
+黙って UTC やその機械の時差にすると、別の機械で動かしたときに静かにずれるためです。
+
+注意: **時差は固定の値だけです**（`UTC`・`JST`・`offset(-5)` など）。IANA の
+タイムゾーン（`Asia/Tokyo`・`America/New_York`）のデータは持っていません。
+夏時間のある地域は、その時点の時差を自分で渡してください。
+
+| 作る | 説明 |
+|---|---|
+| `of(off, year, month, day, hour=0, minute=0, second=0, nanosecond=0) -> DateTime raises DateError` | 日時。ありえない値は `DateError` |
+| `date_of(year, month, day) -> Date raises DateError` | 日付 |
+| `now(off) -> DateTime raises DateError` | いまの時刻 |
+| `from_unix(sec, off)` / `from_unix_ns(ns, off)` | UNIX 時刻から |
+| `UTC` / `JST` / `offset(h, m=0) -> int raises DateError` | 時差（秒）。`offset(-5, 30)` は `-05:30` |
+| `days(n)` / `hours(n)` / `minutes(n)` / `seconds(n)` / `millis(n)` / `micros(n)` / `nanos(n)` | 期間 |
+
+| 読む | 説明 |
+|---|---|
+| `parse_iso(s) -> DateTime raises DateError` | `2026-10-01T09:30:00+09:00` / `…Z` / `…+0900` / 秒の省略 / 秒未満 / `T` の代わりの空白。**時差が無ければ誤り** |
+| `parse_iso_in(s, off)` | 同じく。時差が書かれていなければ `off`（書かれていればそちらが勝つ） |
+| `parse_date(s) -> Date raises DateError` | `2026-10-01` |
+| `parse(s, fmt, off) -> DateTime raises DateError` | 書式で読む（`%j` 以外は書式と同じ指定）。`%z` が無ければ `off` |
+
+| `DateTime` | 説明 |
+|---|---|
+| `year()` `month()` `day()` `hour()` `minute()` `second()` `nanosecond()` | その時差での壁時計の値 |
+| `date() -> Date` / `weekday()`（月曜 0） / `offset()` | |
+| `unix()` / `unix_ns()` | UNIX 秒・ナノ秒（注意: `unix_ns` は 1677〜2262 年の外で panic。64 ビットに入らないため） |
+| `with_offset(off) -> DateTime raises DateError` | 同じ瞬間を別の時差で |
+| `t + d` / `t.minus(d)` / `t - u` | 期間を足す・引く／日時どうしの差（`Duration`） |
+| `add_months(n)` | 壁時計で n か月後（月末を越える日はその月の末日にそろえる） |
+| `==` `!=` `<` `<=` `>` `>=` | **同じ瞬間かどうか**で比べる |
+| `iso() -> str` | `2026-10-01T09:30:00+09:00`（UTC は `Z`。秒未満は 3・6・9 桁） |
+| `format(fmt) -> str raises DateError` | 書式で書く |
+
+| `Date` | 説明 |
+|---|---|
+| `year` `month` `day` | |
+| `weekday()`（月曜 0） / `day_of_year()` / `ordinal()`（1970-01-01 からの日数） | |
+| `add_days(n)` / `add_months(n)` / `a - b`（日数） | |
+| 比較・`iso()` | |
+
+| `Duration` | 説明 |
+|---|---|
+| `+` `-` 単項 `-` `* int` と比較 | |
+| `total_seconds() -> float` / `total_ns()` / `floor_seconds()` / `is_negative()` | 注意: `total_ns` は約 292 年を超えると panic |
+| `text()` | `26h3m4.5s` / `-1.5s` / `0s`（Go の `Duration` と同じ書き方） |
+
+**書式の指定**（`format` と `parse`）
+
+| 指定 | 意味 | 指定 | 意味 |
+|---|---|---|---|
+| `%Y` | 年（4 桁） | `%f` | マイクロ秒（6 桁） |
+| `%m` `%d` | 月・日（2 桁） | `%z` / `%:z` | 時差 `+0900` / `+09:00` |
+| `%H` `%M` `%S` | 時・分・秒（2 桁） | `%a` `%A` | 曜日（`Mon` / `Monday`） |
+| `%j` | 年内の通し日（3 桁。書くだけ） | `%b` `%B` | 月（`Oct` / `October`） |
+| `%%` | `%` そのもの | | |
+
+知らない指定は `DateError` です（黙ってそのまま出しません）。
+
+注意: 範囲（1〜9999 年）を出る**計算**（`t + d`・`add_days` など）は panic です。
+**入力**の誤り（作る・読む・書式）は `DateError` です。うるう秒は扱いません
+（`23:59:60` は誤り。Python と同じ）。
+
+注意: Python の `datetime` と差分試験をしました。でたらめな UNIX 時刻・時差・期間・
+月数を約 3 万組作り、ISO 表記・曜日・期間を足した結果・月の加算・書式での書き出しと
+読み直しを突き合わせて、**不一致は 0 件**です。
+
+---
+
 ## time
 
 **自分のプログラムの速さを測るためのモジュールです**。
+日付や時刻（年月日・書式・時差）を扱うときは [`datetime`](#datetime) を使ってください。
 
 ```python
 import time

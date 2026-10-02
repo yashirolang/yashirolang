@@ -1,0 +1,77 @@
+# OUTPUT: 2026-02-29 -> 2026-02 の日は 1〜28 です（29）
+# OUTPUT: 2026-13-01 -> 月は 1〜12 です（13）
+# OUTPUT: 10000-01-01 -> 年は 1〜9999 です（10000）
+# OUTPUT: 24:00 -> 時は 0〜23 です（24）
+# OUTPUT: 23:59:60 -> 秒は 0〜59 です（60。うるう秒は扱いません）
+# OUTPUT: 時差なし -> '2026-10-01T09:30:00' の 19 バイト目: 時差がありません。末尾に Z か +09:00 を付けるか、parse_iso_in(s, 時差) で時差を明示してください（黙って UTC にはしません）
+# OUTPUT: 時差を明示 -> 2026-10-01T09:30:00+09:00
+# OUTPUT: 書かれた時差が勝つ -> 2026-10-01T09:30:00Z
+# OUTPUT: 余計な文字 -> '2026-10-01T09:30:00Zx' の 20 バイト目: 日時の後ろに余計な文字があります
+# OUTPUT: 桁 -> '2026-1-01' の 5 バイト目: 月は 2 桁の数字です
+# OUTPUT: 時差の範囲 -> 時差は ±24 時間未満です（86400 秒）
+# OUTPUT: 書式 -> 書式に知らない指定があります（%Q）
+# OUTPUT: 月の名前 -> '01/Okt/2026' の 3 バイト目: 月の名前が読めません
+# OUTPUT: 1 年より前 -> UNIX 秒 -62135596801 は 1〜9999 年の外です
+# 入力の誤りは panic ではなく DateError（日時は外から来るものなので）。
+# ★ 時差の書かれていない日時は、黙って UTC にせず断る
+import datetime
+
+def show(label: str, s: str) -> None:
+    print(label + " -> " + s)
+
+def main() -> int:
+    try:
+        datetime.date_of(2026, 2, 29)
+    except datetime.DateError as e:
+        show("2026-02-29", e.message)
+    try:
+        datetime.date_of(2026, 13, 1)
+    except datetime.DateError as e:
+        show("2026-13-01", e.message)
+    try:
+        datetime.date_of(10000, 1, 1)
+    except datetime.DateError as e:
+        show("10000-01-01", e.message)
+    try:
+        datetime.of(datetime.UTC, 2026, 10, 1, 24, 0)
+    except datetime.DateError as e:
+        show("24:00", e.message)
+    try:
+        datetime.of(datetime.UTC, 2026, 10, 1, 23, 59, 60)
+    except datetime.DateError as e:
+        show("23:59:60", e.message)
+    try:
+        datetime.parse_iso("2026-10-01T09:30:00")
+    except datetime.DateError as e:
+        show("時差なし", e.message)
+    try:
+        show("時差を明示", datetime.parse_iso_in("2026-10-01T09:30:00", datetime.JST).iso())
+        show("書かれた時差が勝つ", datetime.parse_iso_in("2026-10-01T09:30:00Z", datetime.JST).iso())
+    except datetime.DateError as e:
+        show("?", e.message)
+    try:
+        datetime.parse_iso("2026-10-01T09:30:00Zx")
+    except datetime.DateError as e:
+        show("余計な文字", e.message)
+    try:
+        datetime.parse_date("2026-1-01")
+    except datetime.DateError as e:
+        show("桁", e.message)
+    try:
+        datetime.offset(24)
+    except datetime.DateError as e:
+        show("時差の範囲", e.message)
+    try:
+        t: datetime.DateTime = datetime.of(datetime.UTC, 2026, 10, 1)
+        t.format("%Q")
+    except datetime.DateError as e:
+        show("書式", e.message)
+    try:
+        datetime.parse("01/Okt/2026", "%d/%b/%Y", datetime.UTC)
+    except datetime.DateError as e:
+        show("月の名前", e.message)
+    try:
+        datetime.from_unix(-62135596801, datetime.UTC)
+    except datetime.DateError as e:
+        show("1 年より前", e.message)
+    return 0

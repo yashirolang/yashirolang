@@ -1,0 +1,820 @@
+# datetime — 日付と時刻
+#
+# 使い方:
+#
+#   t: datetime.DateTime = datetime.of(datetime.JST, 2026, 10, 1, 9, 30)   # raises DateError
+#   print(t.iso())                          # 2026-10-01T09:30:00+09:00
+#   u: datetime.DateTime = t + datetime.hours(20)
+#   print(u.format("%Y年%m月%d日 %H:%M"))    # 2026年10月02日 05:30
+#   d: datetime.Duration = u - t            # 20h0m0s
+#   now: datetime.DateTime = datetime.now(datetime.JST)
+#   p: datetime.DateTime = datetime.parse_iso("2026-10-01T00:30:00Z")
+#   day: datetime.Date = datetime.date_of(2026, 2, 28)
+#   print(day.add_days(1).iso())            # 2026-03-01
+#
+# ★ **時差を持たない日時（naive）は作れません。**
+#   Python の datetime は「時差なし」と「時差つき」が同じ型で混ざり、
+#   比べると例外、引き算すると黙って 9 時間ずれる、が定番の事故です。
+#   ここの DateTime は**必ず時差を持ち**、比較・引き算は**同じ瞬間かどうか**で決めます
+#   （09:00+09:00 と 00:00Z は等しい）。時差の書かれていない文字列を読むときは、
+#   時差を**明示して**渡してもらいます（parse_iso_in / parse の off）。黙って UTC にはしません。
+#
+# 注意: **時差は固定の値だけです**（UTC・+09:00 など）。IANA のタイムゾーン
+#   （Asia/Tokyo・America/New_York）のデータは持っていません。夏時間のある地域は、
+#   その時点の時差を自分で渡してください。
+#
+# 注意: 年は **1〜9999** です（Python と同じ）。範囲を出る計算は panic、
+#   入力の誤り（作る・読む・書式）は raises DateError です。
+#   うるう秒は扱いません（23:59:60 は誤りです。Python と同じ）。
+import strings
+import time
+
+SEC_PER_DAY: int = 86400
+NS_PER_SEC: int = 1000000000
+# 0001-01-01 と 9999-12-31 の、1970-01-01 からの日数
+# 注意: グローバルの初期値に負の数は書けないので、0001-01-01 は「何日前か」で持ちます
+DAYS_BEFORE_EPOCH: int = 719162
+MAX_DAYS: int = 2932896
+
+UTC: int = 0
+JST: int = 32400       # +09:00（秒）
+
+
+# 日付・時刻の誤り
+class DateError:
+    message: str
+
+    def init(self, message: own str) -> None:
+        self.message = message
+
+
+# ── 暦の計算 ──────────────────────────────────────────────
+#
+# ★ 1970-01-01 からの日数と (年, 月, 日) を相互に変換します（Howard Hinnant の方法。
+#   400 年周期で考えるので、ループもうるう年の表も要りません）。`//` と `%` は
+#   Python と同じく切り下げなので、1970 年より前でもそのまま合います。
+
+def is_leap(y: int) -> bool:
+    return (y % 4 == 0 and y % 100 != 0) or y % 400 == 0
+
+def days_in_month(y: int, m: int) -> int:
+    if m == 2:
+        if is_leap(y):
+            return 29
+        return 28
+    if m == 4 or m == 6 or m == 9 or m == 11:
+        return 30
+    return 31
+
+def days_from_civil(y0: int, m: int, d: int) -> int:
+    y: int = y0
+    if m <= 2:
+        y = y - 1
+    era: int = y // 400
+    yoe: int = y - era * 400
+    mp: int = (m + 9) % 12
+    doy: int = (153 * mp + 2) // 5 + d - 1
+    doe: int = yoe * 365 + yoe // 4 - yoe // 100 + doy
+    return era * 146097 + doe - 719468
+
+# 1970-01-01 からの日数を日付に
+def civil_from_days(z0: int) -> Date:
+    z: int = z0 + 719468
+    era: int = z // 146097
+    doe: int = z - era * 146097
+    yoe: int = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
+    y: int = yoe + era * 400
+    doy: int = doe - (365 * yoe + yoe // 4 - yoe // 100)
+    mp: int = (5 * doy + 2) // 153
+    d: int = doy - (153 * mp + 2) // 5 + 1
+    m: int = mp + 3
+    if mp >= 10:
+        m = mp - 9
+    if m <= 2:
+        y = y + 1
+    return Date(y, m, d)
+
+def check_days(days: int, what: str) -> None:
+    if days < -DAYS_BEFORE_EPOCH or days > MAX_DAYS:
+        panic("datetime: " + what + " が 1〜9999 年の外に出ました")
+
+# 数を 0 で詰める（負は来ない前提）
+def pad(n: int, width: int) -> str:
+    s: str = str(n)
+    while len(s) < width:
+        s = "0" + s
+    return s
+
+# 曜日・月の名前（英語。strftime と同じ）。
+# 注意: グローバルの初期値に list は書けないので、関数で引きます
+def weekday_names(long: bool) -> list[str]:
+    if long:
+        return ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    return ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+def month_names(long: bool) -> list[str]:
+    if long:
+        return ["January", "February", "March", "April", "May", "June", "July", "August",
+                "September", "October", "November", "December"]
+    return ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+# ── 期間 ──────────────────────────────────────────────────
+#
+# ★ 秒とナノ秒に分けて持ちます（ns は 0〜999999999 にそろえる）。
+#   ナノ秒だけを 64 ビットで持つと約 292 年であふれ、1〜9999 年の差を表せません。
+class Duration:
+    secs: int
+    ns: int
+
+    def init(self, secs: int, ns: int) -> None:
+        # ns を 0〜999999999 にそろえる（負の期間は secs が負になる）
+        self.secs = secs + ns // NS_PER_SEC
+        self.ns = ns % NS_PER_SEC
+
+    def __add__(self, o: Duration) -> Duration:
+        return Duration(self.secs + o.secs, self.ns + o.ns)
+
+    def __sub__(self, o: Duration) -> Duration:
+        return Duration(self.secs - o.secs, self.ns - o.ns)
+
+    def __neg__(self) -> Duration:
+        return Duration(-self.secs, -self.ns)
+
+    def __mul__(self, k: int) -> Duration:
+        # ★ ns * k はあふれうるので、秒とナノ秒に分けて掛けます
+        extra: int = (self.ns * (k % NS_PER_SEC)) // NS_PER_SEC
+        rem: int = (self.ns * (k % NS_PER_SEC)) % NS_PER_SEC
+        return Duration(self.secs * k + self.ns * (k // NS_PER_SEC) + extra, rem)
+
+    def cmp(self, o: Duration) -> int:
+        if self.secs != o.secs:
+            if self.secs < o.secs:
+                return -1
+            return 1
+        if self.ns != o.ns:
+            if self.ns < o.ns:
+                return -1
+            return 1
+        return 0
+
+    def __eq__(self, o: Duration) -> bool:
+        return self.cmp(o) == 0
+
+    def __ne__(self, o: Duration) -> bool:
+        return self.cmp(o) != 0
+
+    def __lt__(self, o: Duration) -> bool:
+        return self.cmp(o) < 0
+
+    def __le__(self, o: Duration) -> bool:
+        return self.cmp(o) <= 0
+
+    def __gt__(self, o: Duration) -> bool:
+        return self.cmp(o) > 0
+
+    def __ge__(self, o: Duration) -> bool:
+        return self.cmp(o) >= 0
+
+    def is_negative(self) -> bool:
+        return self.secs < 0
+
+    # 秒で（小数つき）
+    def total_seconds(self) -> float:
+        return float(self.secs) + float(self.ns) / 1000000000.0
+
+    # ナノ秒で。注意: 約 292 年を超えると panic します（桁あふれの検査）
+    def total_ns(self) -> int:
+        return self.secs * NS_PER_SEC + self.ns
+
+    # 切り下げた秒（-1.5 秒なら -2）
+    def floor_seconds(self) -> int:
+        return self.secs
+
+    # 26h3m4.5s / -1.5s / 0s（Go の Duration と同じ書き方）
+    def text(self) -> str:
+        secs: int = self.secs
+        ns: int = self.ns
+        sign: str = ""
+        if secs < 0:
+            sign = "-"
+            # 負の期間は絶対値で書く
+            if ns > 0:
+                secs = -secs - 1
+                ns = NS_PER_SEC - ns
+            else:
+                secs = -secs
+        if secs == 0 and ns == 0:
+            return "0s"
+        h: int = secs // 3600
+        mi: int = (secs % 3600) // 60
+        s: int = secs % 60
+        frac: str = ""
+        if ns > 0:
+            f: str = pad(ns, 9)
+            while strings.endswith(f, "0"):
+                f = f[0:len(f) - 1]
+            frac = "." + f
+        out: str = sign
+        if h > 0:
+            out = out + str(h) + "h" + str(mi) + "m"
+        elif mi > 0:
+            out = out + str(mi) + "m"
+        return out + str(s) + frac + "s"
+
+    def __copy__(self) -> Duration:
+        return Duration(self.secs, self.ns)
+
+def days(n: int) -> Duration:
+    return Duration(n * SEC_PER_DAY, 0)
+
+def hours(n: int) -> Duration:
+    return Duration(n * 3600, 0)
+
+def minutes(n: int) -> Duration:
+    return Duration(n * 60, 0)
+
+def seconds(n: int) -> Duration:
+    return Duration(n, 0)
+
+def millis(n: int) -> Duration:
+    return Duration(n // 1000, (n % 1000) * 1000000)
+
+def micros(n: int) -> Duration:
+    return Duration(n // 1000000, (n % 1000000) * 1000)
+
+def nanos(n: int) -> Duration:
+    return Duration(n // NS_PER_SEC, n % NS_PER_SEC)
+
+
+# ── 日付 ──────────────────────────────────────────────────
+class Date:
+    year: int
+    month: int
+    day: int
+
+    # 注意: 直接作らず date_of を使ってください（ここは確かめません）
+    def init(self, year: int, month: int, day: int) -> None:
+        self.year = year
+        self.month = month
+        self.day = day
+
+    # 1970-01-01 からの日数
+    def ordinal(self) -> int:
+        return days_from_civil(self.year, self.month, self.day)
+
+    # 月曜 0 〜 日曜 6（Python の weekday と同じ）
+    def weekday(self) -> int:
+        return (self.ordinal() + 3) % 7
+
+    # 1 月 1 日が 1
+    def day_of_year(self) -> int:
+        return self.ordinal() - days_from_civil(self.year, 1, 1) + 1
+
+    def add_days(self, n: int) -> Date:
+        z: int = self.ordinal() + n
+        check_days(z, "日付")
+        return civil_from_days(z)
+
+    # n か月後。月末を越える日は、その月の末日にそろえます（1 月 31 日 + 1 か月 = 2 月 28 日）
+    def add_months(self, n: int) -> Date:
+        total: int = self.year * 12 + (self.month - 1) + n
+        y: int = total // 12
+        m: int = total % 12 + 1
+        if y < 1 or y > 9999:
+            panic("datetime: 日付 が 1〜9999 年の外に出ました")
+        d: int = self.day
+        last: int = days_in_month(y, m)
+        if d > last:
+            d = last
+        return Date(y, m, d)
+
+    # self - o の日数
+    def __sub__(self, o: Date) -> int:
+        return self.ordinal() - o.ordinal()
+
+    def __eq__(self, o: Date) -> bool:
+        return self.ordinal() == o.ordinal()
+
+    def __ne__(self, o: Date) -> bool:
+        return self.ordinal() != o.ordinal()
+
+    def __lt__(self, o: Date) -> bool:
+        return self.ordinal() < o.ordinal()
+
+    def __le__(self, o: Date) -> bool:
+        return self.ordinal() <= o.ordinal()
+
+    def __gt__(self, o: Date) -> bool:
+        return self.ordinal() > o.ordinal()
+
+    def __ge__(self, o: Date) -> bool:
+        return self.ordinal() >= o.ordinal()
+
+    # 2026-10-01
+    def iso(self) -> str:
+        return pad(self.year, 4) + "-" + pad(self.month, 2) + "-" + pad(self.day, 2)
+
+    def __copy__(self) -> Date:
+        return Date(self.year, self.month, self.day)
+
+# 日付を作る。ありえない日付は DateError
+def date_of(year: int, month: int, day: int) -> Date raises DateError:
+    if year < 1 or year > 9999:
+        raise DateError(f"年は 1〜9999 です（{year}）")
+    if month < 1 or month > 12:
+        raise DateError(f"月は 1〜12 です（{month}）")
+    last: int = days_in_month(year, month)
+    if day < 1 or day > last:
+        raise DateError(f"{year}-{pad(month, 2)} の日は 1〜{last} です（{day}）")
+    return Date(year, month, day)
+
+
+# ── 日時 ──────────────────────────────────────────────────
+#
+# ★ 中身は「UTC の UNIX 秒」「ナノ秒」「時差（秒）」です。年月日・時分秒は、
+#   時差を足した壁時計の値をその場で計算します。
+class DateTime:
+    sec: int     # 1970-01-01T00:00:00Z からの秒（UTC）
+    ns: int      # 0〜999999999
+    off: int     # 時差（秒。+09:00 なら 32400）
+
+    # 注意: 直接作らず of / from_unix を使ってください（ここは確かめません）
+    def init(self, sec: int, ns: int, off: int) -> None:
+        self.sec = sec
+        self.ns = ns
+        self.off = off
+
+    def local_days(self) -> int:
+        return (self.sec + self.off) // SEC_PER_DAY
+
+    def local_sod(self) -> int:
+        return (self.sec + self.off) % SEC_PER_DAY
+
+    def date(self) -> Date:
+        return civil_from_days(self.local_days())
+
+    def year(self) -> int:
+        return self.date().year
+
+    def month(self) -> int:
+        return self.date().month
+
+    def day(self) -> int:
+        return self.date().day
+
+    def hour(self) -> int:
+        return self.local_sod() // 3600
+
+    def minute(self) -> int:
+        return (self.local_sod() % 3600) // 60
+
+    def second(self) -> int:
+        return self.local_sod() % 60
+
+    def nanosecond(self) -> int:
+        return self.ns
+
+    def offset(self) -> int:
+        return self.off
+
+    def weekday(self) -> int:
+        return (self.local_days() + 3) % 7
+
+    # UNIX 秒（切り下げ）とナノ秒
+    def unix(self) -> int:
+        return self.sec
+
+    def unix_ns(self) -> int:
+        return self.sec * NS_PER_SEC + self.ns
+
+    # 同じ瞬間を、別の時差で表す
+    def with_offset(self, off: int) -> DateTime raises DateError:
+        check_offset(off)
+        r: DateTime = DateTime(self.sec, self.ns, off)
+        r.check_range()
+        return r
+
+    def check_range(self) -> None:
+        check_days(self.local_days(), "日時")
+
+    def __add__(self, d: Duration) -> DateTime:
+        r: DateTime = DateTime(self.sec + d.secs + (self.ns + d.ns) // NS_PER_SEC,
+                               (self.ns + d.ns) % NS_PER_SEC, self.off)
+        r.check_range()
+        return r
+
+    # self - o（同じ瞬間どうしの差。時差は関係ありません）
+    def __sub__(self, o: DateTime) -> Duration:
+        return Duration(self.sec - o.sec, self.ns - o.ns)
+
+    # 期間を引く（`t - d` は「日時 - 日時」に使っているので、こちらはメソッドです）
+    def minus(self, d: Duration) -> DateTime:
+        return self + -d
+
+    # n か月後（壁時計で数えます。月末を越える日はその月の末日にそろえる）
+    def add_months(self, n: int) -> DateTime:
+        nd: Date = self.date().add_months(n)
+        days: int = nd.ordinal()
+        return DateTime(days * SEC_PER_DAY + self.local_sod() - self.off, self.ns, self.off)
+
+    def cmp(self, o: DateTime) -> int:
+        if self.sec != o.sec:
+            if self.sec < o.sec:
+                return -1
+            return 1
+        if self.ns != o.ns:
+            if self.ns < o.ns:
+                return -1
+            return 1
+        return 0
+
+    # ★ 比較は**同じ瞬間か**で決めます（09:00+09:00 == 00:00Z）
+    def __eq__(self, o: DateTime) -> bool:
+        return self.cmp(o) == 0
+
+    def __ne__(self, o: DateTime) -> bool:
+        return self.cmp(o) != 0
+
+    def __lt__(self, o: DateTime) -> bool:
+        return self.cmp(o) < 0
+
+    def __le__(self, o: DateTime) -> bool:
+        return self.cmp(o) <= 0
+
+    def __gt__(self, o: DateTime) -> bool:
+        return self.cmp(o) > 0
+
+    def __ge__(self, o: DateTime) -> bool:
+        return self.cmp(o) >= 0
+
+    # 2026-10-01T09:30:00+09:00（UTC は Z。秒未満があれば 3・6・9 桁で）
+    def iso(self) -> str:
+        return (self.date().iso() + "T" + pad(self.hour(), 2) + ":" + pad(self.minute(), 2) +
+                ":" + pad(self.second(), 2) + frac_text(self.ns) + offset_text(self.off, True))
+
+    # strftime と同じ書き方で書く（使える指定は下の FORMATS）
+    def format(self, fmt: str) -> str raises DateError:
+        parts: list[str] = []
+        i: int = 0
+        lit: int = 0
+        dt: Date = self.date()
+        while i < len(fmt):
+            if strings.byte_at(fmt, i) != 37:   # '%'
+                i = i + 1
+                continue
+            parts.append(fmt[lit:i])
+            if i + 1 >= len(fmt):
+                raise DateError("書式が '%' で終わっています")
+            c: str = fmt[i + 1:i + 2]
+            i = i + 2
+            if c == "Y":
+                parts.append(pad(dt.year, 4))
+            elif c == "m":
+                parts.append(pad(dt.month, 2))
+            elif c == "d":
+                parts.append(pad(dt.day, 2))
+            elif c == "H":
+                parts.append(pad(self.hour(), 2))
+            elif c == "M":
+                parts.append(pad(self.minute(), 2))
+            elif c == "S":
+                parts.append(pad(self.second(), 2))
+            elif c == "f":
+                parts.append(pad(self.ns // 1000, 6))
+            elif c == "z":
+                parts.append(offset_text(self.off, False))
+            elif c == ":":
+                if i >= len(fmt) or fmt[i:i + 1] != "z":
+                    raise DateError("書式の '%:' の後ろは z だけです（%:z）")
+                i = i + 1
+                parts.append(offset_colon(self.off))
+            elif c == "j":
+                parts.append(pad(dt.day_of_year(), 3))
+            elif c == "a":
+                parts.append(copy(weekday_names(False)[dt.weekday()]))
+            elif c == "A":
+                parts.append(copy(weekday_names(True)[dt.weekday()]))
+            elif c == "b":
+                parts.append(copy(month_names(False)[dt.month - 1]))
+            elif c == "B":
+                parts.append(copy(month_names(True)[dt.month - 1]))
+            elif c == "%":
+                parts.append("%")
+            else:
+                raise DateError("書式に知らない指定があります（%" + c + "）")
+            lit = i
+        parts.append(fmt[lit:len(fmt)])
+        return strings.join(parts, "")
+
+    def __copy__(self) -> DateTime:
+        return DateTime(self.sec, self.ns, self.off)
+
+
+# 秒未満を .123 / .123456 / .123456789 で（0 なら空）
+def frac_text(ns: int) -> str:
+    if ns == 0:
+        return ""
+    if ns % 1000000 == 0:
+        return "." + pad(ns // 1000000, 3)
+    if ns % 1000 == 0:
+        return "." + pad(ns // 1000, 6)
+    return "." + pad(ns, 9)
+
+# iso なら +09:00（UTC は Z）、そうでなければ +0900（UTC は +0000）
+def offset_text(off: int, iso: bool) -> str:
+    if iso:
+        if off == 0:
+            return "Z"
+        return offset_colon(off)
+    sign: str = "+"
+    a: int = off
+    if off < 0:
+        sign = "-"
+        a = -off
+    return sign + pad(a // 3600, 2) + pad((a % 3600) // 60, 2)
+
+def offset_colon(off: int) -> str:
+    sign: str = "+"
+    a: int = off
+    if off < 0:
+        sign = "-"
+        a = -off
+    return sign + pad(a // 3600, 2) + ":" + pad((a % 3600) // 60, 2)
+
+def check_offset(off: int) -> None raises DateError:
+    if off <= -SEC_PER_DAY or off >= SEC_PER_DAY:
+        raise DateError(f"時差は ±24 時間未満です（{off} 秒）")
+
+# 時差を作る（offset(9) で +09:00、offset(-5, 30) で -05:30）
+def offset(h: int, m: int = 0) -> int raises DateError:
+    if m < 0 or m > 59:
+        raise DateError(f"時差の分は 0〜59 です（{m}）")
+    off: int = h * 3600 + m * 60
+    if h < 0:
+        off = h * 3600 - m * 60
+    check_offset(off)
+    return off
+
+# 日時を作る。ありえない日時は DateError
+#
+# ★ off（時差）は**先頭の必須の引数**です。黙って UTC やその機械の時差にすると、
+#   別の機械で動かしたときに静かにずれるためです（既定値を持たせられないので先頭に置きました）。
+def of(off: int, year: int, month: int, day: int, hour: int = 0, minute: int = 0,
+       second: int = 0, nanosecond: int = 0) -> DateTime raises DateError:
+    d: Date = date_of(year, month, day)
+    if hour < 0 or hour > 23:
+        raise DateError(f"時は 0〜23 です（{hour}）")
+    if minute < 0 or minute > 59:
+        raise DateError(f"分は 0〜59 です（{minute}）")
+    if second < 0 or second > 59:
+        raise DateError(f"秒は 0〜59 です（{second}。うるう秒は扱いません）")
+    if nanosecond < 0 or nanosecond >= NS_PER_SEC:
+        raise DateError(f"ナノ秒は 0〜999999999 です（{nanosecond}）")
+    check_offset(off)
+    sec: int = d.ordinal() * SEC_PER_DAY + hour * 3600 + minute * 60 + second - off
+    return DateTime(sec, nanosecond, off)
+
+# UNIX 秒から
+def from_unix(sec: int, off: int) -> DateTime raises DateError:
+    check_offset(off)
+    r: DateTime = DateTime(sec, 0, off)
+    if r.local_days() < -DAYS_BEFORE_EPOCH or r.local_days() > MAX_DAYS:
+        raise DateError(f"UNIX 秒 {sec} は 1〜9999 年の外です")
+    return r
+
+def from_unix_ns(ns: int, off: int) -> DateTime raises DateError:
+    check_offset(off)
+    r: DateTime = DateTime(ns // NS_PER_SEC, ns % NS_PER_SEC, off)
+    if r.local_days() < -DAYS_BEFORE_EPOCH or r.local_days() > MAX_DAYS:
+        raise DateError(f"UNIX ナノ秒 {ns} は 1〜9999 年の外です")
+    return r
+
+# いまの時刻（off の時差で表す）
+def now(off: int) -> DateTime raises DateError:
+    return from_unix_ns(time.now_ns(), off)
+
+
+# ── 読む ──────────────────────────────────────────────────
+
+# 読み取りの途中の状態
+class Reader:
+    s: str
+    pos: int
+
+    def init(self, s: own str) -> None:
+        self.s = s
+        self.pos = 0
+
+    def at_end(self) -> bool:
+        return self.pos >= len(self.s)
+
+    def peek(self) -> int:
+        if self.pos >= len(self.s):
+            return -1
+        return strings.byte_at(self.s, self.pos)
+
+    def fail(self, what: str) -> DateError:
+        return DateError(f"'{self.s}' の {self.pos} バイト目: {what}")
+
+    # ちょうど n 桁の数（n が 0 なら 1 桁以上）
+    # 注意: 誤りは**欄の始まり**の位置で報告します（読み進めた後ろではなく）
+    def digits(mut self, n: int, what: str) -> int raises DateError:
+        start: int = self.pos
+        v: int = 0
+        k: int = 0
+        while not self.at_end():
+            b: int = self.peek()
+            if b < 48 or b > 57:
+                break
+            if n > 0 and k >= n:
+                break
+            v = v * 10 + (b - 48)
+            k = k + 1
+            self.pos = self.pos + 1
+            if k > 18:
+                raise self.fail(what + "の桁が多すぎます")
+        if k == 0 or (n > 0 and k != n):
+            self.pos = start
+            if n > 0:
+                raise self.fail(f"{what}は {n} 桁の数字です")
+            raise self.fail(what + "の数字がありません")
+        return v
+
+    def expect(mut self, c: str) -> None raises DateError:
+        if self.pos + len(c) > len(self.s) or self.s[self.pos:self.pos + len(c)] != c:
+            raise self.fail("'" + c + "' が要ります")
+        self.pos = self.pos + len(c)
+
+    # 秒未満（. の後ろ 1〜9 桁）
+    def fraction(mut self) -> int raises DateError:
+        start: int = self.pos
+        v: int = self.digits(0, "秒未満")
+        k: int = self.pos - start
+        if k > 9:
+            raise self.fail("秒未満は 9 桁までです")
+        while k < 9:
+            v = v * 10
+            k = k + 1
+        return v
+
+    # Z / +09:00 / +0900 / +09（あるかどうかは先に has_zone で見ます）
+    def zone(mut self) -> int raises DateError:
+        b: int = self.peek()
+        if b == 90 or b == 122:   # Z z
+            self.pos = self.pos + 1
+            return 0
+        if b != 43 and b != 45:   # + -
+            raise self.fail("時差（Z か +09:00）が要ります")
+        neg: bool = b == 45
+        self.pos = self.pos + 1
+        h: int = self.digits(2, "時差の時")
+        m: int = 0
+        if self.peek() == 58:     # :
+            self.pos = self.pos + 1
+            m = self.digits(2, "時差の分")
+        elif self.peek() >= 48 and self.peek() <= 57:
+            m = self.digits(2, "時差の分")
+        if m > 59:
+            raise self.fail("時差の分は 0〜59 です")
+        off: int = h * 3600 + m * 60
+        if neg:
+            off = -off
+        if off <= -SEC_PER_DAY or off >= SEC_PER_DAY:
+            raise self.fail("時差は ±24 時間未満です")
+        return off
+
+    def has_zone(self) -> bool:
+        b: int = self.peek()
+        return b == 90 or b == 122 or b == 43 or b == 45
+
+
+# 2026-10-01 を読む
+def parse_date(s: str) -> Date raises DateError:
+    r: Reader = Reader(copy(s))
+    y: int = r.digits(4, "年")
+    r.expect("-")
+    m: int = r.digits(2, "月")
+    r.expect("-")
+    d: int = r.digits(2, "日")
+    if not r.at_end():
+        raise r.fail("日付の後ろに余計な文字があります")
+    return date_of(y, m, d)
+
+# ISO 8601 の日時を読む（時差つきのものだけ）。
+#   2026-10-01T09:30:00+09:00 / 2026-10-01T00:30:00Z / 2026-10-01 09:30:00.123+0900 /
+#   2026-10-01T09:30+09:00（秒は省略できる）
+def parse_iso(s: str) -> DateTime raises DateError:
+    return parse_iso_impl(s, False, 0)
+
+# 同じく。時差が書かれていなければ off とみなします（書かれていればそちらが勝ちます）
+def parse_iso_in(s: str, off: int) -> DateTime raises DateError:
+    check_offset(off)
+    return parse_iso_impl(s, True, off)
+
+def parse_iso_impl(s: str, has_default: bool, default_off: int) -> DateTime raises DateError:
+    r: Reader = Reader(copy(s))
+    y: int = r.digits(4, "年")
+    r.expect("-")
+    mo: int = r.digits(2, "月")
+    r.expect("-")
+    d: int = r.digits(2, "日")
+    b: int = r.peek()
+    if b != 84 and b != 116 and b != 32:   # T t ' '
+        raise r.fail("日付と時刻のあいだは 'T' か空白です（日付だけなら parse_date）")
+    r.pos = r.pos + 1
+    h: int = r.digits(2, "時")
+    r.expect(":")
+    mi: int = r.digits(2, "分")
+    sec: int = 0
+    ns: int = 0
+    if r.peek() == 58:
+        r.pos = r.pos + 1
+        sec = r.digits(2, "秒")
+        if r.peek() == 46 or r.peek() == 44:   # . ,
+            r.pos = r.pos + 1
+            ns = r.fraction()
+    off: int = default_off
+    if r.has_zone():
+        off = r.zone()
+    elif not has_default:
+        raise r.fail("時差がありません。末尾に Z か +09:00 を付けるか、" +
+                     "parse_iso_in(s, 時差) で時差を明示してください（黙って UTC にはしません）")
+    if not r.at_end():
+        raise r.fail("日時の後ろに余計な文字があります")
+    return of(off, y, mo, d, h, mi, sec, ns)
+
+def name_index(r: mut Reader, names: list[str], what: str) -> int raises DateError:
+    k: int = 0
+    while k < len(names):
+        n: str = names[k]
+        if r.pos + len(n) <= len(r.s) and r.s[r.pos:r.pos + len(n)] == n:
+            r.pos = r.pos + len(n)
+            return k
+        k = k + 1
+    raise r.fail(what + "の名前が読めません")
+
+# 書式（format と同じ指定）に従って読む。
+#
+# ★ off は書式に %z / %:z が無いときの時差です（**省略できません**。黙って UTC に
+#   しないため）。%z があればそちらが勝ちます。
+# 注意: 読めるのは %Y %m %d %H %M %S %f %z %:z %a %A %b %B %% です（%j は読めません）。
+def parse(s: str, fmt: str, off: int) -> DateTime raises DateError:
+    check_offset(off)
+    r: Reader = Reader(copy(s))
+    y: int = 1970
+    mo: int = 1
+    d: int = 1
+    h: int = 0
+    mi: int = 0
+    sec: int = 0
+    ns: int = 0
+    zone: int = off
+    i: int = 0
+    while i < len(fmt):
+        b: int = strings.byte_at(fmt, i)
+        if b != 37:
+            n: int = strings.char_len_at(fmt, i)
+            r.expect(fmt[i:i + n])
+            i = i + n
+            continue
+        if i + 1 >= len(fmt):
+            raise DateError("書式が '%' で終わっています")
+        c: str = fmt[i + 1:i + 2]
+        i = i + 2
+        if c == "Y":
+            y = r.digits(4, "年")
+        elif c == "m":
+            mo = r.digits(2, "月")
+        elif c == "d":
+            d = r.digits(2, "日")
+        elif c == "H":
+            h = r.digits(2, "時")
+        elif c == "M":
+            mi = r.digits(2, "分")
+        elif c == "S":
+            sec = r.digits(2, "秒")
+        elif c == "f":
+            ns = r.fraction()
+        elif c == "z":
+            zone = r.zone()
+        elif c == ":":
+            if i >= len(fmt) or fmt[i:i + 1] != "z":
+                raise DateError("書式の '%:' の後ろは z だけです（%:z）")
+            i = i + 1
+            zone = r.zone()
+        elif c == "a":
+            name_index(r, weekday_names(False), "曜日")
+        elif c == "A":
+            name_index(r, weekday_names(True), "曜日")
+        elif c == "b":
+            mo = name_index(r, month_names(False), "月") + 1
+        elif c == "B":
+            mo = name_index(r, month_names(True), "月") + 1
+        elif c == "%":
+            r.expect("%")
+        else:
+            raise DateError("書式に読めない指定があります（%" + c + "）")
+    if not r.at_end():
+        raise r.fail("書式の後ろに余計な文字があります")
+    return of(zone, y, mo, d, h, mi, sec, ns)

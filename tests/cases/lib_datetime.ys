@@ -1,0 +1,39 @@
+# OUTPUT: 2026-10-01T09:30:00+09:00
+# OUTPUT: 2026年10月02日 05:30 Fri +0900
+# OUTPUT: 20h0m0s
+# OUTPUT: 2026-10-01T00:30:00Z True 2026-10-01T09:30:00+09:00
+# OUTPUT: 2024-02-29 2024-03-01 2026-02-28
+# OUTPUT: 3 365
+# OUTPUT: 2026-10-01T13:05:09+09:00 1790827509
+# OUTPUT: 1970-01-01T00:00:00Z 1969-12-31T23:59:59Z
+# OUTPUT: -1.5s 26h3m4.5s
+# OUTPUT: 0001-01-01T00:00:00Z 9999-12-31T23:59:59.999999999Z
+# OUTPUT: 2026-10-01T09:30:00.123+09:00
+# 日付と時刻（lib/datetime）。時差を持たない日時は作れない。
+#   比較と引き算は「同じ瞬間か」で決まる（09:30+09:00 と 00:30Z は等しい）
+import datetime
+
+def run() -> None raises datetime.DateError:
+    t: datetime.DateTime = datetime.of(datetime.JST, 2026, 10, 1, 9, 30)
+    print(t.iso())
+    u: datetime.DateTime = t + datetime.hours(20)
+    print(u.format("%Y年%m月%d日 %H:%M %a %z"))
+    print((u - t).text())
+    p: datetime.DateTime = datetime.parse_iso("2026-10-01T00:30:00Z")
+    print(p.iso() + " " + str(p == t) + " " + str(p.with_offset(datetime.JST).iso()))
+    d: datetime.Date = datetime.date_of(2024, 2, 28)
+    print(d.add_days(1).iso() + " " + d.add_days(2).iso() + " " + datetime.date_of(2026, 1, 31).add_months(1).iso())
+    print(str(datetime.date_of(2026, 10, 1).weekday()) + " " + str(datetime.date_of(2026, 12, 31).day_of_year()))
+    q: datetime.DateTime = datetime.parse("01/Oct/2026:13:05:09 +0900", "%d/%b/%Y:%H:%M:%S %z", datetime.UTC)
+    print(q.iso() + " " + str(q.unix()))
+    print(datetime.from_unix(0, datetime.UTC).iso() + " " + datetime.from_unix(-1, datetime.UTC).iso())
+    print((datetime.millis(-1500)).text() + " " + (datetime.hours(26) + datetime.minutes(3) + datetime.millis(4500)).text())
+    print(datetime.of(datetime.UTC, 1, 1, 1).iso() + " " + datetime.of(datetime.UTC, 9999, 12, 31, 23, 59, 59, 999999999).iso())
+    print(datetime.parse_iso("2026-10-01 09:30:00.123+09:00").iso())
+
+def main() -> int:
+    try:
+        run()
+    except datetime.DateError as e:
+        print("DateError: " + e.message)
+    return 0

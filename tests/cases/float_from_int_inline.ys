@@ -1,0 +1,14 @@
+# OUTPUT: 3.5
+# OUTPUT: -9007199254740992.0
+# EXIT: 0
+# IR: sitofp i64
+# IR-NOT: call double @pl_float_from_int
+# float(int) は命令 1 つ（sitofp）。
+#   ★ ランタイムの pl_float_from_int（`(double)v` だけの関数）を呼んでいたので、
+#     LLVM から中が見えず、ループのベクトル化まで止まっていました
+#     （float の級数 2000 万項で C の 5.9 倍 → 1.0 倍）。
+def main() -> int:
+    n: int = 7
+    print(str(float(n) / 2.0))
+    print(str(float(-9007199254740992)))
+    return 0

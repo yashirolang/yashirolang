@@ -1,0 +1,36 @@
+# OUTPUT: 6.0
+# OUTPUT: 0
+# OUTPUT: 11.999999999999998
+# EXIT: 0
+# IR: vz.fast.
+# IR: vz.slow.
+# for i in range(...) のループにも版分けが効く。
+#
+#   ★ `for j in range(n):` は parser で `for.ix` を誘導変数にした while になり、
+#     本体の先頭で `j = for.ix` と写します。添字は j で書かれるので、j を for.ix の
+#     別名として扱わないと、**いちばん普通の for のループに版分けが一度も効きません**
+#     でした（while で書いたときだけ効いていた）。行列積（行を外に出した二重リスト）で
+#     107 ms → 35 ms です。
+#   注意: 上の `# IR:` 2 行がこのテストの要です（出力だけでは版分けの有無が見えません）。
+def axpy(a: float, xs: list[float], ys: mut list[float]) -> None:
+    for j in range(len(xs)):
+        ys[j] = ys[j] + a * xs[j]
+
+def main() -> int:
+    xs: list[float] = [1.0, 2.0, 3.0]
+    ys: list[float] = [0.5, 0.0, 0.0]
+    axpy(1.0, xs, ys)
+    print(str(ys[0] + ys[1] + ys[2] - 0.5))
+    # 0 回まわるループでも、範囲の外を触らない
+    ex: list[float] = []
+    ey: list[float] = []
+    axpy(2.0, ex, ey)
+    print(str(len(ey)))
+    # ループ変数を本体で書き換えたら、別名とは見なさない（遅い側だけで正しく動く）
+    zs: list[float] = [1.0, 2.0, 3.0, 4.0]
+    s: float = 0.0
+    for k in range(4):
+        k = 3 - k
+        s = s + zs[k] * 1.2
+    print(str(s))
+    return 0

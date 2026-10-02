@@ -1,0 +1,34 @@
+# OUTPUT: 19.0 22.0 43.0 50.0
+# OUTPUT: 0 回のループは行を触らない: True
+# EXIT: 0
+# IR: vz.rows.
+# IR: vz.fast.
+# 二重リストの c[i][j] にも版分けが効く（行 c[i] を入口で 1 回だけ取り出す）。
+#
+#   ★ 内側のループで行 c[i] / b[k] は変わらないので、入口で「i < len(c)」と
+#     行の長さを確かめれば、ループの中の検査を 2 段とも外せます。取り出した行は
+#     速い側で使い回します（毎周 c から読み直すと、LLVM が読み出しを外へ出せません）。
+#     512³ の行列積で 221 ms → 52 ms（Rust の Vec<Vec<f64>> は 134 ms）。
+#   注意: 確かめは 2 段です。行を先に取り出すと、0 回しか回らないループで
+#     元のプログラムでは起きない「添字の範囲外」で止まってしまいます（下の 2 行目）。
+def matmul(a: list[list[float]], b: list[list[float]], c: mut list[list[float]]) -> None:
+    n: int = len(a)
+    for i in range(n):
+        for k in range(n):
+            aik: float = a[i][k]
+            for j in range(n):
+                c[i][j] = c[i][j] + aik * b[k][j]
+
+def touch(c: mut list[list[float]], row: int, n: int) -> None:
+    for j in range(n):
+        c[row][j] = 1.0
+
+def main() -> int:
+    a: list[list[float]] = [[1.0, 2.0], [3.0, 4.0]]
+    b: list[list[float]] = [[5.0, 6.0], [7.0, 8.0]]
+    c: list[list[float]] = [[0.0, 0.0], [0.0, 0.0]]
+    matmul(a, b, c)
+    print(str(c[0][0]) + " " + str(c[0][1]) + " " + str(c[1][0]) + " " + str(c[1][1]))
+    touch(c, 99, 0)        # 行 99 は無いが、0 回なので触らない
+    print("0 回のループは行を触らない: " + str(c[0][0] == 19.0))
+    return 0

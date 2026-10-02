@@ -1,0 +1,13 @@
+# OUTPUT: 3.0
+# EXIT: 1
+# for のループで範囲の外を触る形は、版分けされても正しい位置で止まる。
+#   入口の確かめに落ちて遅い側を回り、j == 3 で添字の範囲外になる（j == 0〜2 の結果は出ている）
+def main() -> int:
+    xs: list[float] = [1.0, 1.0, 1.0]
+    ys: list[float] = [0.0, 0.0, 0.0, 0.0]
+    s: float = 0.0
+    for j in range(4):
+        s = s + xs[j] * ys[j]
+        if j == 2:
+            print(str(xs[0] + xs[1] + xs[2]))
+    return 0

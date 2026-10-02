@@ -477,22 +477,35 @@ def matmul(a: Matrix, b: Matrix) -> Matrix:
     if a.cols != b.rows:
         panic("linalg.matmul: 形が合いません（" + shape_str(a) + " と " +
               shape_str(b) + "）")
-    c: Matrix = mzeros(a.rows, b.cols)
+    # ★ 平坦な list を直接たどります（get / set を経由しません）。
+    #   get / set は呼ぶたびに行と列の範囲を確かめるので、内側のループに
+    #   検査が 3 つずつ並び、ベクトル化も効きませんでした（C の 15 倍）。
+    #   形は入口で確かめてあり、添字の検査はリストの側に残るので、安全は変わりません。
+    n: int = a.rows
+    m: int = a.cols
+    p: int = b.cols
+    ad: list[float] = a.data
+    bd: list[float] = b.data
+    cd: list[float] = []
+    for z in range(n * p):
+        cd.append(0.0)
     i: int = 0
-    while i < a.rows:
+    while i < n:
         k: int = 0
-        while k < a.cols:
+        while k < m:
             # ★ 内側を j にすると b の行を順に舐めるので、
             #   行優先の並びと相性がよくなります（i-k-j の順）
-            aik: float = a.get(i, k)
+            aik: float = ad[i * m + k]
             if aik != 0.0:
+                ci: int = i * p
+                bk: int = k * p
                 j: int = 0
-                while j < b.cols:
-                    c.set(i, j, c.get(i, j) + aik * b.get(k, j))
+                while j < p:
+                    cd[ci + j] = cd[ci + j] + aik * bd[bk + j]
                     j = j + 1
             k = k + 1
         i = i + 1
-    return c
+    return Matrix(n, p, cd)
 
 # 行列 × ベクトル
 def matvec(a: Matrix, v: list[float]) -> list[float]:

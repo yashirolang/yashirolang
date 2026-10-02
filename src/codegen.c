@@ -62,6 +62,11 @@ typedef struct {
     // ── 添字の範囲をループの外で 1 回だけ確かめる ──
     bool nobc;               // 速い側の本体を生成中（境界検査を出さない）
     const char *iv_ir;       // その版分けの誘導変数（増分の桁あふれ検査も外す）
+    // ★ 版分けの速い経路で使い回す行（c[i]）。入口の確かめで取り出した値です（0.48.0）。
+    struct Node *rowc_node[16];
+    const char *rowc_val[16];
+    int nrowc;
+    const char *subst_alias; // …と、その別名（for のループ変数）を…
     const char *subst_ir;    // ガードの計算中だけ、この変数を…
     const char *subst_val;   //   …この値に読み替える
 
@@ -1246,7 +1251,8 @@ static char *gen_expr(Emitter *e, Node *n) {
             //   注意: 添字の式をもう一度そのまま生成するので、substitution は
             //     ここ 1 か所で足ります（式の形を分解する必要がありません）。
             if (e->subst_ir && n->ir_name &&
-                strcmp(n->ir_name, e->subst_ir) == 0)
+                (strcmp(n->ir_name, e->subst_ir) == 0 ||
+                 (e->subst_alias && strcmp(n->ir_name, e->subst_alias) == 0)))
                 return (char *)e->subst_val;
 
             // ★ 関数の名前を値として使う場合（A-43）。
@@ -2256,7 +2262,30 @@ static char *gen_index_expr(Emitter *e, Node *n, char **ovf) {
     return val;
 }
 
+// 2 つの式が同じ「場所・添字」の形か（版分けで取り出した行を見分けるため）
+static bool vz_same(Node *a, Node *b) {
+    if (!a || !b) return a == b;
+    if (a->kind != b->kind) return false;
+    switch (a->kind) {
+        case ND_VAR: return a->ir_name && b->ir_name && strcmp(a->ir_name, b->ir_name) == 0;
+        case ND_INT: return a->ival == b->ival;
+        case ND_FIELD:
+            return !a->mod_name && !b->mod_name && strcmp(a->name, b->name) == 0 &&
+                   vz_same(a->lhs, b->lhs);
+        case ND_INDEX: return vz_same(a->lhs, b->lhs) && vz_same(a->rhs, b->rhs);
+        case ND_BINOP:
+            return a->op == b->op && vz_same(a->lhs, b->lhs) && vz_same(a->rhs, b->rhs);
+        default: return false;
+    }
+}
+
 static char *gen_index(Emitter *e, Node *n) {
+    // ★ 版分けの速い経路では、入口で取り出した行（c[i]）を使い回します。
+    //   毎周 c から読み直すと、c[i][j] への書き込みが c を変えうると見られて
+    //   LLVM が読み出しをループの外へ出せず、二重リストの行列積が遅いままでした。
+    //   本体で c も行も差し替わらないことは vz_analyze が確かめています。
+    for (int r = 0; r < e->nrowc; r++)
+        if (vz_same(e->rowc_node[r], n)) return (char *)e->rowc_val[r];
     Type *ot = n->lhs->type;
     char *obj = gen_expr(e, n->lhs);
     char *ovf = NULL;
@@ -3740,12 +3769,28 @@ static bool vz_assigns(Node *n, const char *ir) {
 //   の添字 `k` は「j についてアフィン」ではありますが（j が現れない＝定数項）、
 //   **両端で確かめた値と実際の値が違います**。範囲外を読んで通ってしまいます。
 //   だから「誘導変数以外は不変」を要求します。
-static bool vz_invariant(Node *e, const char *iv, Node *body) {
+// ★ alias は誘導変数の別名です（for のループ変数。下の vz_analyze）。
+//   本体の先頭で 1 回だけ代入されるので、誘導変数と同じに扱います。
+static bool vz_invariant(Node *e, const char *iv, const char *alias, Node *body) {
     if (!e) return true;
     if (e->kind == ND_VAR && e->ir_name && strcmp(e->ir_name, iv) != 0 &&
-        vz_assigns(body, e->ir_name))
+        !(alias && strcmp(e->ir_name, alias) == 0) && vz_assigns(body, e->ir_name))
         return false;
-    return vz_invariant(e->lhs, iv, body) && vz_invariant(e->rhs, iv, body);
+    return vz_invariant(e->lhs, iv, alias, body) && vz_invariant(e->rhs, iv, alias, body);
+}
+
+// 変数 ir への代入（宣言を含む）が、文の並びの中に何回あるか（body / els をたどる）。
+static int vz_count_assign(Node *n, const char *ir) {
+    int total = 0;
+    for (; n; n = n->next) {
+        if (n->kind == ND_ASSIGN && n->lhs && n->lhs->kind == ND_VAR && n->lhs->ir_name &&
+            strcmp(n->lhs->ir_name, ir) == 0)
+            total++;
+        if (n->kind == ND_VARDECL && n->ir_name && strcmp(n->ir_name, ir) == 0) total++;
+        total += vz_count_assign(n->body, ir);
+        total += vz_count_assign(n->els, ir);
+    }
+    return total;
 }
 
 // 変数 ir が式の中に何回現れるか（アフィンかどうかの判定に使う）。
@@ -3828,34 +3873,66 @@ static bool vz_body_ok(Node *n) {
 // 本体の中の「list への添字」を集める。1 つでも証明できなければ false。
 //
 // ★ 集めた添字は、ガードで**両端の値**を計算するのに使います。
-static bool vz_sites(Node *n, const char *iv, Node *body, Node **out, int *cnt,
-                     int max);
+static bool vz_sites(Node *n, const char *iv, const char *alias, Node *body, Node **out,
+                     int *cnt, int max);
 
-static bool vz_sites_list(Node *n, const char *iv, Node *body, Node **out,
-                          int *cnt, int max) {
+// 「ループの中で変わらない行」か：xs[k] で、xs は場所、k は誘導変数を含まない不変の式。
+//
+// ★ 二重リストの `c[i][j]` を版分けするためのものです（0.48.0）。内側のループで
+//   行 `c[i]` は変わらないので、入口で `i < len(c)` と行の長さを確かめれば、
+//   ループの中の検査を 2 段とも外せます。Rust の Vec<Vec<f64>> は内側の添字の検査が
+//   残るので、ここで差が付きます。
+// 注意: 行そのものを差し替える代入（`c[k] = 別のリスト`）が本体にあれば、
+//   vz_analyze が断ります（入口で見た行と同じものと言えなくなるため）。
+static bool vz_row(Node *n, const char *iv, const char *alias, Node *body) {
+    if (!n || n->kind != ND_INDEX || !n->lhs || !n->lhs->type ||
+        n->lhs->type->kind != TY_LIST)
+        return false;
+    if (!n->type || n->type->kind != TY_LIST) return false;   // 行も list であること
+    if (!vz_place(n->lhs)) return false;
+    if (!vz_pure_index(n->rhs)) return false;
+    if (vz_count(n->rhs, iv) != 0) return false;
+    if (alias && vz_count(n->rhs, alias) != 0) return false;
+    return vz_invariant(n->rhs, iv, alias, body);
+}
+
+// 本体に「list の要素へ list を代入する」文があるか（行の差し替え）。
+static bool vz_replaces_row(Node *n) {
+    for (; n; n = n->next) {
+        if (n->kind == ND_ASSIGN && n->lhs && n->lhs->kind == ND_INDEX && n->lhs->type &&
+            (n->lhs->type->kind == TY_LIST || n->lhs->type->kind == TY_STR))
+            return true;
+        if (vz_replaces_row(n->body) || vz_replaces_row(n->els)) return true;
+    }
+    return false;
+}
+
+static bool vz_sites_list(Node *n, const char *iv, const char *alias, Node *body,
+                          Node **out, int *cnt, int max) {
     for (; n; n = n->next)
-        if (!vz_sites(n, iv, body, out, cnt, max)) return false;
+        if (!vz_sites(n, iv, alias, body, out, cnt, max)) return false;
     return true;
 }
 
-static bool vz_sites(Node *n, const char *iv, Node *body, Node **out, int *cnt,
-                     int max) {
+static bool vz_sites(Node *n, const char *iv, const char *alias, Node *body, Node **out,
+                     int *cnt, int max) {
     if (!n) return true;
     if (n->kind == ND_INDEX && n->lhs->type && n->lhs->type->kind == TY_LIST) {
         // 対象は「場所」で、添字は誘導変数についてアフィンで、
         // 誘導変数以外は不変であること。
-        if (!vz_place(n->lhs)) return false;
+        if (!vz_place(n->lhs) && !vz_row(n->lhs, iv, alias, body)) return false;
         if (!vz_pure_index(n->rhs)) return false;
         if (vz_count(n->rhs, iv) > 1) return false;  // アフィンでない（v*v など）
-        if (!vz_invariant(n->rhs, iv, body)) return false;
+        if (alias && vz_count(n->rhs, alias) > 1) return false;
+        if (!vz_invariant(n->rhs, iv, alias, body)) return false;
         if (*cnt >= max) return false;
         out[(*cnt)++] = n;
     }
     Node *kids[] = {n->lhs, n->rhs, n->els, n->incr};
     for (unsigned i = 0; i < sizeof(kids) / sizeof(kids[0]); i++)
-        if (!vz_sites(kids[i], iv, body, out, cnt, max)) return false;
-    return vz_sites_list(n->body, iv, body, out, cnt, max) &&
-           vz_sites_list(n->args, iv, body, out, cnt, max);
+        if (!vz_sites(kids[i], iv, alias, body, out, cnt, max)) return false;
+    return vz_sites_list(n->body, iv, alias, body, out, cnt, max) &&
+           vz_sites_list(n->args, iv, alias, body, out, cnt, max);
 }
 
 // 「v = v + 1」の形か。
@@ -3951,7 +4028,9 @@ static void gen_while_plain(Emitter *e, Node *n) {
 //    すべて外しているため）。残るのは rc[T] や T | None の束縛ぐらいで、
 //    それも ① と ② のとおり各ブロックで釣り合います。
 //    ★ 回帰テスト: tests/cases/vz_drop（拡張子は make info）が ASan で釣り合いを見張ります。
-static const char *vz_analyze(Emitter *e, Node *n, Node **sites, int *nsites) {
+static const char *vz_analyze(Emitter *e, Node *n, Node **sites, int *nsites,
+                              const char **alias_out) {
+    *alias_out = NULL;
     if (n->kind != ND_WHILE) return NULL;
 
     // ① 形：while v < L:
@@ -3970,7 +4049,7 @@ static const char *vz_analyze(Emitter *e, Node *n, Node **sites, int *nsites) {
         L_ok = true;  // ★ while i < len(xs): は非常に多いので通します
     if (!L_ok) return NULL;
     if (vz_count(L, iv) != 0) return NULL;
-    if (!vz_invariant(L, iv, n->body)) return NULL;   // 上限も不変であること
+    if (!vz_invariant(L, iv, NULL, n->body)) return NULL;   // 上限も不変であること
 
     // ③ 本体：呼び出し・入れ子ループ・脱出が無いこと。
     if (!vz_body_ok(n->body)) return NULL;
@@ -4016,36 +4095,64 @@ static const char *vz_analyze(Emitter *e, Node *n, Node **sites, int *nsites) {
     }
 
     // ⑥ 添字を集める。1 つも無ければ版分けする意味がありません。
+    // ⑤' for のループ変数は誘導変数の別名です。
+    //   `for j in range(n):` は parser で次の形になります：
+    //       for.ix = 0
+    //       while for.ix < n:  j = for.ix; 本体 （増分 for.ix = for.ix + 1）
+    //   添字は j で書かれるので、j を for.ix と同じに扱わないと、**いちばん普通の
+    //   for のループに版分けが一度も効きません**でした（while で書いたときだけ効いた）。
+    //   別名として扱うのは、本体の先頭で `j = for.ix` と宣言され、ほかでは
+    //   代入されないときだけです（それなら本体の中で j == for.ix が常に成り立つ）。
+    const char *alias = NULL;
+    if (n->body && n->body->kind == ND_BLOCK && n->body->body) {
+        Node *first = n->body->body;
+        if (first->kind == ND_VARDECL && first->ir_name && first->rhs &&
+            first->rhs->kind == ND_VAR && first->rhs->ir_name &&
+            strcmp(first->rhs->ir_name, iv) == 0 && first->type &&
+            first->type->kind == TY_INT &&
+            vz_count_assign(n->body, first->ir_name) == 1 &&
+            (!n->incr || vz_count_assign(n->incr, first->ir_name) == 0))
+            alias = first->ir_name;
+    }
+
     *nsites = 0;
-    if (!vz_sites(n->body, iv, n->body, sites, nsites, VZ_MAX_SITES)) return NULL;
+    if (!vz_sites(n->body, iv, alias, n->body, sites, nsites, VZ_MAX_SITES)) return NULL;
     if (n->incr &&
-        !vz_sites(n->incr, iv, n->body, sites, nsites, VZ_MAX_SITES))
+        !vz_sites(n->incr, iv, alias, n->body, sites, nsites, VZ_MAX_SITES))
         return NULL;
     if (*nsites == 0) return NULL;
 
     // ⑦ 添字の対象になっている list が本体で書き換わらないこと。
+    bool has_row = false;
     for (int i = 0; i < *nsites; i++) {
         Node *root = sites[i]->lhs;
-        while (root->kind == ND_FIELD) root = root->lhs;
+        if (root->kind == ND_INDEX) has_row = true;
+        while (root->kind == ND_FIELD || root->kind == ND_INDEX) root = root->lhs;
         if (!root->ir_name || vz_assigns(n->body, root->ir_name)) return NULL;
     }
+    if (has_row && (vz_replaces_row(n->body->kind == ND_BLOCK ? n->body->body : n->body) ||
+                    (n->incr && vz_replaces_row(n->incr))))
+        return NULL;
     // 注意: 上限に len(xs) を使っているなら、その xs も不変であること。
     if (L->kind == ND_CALL) {
         Node *lr = L->args;
         while (lr && lr->kind == ND_FIELD) lr = lr->lhs;
         if (!lr || !lr->ir_name || vz_assigns(n->body, lr->ir_name)) return NULL;
     }
+    *alias_out = alias;
     return iv;
 }
 
 // 添字 1 つぶんの「両端が範囲内か」を計算して、ガードに and する。
-static char *vz_check_at(Emitter *e, Node *site, const char *iv, const char *val,
-                         const char *len, char *acc) {
+static char *vz_check_at(Emitter *e, Node *site, const char *iv, const char *alias,
+                         const char *val, const char *len, char *acc) {
     e->subst_ir = iv;
+    e->subst_alias = alias;
     e->subst_val = val;
     char *ovf = NULL;
     char *idx = gen_index_expr(e, site->rhs, &ovf);
     e->subst_ir = NULL;
+    e->subst_alias = NULL;
     e->subst_val = NULL;
 
     // ★ 符号なしで比べると「0 以上」と「長さ未満」が 1 回で済みます
@@ -4071,7 +4178,8 @@ static char *vz_check_at(Emitter *e, Node *site, const char *iv, const char *val
 static void gen_while(Emitter *e, Node *n) {
     Node *sites[VZ_MAX_SITES];
     int nsites = 0;
-    const char *iv = vz_analyze(e, n, sites, &nsites);
+    const char *alias = NULL;
+    const char *iv = vz_analyze(e, n, sites, &nsites, &alias);
     if (!iv) {
         gen_while_plain(e, n);
         return;
@@ -4092,15 +4200,48 @@ static void gen_while(Emitter *e, Node *n) {
     char *Lm1 = new_tmp(e);
     sb_printf(&e->fn, "  %s = sub i64 %s, 1\n", Lm1, Lv);  // 最後に回る v
 
+    // ★ 行（c[i]）を対象にする添字があるときは、確かめを 2 段に分けます。
+    //   ① 場所が対象の添字（c[i] 自身を含む）を確かめる → 落ちたら遅い側
+    //   ② 通ったら行を（検査なしで）取り出して、行が対象の添字を確かめる
+    //   注意: 行を先に取り出すと、ループが 0 回のときに元のプログラムでは
+    //     起きない「添字の範囲外」で止まってしまいます。
+    bool has_row = false;
+    for (int i = 0; i < nsites; i++)
+        if (sites[i]->lhs->kind == ND_INDEX) has_row = true;
+
     char *acc = NULL;
+    for (int phase = 0; phase < 2; phase++) {
+    if (phase == 1) {
+        if (!has_row) break;
+        char rows_l[32];
+        snprintf(rows_l, sizeof(rows_l), "vz.rows.%d", id);
+        emit_cond_br(e, acc, rows_l, slow_l);
+        emit_label(e, rows_l);
+        acc = NULL;
+    }
     for (int i = 0; i < nsites; i++) {
+        if ((sites[i]->lhs->kind == ND_INDEX) != (phase == 1)) continue;
+        bool saved_nobc = e->nobc;
+        e->nobc = phase == 1;   // ② の行は ① で範囲を確かめ済み
         char *obj = gen_expr(e, sites[i]->lhs);
+        e->nobc = saved_nobc;
+        if (phase == 1 && e->nrowc < 16) {
+            bool known = false;
+            for (int r = 0; r < e->nrowc; r++)
+                if (vz_same(e->rowc_node[r], sites[i]->lhs)) known = true;
+            if (!known) {
+                e->rowc_node[e->nrowc] = sites[i]->lhs;
+                e->rowc_val[e->nrowc] = obj;
+                e->nrowc++;
+            }
+        }
         char *lenp = new_tmp(e);
         sb_printf(&e->fn, "  %s = getelementptr i8, ptr %s, i64 8\n", lenp, obj);
         char *len = new_tmp(e);
         sb_printf(&e->fn, "  %s = load i64, ptr %s" TBAA_LISTHDR "\n", len, lenp);
-        acc = vz_check_at(e, sites[i], iv, v0, len, acc);
-        acc = vz_check_at(e, sites[i], iv, Lm1, len, acc);
+        acc = vz_check_at(e, sites[i], iv, alias, v0, len, acc);
+        acc = vz_check_at(e, sites[i], iv, alias, Lm1, len, acc);
+    }
     }
     emit_cond_br(e, acc, fast_l, slow_l);
 
@@ -4111,6 +4252,7 @@ static void gen_while(Emitter *e, Node *n) {
     gen_while_plain(e, n);
     e->nobc = false;
     e->iv_ir = NULL;
+    e->nrowc = 0;          // 取り出した行を使い回すのは速い側だけ
     if (!e->terminated) emit_br(e, done_l);
 
     // ── 遅い側：今までどおり（診断もそのまま）──
@@ -4183,6 +4325,18 @@ static char *gen_builtin_call(Emitter *e, Node *n) {
     // ★ 値型の copy は「そのまま」です。呼び出しを出しません
     //   （int の複製に関数呼び出しを 1 つ払うのは筋が通りません）。
     if (strcmp(b->impl, "pl_copy_id") == 0) return gen_expr(e, n->args);
+
+    // ★ float(int) は命令 1 つです（sitofp）。ランタイムの pl_float_from_int は
+    //   `(double)v` だけの関数ですが、呼び出しにすると LLVM から中が見えず、
+    //   ループのベクトル化まで止まっていました（float の級数で C の 5.9 倍）。
+    //   int → float は値が変わらない（2^53 を超えると丸めるのは C と同じ）ので、
+    //   検査は要りません。
+    if (strcmp(b->impl, "pl_float_from_int") == 0) {
+        char *v = gen_expr(e, n->args);
+        char *t = new_tmp(e);
+        sb_printf(&e->fn, "  %s = sitofp i64 %s to double\n", t, v);
+        return t;
+    }
 
     // 注意: bool は本言語のレジスタ上では i1 ですが、C 側は long long で
     //    受け取ります。境界で i64 に広げます（規約 R5 と同じ考え方）。

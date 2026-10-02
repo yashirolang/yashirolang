@@ -182,6 +182,11 @@ class Emitter:
     # ── 添字の範囲をループの外で 1 回だけ確かめる ──
     nobc: bool          # 速い側の本体を生成中（境界検査を出さない）
     iv_ir: str          # その版分けの誘導変数（増分の桁あふれ検査も外す）
+    # ★ 版分けの速い経路で使い回す行（c[i]）と、入口で取り出した値（0.48.0）
+    rowc_nodes: list[rc[ast.Node]]
+    rowc_vals: list[str]
+    subst_alias: str    # …と、その別名（for のループ変数。空なら無し）を…
+    vz_alias: str       # vz_analyze が見つけた別名（gen_while が vz_check_at に渡す）
     subst_ir: str       # ガードの計算中だけ、この変数を…
     subst_val: str      #   …この値に読み替える
 
@@ -196,6 +201,10 @@ class Emitter:
         self.nobc = False
         self.iv_ir = ""
         self.subst_ir = ""
+        self.subst_alias = ""
+        self.vz_alias = ""
+        self.rowc_nodes = []
+        self.rowc_vals = []
         self.subst_val = ""
         self.thunkdefs = []
         self.thunk_keys = []
@@ -908,6 +917,8 @@ class Emitter:
             #   注意: 添字の式をもう一度そのまま生成するので、置き換えは
             #     ここ 1 か所で足りる（式の形を分解する必要がない）。
             if len(self.subst_ir) > 0 and n.ir_name == self.subst_ir:
+                return copy(self.subst_val)
+            if len(self.subst_alias) > 0 and n.ir_name == self.subst_alias:
                 return copy(self.subst_val)
             # ★ 関数の名前を値として使う場合。箱から読むのではなく、
             #   **関数のラベルそのもの**が値です。
@@ -2462,6 +2473,13 @@ class Emitter:
         return val
 
     def gen_index(mut self, n: rc[ast.Node]) -> str:
+        # ★ 版分けの速い経路では、入口で取り出した行（c[i]）を使い回す。
+        #   対になる定義: src/codegen.c の gen_index
+        r: int = 0
+        while r < len(self.rowc_nodes):
+            if vz_same(self.rowc_nodes[r], n):
+                return copy(self.rowc_vals[r])
+            r = r + 1
         obj_node: rc[ast.Node] = node_of(n.lhs)
         ot: rc[ast.Type] = type_of(obj_node)
         obj: str = self.gen_expr(obj_node)
@@ -3761,6 +3779,7 @@ class Emitter:
     #    それも ① と ② のとおり各ブロックで釣り合います。
     #    対になる定義: src/codegen.c の vz_analyze
     def vz_analyze(mut self, n: rc[ast.Node], sites: mut list[rc[ast.Node]]) -> str:
+        self.vz_alias = ""
         if n.kind != ast.ND_WHILE:
             return ""
 
@@ -3791,7 +3810,7 @@ class Emitter:
             return ""
         if vz_count(c.rhs, iv) != 0:
             return ""
-        if not vz_invariant(c.rhs, iv, n.body):   # 上限も不変であること
+        if not vz_invariant(c.rhs, iv, "", n.body):   # 上限も不変であること
             return ""
 
         # ③ 本体：呼び出し・入れ子ループ・脱出が無いこと
@@ -3818,21 +3837,49 @@ class Emitter:
             return ""
 
         # ⑥ 添字を集める。1 つも無ければ版分けする意味がない
-        if not vz_sites(n.body, iv, n.body, sites):
+        # ⑤' for のループ変数は誘導変数の別名（本体の先頭で `j = for.ix` と宣言され、
+        #   ほかでは代入されないとき）。対になる定義: src/codegen.c の vz_analyze ⑤'
+        alias: str = ""
+        if n.body is not None:
+            bb: rc[ast.Node] = node_of(n.body)
+            if bb.kind == ast.ND_BLOCK and bb.body is not None:
+                first: rc[ast.Node] = node_of(bb.body)
+                if (first.kind == ast.ND_VARDECL and len(first.ir_name) > 0 and
+                        first.rhs is not None):
+                    fr: rc[ast.Node] = node_of(first.rhs)
+                    if (fr.kind == ast.ND_VAR and fr.ir_name == iv and
+                            type_of(first).kind == ast.TY_INT and
+                            vz_count_assign(n.body, first.ir_name) == 1 and
+                            (n.incr is None or vz_count_assign(n.incr, first.ir_name) == 0)):
+                        alias = copy(first.ir_name)
+
+        if not vz_sites(n.body, iv, alias, n.body, sites):
             return ""
-        if n.incr is not None and not vz_sites(n.incr, iv, n.body, sites):
+        if n.incr is not None and not vz_sites(n.incr, iv, alias, n.body, sites):
             return ""
         if len(sites) == 0:
             return ""
 
         # ⑦ 添字の対象になっている list が本体で書き換わらないこと
+        has_row: bool = False
         for st in sites:
             root: rc[ast.Node] = node_of(st.lhs)
-            while root.kind == ast.ND_FIELD:
+            if root.kind == ast.ND_INDEX:
+                has_row = True
+            while root.kind == ast.ND_FIELD or root.kind == ast.ND_INDEX:
                 root = node_of(root.lhs)
             if len(root.ir_name) == 0:
                 return ""
             if vz_assigns(n.body, root.ir_name):
+                return ""
+        if has_row:
+            nb: rc[ast.Node] = node_of(n.body)
+            rep: bool = False
+            if nb.kind == ast.ND_BLOCK:
+                rep = vz_replaces_row(nb.body)
+            else:
+                rep = vz_replaces_row(n.body)
+            if rep or (n.incr is not None and vz_replaces_row(n.incr)):
                 return ""
         # 注意: 上限に len(xs) を使っているなら、その xs も不変であること
         if big_l.kind == ast.ND_CALL:
@@ -3843,12 +3890,14 @@ class Emitter:
                 return ""
             if vz_assigns(n.body, lr.ir_name):
                 return ""
+        self.vz_alias = alias
         return iv
 
     # 添字 1 つぶんの「両端が範囲内か」を計算して、ガードに and する
     def vz_check_at(mut self, site: rc[ast.Node], iv: str, val: str, ln: str,
                     acc: str) -> str:
         self.subst_ir = copy(iv)
+        self.subst_alias = copy(self.vz_alias)
         self.subst_val = copy(val)
         # 注意: 入れ子（xs[ys[i * 2]]）に備えて、貯め場所を退避してから使う。
         #   ★ copy が要ります（借りたものはフィールドに戻せません。E-BORROW-3）。
@@ -3858,6 +3907,7 @@ class Emitter:
         ovf: str = copy(self.ovf_flag)
         self.ovf_flag = saved
         self.subst_ir = ""
+        self.subst_alias = ""
         self.subst_val = ""
 
         # ★ 符号なしで比べると「0 以上」と「長さ未満」が 1 回で済む
@@ -3903,15 +3953,46 @@ class Emitter:
         lm1: str = self.new_tmp()
         self.emit("  " + lm1 + " = sub i64 " + lv + ", 1\n")
 
+        # ★ 行（c[i]）を対象にする添字があるときは、確かめを 2 段に分ける
+        #   （① 場所が対象の添字 → ② 行を検査なしで取り出して、その添字）。
+        #   対になる定義: src/codegen.c の gen_while
+        has_row: bool = False
+        for s0 in sites:
+            if node_of(s0.lhs).kind == ast.ND_INDEX:
+                has_row = True
         acc: str = ""
-        for site in sites:
-            obj: str = self.gen_expr(node_of(site.lhs))
-            lenp: str = self.new_tmp()
-            self.emit("  " + lenp + " = getelementptr i8, ptr " + obj + ", i64 8\n")
-            ln: str = self.new_tmp()
-            self.emit("  " + ln + " = load i64, ptr " + lenp + TBAA_LISTHDR + "\n")
-            acc = self.vz_check_at(site, iv, v0, ln, acc)
-            acc = self.vz_check_at(site, iv, lm1, ln, acc)
+        phase: int = 0
+        while phase < 2:
+            if phase == 1:
+                if not has_row:
+                    break
+                rows_l: str = "vz.rows." + str(id_)
+                self.emit_cond_br(acc, rows_l, slow_l)
+                self.emit_label(rows_l)
+                acc = ""
+            for site in sites:
+                is_row: bool = node_of(site.lhs).kind == ast.ND_INDEX
+                if is_row != (phase == 1):
+                    continue
+                saved_nobc: bool = self.nobc
+                self.nobc = phase == 1
+                obj: str = self.gen_expr(node_of(site.lhs))
+                self.nobc = saved_nobc
+                if phase == 1 and len(self.rowc_nodes) < 16:
+                    known: bool = False
+                    for rn in self.rowc_nodes:
+                        if vz_same(rn, node_of(site.lhs)):
+                            known = True
+                    if not known:
+                        self.rowc_nodes.append(node_of(site.lhs))
+                        self.rowc_vals.append(copy(obj))
+                lenp: str = self.new_tmp()
+                self.emit("  " + lenp + " = getelementptr i8, ptr " + obj + ", i64 8\n")
+                ln: str = self.new_tmp()
+                self.emit("  " + ln + " = load i64, ptr " + lenp + TBAA_LISTHDR + "\n")
+                acc = self.vz_check_at(site, iv, v0, ln, acc)
+                acc = self.vz_check_at(site, iv, lm1, ln, acc)
+            phase = phase + 1
         self.emit_cond_br(acc, fast_l, slow_l)
 
         # ── 速い側：検査も正規化も出さない（ここがベクトル化される）──
@@ -3921,6 +4002,8 @@ class Emitter:
         self.gen_while_plain(n)
         self.nobc = False
         self.iv_ir = ""
+        self.rowc_nodes = []       # 取り出した行を使い回すのは速い側だけ
+        self.rowc_vals = []
         if not self.terminated:
             self.emit_br(done_l)
 
@@ -3983,6 +4066,14 @@ class Emitter:
         #   対になる定義: src/codegen.c の gen_builtin_call
         if n.builtin == "pl_copy_id":
             return self.gen_expr(arg_node)
+
+        # ★ float(int) は命令 1 つ（sitofp）。呼び出しにすると LLVM から中が見えず、
+        #   ループのベクトル化まで止まる。対になる定義: src/codegen.c の gen_builtin_call
+        if n.builtin == "pl_float_from_int":
+            fv: str = self.gen_expr(arg_node)
+            ft: str = self.new_tmp()
+            self.emit("  " + ft + " = sitofp i64 " + fv + " to double\n")
+            return ft
 
         # 注意: bool は C 側で long long で受け取るので、境界で i64 に広げる
         argty: str = self.llvm_type(at)
@@ -5599,14 +5690,16 @@ def vz_assigns(n: rc[ast.Node] | None, ir: str) -> bool:
 #   の添字 `k` は「j についてアフィン」ではある（j が現れない＝定数項）が、
 #   **両端で確かめた値と実際の値が違う**。範囲外を読んで通ってしまう。
 #   だから「誘導変数以外は不変」を要求する。
-def vz_invariant(e: rc[ast.Node] | None, iv: str, body: rc[ast.Node] | None) -> bool:
+# ★ alias は誘導変数の別名（for のループ変数）。空なら無し。
+def vz_invariant(e: rc[ast.Node] | None, iv: str, alias: str,
+                 body: rc[ast.Node] | None) -> bool:
     if e is None:
         return True
     q: rc[ast.Node] = node_of(e)
-    if q.kind == ast.ND_VAR and q.ir_name != iv:
+    if q.kind == ast.ND_VAR and q.ir_name != iv and not (len(alias) > 0 and q.ir_name == alias):
         if vz_assigns(body, q.ir_name):
             return False
-    return vz_invariant(q.lhs, iv, body) and vz_invariant(q.rhs, iv, body)
+    return vz_invariant(q.lhs, iv, alias, body) and vz_invariant(q.rhs, iv, alias, body)
 
 # 変数 ir が式の中に何回現れるか（アフィンかどうかの判定に使う）
 def vz_count(n: rc[ast.Node] | None, ir: str) -> int:
@@ -5692,7 +5785,7 @@ def vz_node_ok(c: rc[ast.Node]) -> bool:
     return False
 
 # 本体の中の「list への添字」を集める。1 つでも証明できなければ False
-def vz_sites(n: rc[ast.Node] | None, iv: str, body: rc[ast.Node] | None,
+def vz_sites(n: rc[ast.Node] | None, iv: str, alias: str, body: rc[ast.Node] | None,
              out: mut list[rc[ast.Node]]) -> bool:
     q: rc[ast.Node] | None = n
     while q is not None:
@@ -5702,25 +5795,87 @@ def vz_sites(n: rc[ast.Node] | None, iv: str, body: rc[ast.Node] | None,
             if ot.kind == ast.TY_LIST:
                 # 対象は「場所」で、添字は誘導変数についてアフィンで、
                 # 誘導変数以外は不変であること
-                if not vz_place(c.lhs):
+                if not vz_place(c.lhs) and not vz_row(c.lhs, iv, alias, body):
                     return False
                 if not vz_pure_index(c.rhs):
                     return False
                 if vz_count(c.rhs, iv) > 1:
                     return False       # アフィンでない（v*v など）
-                if not vz_invariant(c.rhs, iv, body):
+                if len(alias) > 0 and vz_count(c.rhs, alias) > 1:
+                    return False
+                if not vz_invariant(c.rhs, iv, alias, body):
                     return False
                 if len(out) >= VZ_MAX_SITES:
                     return False
                 out.append(node_of(c))
-        if not vz_sites(c.lhs, iv, body, out) or not vz_sites(c.rhs, iv, body, out):
+        if not vz_sites(c.lhs, iv, alias, body, out) or not vz_sites(c.rhs, iv, alias, body, out):
             return False
-        if not vz_sites(c.els, iv, body, out) or not vz_sites(c.incr, iv, body, out):
+        if not vz_sites(c.els, iv, alias, body, out) or not vz_sites(c.incr, iv, alias, body, out):
             return False
-        if not vz_sites(c.body, iv, body, out) or not vz_sites(c.args, iv, body, out):
+        if not vz_sites(c.body, iv, alias, body, out) or not vz_sites(c.args, iv, alias, body, out):
             return False
         q = c.next
     return True
+
+# 「ループの中で変わらない行」か（xs[k]。k は誘導変数を含まない不変の式）。
+# 対になる定義: src/codegen.c の vz_row
+def vz_row(n0: rc[ast.Node] | None, iv: str, alias: str, body: rc[ast.Node] | None) -> bool:
+    if n0 is None:
+        return False
+    n: rc[ast.Node] = node_of(n0)
+    if n.kind != ast.ND_INDEX or n.lhs is None:
+        return False
+    if type_of(node_of(n.lhs)).kind != ast.TY_LIST:
+        return False
+    if type_of(n).kind != ast.TY_LIST:
+        return False
+    if not vz_place(n.lhs):
+        return False
+    if not vz_pure_index(n.rhs):
+        return False
+    if vz_count(n.rhs, iv) != 0:
+        return False
+    if len(alias) > 0 and vz_count(n.rhs, alias) != 0:
+        return False
+    return vz_invariant(n.rhs, iv, alias, body)
+
+# 本体に「list の要素へ list か str を代入する」文があるか（行の差し替え）。
+# 対になる定義: src/codegen.c の vz_replaces_row
+def vz_replaces_row(n: rc[ast.Node] | None) -> bool:
+    q: rc[ast.Node] | None = n
+    while q is not None:
+        c: rc[ast.Node] = node_of(q)
+        if c.kind == ast.ND_ASSIGN and c.lhs is not None:
+            lh: rc[ast.Node] = node_of(c.lhs)
+            if lh.kind == ast.ND_INDEX:
+                k: int = type_of(lh).kind
+                if k == ast.TY_LIST or k == ast.TY_STR:
+                    return True
+        if vz_replaces_row(c.body) or vz_replaces_row(c.els):
+            return True
+        q = c.next
+    return False
+
+# 2 つの式が同じ「場所・添字」の形か。対になる定義: src/codegen.c の vz_same
+def vz_same(a0: rc[ast.Node] | None, b0: rc[ast.Node] | None) -> bool:
+    if a0 is None or b0 is None:
+        return a0 is None and b0 is None
+    a: rc[ast.Node] = node_of(a0)
+    b: rc[ast.Node] = node_of(b0)
+    if a.kind != b.kind:
+        return False
+    if a.kind == ast.ND_VAR:
+        return len(a.ir_name) > 0 and a.ir_name == b.ir_name
+    if a.kind == ast.ND_INT:
+        return a.ival == b.ival
+    if a.kind == ast.ND_FIELD:
+        return (len(a.mod_name) == 0 and len(b.mod_name) == 0 and a.name == b.name and
+                vz_same(a.lhs, b.lhs))
+    if a.kind == ast.ND_INDEX:
+        return vz_same(a.lhs, b.lhs) and vz_same(a.rhs, b.rhs)
+    if a.kind == ast.ND_BINOP:
+        return a.op == b.op and vz_same(a.lhs, b.lhs) and vz_same(a.rhs, b.rhs)
+    return False
 
 # 「v = v + 1」の形か
 def vz_is_step1(st: rc[ast.Node] | None, iv: str) -> bool:

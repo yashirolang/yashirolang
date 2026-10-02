@@ -1,0 +1,145 @@
+# OUTPUT: 欠損: 2 数値の列: True note の空: 0
+# OUTPUT: shop  day  amount
+# OUTPUT:    A  1.0   100.0
+# OUTPUT:    B  1.0      NA
+# OUTPUT:    A  2.0   250.0
+# OUTPUT:    C  2.0    80.0
+# OUTPUT:    B  3.0   300.0
+# OUTPUT:    A  3.0      NA
+# OUTPUT: 埋めた合計: 730.0
+# OUTPUT: 捨てた残り: 4 行 100.0,250.0,80.0,300.0
+# OUTPUT: 列: 金額,shop / shop,day,amount / 末尾 B,A
+# OUTPUT: 並べ替え: A,A,A,B,B,C 3.0,2.0,1.0,3.0,1.0,2.0
+# OUTPUT: 欠損は最後: B,A,A,C,B,A
+# OUTPUT: shop  amount_sum  amount_median          amount_std
+# OUTPUT:    A       350.0          175.0  106.06601717798213
+# OUTPUT:    C        80.0           80.0                  NA
+# OUTPUT:    B       300.0          300.0                  NA
+# OUTPUT: 結合: 6 行 欠損 1
+# OUTPUT: shop  day  area
+# OUTPUT:    A  1.0    東
+# OUTPUT:    B  1.0    西
+# OUTPUT:    A  2.0    東
+# OUTPUT:    C  2.0    NA
+# OUTPUT:    B  3.0    西
+# OUTPUT:    A  3.0    東
+# OUTPUT: shop  count
+# OUTPUT:    A    3.0
+# OUTPUT:    B    2.0
+# OUTPUT:    C    1.0
+# OUTPUT: 異なる店: A,B,C
+# OUTPUT: つないだ: 3 行 欠損 2
+# OUTPUT: 往復の欠損: 2
+# OUTPUT: TSV: a,b 1.0
+# OUTPUT: 行 6 / 列 4
+# OUTPUT: shop         文字列  異なり 3
+# OUTPUT: day          数値    平均 2.0  最小 1.0  最大 3.0  標準偏差 0.8165
+# OUTPUT: amount       数値    平均 182.5  最小 80.0  最大 300.0  標準偏差 94.4391  欠損 2
+# OUTPUT: note         文字列  異なり 3
+# OUTPUT: 欄の数: frame: 3 行目の欄の数が見出しと違います（1 と 2）
+# OUTPUT: 引用符: frame: 2 行目で始まった引用符が閉じていません
+# OUTPUT: 見出しの重複: frame: 見出し 'a' が 2 回出てきます
+# OUTPUT: 空: frame: CSV が空です
+# OUTPUT: ファイル: frame: ファイル '/nonexistent/x.csv' がありません
+# EXIT: 0
+# frame の強化（欠損・列の選択・並べ替え・集計・結合・CSV の誤り）
+import frame
+import strings
+
+# 表を 1 行ずつ出す（★ 試験の期待値は行頭の空白を落として読むので、ここでも落とします）
+def table(s: str) -> None:
+    for line in strings.split(s, "\n"):
+        if len(line) > 0:
+            print(strings.strip(line))
+
+def show_nums(xs: list[float]) -> str:
+    parts: list[str] = []
+    for x in xs:
+        parts.append(str(x))
+    return strings.join(parts, ",")
+
+def run() -> None raises frame.FrameError:
+    csv: str = ("shop,day,amount,note\n" +
+                "A,1,100,ok\n" +
+                "B,1,,遅れ\n" +
+                "A,2,250,\n" +
+                "C,2,80,ok\n" +
+                "B,3,300,ok\n" +
+                "A,3,,ok\n")
+    df: frame.Frame = frame.try_parse_csv(csv)
+
+    # ① 空の欄は欠損（列は数値のまま）。文字列の列の空は ""
+    print("欠損: " + str(df.count_missing("amount")) + " 数値の列: " + str(df.is_num("amount")) +
+          " note の空: " + str(df.count_missing("note")))
+    table(df.select(["shop", "day", "amount"]).show())
+
+    # ② 埋める／捨てる
+    filled: frame.Frame = df.fill_num("amount", 0.0)
+    print("埋めた合計: " + str(frame.sum_of(filled.num("amount"))))
+    kept: frame.Frame = df.drop_missing()
+    print("捨てた残り: " + str(kept.rows()) + " 行 " + show_nums(kept.num("amount")))
+
+    # ③ 列を選ぶ・除く・改名・先頭と末尾
+    sel: frame.Frame = df.select(["amount", "shop"]).rename("amount", "金額")
+    print("列: " + strings.join(sel.names(), ",") + " / " +
+          strings.join(df.drop_cols(["note"]).names(), ",") + " / 末尾 " +
+          strings.join(df.tail(2).text("shop"), ","))
+
+    # ④ 文字列の列と複数の列で並べ替え（欠損は最後）
+    s1: frame.Frame = df.sort_by_keys(["shop", "day"], [True, False])
+    print("並べ替え: " + strings.join(s1.text("shop"), ",") + " " +
+          show_nums(s1.num("day")))
+    s2: frame.Frame = df.sort_by_desc("amount")
+    print("欠損は最後: " + strings.join(s2.text("shop"), ","))
+
+    # ⑤ 鍵も集計も複数（欠損を捨ててから）
+    g: frame.Frame = frame.agg(kept, ["shop"], ["amount", "amount", "amount"],
+                               ["sum", "median", "std"])
+    table(g.show())
+
+    # ⑥ 結合（left で相手の無い行は欠損）
+    shops: frame.Frame = frame.Frame()
+    shops.add_text("shop", ["A", "B"])
+    shops.add_text("area", ["東", "西"])
+    j: frame.Frame = frame.join(df.select(["shop", "day"]), shops, ["shop"], "left")
+    print("結合: " + str(j.rows()) + " 行 欠損 " + str(j.count_missing("area")))
+    table(j.show())
+
+    # ⑦ 件数・異なる値・縦につなぐ
+    table(frame.value_counts(df, "shop").show())
+    print("異なる店: " + strings.join(df.unique_text("shop"), ","))
+    both: frame.Frame = frame.concat(df.head(2), df.tail(1))
+    print("つないだ: " + str(both.rows()) + " 行 欠損 " + str(both.count_missing("amount")))
+
+    # ⑧ 欠損は CSV では空の欄に戻る（往復）
+    again: frame.Frame = frame.try_parse_csv(frame.to_csv(df))
+    print("往復の欠損: " + str(again.count_missing("amount")))
+
+    # ⑨ TSV
+    t: frame.Frame = frame.try_parse_csv("a\tb\n1\tx\n", "\t")
+    print("TSV: " + strings.join(t.names(), ",") + " " + str(t.num("a")[0]))
+
+    table(frame.describe(df))
+
+def bad(label: str, text: str) -> None:
+    try:
+        frame.try_parse_csv(text)
+        print(label + ": 読めてしまった")
+    except frame.FrameError as e:
+        print(label + ": " + e.message)
+
+def main() -> int:
+    try:
+        run()
+    except frame.FrameError as e:
+        print("NG: " + e.message)
+        return 1
+    bad("欄の数", "a,b\n1,2\n3\n")
+    bad("引用符", "a,b\n1,\"x\n")
+    bad("見出しの重複", "a,a\n1,2\n")
+    bad("空", "")
+    try:
+        frame.try_read_csv("/nonexistent/x.csv")
+    except frame.FrameError as e2:
+        print("ファイル: " + e2.message)
+    return 0

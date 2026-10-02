@@ -1,0 +1,12 @@
+# EXIT: 1
+# 欠損のある列は、埋めるか捨てるかを選ぶまで取り出せない（panic）
+#
+#   ★ pandas は欠損を NaN にして、平均では黙って飛ばし、足し算では NaN を広げます。
+#     どちらが起きたかを見落とすと、集計の数字が静かに変わります。
+import frame
+
+def main() -> int:
+    df: frame.Frame = frame.parse_csv("shop,amount\nA,100\nB,\nC,80\n")
+    print(str(df.count_missing("amount")))     # ここは通る（1）
+    print(str(len(df.num("amount"))))          # 欠損があるので panic
+    return 0

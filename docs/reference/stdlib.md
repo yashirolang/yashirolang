@@ -35,7 +35,7 @@ def main() -> int:
 | [`complex`](#complex) | **複素数** — Python の `cmath` 相当 |
 | [`fft`](#fft) | **高速フーリエ変換** |
 | [`plot`](#plot) | **作図** — SVG を書き出す（matplotlib 相当） |
-| [`frame`](#frame) | **表形式のデータ** — CSV・絞り込み・並べ替え・集計（pandas 相当） |
+| [`frame`](#frame) | **表形式のデータ** — CSV・絞り込み・並べ替え・集計・結合・欠損値（pandas 相当） |
 | [`decimal`](#decimal) | **十進の固定小数点** — 金額のための正確な数 |
 | [`bytes`](#bytes) | **固定幅のバイト並び** — 通信フレーム・バイナリ形式 |
 | [`blas`](#blas) | **BLAS を呼ぶ** — 行列積・内積（注意: リンクの指定が要ります） |
@@ -1301,23 +1301,34 @@ def main() -> int:
 
 ## frame
 
-**表形式のデータ**。CSV の読み書き・絞り込み・並べ替え・グループ集計。
+**表形式のデータ**。CSV の読み書き・絞り込み・並べ替え・集計・結合。
 
 注意: **pandas の設計は真似していません。** pandas の列は「何でも入る」ものですが、
 この言語には暗黙の型変換がありません。**列は数値か文字列**で、
 取り出すときに型を選びます。取り違えたら**その場で panic** します。
 
+★ **欠損値（空の欄）は、黙って埋めも飛ばしもしません。** pandas は欠損を NaN にして、
+平均では黙って飛ばし、足し算では NaN を広げます。どちらが起きたかを見落とすと、
+集計の数字が静かに変わります。ここでは欠損のある列を `num` / `text` で取り出そうと
+すると止まり、`fill_num`（埋める）か `drop_missing`（その行を捨てる）を**先に選ばせます**。
+
 ```python
 import frame
 
-def main() -> int:
-    df: frame.Frame = frame.read_csv("sales.csv")
-    print(frame.describe(df))
-    print(df.show_head(5))
+def run() -> None raises frame.FrameError:
+    df: frame.Frame = frame.try_read_csv("sales.csv")      # 形の誤りは FrameError
+    print(frame.describe(df))                               # 欠損の数も出ます
+    clean: frame.Frame = df.drop_missing_in(["price"])
+    g: frame.Frame = frame.agg(clean, ["shop", "month"], ["price", "price"], ["sum", "median"])
+    print(g.sort_by_keys(["shop", "price_sum"], [True, False]).show())
+    j: frame.Frame = frame.join(clean, frame.try_read_csv("shops.csv"), ["shop"], "left")
 
-    hi: frame.Frame = df.where(frame.gt(df.num("price"), 150.0))
-    g: frame.Frame = frame.group_by(df, "shop", "price", "sum")
-    print(g.show())
+def main() -> int:
+    try:
+        run()
+    except frame.FrameError as e:
+        print("CSV の誤り: " + e.message)
+        return 1
     return 0
 ```
 
@@ -1325,46 +1336,86 @@ def main() -> int:
 
 | 呼び出し | 中身 |
 |---|---|
-| `frame.read_csv(path)` | ファイルから読む |
-| `frame.parse_csv(text)` | 文字列から読む |
-| `frame.write_csv(df, path)` / `frame.to_csv(df)` | 書く |
+| `frame.try_read_csv(path, sep=",")` / `frame.try_parse_csv(text, sep=",")` | **外から来る CSV はこちら**。形の誤り（欄の数・閉じていない引用符・見出しの重複・空・ファイルが無い）は `raises FrameError`。`sep="\t"` で TSV |
+| `frame.read_csv(path)` / `frame.parse_csv(text)` | 同じく。ただし誤りは panic（自分で用意した CSV 向け） |
+| `frame.write_csv(df, path)` / `frame.to_csv(df)` | 書く（欠損は空の欄） |
 
-**1 行目が見出し**です。列の型は**中身を見て決めます** — その列の値が全部
-数として読めれば数値の列、そうでなければ文字列の列です（空の欄があれば文字列）。
-引用符（`"…"`、`""` で `"` 1 個）とカンマ・改行を含む欄に対応しています。
+**1 行目が見出し**です。列の型は**中身を見て決めます** — 空でない値が全部
+数として読めれば**数値の列**で、空の欄は**欠損**になります。そうでなければ
+**文字列の列**で、空の欄は `""` です。引用符（`"…"`、`""` で `"` 1 個）と
+カンマ・改行を含む欄に対応しています。
+
+注意: 0.46.0 までは、空の欄が 1 つでもある列は**文字列の列**になっていました。
+いまは数値の列（欠損つき）になります。
 
 ### 形を見る・取り出す
 
 | 呼び出し | 中身 |
 |---|---|
-| `df.rows()` / `df.width()` | 行数・列数 |
-| `df.names()` | 列名の一覧 |
-| `df.has(name)` / `df.index_of(name)` | 列があるか |
-| `df.num(name)` | 数値の列を `list[float]` で（注意: 文字列の列なら panic） |
-| `df.text(name)` | 文字列の列を `list[str]` で（注意: 数値の列なら panic） |
-| `df.show()` / `df.show_head(n)` | 桁を揃えた表（**表示幅**で揃えます） |
-| `frame.describe(df)` | 列ごとの平均・最小・最大・標準偏差 |
+| `df.rows()` / `df.width()` / `df.names()` | 行数・列数・列名 |
+| `df.has(name)` / `df.index_of(name)` / `df.is_num(name)` | 列があるか・何番目か・数値の列か |
+| `df.num(name)` / `df.text(name)` | 列を `list[float]` / `list[str]` で（注意: 種類が違う・**欠損がある**なら panic） |
+| `df.unique_num(name)` / `df.unique_text(name)` | 異なる値（初出の順） |
+| `df.show()` / `df.show_head(n)` | 桁を揃えた表（**表示幅**で揃えます。欠損は `NA`） |
+| `frame.describe(df)` | 列ごとの平均・最小・最大・標準偏差と欠損の数 |
+
+### 欠損
+
+| 呼び出し | 中身 |
+|---|---|
+| `df.count_missing(name)` / `df.has_missing(name)` | 欠損の数・あるか |
+| `df.is_missing(name)` | 欠損の行が `True` の印（`where` に渡せます） |
+| `df.fill_num(name, v)` / `df.fill_text(name, s)` | 欠損を埋めた新しい表 |
+| `df.drop_missing()` / `df.drop_missing_in(names)` | （その列のどれかが）欠損の行を捨てた新しい表 |
+| `df.add_num_opt(name, xs, miss)` / `df.add_text_opt(...)` | 欠損つきで列を足す |
 
 ### 組み立てる・選ぶ
 
 | 呼び出し | 中身 |
 |---|---|
 | `df.add_num(name, xs)` / `df.add_text(name, xs)` | 列を足す（注意: 行数が合わないと panic） |
+| `df.select(names)` / `df.drop_cols(names)` / `df.rename(old, new)` | 列を選ぶ・除く・名前を変える |
 | `df.where(keep)` | `keep: list[bool]` が `True` の行だけ |
-| `df.take(idx)` | 行番号の並びのとおりに取り出す |
-| `df.head(n)` | 先頭 n 行 |
-| `df.sort_by(name)` / `sort_by_desc(name)` | 数値の列で並べ替え（**安定**） |
+| `df.take(idx)` / `df.head(n)` / `df.tail(n)` | 行番号のとおり・先頭・末尾 |
+| `df.sort_by(name)` / `sort_by_desc(name)` | 並べ替え（数値の列も文字列の列も。**安定**。欠損は最後） |
+| `df.sort_by_keys(names, asc)` | 複数の列で（`asc[i]` が `False` ならその列は降順） |
+| `frame.concat(a, b)` | 縦につなぐ（列の名前・並び・種類が同じこと） |
+
+注意: 列を除くメソッドが `drop` でなく `drop_cols` なのは、`drop` がクラスの
+デストラクタの名前だからです（仕様 §6.2）。
 
 **印（`list[bool]`）を作る関数**：`frame.gt` / `ge` / `lt` / `le` / `eq_num`
-（数値の列と定数）、`frame.eq_text`（文字列の列と定数）、
+（数値の列と定数）、`frame.eq_text` / `in_text`（文字列の列と定数・その並び）、
 `frame.both` / `either` / `negate`（印どうしの論理演算）。
 
 ### まとめる
 
-`frame.group_by(df, key, value, how)` — `key` は**文字列でも数値の列でも**よく、
-`value` は数値の列です（返る表の鍵の列は元と同じ種類になります）。
-`how` は `"mean"` / `"sum"` / `"count"` / `"min"` / `"max"`。
-返るのは 2 列の新しい表で、**`key` の初出の順**に並びます。
+| 呼び出し | 中身 |
+|---|---|
+| `frame.agg(df, keys, values, hows)` | 鍵の列（複数可）ごとに、`values[i]` を `hows[i]` で集計。列名は `値の列_集計` |
+| `frame.group_by(df, key, value, how)` | 鍵 1 つ・集計 1 つ（返る列名は `value` のまま） |
+| `frame.value_counts(df, name)` | 値ごとの件数（多い順。同じなら初出の順） |
+
+`how` は `"mean"` / `"sum"` / `"count"` / `"min"` / `"max"` / `"median"` / `"std"`（標本標準偏差）。
+返る表は**鍵の初出の順**に並び、鍵の列は元と同じ種類のままです。組はハッシュ表で
+探すので、行数に比例する時間で終わります。
+
+注意: `std` は値が 1 つしかない組では決まらないので、0 ではなく**欠損**になります。
+注意: 鍵の列・値の列に欠損があれば panic です（先に `drop_missing_in` か `fill_num`）。
+`count` だけは値を読まないので、文字列の列や欠損のある列も数えられます。
+
+### 結合
+
+`frame.join(left, right, on, how)` — `on` の列が等しい行どうしをつなぎます。
+`how` は `"inner"`（両方にある行だけ）か `"left"`（left の行はすべて残す）。
+
+- 並びは left の行の順で、1 つの行に相手が複数あれば相手の順に並べます
+- `left` で相手の無い行は、right から来た列が**欠損**になります（0 や `""` で埋めると「相手が無かった」ことが消えるため）
+- 鍵の列は両方にあり、種類（数値か文字列か）が同じで、欠損が無いこと
+- right の鍵以外の列が left と同じ名前なら、後ろに `_right` を付けます
+
+注意: 並べ替え・集計・結合は、Python で書いた素直な参照実装と、でたらめな表
+200 個で突き合わせて一致を確かめています。
 
 **組み合わせた例**は [examples/sales_report.ys](../../examples/sales_report.ys)
 にあります（CSV → 集計 → 図）。

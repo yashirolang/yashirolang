@@ -17,7 +17,7 @@
 #   | クライアント（get / post / request） | A-23 |
 #   | 待ち時間 | A-23（`l.set_conn_timeout(ms)`） |
 #   | TLS（https） | まだ。**はっきり断ります**（黙って平文で繋ぎません） |
-#   | 接続を貯めておく（keep-alive の使い回し） | まだ。クライアントは毎回繋ぎます |
+#   | 接続を貯めておく（keep-alive の使い回し） | 0.45.0（`Client`）。`get` / `post` は毎回繋ぎます |
 #
 # ★ **投げるのは HttpError だけです。** 下の net が投げる NetError も
 #   ここで包み直すので、この層を使う人がソケットの話を知らずに済みます。
@@ -29,6 +29,7 @@
 import dict
 import net
 import strings
+import time
 import tls
 
 # 受け取る要求の上限（頭でっかちな要求で潰されないため）
@@ -119,11 +120,14 @@ class Response:
     status: int
     headers: dict.Dict[str, str]
     body: str
+    # 応答行の版（"HTTP/1.1"）。クライアントが接続を使い回せるかを決めるのに使います
+    version: str
 
     def init(self, status: int, body: own str) -> None:
         self.status = status
         self.headers = dict.Dict()
         self.body = body
+        self.version = "HTTP/1.1"
 
     # ヘッダを足す。
     #
@@ -203,9 +207,13 @@ def json(status: int, body: str) -> Response:
 class Reader:
     # まだ渡していない、読みすぎたぶん
     buf: str
+    # これまでに受け取ったバイト数（使い回した接続で「応答が 1 バイトも来ないうちに
+    # 切れた」かを見分けるため。Client の再送の判断に使います）
+    received: int
 
     def init(self) -> None:
         self.buf = ""
+        self.received = 0
 
     # 1 回ぶん受け取る（相手が閉じていたら eof の HttpError）。
     #
@@ -220,6 +228,7 @@ class Reader:
             raise from_net(e)
         if len(more) == 0:
             raise eof_error()
+        self.received = self.received + len(more)
         return more
 
     # 1 回ぶん読み足す。相手が閉じていたら eof の HttpError。
@@ -758,9 +767,9 @@ def to_int(s: str) -> int:
 #   応答の入れ物は Response、チャンクの解き方も同じものです。
 #   「送る側と受ける側で別々に書いた解釈が食い違う」のを避けられます。
 #
-# 注意: **1 回の要求ごとに繋いで閉じます**（Connection: close）。接続を
-#   貯めておく仕組みはまだありません。何十回も叩くなら、net で自分で
-#   1 本の接続を持ち回ってください。
+# 注意: get / post / request は **1 回の要求ごとに繋いで閉じます**（Connection: close）。
+#   同じ相手に何度も要求するなら、接続を使い回す Client（このファイルの末尾）を
+#   使ってください。
 
 # 相手が返事をくれるまで待つ上限（ミリ秒）。
 #
@@ -908,7 +917,7 @@ def host_header(u: mut Url) -> str:
 
 # 要求をバイト列にする
 def build_request(u: mut Url, method: str, headers: mut dict.Dict[str, str],
-                  body: str) -> str:
+                  body: str, keep: bool = False) -> str:
     parts: list[str] = []
     parts.append(method + " " + u.target + " HTTP/1.1" + CRLF)
     parts.append("host: " + host_header(u) + CRLF)
@@ -926,7 +935,10 @@ def build_request(u: mut Url, method: str, headers: mut dict.Dict[str, str],
     # 注意: **本体が無くても content-length を書きます。** 省くと相手によっては
     #   「本体は接続が切れるまで」と解釈します。
     parts.append("content-length: " + str(len(body)) + CRLF)
-    parts.append("connection: close" + CRLF)
+    if keep:
+        parts.append("connection: keep-alive" + CRLF)
+    else:
+        parts.append("connection: close" + CRLF)
     parts.append(copy(CRLF))
     parts.append(copy(body))
     return strings.join(parts, "")
@@ -956,6 +968,7 @@ def read_response(rd: mut Reader, c: mut tls.Stream, method: str) -> Response ra
         raise HttpError("状態番号が数ではありません: " + first[1], 0)
 
     res: Response = Response(code, "")
+    res.version = copy(first[0])
     i: int = 1
     while i < len(lines):
         line: str = lines[i]
@@ -1058,3 +1071,218 @@ def post(url: str, content_type: str, body: str) -> Response raises HttpError:
     h: dict.Dict[str, str] = dict.Dict()
     h.set("content-type", copy(content_type))
     return request("POST", url, h, body, CLIENT_TIMEOUT_MS)
+
+
+# ── 接続を使い回すクライアント（keep-alive）─────────────────
+#
+# ★ 同じ相手に何度も要求するとき、毎回繋ぎ直す（TCP と TLS の握手）手間を省きます。
+#
+#     cl: http.Client = http.Client()
+#     r1: http.Response = cl.get("https://example.com/a")
+#     r2: http.Response = cl.get("https://example.com/b")   # 同じ接続を使い回す
+#     cl.close()                                            # 貯めた接続を閉じる
+#
+# ★ **使い回すのは同じ相手（方式・ホスト・ポート）の接続だけです。**
+#   http と https は決して混ぜません（鍵に方式を入れています）。
+#
+# ★ **使い回した接続が相手に閉じられていたら、繋ぎ直して 1 回だけ送り直します。**
+#   ただし送り直すのは、次の 2 つがそろったときだけです。
+#     ・応答が **1 バイトも来ていない**（相手は要求を処理していないと分かる）
+#     ・**繰り返しても結果が変わらない**要求（GET / HEAD / PUT / DELETE / OPTIONS）
+#   POST を黙って 2 回送ると、二重の注文・二重の送金になりうるためです。
+#   POST が届いたか分からないときは HttpError を返し、判断を呼び出し側に任せます。
+#
+# ★ **応答の後ろに余計なバイトが残っていたら、その接続は使い回しません。**
+#   次の要求の応答として読んでしまい、応答が 1 つずれる（取り違える）のを防ぐためです。
+#
+# 注意: **閉じるのは利用者の仕事です**（`cl.close()`）。クラスに「解放されるときに
+#   呼ばれる処理」がまだ無いので、閉じ忘れると貯めた接続の fd が残ります。
+#
+# 注意: スレッドをまたいで共有できません（中身が rc ではない所有の値で、
+#   `spawn` に渡すと動かす扱いになります）。スレッドごとに Client を作ってください。
+
+# 貯めておいた接続を使い回してよい時間（ミリ秒）。これより古ければ閉じて繋ぎ直します。
+# ★ 多くのサーバーは 5〜75 秒で黙って閉じます。古い接続ほど閉じられている見込みが高いので、
+#   送ってから失敗に気づくより、先に捨てたほうが早くて確実です。
+IDLE_MS: int = 30000
+# 貯めておく接続の数の上限（相手ごとではなく全体）
+MAX_IDLE: int = 8
+
+
+# 貯めておく接続 1 本
+class PooledConn:
+    key: str                # "https://example.com:443"
+    stream: tls.Stream
+    rd: Reader              # ★ 読みすぎたぶんは接続ごとに持ち歩きます
+    last_ns: int            # 最後に使い終えた時刻（単調時計）
+    uses: int               # この接続で済ませた要求の数
+
+    def init(self, key: own str, stream: own tls.Stream) -> None:
+        self.key = key
+        self.stream = stream
+        self.rd = Reader()
+        self.last_ns = time.monotonic_ns()
+        self.uses = 0
+
+
+# 方式・ホスト・ポートで相手を表す（ホストは大小を区別しない）
+def origin_key(u: mut Url) -> str:
+    return u.scheme + "://" + lower(u.host) + ":" + str(u.port)
+
+
+# 繰り返しても結果が変わらない要求か（RFC 9110 §9.2.2）
+def idempotent(method: str) -> bool:
+    m: str = lower(method)
+    return m == "get" or m == "head" or m == "put" or m == "delete" or m == "options"
+
+
+class Client:
+    idle: list[PooledConn]
+    timeout_ms: int
+    # 試験と調べもののための数（繋いだ回数・使い回した回数）
+    connects: int
+    reuses: int
+
+    def init(self) -> None:
+        self.idle = []
+        self.timeout_ms = CLIENT_TIMEOUT_MS
+        self.connects = 0
+        self.reuses = 0
+
+    # 貯めている接続の数
+    def idle_count(self) -> int:
+        return len(self.idle)
+
+    # 貯めている接続をすべて閉じる
+    def close(mut self) -> None:
+        while len(self.idle) > 0:
+            p: PooledConn = self.idle.pop()
+            p.stream.close()
+
+    # i 番目の接続を貯めから取り出す（並びは保ちます）。
+    # ★ list の pop は末尾からしか取れないので、後ろを退けてから取り、戻します
+    #   （貯めは MAX_IDLE 本までなので、これで足ります）。
+    def take(mut self, i: int) -> PooledConn:
+        rest: list[PooledConn] = []
+        while len(self.idle) - 1 > i:
+            rest.append(self.idle.pop())
+        got: PooledConn = self.idle.pop()
+        while len(rest) > 0:
+            self.idle.append(rest.pop())
+        return got
+
+    # key の相手の接続を貯めから探す（無ければ -1）。古いものはここで閉じます。
+    def find_idle(mut self, key: str) -> int:
+        now: int = time.monotonic_ns()
+        i: int = len(self.idle) - 1
+        while i >= 0:
+            if (now - self.idle[i].last_ns) // 1000000 > IDLE_MS:
+                old: PooledConn = self.take(i)
+                old.stream.close()
+            elif self.idle[i].key == key:
+                return i
+            i = i - 1
+        return -1
+
+    # 新しく繋ぐ
+    def connect(mut self, u: mut Url, key: str) -> PooledConn raises HttpError:
+        c: tls.Stream = tls.Stream(net.Conn(-1), -1)
+        try:
+            if u.scheme == "https":
+                c = tls.connect(u.host, u.port)
+            else:
+                c = tls.plain(net.connect(u.host, u.port))
+        except net.NetError as ce:
+            raise from_net(ce)
+        self.connects = self.connects + 1
+        return PooledConn(copy(key), c)
+
+    # 1 往復する（失敗したら HttpError。接続は閉じません）
+    def exchange(self, p: mut PooledConn, u: mut Url, method: str,
+                 headers: mut dict.Dict[str, str], body: str) -> Response raises HttpError:
+        try:
+            if self.timeout_ms > 0:
+                p.stream.set_timeout(self.timeout_ms)
+            p.stream.send(build_request(u, method, headers, body, True))
+        except net.NetError as ne:
+            raise from_net(ne)
+        return read_response(p.rd, p.stream, method)
+
+    # 使い終えた接続を、使い回せるなら貯める（使い回せなければ閉じる）
+    def give_back(mut self, p: own PooledConn, res: mut Response, method: str) -> None:
+        keep: bool = reusable(res, method) and len(p.rd.buf) == 0
+        if not keep:
+            p.stream.close()
+            return
+        p.uses = p.uses + 1
+        p.last_ns = time.monotonic_ns()
+        if len(self.idle) >= MAX_IDLE:
+            oldest: PooledConn = self.take(0)
+            oldest.stream.close()
+        self.idle.append(p)
+
+    # 要求を 1 本送って、応答を受け取る（headers は足したいものだけ）
+    def request(mut self, method: str, url: str, headers: mut dict.Dict[str, str],
+                body: str) -> Response raises HttpError:
+        u: Url = parse_url(url)
+        key: str = origin_key(u)
+        i: int = self.find_idle(key)
+        if i >= 0:
+            p: PooledConn = self.take(i)
+            retry: bool = False
+            res: Response = Response(0, "")
+            # ★ 「この往復で 1 バイトでも来たか」は、往復の前の数と比べます
+            #   （received はこの接続の累計なので、前の応答のぶんが入っています）
+            before: int = p.rd.received
+            try:
+                res = self.exchange(p, u, method, headers, body)
+            except HttpError as e:
+                p.stream.close()
+                # ★ 送り直すのは「応答が 1 バイトも来ていない」かつ「繰り返しても
+                #   結果が変わらない要求」のときだけ（上の説明）。待ち時間切れは
+                #   相手が処理中かもしれないので送り直しません。
+                if p.rd.received > before or e.timed_out or e.status != 0 or not idempotent(method):
+                    raise e
+                retry = True
+            if not retry:
+                self.reuses = self.reuses + 1
+                self.give_back(p, res, method)
+                return res
+        fresh: PooledConn = self.connect(u, key)
+        res2: Response = Response(0, "")
+        try:
+            res2 = self.exchange(fresh, u, method, headers, body)
+        except HttpError as e2:
+            fresh.stream.close()
+            raise e2
+        self.give_back(fresh, res2, method)
+        return res2
+
+    def get(mut self, url: str) -> Response raises HttpError:
+        h: dict.Dict[str, str] = dict.Dict()
+        return self.request("GET", url, h, "")
+
+    def post(mut self, url: str, content_type: str, body: str) -> Response raises HttpError:
+        h: dict.Dict[str, str] = dict.Dict()
+        h.set("content-type", copy(content_type))
+        return self.request("POST", url, h, body)
+
+
+# 応答のあと、その接続を次の要求に使えるか（RFC 9112 §9.3）
+#
+#   ・相手が `connection: close` と言った → 使えない
+#   ・HTTP/1.0 は `connection: keep-alive` と言ったときだけ使える
+#   ・本体の終わりを「相手が閉じるまで」で知った → もう閉じているので使えない
+def reusable(res: mut Response, method: str) -> bool:
+    conn: str = lower(res.header("connection"))
+    if conn == "close":
+        return False
+    if res.version == "HTTP/1.0" and conn != "keep-alive":
+        return False
+    if res.version != "HTTP/1.1" and res.version != "HTTP/1.0":
+        return False
+    if no_body(res.status, method):
+        return True
+    if lower(res.header("transfer-encoding")) == "chunked":
+        return True
+    return len(res.header("content-length")) > 0

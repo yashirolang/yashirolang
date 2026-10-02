@@ -1,0 +1,147 @@
+# OUTPUT: 使い回し: hi /a hi /b hi /c 繋いだ 1 回 使い回した 2 回
+# OUTPUT: 閉じられていた GET は繋ぎ直して送り直す: A1 A2 繋いだ 2 回
+# OUTPUT: 閉じられていた POST は送り直さない: True 繋いだ 1 回
+# OUTPUT: 応答の後ろに余計なバイト: C1 貯め 0 → C2 繋いだ 2 回
+# OUTPUT: connection: close は貯めない: 貯め 0
+# OUTPUT: HTTP/1.0 は keep-alive と言わなければ貯めない: 貯め 0
+# OUTPUT: 閉じるまでが本体の応答は貯めない: 貯め 0
+# OUTPUT: 相手が違えば使い回さない: 繋いだ 2 回
+# EXIT: 0
+# http.Client — 接続を使い回すクライアント（keep-alive）
+#
+#   ★ 使い回せているかは「接続を 1 本しか受けないサーバー」で確かめます
+#     （繋ぎ直していたら 2 本目は誰にも受けてもらえず、待ち時間切れになる）。
+#   ★ 安全のための 3 つの約束を、手書きの応答を返す相手で確かめます。
+#     ・使い回した接続が閉じられていたら、GET は送り直す／POST は送り直さない
+#     ・応答の後ろに余計なバイトがあれば、その接続は貯めない（応答の取り違えを防ぐ）
+#     ・使い回すのは同じ相手（方式・ホスト・ポート）だけ
+import http
+import net
+
+def handle(req: http.Request) -> http.Response:
+    return http.text(200, "hi " + req.path)
+
+def one_conn_server(fd: int) -> int:
+    l: net.Listener = net.Listener(fd, 0)
+    http.serve_n(l, handle, 1)
+    return 0
+
+# 1 本受けて、要求を 1 つ読み、決めた応答を送って閉じる
+def reply(l: mut net.Listener, raw: str) -> None raises net.NetError:
+    c: net.Conn = l.accept()
+    c.set_timeout(3000)
+    c.recv(65536)
+    c.send(raw)
+    c.close()
+
+def raw_server(fd: int) -> int:
+    l: net.Listener = net.Listener(fd, 0)
+    try:
+        # A: keep-alive と言いつつ閉じる → 次の GET は繋ぎ直す
+        reply(l, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nA1")
+        reply(l, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nA2")
+        # B: 同じく閉じる → 次の POST は送り直さない（ここで 1 本しか受けない）
+        reply(l, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nB1")
+        # C: 応答の後ろに余計なバイト → 貯めない。次は新しい接続
+        reply(l, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nC1HTTP/1.1 200 OK\r\n")
+        reply(l, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nC2")
+        # D: connection: close / HTTP/1.0 / 閉じるまでが本体
+        reply(l, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nD1")
+        reply(l, "HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nD2")
+        reply(l, "HTTP/1.1 200 OK\r\n\r\nD3")
+    except net.NetError as e:
+        print("raw_server NG: " + e.message)
+    return 0
+
+def main() -> int:
+    # ── 使い回し ──
+    try:
+        l: net.Listener = net.listen("127.0.0.1", 0)
+        base: str = "http://127.0.0.1:" + str(l.port)
+        t: Thread[int] = spawn(one_conn_server, l.fd)
+        cl: http.Client = http.Client()
+        cl.timeout_ms = 3000
+        r1: http.Response = cl.get(base + "/a")
+        r2: http.Response = cl.get(base + "/b")
+        r3: http.Response = cl.post(base + "/c", "text/plain", "x")
+        print("使い回し: " + r1.body + " " + r2.body + " " + r3.body + " 繋いだ " +
+              str(cl.connects) + " 回 使い回した " + str(cl.reuses) + " 回")
+        cl.close()
+        t.join()
+        l.close()
+    except http.HttpError as he:
+        print("NG: " + he.message)
+        return 1
+    except net.NetError as ne:
+        print("NG(net): " + ne.message)
+        return 1
+
+    # ── 安全のための約束 ──
+    try:
+        l2: net.Listener = net.listen("127.0.0.1", 0)
+        base2: str = "http://127.0.0.1:" + str(l2.port)
+        t2: Thread[int] = spawn(raw_server, l2.fd)
+
+        ca: http.Client = http.Client()
+        ca.timeout_ms = 3000
+        a1: http.Response = ca.get(base2 + "/")
+        a2: http.Response = ca.get(base2 + "/")
+        print("閉じられていた GET は繋ぎ直して送り直す: " + a1.body + " " + a2.body +
+              " 繋いだ " + str(ca.connects) + " 回")
+        ca.close()
+
+        cb: http.Client = http.Client()
+        cb.timeout_ms = 3000
+        b1: http.Response = cb.get(base2 + "/")
+        refused: bool = False
+        try:
+            cb.post(base2 + "/", "text/plain", "注文")
+        except http.HttpError as pe:
+            refused = True
+        print("閉じられていた POST は送り直さない: " + str(refused) + " 繋いだ " +
+              str(cb.connects) + " 回")
+        cb.close()
+
+        cc: http.Client = http.Client()
+        cc.timeout_ms = 3000
+        c1: http.Response = cc.get(base2 + "/")
+        n1: int = cc.idle_count()
+        c2: http.Response = cc.get(base2 + "/")
+        print("応答の後ろに余計なバイト: " + c1.body + " 貯め " + str(n1) + " → " + c2.body +
+              " 繋いだ " + str(cc.connects) + " 回")
+        cc.close()
+
+        cd: http.Client = http.Client()
+        cd.timeout_ms = 3000
+        cd.get(base2 + "/")
+        print("connection: close は貯めない: 貯め " + str(cd.idle_count()))
+        cd.get(base2 + "/")
+        print("HTTP/1.0 は keep-alive と言わなければ貯めない: 貯め " + str(cd.idle_count()))
+        cd.get(base2 + "/")
+        print("閉じるまでが本体の応答は貯めない: 貯め " + str(cd.idle_count()))
+        cd.close()
+        t2.join()
+        l2.close()
+
+        # ── 相手が違えば使い回さない（ポートが違う 2 つのサーバー）──
+        la: net.Listener = net.listen("127.0.0.1", 0)
+        lb: net.Listener = net.listen("127.0.0.1", 0)
+        ta: Thread[int] = spawn(one_conn_server, la.fd)
+        tb: Thread[int] = spawn(one_conn_server, lb.fd)
+        ce: http.Client = http.Client()
+        ce.timeout_ms = 3000
+        ce.get("http://127.0.0.1:" + str(la.port) + "/")
+        ce.get("http://127.0.0.1:" + str(lb.port) + "/")
+        print("相手が違えば使い回さない: 繋いだ " + str(ce.connects) + " 回")
+        ce.close()
+        ta.join()
+        tb.join()
+        la.close()
+        lb.close()
+    except http.HttpError as he2:
+        print("NG: " + he2.message)
+        return 1
+    except net.NetError as ne2:
+        print("NG(net): " + ne2.message)
+        return 1
+    return 0

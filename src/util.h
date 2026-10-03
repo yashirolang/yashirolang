@@ -36,6 +36,7 @@ char *sb_str(StrBuf *sb);
 // ── ファイル入出力 ──────────────────────────────────────────
 // ファイル全体を読み込む。\r\n は \n に正規化し、末尾に改行を保証する。
 char *read_file(const char *path);
+char *read_file_or_null(const char *path);
 void write_file(const char *path, const char *text);
 
 // ── エラー終了 ──────────────────────────────────────────────

@@ -20,6 +20,7 @@ import parser
 import sema
 import token
 import codegen
+import diag
 import ownck
 import prove
 import pygen
@@ -197,6 +198,13 @@ def parse_args(args: list[str]) -> Options:
             o.drop = True
         # ★ 所有権の検査を警告に落とす逃げ道。**後に書いたほうが勝ち**。
         #   --warn-own --deny-move なら「移動だけエラー」に戻せます。
+        # ★ 診断の言語（docs/design/i18n-diagnostics.md）。既定は日本語。
+        #   対になる定義: src/main.c の --lang=
+        elif strings.startswith(a, "--lang="):
+            spec: str = a[7:len(a)]
+            if not diag.set_lang(spec):
+                io.eprint("error: --lang に書けるのは ja / en / auto です（'" + spec + "'）\n")
+                exit(1)
         elif a == "--warn-own":
             o.deny_move = False
             o.deny_borrow = False

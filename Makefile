@@ -81,7 +81,7 @@ LANG_NAME := yashirolang
 LANG_EXT  := .ys
 LANG_CC   := yashirolang
 LANG_PM   := ysm
-LANG_VERSION := 0.49.0
+LANG_VERSION := 0.50.0
 LANG_REPO := https://github.com/yashirolang/yashirolang
 CFLAGS  += -DPLC_LANG_NAME='"$(LANG_NAME)"' \
            -DPLC_LANG_EXT='"$(LANG_EXT)"' \
@@ -311,7 +311,7 @@ own-report: $(RUNTIME_OBJ)
 	    | grep -oE "selfhost/[a-z_]+\$(LANG_EXT)" | sort | uniq -c | sort -rn; \
 	fi
 
-.PHONY: all clean test test-one selfhost-test bootstrap bootstrap-test asan drop-asan drop-leak info inline-report inline-check own-report own-strict pm pm-test coverage coverage-detail stdlib-usage
+.PHONY: all clean test test-one check-msgs selfhost-test bootstrap bootstrap-test asan drop-asan drop-leak info inline-report inline-check own-report own-strict pm pm-test coverage coverage-detail stdlib-usage
 
 all: $(TARGET) $(RUNTIME_OBJ)
 
@@ -388,6 +388,7 @@ stdlib-usage:
 
 # ── テスト ──────────────────────────────────────────────────
 test: $(TARGET) $(RUNTIME_OBJ) $(PM)
+	@tools/check_msgs.sh
 	@tests/run_tests.sh
 	@tests/drop_asan.sh
 	@tests/selfhost.sh
@@ -555,10 +556,12 @@ DESTDIR ?=
 
 # ★ LICENSE も一緒に置きます（配る実体に付いて回るべきものなので）。
 install: all
-	@mkdir -p "$(DESTDIR)$(PREFIX)/bin" "$(DESTDIR)$(PREFIX)/lib/plc/lib"
+	@mkdir -p "$(DESTDIR)$(PREFIX)/bin" "$(DESTDIR)$(PREFIX)/lib/plc/lib" "$(DESTDIR)$(PREFIX)/lib/plc/msgs"
 	cp $(TARGET) "$(DESTDIR)$(PREFIX)/bin/"
 	cp $(RUNTIME_OBJ) "$(DESTDIR)$(PREFIX)/lib/plc/"
 	cp lib/*$(LANG_EXT) "$(DESTDIR)$(PREFIX)/lib/plc/lib/"
+	@# ★ 診断の英語の表（標準ライブラリの隣。docs/design/i18n-diagnostics.md §5）
+	cp msgs/*.tsv "$(DESTDIR)$(PREFIX)/lib/plc/msgs/"
 	@# ★ NOTICE も一緒に（Apache-2.0 §4(d)。make dist と同じ理由）。
 	cp LICENSE NOTICE "$(DESTDIR)$(PREFIX)/lib/plc/"
 	@$(MAKE) --no-print-directory $(PM)
@@ -574,10 +577,11 @@ uninstall:
 DIST_NAME ?= $(LANG_NAME)-$(UNAME_S)-$(shell uname -m 2>/dev/null || echo unknown)
 dist: all $(PM)
 	rm -rf build/dist/$(DIST_NAME)
-	@mkdir -p build/dist/$(DIST_NAME)/bin build/dist/$(DIST_NAME)/lib/plc/lib
+	@mkdir -p build/dist/$(DIST_NAME)/bin build/dist/$(DIST_NAME)/lib/plc/lib build/dist/$(DIST_NAME)/lib/plc/msgs
 	cp $(TARGET) $(PM) build/dist/$(DIST_NAME)/bin/
 	cp $(RUNTIME_OBJ) build/dist/$(DIST_NAME)/lib/plc/
 	cp lib/*$(LANG_EXT) build/dist/$(DIST_NAME)/lib/plc/lib/
+	cp msgs/*.tsv build/dist/$(DIST_NAME)/lib/plc/msgs/
 	@# ★ **NOTICE も必ず入れます。** Apache-2.0 §4(d) は「元の作品に NOTICE が
 	@#   あるなら、再配布物にも入れること」を求めます。ここで落とすと、
 	@#   配布物が許諾の条件を満たしません。
@@ -620,6 +624,10 @@ clean:
 
 check-naming:
 	@tools/check_naming.sh
+
+# 診断の英語の表（msgs/en.tsv）とソースを突き合わせる（docs/design/i18n-diagnostics.md §8）
+check-msgs:
+	@tools/check_msgs.sh
 
 # ── コンパイラ自身を「所有権エラー」で建てる ────────────────
 #

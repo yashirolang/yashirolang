@@ -26,6 +26,7 @@ extern char **environ;
 
 #include "ast.h"
 #include "codegen.h"
+#include "diag.h"
 #include "lexer.h"
 #include "module.h"
 #include "ownck.h"
@@ -275,6 +276,12 @@ static Options parse_args(int argc, char **argv) {
         // 注意: **後に書いたほうが勝ちます**（--drop / --no-drop と同じ規則）。
         //   --warn-own --deny-move なら「移動だけエラー」に戻せるので、
         //   古いコードを検査ごとに直していけます（決定 D12 の意図はこちら側へ）。
+        // ★ 診断の言語（docs/design/i18n-diagnostics.md）。既定は日本語。
+        if (strncmp(a, "--lang=", 7) == 0) {
+            if (!msg_set_lang(a + 7))
+                error("--lang に書けるのは ja / en / auto です（'%s'）", a + 7);
+            continue;
+        }
         if (strcmp(a, "--warn-own") == 0) {
             o.deny_move = 0;
             o.deny_borrow = 0;

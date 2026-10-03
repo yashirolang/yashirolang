@@ -150,6 +150,9 @@ static const char *lib_dir(void) {
     return PLC_LIB_DIR;
 }
 
+// 標準ライブラリの場所を外に見せる（診断の英語の表は、その隣の msgs/ にあります）
+const char *plc_lib_dir(void) { return lib_dir(); }
+
 // 探す場所を順に並べる（① 入口のディレクトリ ② -I ③ lib/）。
 // ★ 並びは「表示する順」であって「優先順位」ではありません。
 static int candidates(Loader *ld, const char *name, char **out) {

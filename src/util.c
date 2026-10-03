@@ -76,6 +76,14 @@ char *sb_str(StrBuf *sb) { return sb->data; }
 
 // ── ファイル入出力 ──────────────────────────────────────────
 
+// 読めなければ NULL（診断の英語の表のように「あれば使う」ファイル向け）
+char *read_file_or_null(const char *path) {
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return NULL;
+    fclose(fp);
+    return read_file(path);
+}
+
 char *read_file(const char *path) {
     FILE *fp;
     if (strcmp(path, "-") == 0) {

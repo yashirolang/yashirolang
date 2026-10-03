@@ -22,6 +22,155 @@ char *diag_fmt(const char *fmt, ...) {
     return buf;
 }
 
+// ── 言語の切り替え（docs/design/i18n-diagnostics.md）──────────
+//
+// ★ 対になる定義: selfhost/diag の msg / set_lang（**同じ規則で同じ文字列を返す**）。
+
+enum { LANG_UNSET = -1, LANG_JA = 0, LANG_EN = 1 };
+static int g_lang = LANG_UNSET;
+
+// "ja" / "en" / "auto" を言語に直す（それ以外は -1）
+static int lang_of(const char *spec) {
+    if (!spec) return -1;
+    if (strcmp(spec, "ja") == 0) return LANG_JA;
+    if (strcmp(spec, "en") == 0) return LANG_EN;
+    if (strcmp(spec, "auto") == 0) {
+        // LC_ALL → LC_MESSAGES → LANG の順に、最初に空でないものを見る
+        const char *names[] = {"LC_ALL", "LC_MESSAGES", "LANG"};
+        for (int i = 0; i < 3; i++) {
+            const char *v = getenv(names[i]);
+            if (v && v[0]) return strncmp(v, "ja", 2) == 0 ? LANG_JA : LANG_EN;
+        }
+        return LANG_EN;
+    }
+    return -1;
+}
+
+bool msg_set_lang(const char *spec) {
+    int l = lang_of(spec);
+    if (l < 0) return false;
+    g_lang = l;
+    return true;
+}
+
+static int cur_lang(void) {
+    if (g_lang == LANG_UNSET) {
+        // ★ 既定は日本語。環境変数が読めない・不正なら日本語のまま
+        //   （診断を出す途中で止まるのは本末転倒なので、断りません）。
+        int l = lang_of(getenv("PLC_MSG_LANG"));
+        g_lang = l < 0 ? LANG_JA : l;
+    }
+    return g_lang;
+}
+
+bool msg_is_en(void) { return cur_lang() == LANG_EN; }
+
+// 英語の表（最初に要ったときに 1 回だけ読む）
+static char **g_en_keys;
+static char **g_en_vals;
+static int g_en_n;
+static bool g_en_loaded;
+
+const char *plc_lib_dir(void);   // module.c
+
+// \n \t \\ を戻す（表の中で改行やタブを書くため）
+static char *unescape(const char *s, size_t n) {
+    char *out = xmalloc(n + 1);
+    size_t k = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (s[i] == '\\' && i + 1 < n) {
+            char c = s[i + 1];
+            if (c == 'n') { out[k++] = '\n'; i++; continue; }
+            if (c == 't') { out[k++] = '\t'; i++; continue; }
+            if (c == '\\') { out[k++] = '\\'; i++; continue; }
+        }
+        out[k++] = s[i];
+    }
+    out[k] = '\0';
+    return out;
+}
+
+static void load_en(void) {
+    if (g_en_loaded) return;
+    g_en_loaded = true;
+    // 置き場所：PLC_MSG_DIR → 標準ライブラリの隣（<lib>/../msgs）
+    const char *dir = getenv("PLC_MSG_DIR");
+    char path[4096];
+    if (dir && dir[0]) snprintf(path, sizeof(path), "%s/en.tsv", dir);
+    else snprintf(path, sizeof(path), "%s/../msgs/en.tsv", plc_lib_dir());
+    char *text = read_file_or_null(path);
+    if (!text) {
+        fprintf(stderr, "note: English messages not found; showing Japanese\n");
+        return;
+    }
+    int cap = 64;
+    g_en_keys = xmalloc(sizeof(char *) * (size_t)cap);
+    g_en_vals = xmalloc(sizeof(char *) * (size_t)cap);
+    for (char *line = text; *line;) {
+        char *end = strchr(line, '\n');
+        size_t len = end ? (size_t)(end - line) : strlen(line);
+        if (len > 0 && line[len - 1] == '\r') len--;
+        if (len > 0 && line[0] != '#') {
+            char *tab = memchr(line, '\t', len);
+            if (tab) {
+                if (g_en_n == cap) {
+                    cap *= 2;
+                    char **nk = xmalloc(sizeof(char *) * (size_t)cap);
+                    char **nv = xmalloc(sizeof(char *) * (size_t)cap);
+                    memcpy(nk, g_en_keys, sizeof(char *) * (size_t)g_en_n);
+                    memcpy(nv, g_en_vals, sizeof(char *) * (size_t)g_en_n);
+                    g_en_keys = nk;
+                    g_en_vals = nv;
+                }
+                g_en_keys[g_en_n] = xstrndup(line, (size_t)(tab - line));
+                g_en_vals[g_en_n] = unescape(tab + 1, len - (size_t)(tab - line) - 1);
+                g_en_n++;
+            }
+        }
+        if (!end) break;
+        line = end + 1;
+    }
+}
+
+static const char *en_lookup(const char *key) {
+    load_en();
+    for (int i = 0; i < g_en_n; i++)
+        if (strcmp(g_en_keys[i], key) == 0) return g_en_vals[i];
+    return NULL;
+}
+
+// {0} {1} … を埋める。番号が無い・範囲外なら、そのまま残す。
+static char *fill(const char *tpl, const char **args, int nargs) {
+    StrBuf sb;
+    sb_init(&sb);
+    for (const char *p = tpl; *p;) {
+        if (p[0] == '{' && p[1] == '{') { sb_printf(&sb, "{"); p += 2; continue; }
+        if (p[0] == '}' && p[1] == '}') { sb_printf(&sb, "}"); p += 2; continue; }
+        if (p[0] == '{' && p[1] >= '0' && p[1] <= '9') {
+            const char *q = p + 1;
+            int n = 0;
+            while (*q >= '0' && *q <= '9') n = n * 10 + (*q++ - '0');
+            if (*q == '}' && n < nargs) {
+                sb_printf(&sb, "%s", args[n] ? args[n] : "");
+                p = q + 1;
+                continue;
+            }
+        }
+        sb_printf(&sb, "%c", *p);
+        p++;
+    }
+    return sb_str(&sb);
+}
+
+const char *msgv(const char *key, const char *ja, const char **args, int nargs) {
+    const char *tpl = ja;
+    if (cur_lang() == LANG_EN) {
+        const char *en = en_lookup(key);
+        if (en) tpl = en;
+    }
+    return fill(tpl, args, nargs);
+}
+
 // ── 罫線の桁揃え ────────────────────────────────────────────
 //
 // 行番号の桁数に合わせて罫線の位置をそろえます。
@@ -211,6 +360,11 @@ static void render_block(const DiagLabel *lb, int gw) {
 void diag_emit(const Diag *d) {
     const char *sev = d->severity ? d->severity : "error";
     int gw = gutter_width(d);
+    // ★ 枠の言葉は**書き出す前に**組み立てます。英語の表が見つからないときの
+    //   note がここで出るので、診断の途中に割り込みません（セルフホスト版は
+    //   まとめて書き出すので、そちらと同じ並びにするため）。
+    const char *w_related = MSG0("diag.related", "関連する位置");
+    const char *w_help = MSG0("diag.help", "ヒント");
 
     // ① 主メッセージ（診断コードがあれば error[E-MOVE-1]: の形で出す）
     if (d->code) fprintf(stderr, "%s[%s]: %s\n", sev, d->code, d->message);
@@ -229,7 +383,8 @@ void diag_emit(const Diag *d) {
     //    この教材では分割方式を採用します。
     if (d->related.tok) {
         fprintf(stderr, "%*s |\n", gw + 1, "");
-        fprintf(stderr, "note: %s\n", d->related.label ? d->related.label : "関連する位置");
+        fprintf(stderr, "note: %s\n",
+                d->related.label ? d->related.label : w_related);
         DiagLabel rel = {d->related.tok, NULL};  // note 側に重ねてラベルは出さない
         render_block(&rel, gw);
     }
@@ -237,7 +392,7 @@ void diag_emit(const Diag *d) {
     // ④ ヒント
     if (d->hint) {
         fprintf(stderr, "%*s |\n", gw + 1, "");
-        fprintf(stderr, "%*s = ヒント: %s\n", gw + 1, "", d->hint);
+        fprintf(stderr, "%*s = %s: %s\n", gw + 1, "", w_help, d->hint);
     }
 }
 

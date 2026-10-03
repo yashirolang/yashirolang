@@ -1,0 +1,10 @@
+# ERROR: error[E-MUT-1]:
+# ERROR: = ヒント: 引数を 'xs: mut list[int]' にしてください
+# 既定は日本語（--lang も PLC_MSG_LANG も無いとき）。枠の言葉も今までどおり「ヒント」。
+def add_item(xs: list[int], n: int) -> None:
+    xs.append(n)
+
+def main() -> int:
+    xs: list[int] = [1, 2, 3]
+    add_item(xs, 4)
+    return 0

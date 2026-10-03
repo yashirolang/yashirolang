@@ -21,7 +21,152 @@
 #      = ヒント: 括弧の対応を確認してください
 import io
 import strings
+import sys
 import token
+
+
+# ── 言語の切り替え（docs/design/i18n-diagnostics.md）──────────
+#
+# ★ 日本語が正本で、既定。英語は msgs/en.tsv を鍵で引く。
+#   文面の {0} {1} … は差し込む値（いつも文字列）。{{ と }} は波括弧そのもの。
+#   対になる定義: src/diag.c の msgv / msg_set_lang（同じ規則で同じ文字列を返す）
+#
+# 注意: グローバルの初期値に list は書けないので、英語の表は読んだファイルの
+#   中身をそのまま持ち、鍵を引くたびに頭から探す（英語のときだけ、エラーのときだけ）。
+MSG_LANG: int = 0           # 0: まだ決めていない / 1: 日本語 / 2: 英語
+# 注意: グローバルの初期値に負の数は書けないので、C 版（-1 / 0 / 1）と番号をずらしています
+EN_TEXT: str = ""
+EN_LOADED: bool = False
+
+def lang_of(spec: str) -> int:
+    if spec == "ja":
+        return 1
+    if spec == "en":
+        return 2
+    if spec == "auto":
+        for nm in ["LC_ALL", "LC_MESSAGES", "LANG"]:
+            v: str = sys.getenv(nm)
+            if len(v) > 0:
+                if strings.startswith(v, "ja"):
+                    return 1
+                return 2
+        return 2
+    return 0
+
+# 言語を決める（"ja" / "en" / "auto"。それ以外なら False）
+def set_lang(spec: str) -> bool:
+    l: int = lang_of(spec)
+    if l == 0:
+        return False
+    MSG_LANG = l
+    return True
+
+def cur_lang() -> int:
+    if MSG_LANG == 0:
+        l: int = lang_of(sys.getenv("PLC_MSG_LANG"))
+        if l == 0:
+            l = 1
+        MSG_LANG = l
+    return MSG_LANG
+
+def load_en() -> None:
+    if EN_LOADED:
+        return
+    EN_LOADED = True
+    dir: str = sys.getenv("PLC_MSG_DIR")
+    path: str = dir + "/en.tsv"
+    if len(dir) == 0:
+        lib: str = sys.getenv("PLC_LIB_DIR")
+        if len(lib) == 0:
+            lib = "lib"
+        path = lib + "/../msgs/en.tsv"
+    if not io.exists(path):
+        io.eprint("note: English messages not found; showing Japanese\n")
+        return
+    EN_TEXT = io.read_file(path)
+
+# \n \t \\ を戻す
+def unescape(s: str) -> str:
+    out: list[str] = []
+    i: int = 0
+    while i < len(s):
+        if strings.byte_at(s, i) == 92 and i + 1 < len(s):
+            c: int = strings.byte_at(s, i + 1)
+            if c == 110:
+                out.append("\n")
+                i = i + 2
+                continue
+            if c == 116:
+                out.append("\t")
+                i = i + 2
+                continue
+            if c == 92:
+                out.append("\\")
+                i = i + 2
+                continue
+        n: int = strings.char_len_at(s, i)
+        out.append(s[i:i + n])
+        i = i + n
+    return strings.join(out, "")
+
+# 鍵を引く（無ければ ""。見つかったかは 2 つめで返す代わりに、found を見る）
+def en_lookup(key: str) -> str:
+    load_en()
+    for line0 in strings.split(EN_TEXT, "\n"):
+        line: str = line0
+        if strings.endswith(line, "\r"):
+            line = line[0:len(line) - 1]
+        if len(line) == 0 or strings.startswith(line, "#"):
+            continue
+        tab: int = strings.find(line, "\t")
+        if tab < 0:
+            continue
+        if line[0:tab] == key:
+            return "\t" + unescape(line[tab + 1:len(line)])
+    return ""
+
+# {0} {1} … を埋める。番号が無い・範囲外なら、そのまま残す。
+def fill(tpl: str, args: list[str]) -> str:
+    out: list[str] = []
+    i: int = 0
+    n: int = len(tpl)
+    while i < n:
+        b: int = strings.byte_at(tpl, i)
+        if b == 123 and i + 1 < n and strings.byte_at(tpl, i + 1) == 123:
+            out.append("{")
+            i = i + 2
+            continue
+        if b == 125 and i + 1 < n and strings.byte_at(tpl, i + 1) == 125:
+            out.append("}")
+            i = i + 2
+            continue
+        if b == 123 and i + 1 < n:
+            d0: int = strings.byte_at(tpl, i + 1)
+            if d0 >= 48 and d0 <= 57:
+                q: int = i + 1
+                k: int = 0
+                while q < n and strings.byte_at(tpl, q) >= 48 and strings.byte_at(tpl, q) <= 57:
+                    k = k * 10 + (strings.byte_at(tpl, q) - 48)
+                    q = q + 1
+                if q < n and strings.byte_at(tpl, q) == 125 and k < len(args):
+                    out.append(copy(args[k]))
+                    i = q + 1
+                    continue
+        out.append(tpl[i:i + 1])
+        i = i + 1
+    return strings.join(out, "")
+
+# 文面を作る（日本語のときは ja、英語のときは表の文面。表に無ければ ja）
+def msg(key: str, ja: str, args: list[str]) -> str:
+    if cur_lang() == 2:
+        en: str = en_lookup(key)
+        if len(en) > 0:
+            return fill(en[1:len(en)], args)
+    return fill(ja, args)
+
+def msg0(key: str, ja: str) -> str:
+    none: list[str] = []
+    return msg(key, ja, none)
 
 
 # ソース上の 1 箇所と、そこに付ける短い説明
@@ -241,6 +386,9 @@ def gutter_width(d: Diag) -> int:
 
 def emit(d: Diag) -> None:
     gw: int = gutter_width(d)
+    # ★ 枠の言葉は書き出す前に組み立てる（C 版の diag_emit と同じ並び）
+    w_related: str = msg0("diag.related", "関連する位置")
+    w_help: str = msg0("diag.help", "ヒント")
     parts: list[str] = []
 
     # ① 主メッセージ（診断コードがあれば error[E-MOVE-1]: の形で出す）
@@ -260,14 +408,14 @@ def emit(d: Diag) -> None:
         parts.append(spaces(gw + 1) + " |\n")
         note: str = r.text
         if len(note) == 0:
-            note = "関連する位置"
+            note = w_related
         parts.append("note: " + note + "\n")
         parts.append(render_block(Label(r.tok, ""), gw))
 
     # ④ ヒント
     if len(d.hint) > 0:
         parts.append(spaces(gw + 1) + " |\n")
-        parts.append(spaces(gw + 1) + " = ヒント: " + d.hint + "\n")
+        parts.append(spaces(gw + 1) + " = " + w_help + ": " + d.hint + "\n")
 
     io.eprint(strings.join(parts, ""))
 

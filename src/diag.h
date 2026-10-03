@@ -75,4 +75,31 @@ _Noreturn void error_at(Token *tok, const char *fmt, ...);
 // ヒント付き。hint は最後の行に "= ヒント: " として出ます。
 _Noreturn void error_at_hint(Token *tok, const char *hint, const char *fmt, ...);
 
+// ── 言語の切り替え（docs/design/i18n-diagnostics.md）──────────
+//
+// ★ 日本語が正本で、既定です。英語は msgs/en.tsv を鍵で引きます。
+//   文面の中の {0} {1} … は、差し込む値（いつも文字列）で埋めます
+//   （{{ と }} は波括弧そのもの）。英語では語順が変わるので番号で書きます。
+//
+//   MSG2("E-TYPE-3", "型 '{0}' と '{1}' は違います", l, r)
+//
+// 注意: 英語の表が無い・鍵が無いときは、日本語で出します（診断を出せなく
+//   なることはありません）。日本語のときは表を開きません。
+// 注意: 日本語の文面は**1 つの文字列リテラル**で書きます（make check-msgs が
+//   差し込みの番号を英語と突き合わせるため）。
+//
+// 言語を決める。spec は "ja" / "en" / "auto"。それ以外なら false。
+// 呼ばなければ、最初に文面を作るときに環境変数 PLC_MSG_LANG を見ます。
+bool msg_set_lang(const char *spec);
+// いまの言語が英語か
+bool msg_is_en(void);
+const char *msgv(const char *key, const char *ja, const char **args, int nargs);
+#define MSG0(k, ja) msgv((k), (ja), NULL, 0)
+#define MSG1(k, ja, a) msgv((k), (ja), (const char *[]){(a)}, 1)
+#define MSG2(k, ja, a, b) msgv((k), (ja), (const char *[]){(a), (b)}, 2)
+#define MSG3(k, ja, a, b, c) msgv((k), (ja), (const char *[]){(a), (b), (c)}, 3)
+#define MSG4(k, ja, a, b, c, d) msgv((k), (ja), (const char *[]){(a), (b), (c), (d)}, 4)
+#define MSG5(k, ja, a, b, c, d, e2) \
+    msgv((k), (ja), (const char *[]){(a), (b), (c), (d), (e2)}, 5)
+
 #endif  // PLC_DIAG_H

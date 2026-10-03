@@ -9,6 +9,9 @@
 #   tests/selfhost.sh tests/cases/x$EXT    1 ケースだけ
 
 set -u
+# ★ 試験は日本語の文面を見ます。使う人が英語を選んでいても、ここでは外します
+#   （docs/design/i18n-diagnostics.md §9.1。英語は # FLAGS: --lang=en で選ぶ）。
+unset PLC_MSG_LANG
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -243,6 +246,19 @@ for f in "${FILES[@]}"; do
         printf "  %sFAIL%s  %s（型エラーの内容が違う）\n" "$C_NG" "$C_END" "$name"
         diff "$TMP/c.err" "$TMP/m.err" | head -14 | sed 's/^/          /'
         continue
+    fi
+
+    # ★ 型の誤りがあるケースは、**英語でも**突き合わせます
+    #   （docs/design/i18n-diagnostics.md §9.1。2 つの実装の英語も 1 文字違わないこと）。
+    if [ "$crc" -ne 0 ]; then
+        PLC_MSG_LANG=en "$PLC_CC" --check "$f" > /dev/null 2>"$TMP/c.en.err"
+        PLC_MSG_LANG=en "$STAGE1_CHECK" "$f" > /dev/null 2>"$TMP/m.en.err"
+        if ! diff -q "$TMP/c.en.err" "$TMP/m.en.err" > /dev/null; then
+            fail=$((fail + 1)); failed_names+=("$name")
+            printf "  %sFAIL%s  %s（英語の型エラーの内容が違う）\n" "$C_NG" "$C_END" "$name"
+            diff "$TMP/c.en.err" "$TMP/m.en.err" | head -14 | sed 's/^/          /'
+            continue
+        fi
     fi
 
     if [ "$crc" -ne 0 ]; then

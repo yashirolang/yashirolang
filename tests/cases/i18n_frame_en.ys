@@ -1,0 +1,14 @@
+# FLAGS: --lang=en
+# ERROR: error[E-MUT-1]:
+# ERROR: = help: 引数を 'xs: mut list[int]' にしてください
+# 診断の言語の切り替え（docs/design/i18n-diagnostics.md 段階 0）。
+#   ★ --lang=en で、診断の枠の言葉（ヒント → help）が英語になります。
+#     文面そのものは、まだ訳していないので日本語のまま出ます（訳が無い鍵は日本語）。
+#   注意: error[E-MUT-1]: の形は言語によらず同じです（エディタ拡張がこの形で拾うため）。
+def add_item(xs: list[int], n: int) -> None:
+    xs.append(n)
+
+def main() -> int:
+    xs: list[int] = [1, 2, 3]
+    add_item(xs, 4)
+    return 0

@@ -49,6 +49,9 @@
 #   tests/run_tests.sh tests/mods/y/main$EXT
 
 set -u
+# ★ 試験は日本語の文面を見ます。使う人が英語を選んでいても、ここでは外します
+#   （docs/design/i18n-diagnostics.md §9.1。英語は # FLAGS: --lang=en で選ぶ）。
+unset PLC_MSG_LANG
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # ★ 実行ファイル名は Makefile の LANG_CC / LANG_PM が決めます。

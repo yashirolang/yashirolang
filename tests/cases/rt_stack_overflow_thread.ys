@@ -1,0 +1,9 @@
+# EXIT: 1
+# spawn で始めたスレッドの中でも同じ（受け止め用のスタックはスレッドごとに用意します）
+def depth(n: int) -> int:
+    return depth(n + 1) + 1
+
+def main() -> int:
+    t: Thread[int] = spawn(depth, 0)
+    print(t.join())
+    return 0

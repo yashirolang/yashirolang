@@ -1,0 +1,10 @@
+# EXIT: 1
+# 止まらない再帰は、理由を出して exit 1 で止まる（segfault の 139 にならない）。
+#   ★ ランタイムがスタックの末尾の SIGSEGV を受け止めて
+#     「runtime error: stack overflow（…）」と出します（0.49.0）。
+def depth(n: int) -> int:
+    return depth(n + 1) + 1
+
+def main() -> int:
+    print(depth(0))
+    return 0

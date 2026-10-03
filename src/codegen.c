@@ -1884,6 +1884,9 @@ static char *gen_index_addr(Emitter *e, char *obj, char *idx, const char *sty,
     char *len = new_tmp(e);
     sb_printf(&e->fn, "  %s = load i64, ptr %s" TBAA_LISTHDR "\n", len, lenp);
 
+    // ★ 範囲外の報告には**書いたままの添字**を出します（xs[-4] なら -4）。
+    //   正規化した後の値（-1）を出すと、どの添字が悪かったのか分かりません。
+    char *raw = idx;
     if (normalize) {
         char *isneg = new_tmp(e);
         sb_printf(&e->fn, "  %s = icmp slt i64 %s, 0\n", isneg, idx);
@@ -1924,7 +1927,7 @@ static char *gen_index_addr(Emitter *e, char *obj, char *idx, const char *sty,
         gen_prove_fail(e);
     else
         sb_printf(&e->fn, "  call void @pl_index_fail(i64 %s, i64 %s, i64 %s)\n",
-                  idx, len, ovf_arg);
+                  raw, len, ovf_arg);
     // 注意: pl_index_fail は戻ってきません。unreachable を置かないと
     //   LLVM は「戻るかも」と見て、検査をループ外へ出せなくなります。
     sb_printf(&e->fn, "  unreachable\n");
@@ -3161,8 +3164,8 @@ static void drop_fn_remember(Emitter *e, const char *key, const char *name) {
 //   ② 所有型のフィールドを宣言順に解放する
 //   ③ インスタンス自身を解放する
 //
-// 注意: 自分自身を含むクラス（連結リストなど）では再帰します。
-//    長いリストではスタックを使い切る可能性があります（見直します）。
+// ★ 自分自身を含むクラス（連結リストなど）は、その鎖をループでたどります（0.49.0）。
+//   注意: 同じクラスのフィールドが 2 つ以上（木）なら、最後の 1 つ以外は再帰です。
 static const char *gen_class_drop(Emitter *e, Class *c) {
     StrBuf key;
     sb_init(&key);
@@ -3189,9 +3192,51 @@ static const char *gen_class_drop(Emitter *e, Class *c) {
     int nf = 0;
     for (Field *f = c->fields; f; f = f->next) fdrops[nf++] = drop_fn_for(e, f->type);
 
+    // ★ 自分と同じクラスのフィールド（連結リストの next）は、再帰ではなく
+    //   **ループで**たどって解放します。再帰だと、100 万個つないだリストを
+    //   捨てただけでスタックを使い切って segfault していました（0.48.0 まで）。
+    //   同じクラスのフィールドが 2 つ以上（木）なら、最後の 1 つをループで、
+    //   残りは今までどおり再帰で解放します。
+    //   注意: drop メソッドが呼ばれる順（先頭の節 → 次の節 → …）は変わりません。
+    int chain = -1;
+    for (int k = 0; k < nf; k++)
+        if (fdrops[k] && strcmp(fdrops[k], sb_str(&name)) == 0) chain = k;
+
     StrBuf b;
     sb_init(&b);
     sb_printf(&b, "\ndefine internal void %s(ptr %%p) {\nentry:\n", sb_str(&name));
+    if (chain >= 0) {
+        sb_printf(&b, "  br label %%loop\nloop:\n");
+        sb_printf(&b, "  %%cur = phi ptr [ %%p, %%entry ], [ %%next, %%body ]\n");
+        sb_printf(&b, "  %%isnull = icmp eq ptr %%cur, null\n");
+        sb_printf(&b, "  br i1 %%isnull, label %%done, label %%body\nbody:\n");
+        if (dtor) {
+            bool local = false;
+            for (Node *d = e->ast->body; d; d = d->next)
+                if (d->kind == ND_CLASS && !d->targs && d->cls == c) local = true;
+            if (!local) declare_extern(e, "void", dtor->ir_name, "ptr");
+            sb_printf(&b, "  call void @%s(ptr %%cur)\n", dtor->ir_name);
+        }
+        int k = 0;
+        for (Field *f = c->fields; f; f = f->next, k++) {
+            if (!fdrops[k] || k == chain) continue;
+            sb_printf(&b, "  %%f%d = getelementptr %%%s.type, ptr %%cur, i32 0, i32 %d\n",
+                      k, ftype, f->index);
+            sb_printf(&b, "  %%v%d = load ptr, ptr %%f%d\n", k, k);
+            sb_printf(&b, "  call void %s(ptr %%v%d)\n", fdrops[k], k);
+        }
+        int ci = 0;
+        for (Field *f = c->fields; f; f = f->next, ci++)
+            if (ci == chain)
+                sb_printf(&b, "  %%fnext = getelementptr %%%s.type, ptr %%cur, i32 0, i32 %d\n",
+                          ftype, f->index);
+        sb_printf(&b, "  %%next = load ptr, ptr %%fnext\n");
+        declare_rt(e, "void @pl_drop_obj(ptr)");
+        sb_printf(&b, "  call void @pl_drop_obj(ptr %%cur)\n");
+        sb_printf(&b, "  br label %%loop\ndone:\n  ret void\n}\n");
+        sb_printf(&e->dropdefs, "%s", sb_str(&b));
+        return sb_str(&name);
+    }
     sb_printf(&b, "  %%isnull = icmp eq ptr %%p, null\n");
     sb_printf(&b, "  br i1 %%isnull, label %%done, label %%body\nbody:\n");
 

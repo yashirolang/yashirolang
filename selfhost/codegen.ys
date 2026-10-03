@@ -2362,6 +2362,8 @@ class Emitter:
         self.emit("  " + ln + " = load i64, ptr " + lenp + TBAA_LISTHDR + "\n")
 
         idx: str = idx0
+        # ★ 範囲外の報告には書いたままの添字を出す。対になる定義: src/codegen.c の gen_index_addr
+        raw: str = copy(idx0)
         if normalize:
             isneg: str = self.new_tmp()
             self.emit("  " + isneg + " = icmp slt i64 " + idx + ", 0\n")
@@ -2400,7 +2402,7 @@ class Emitter:
         if self.prove_verify_here():
             self.gen_prove_fail()
         else:
-            self.emit("  call void @pl_index_fail(i64 " + idx + ", i64 " + ln +
+            self.emit("  call void @pl_index_fail(i64 " + raw + ", i64 " + ln +
                       ", i64 " + ovf_arg + ")\n")
         # 注意: pl_index_fail は戻ってこない。unreachable を置かないと
         #   LLVM は「戻るかも」と見て、検査をループ外へ出せなくなる。
@@ -3190,7 +3192,7 @@ class Emitter:
     #   ② 所有型のフィールドを宣言順に解放する
     #   ③ インスタンス自身を解放する
     #
-    # 注意: 自分自身を含むクラス（連結リストなど）では再帰します。
+    # ★ 自分自身を含むクラス（連結リストなど）は、その鎖をループでたどる（0.49.0）。
     def gen_class_drop(mut self, c: rc[ast.Class]) -> str:
         key: str = "class:" + c.ir_name
         hit: str = self.drop_fn_cached(key)
@@ -3236,8 +3238,50 @@ class Emitter:
             if not dtor_local:
                 self.declare_extern("void", dtor_ir, "ptr")
 
+        # ★ 自分と同じクラスのフィールド（連結リストの next）は、再帰ではなく
+        #   ループでたどって解放する。対になる定義: src/codegen.c の gen_class_drop
+        chain: int = -1
+        k0: int = 0
+        while k0 < len(fdrops):
+            if fdrops[k0] == name:
+                chain = k0
+            k0 = k0 + 1
+
         b: list[str] = []
         b.append("\ndefine internal void " + name + "(ptr %p) {\nentry:\n")
+        if chain >= 0:
+            b.append("  br label %loop\nloop:\n")
+            b.append("  %cur = phi ptr [ %p, %entry ], [ %next, %body ]\n")
+            b.append("  %isnull = icmp eq ptr %cur, null\n")
+            b.append("  br i1 %isnull, label %done, label %body\nbody:\n")
+            if len(dtor_ir) > 0:
+                b.append("  call void @" + dtor_ir + "(ptr %cur)\n")
+            k1: int = 0
+            fa: rc[ast.Field] | None = c.fields
+            while fa is not None:
+                fla: rc[ast.Field] = fa
+                if len(fdrops[k1]) > 0 and k1 != chain:
+                    b.append("  %f" + str(k1) + " = getelementptr %" + ftype +
+                             ".type, ptr %cur, i32 0, i32 " + str(fla.index) + "\n")
+                    b.append("  %v" + str(k1) + " = load ptr, ptr %f" + str(k1) + "\n")
+                    b.append("  call void " + fdrops[k1] + "(ptr %v" + str(k1) + ")\n")
+                k1 = k1 + 1
+                fa = fla.next
+            k2: int = 0
+            fb: rc[ast.Field] | None = c.fields
+            while fb is not None:
+                flb: rc[ast.Field] = fb
+                if k2 == chain:
+                    b.append("  %fnext = getelementptr %" + ftype +
+                             ".type, ptr %cur, i32 0, i32 " + str(flb.index) + "\n")
+                k2 = k2 + 1
+                fb = flb.next
+            b.append("  %next = load ptr, ptr %fnext\n")
+            self.declare_rt("void @pl_drop_obj(ptr)")
+            b.append("  call void @pl_drop_obj(ptr %cur)\n")
+            b.append("  br label %loop\ndone:\n  ret void\n}\n")
+            self.dropdefs.append(strings.join(b, ""))
+            return name
         b.append("  %isnull = icmp eq ptr %p, null\n")
         b.append("  br i1 %isnull, label %done, label %body\nbody:\n")
         if len(dtor_ir) > 0:

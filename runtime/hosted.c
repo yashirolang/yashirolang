@@ -40,6 +40,7 @@
 #ifndef _WIN32
 #include <dirent.h>
 #include <sys/wait.h>
+#include <sys/resource.h>   // getrlimit（スタックの大きさ）
 #include <unistd.h>
 #else
 // 注意: Windows の標準出力は既定で「テキストモード」で、\n を \r\n に書き換えます。
@@ -293,10 +294,17 @@ long long pl_file_exists(const char *path) {
     return 1;
 }
 
+#ifndef _WIN32
+static void pl_stack_guard(int is_thread);
+#endif
+
 // 生成される C の main が、いちばん最初に呼びます。
 void pl_set_args(long long argc, char **argv) {
     g_argc = argc;
     g_argv = argv;
+#ifndef _WIN32
+    pl_stack_guard(0);
+#endif
 }
 
 // 注意: system() が返すのは「終了コード」ではなく wait(2) の状態値です。
@@ -446,9 +454,110 @@ typedef struct {
     int            scoped;  // scope の枠に記録されているか
 } PlThread;
 
+// ── スタックを使い切ったときに、理由を出して止める ─────────────
+//
+// ★ 止まらない再帰でスタックを使い切ると、OS はスタックの末尾の番兵の
+//   ページで SIGSEGV を送ります。0.48.0 までは**理由を出さずに**
+//   segfault（exit 139）で落ちていました（Java なら StackOverflowError と出る場面）。
+//   いまは、落ちた番地が「このスレッドのスタックの末尾のあたり」なら、
+//   panic と同じ形で理由を出して exit 1 で止めます。
+//
+// ★ スタックを使い切った状態ではハンドラ自身が動けないので、受け止め用の
+//   別のスタック（sigaltstack）をスレッドごとに用意します。
+//
+// 注意: スタックの末尾以外の SIGSEGV（処理系の不具合）は、隠さずに
+//   今までどおり OS の既定の動き（exit 139）に任せます。
+// 注意: 標準出力に溜まっていて、まだ書き出していない分は失われます
+//   （シグナルの中から安全に書き出す方法がないため。panic は書き出します）。
+// 注意: スタックの大きさは POSIX の関数だけで調べます（_np の関数は使いません）。
+static __thread char  *g_stack_hi;    // このスレッドのスタックの上端（のあたり）
+static __thread size_t g_stack_size;  // このスレッドのスタックの大きさ
+static __thread void  *g_altstack;    // 受け止め用のスタック
+
+static void pl_on_segv(int sig, siginfo_t *si, void *uc) {
+    (void)uc;
+    char *a = (char *)si->si_addr;
+    // 上端から「スタックの大きさ + 番兵のぶん（1 MiB）」の範囲で落ちたなら、
+    // スタックを使い切ったものと見ます。
+    if (g_stack_hi && a < g_stack_hi && (size_t)(g_stack_hi - a) <= g_stack_size + (1u << 20)) {
+        static const char msg[] =
+            "runtime error: stack overflow（スタックを使い切りました。"
+            "再帰が深すぎるか、終わる条件が無いのかもしれません）\n";
+        ssize_t w = write(2, msg, sizeof(msg) - 1);
+        (void)w;
+        _exit(1);
+    }
+    // スタックの末尾ではない → 既定の動きに戻して、もう一度起こさせる
+    signal(sig, SIG_DFL);
+}
+
+static void pl_stack_guard(int is_thread) {
+    char here;
+    g_stack_hi = &here;
+    if (is_thread) {
+        // spawn は既定の属性でスレッドを作るので、既定の大きさを読みます
+        pthread_attr_t a;
+        size_t sz = 0;
+        if (pthread_attr_init(&a) == 0) {
+            pthread_attr_getstacksize(&a, &sz);
+            pthread_attr_destroy(&a);
+        }
+        g_stack_size = sz ? sz : (size_t)8 << 20;
+    } else {
+        struct rlimit rl;
+        g_stack_size = (size_t)8 << 20;
+        if (getrlimit(RLIMIT_STACK, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY)
+            g_stack_size = (size_t)rl.rlim_cur;
+    }
+
+    // ★ 受け止め用のスタックが**すでに用意されていれば、それを使います**。
+    //   AddressSanitizer などは自分でスレッドごとに用意していて、差し替えると
+    //   スレッドの終わりに「自分のもの」として片付けようとして失敗します。
+    stack_t cur;
+    if (sigaltstack(NULL, &cur) == 0 && !(cur.ss_flags & SS_DISABLE) && cur.ss_size > 0) {
+        g_altstack = NULL;
+    } else {
+        size_t alt = 64 * 1024;
+        g_altstack = malloc(alt);
+        if (!g_altstack) return;      // 用意できなくても、今までどおりに動くだけ
+        stack_t ss;
+        ss.ss_sp = g_altstack;
+        ss.ss_size = alt;
+        ss.ss_flags = 0;
+        if (sigaltstack(&ss, NULL) != 0) {
+            free(g_altstack);
+            g_altstack = NULL;
+            return;
+        }
+    }
+
+    if (!is_thread) {
+        struct sigaction sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sa_sigaction = pl_on_segv;
+        sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+        sigemptyset(&sa.sa_mask);
+        sigaction(SIGSEGV, &sa, NULL);
+        sigaction(SIGBUS, &sa, NULL);   // macOS は番兵のページで SIGBUS を送ることがある
+    }
+}
+
+// スレッドを終えるときに、受け止め用のスタックを外して返す
+static void pl_stack_unguard(void) {
+    if (!g_altstack) return;
+    stack_t ss;
+    memset(&ss, 0, sizeof(ss));
+    ss.ss_flags = SS_DISABLE;
+    sigaltstack(&ss, NULL);
+    free(g_altstack);
+    g_altstack = NULL;
+}
+
 static void *pl_thread_trampoline(void *p) {
     PlThread *t = (PlThread *)p;
+    pl_stack_guard(1);
     t->ret = t->thunk(t->fn, t->args);
+    pl_stack_unguard();
     return NULL;
 }
 

@@ -1,0 +1,68 @@
+# OUTPUT: 解放 0
+# OUTPUT: 解放 1
+# OUTPUT: 解放 2
+# OUTPUT: 木: 7
+# OUTPUT: 100 万個: ok
+# EXIT: 0
+# 長い連結リストを捨てても落ちない（解放をループでたどる）。
+#
+#   ★ 0.48.0 までは、自分と同じクラスのフィールド（next）を再帰で解放していたので、
+#     100 万個つないだリストがスコープを抜けただけでスタックを使い切って
+#     segfault していました。いまは next の鎖をループでたどります。
+#   ★ drop メソッドが呼ばれる順（先頭の節 → 次の節 → …）は変わりません（上の 3 行）。
+#   ★ 同じクラスのフィールドが 2 つ（木）でも、今までどおり全部解放されます。
+class Node:
+    v: int
+    next: Node | None
+    loud: bool
+
+    def init(self, v: int, next: own Node | None, loud: bool) -> None:
+        self.v = v
+        self.next = next
+        self.loud = loud
+
+    def drop(self) -> None:
+        if self.loud:
+            print("解放 " + str(self.v))
+
+class Tree:
+    v: int
+    left: Tree | None
+    right: Tree | None
+
+    def init(self, v: int) -> None:
+        self.v = v
+        self.left = None
+        self.right = None
+
+def count(t: Tree | None) -> int:
+    if t is None:
+        return 0
+    else:
+        return 1 + count(t.left) + count(t.right)
+
+def small() -> None:
+    a: Node = Node(0, Node(1, Node(2, None, True), True), True)
+
+def big() -> None:
+    cur: Node | None = None
+    i: int = 0
+    while i < 1000000:
+        cur = Node(i, cur, False)
+        i = i + 1
+
+def main() -> int:
+    small()
+    t: Tree = Tree(1)
+    l: Tree = Tree(2)
+    l.left = Tree(4)
+    l.right = Tree(5)
+    r: Tree = Tree(3)
+    r.left = Tree(6)
+    r.right = Tree(7)
+    t.left = l
+    t.right = r
+    print("木: " + str(count(t)))
+    big()
+    print("100 万個: ok")
+    return 0

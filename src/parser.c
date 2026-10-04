@@ -72,12 +72,12 @@ static Token *expect_close(Parser *p, const char *close, Token *open) {
     char *open_text = xstrndup(open->loc, (size_t)open->len);
 
     Diag d = {0};
-    d.message = diag_fmt("閉じ括弧 '%s' がありません", close);
+    d.message = MSG1("parse.001", "閉じ括弧 '{0}' がありません", close);
     d.primary.tok = t;
-    d.primary.label = diag_fmt("ここに '%s' が必要です", close);
+    d.primary.label = MSG1("parse.002", "ここに '{0}' が必要です", close);
     d.related.tok = open;
-    d.related.label = diag_fmt("対応する '%s' はここです", open_text);
-    d.hint = "括弧の対応を確認してください";
+    d.related.label = MSG1("parse.003", "対応する '{0}' はここです", open_text);
+    d.hint = MSG0("parse.110", "括弧の対応を確認してください");
     diag_fail(&d);
 }
 
@@ -94,16 +94,16 @@ static Token *expect_close(Parser *p, const char *close, Token *open) {
 //    利用者に見せる診断ではこちらを使います。
 static const char *tok_kind_ja(TokenKind kind) {
     switch (kind) {
-        case TK_EOF: return "ファイルの終わり";
-        case TK_INT: return "整数";
-        case TK_FLOAT: return "浮動小数点数";
-        case TK_PUNCT: return "記号";
-        case TK_IDENT: return "名前";
-        case TK_KEYWORD: return "予約語";
-        case TK_STR: return "文字列";
-        case TK_NEWLINE: return "改行";
-        case TK_INDENT: return "字下げ";
-        case TK_DEDENT: return "字下げの終わり";
+        case TK_EOF: return MSG0("parse.111", "ファイルの終わり");
+        case TK_INT: return MSG0("parse.112", "整数");
+        case TK_FLOAT: return MSG0("parse.113", "浮動小数点数");
+        case TK_PUNCT: return MSG0("parse.114", "記号");
+        case TK_IDENT: return MSG0("parse.115", "名前");
+        case TK_KEYWORD: return MSG0("parse.116", "予約語");
+        case TK_STR: return MSG0("parse.117", "文字列");
+        case TK_NEWLINE: return MSG0("parse.118", "改行");
+        case TK_INDENT: return MSG0("parse.119", "字下げ");
+        case TK_DEDENT: return MSG0("parse.120", "字下げの終わり");
         default: UNREACHABLE();
     }
 }
@@ -114,9 +114,9 @@ static Token *expect(Parser *p, TokenKind kind, const char *what,
     if (t->kind == kind) return advance(p);
 
     Diag d = {0};
-    d.message = diag_fmt("%sが必要です", what);
+    d.message = MSG1("parse.004", "{0}が必要です", what);
     d.primary.tok = t;
-    d.primary.label = diag_fmt("ここは%sです", tok_kind_ja(t->kind));
+    d.primary.label = MSG1("parse.005", "ここは{0}です", tok_kind_ja(t->kind));
     d.hint = hint;
     diag_fail(&d);
 }
@@ -195,10 +195,10 @@ static Node *fstring(Parser *p, Token *t) {
 
         if (*q == '}') {
             Diag d = {0};
-            d.message = "f-string に対応しない '}' があります";
+            d.message = MSG0("parse.121", "f-string に対応しない '}}' があります");
             d.primary.tok = t;
-            d.primary.label = "ここです";
-            d.hint = "'}' そのものを書くには '}}' と重ねてください";
+            d.primary.label = MSG0("parse.122", "ここです");
+            d.hint = MSG0("parse.123", "'}}' そのものを書くには '}}}}' と重ねてください");
             diag_fail(&d);
         }
 
@@ -216,9 +216,9 @@ static Node *fstring(Parser *p, Token *t) {
         }
         if (depth != 0) {
             Diag d = {0};
-            d.message = "f-string の '{' が閉じられていません";
+            d.message = MSG0("parse.124", "f-string の '{{' が閉じられていません");
             d.primary.tok = t;
-            d.primary.label = "ここです";
+            d.primary.label = MSG0("parse.122", "ここです");
             diag_fail(&d);
         }
         int exlen = (int)(q - ex);
@@ -252,9 +252,9 @@ static Node *fstring(Parser *p, Token *t) {
 
         if (exlen == 0) {
             Diag d = {0};
-            d.message = "f-string の '{}' が空です";
+            d.message = MSG0("parse.125", "f-string の '{{}}' が空です");
             d.primary.tok = t;
-            d.primary.label = "ここに式が必要です";
+            d.primary.label = MSG0("parse.126", "ここに式が必要です");
             diag_fail(&d);
         }
 
@@ -287,12 +287,10 @@ static Node *fstring(Parser *p, Token *t) {
         //    **黙って無視され**ます。エラーにするより悪い挙動です。
         if (peek(&sp)->kind != TK_NEWLINE && peek(&sp)->kind != TK_EOF) {
             Diag d = {0};
-            d.message = diag_fmt("f-string の中の式を解釈できません: '%.*s'",
-                                 exlen, ex);
+            d.message = MSG1("parse.006", "f-string の中の式を解釈できません: '{0}'", diag_fmt("%.*s", exlen, ex));
             d.primary.tok = t;
-            d.primary.label = "ここです";
-            d.hint = "式の書き方を確かめてください"
-                     "（書式を付けるなら f\"{x:>8}\" のように ':' の後ろに書きます）";
+            d.primary.label = MSG0("parse.122", "ここです");
+            d.hint = MSG0("parse.127", "式の書き方を確かめてください（書式を付けるなら f\"{{x:>8}}\" のように ':' の後ろに書きます）");
             diag_fail(&d);
         }
 
@@ -329,20 +327,18 @@ static Node *fstring(Parser *p, Token *t) {
             if (i < speclen && spec[i] == 'f') { fixed = true; i++; }
             if (i != speclen) {
                 Diag d = {0};
-                d.message = diag_fmt("書式指定を解釈できません: '%.*s'", speclen,
-                                     spec);
+                d.message = MSG1("parse.007", "書式指定を解釈できません: '{0}'", diag_fmt("%.*s", speclen, spec));
                 d.primary.tok = t;
-                d.primary.label = "ここです";
-                d.hint = "書けるのは [埋め文字][< > ^][幅][.桁数][f] です"
-                         "（例: {x:>8} / {v:.2f} / {s:*^10}）";
+                d.primary.label = MSG0("parse.122", "ここです");
+                d.hint = MSG0("parse.128", "書けるのは [埋め文字][< > ^][幅][.桁数][f] です（例: {{x:>8}} / {{v:.2f}} / {{s:*^10}}）");
                 diag_fail(&d);
             }
             if (prec >= 0 && !fixed) {
                 Diag d = {0};
-                d.message = "小数の桁数には 'f' が要ります";
+                d.message = MSG0("parse.129", "小数の桁数には 'f' が要ります");
                 d.primary.tok = t;
-                d.primary.label = "ここです";
-                d.hint = "例: {v:.2f}（小数点以下 2 桁）";
+                d.primary.label = MSG0("parse.122", "ここです");
+                d.hint = MSG0("parse.130", "例: {{v:.2f}}（小数点以下 2 桁）");
                 diag_fail(&d);
             }
             if (align < 0) align = 0;   // 既定は左寄せ
@@ -504,16 +500,15 @@ static Node *primary(Parser *p) {
     // 予約語が式の位置に来た場合は、専用の説明を出す。
     // 「式が必要です」だけだと、なぜ変数名として使えないのか分かりません。
     if (t->kind == TK_KEYWORD)
-        error_at_hint(t, "予約語は変数名として使えません（言語仕様 2.5）",
-                      "'%s' は予約語です", t->text);
+        error_at_hint_m(t, MSG0("parse.009", "予約語は変数名として使えません（言語仕様 2.5）"), MSG1("parse.008", "'{0}' は予約語です", t->text));
 
     // 「何が来るべきだったか」を具体的に伝える。
     Diag d = {0};
-    d.message = "式が必要です";
+    d.message = MSG0("parse.131", "式が必要です");
     d.primary.tok = t;
-    d.primary.label = t->kind == TK_EOF ? "ここでファイルが終わっています"
-                                        : "ここには式が来るはずです";
-    d.hint = "式とは整数リテラル、変数名、または '(' で囲んだ式のことです";
+    d.primary.label = t->kind == TK_EOF ? MSG0("parse.132", "ここでファイルが終わっています")
+                                        : MSG0("parse.133", "ここには式が来るはずです");
+    d.hint = MSG0("parse.134", "式とは整数リテラル、変数名、または '(' で囲んだ式のことです");
     diag_fail(&d);
 }
 
@@ -534,13 +529,11 @@ static Node *list_comp(Parser *p, Token *open, Node *elem, const char *close) {
 
     Token *var = peek(p);
     if (var->kind != TK_IDENT)
-        error_at_hint(var, "内包表記は [式 for 変数 in 対象] の形で書きます",
-                      "ループ変数の名前が必要です");
+        error_at_hint_m(var, MSG0("parse.011", "内包表記は [式 for 変数 in 対象] の形で書きます"), MSG0("parse.010", "ループ変数の名前が必要です"));
     advance(p);
 
     if (!tok_is_kw(peek(p), "in"))
-        error_at_hint(peek(p), "内包表記は [式 for 変数 in 対象] の形で書きます",
-                      "'in' が必要です");
+        error_at_hint_m(peek(p), MSG0("parse.011", "内包表記は [式 for 変数 in 対象] の形で書きます"), MSG0("parse.012", "'in' が必要です"));
     advance(p);
 
     Node *n = new_node(ND_LISTCOMP, open);
@@ -564,8 +557,7 @@ static Node *list_comp(Parser *p, Token *open, Node *elem, const char *close) {
         Node *a2 = a1 ? a1->next : NULL;
         Node *a3 = a2 ? a2->next : NULL;
         if (!a1 || (a3 && a3->next))
-            error_at_hint(it->tok, "range は 1〜3 個の引数を取ります",
-                          "range の引数の個数が違います");
+            error_at_hint_m(it->tok, MSG0("parse.014", "range は 1〜3 個の引数を取ります"), MSG0("parse.013", "range の引数の個数が違います"));
         Node *start, *stop;
         if (!a2) {
             start = new_int_node(ft, 0);
@@ -583,15 +575,10 @@ static Node *list_comp(Parser *p, Token *open, Node *elem, const char *close) {
                 lit = lit->lhs;
             }
             if (lit->kind != ND_INT)
-                error_at_hint(a3->tok,
-                              "増分は整数リテラルで書いてください"
-                              "（例: range(0, 10, 2)）。変数を使いたい場合は "
-                              "for 文で書けます",
-                              "range の増分が定数ではありません");
+                error_at_hint_m(a3->tok, MSG0("parse.016", "増分は整数リテラルで書いてください（例: range(0, 10, 2)）。変数を使いたい場合は for 文で書けます"), MSG0("parse.015", "range の増分が定数ではありません"));
             step = sign * lit->ival;
             if (step == 0)
-                error_at_hint(a3->tok, "増分が 0 だと無限ループになります",
-                              "range の増分に 0 は使えません");
+                error_at_hint_m(a3->tok, MSG0("parse.018", "増分が 0 だと無限ループになります"), MSG0("parse.017", "range の増分に 0 は使えません"));
         }
         start->next = stop;
         stop->next = NULL;
@@ -608,10 +595,7 @@ static Node *list_comp(Parser *p, Token *open, Node *elem, const char *close) {
     }
 
     if (tok_is_kw(peek(p), "for"))
-        error_at_hint(peek(p),
-                      "for は 1 つだけです（入れ子にしたいときは、いったん"
-                      "変数に入れてください）",
-                      "内包表記の 'for' が 2 つあります");
+        error_at_hint_m(peek(p), MSG0("parse.020", "for は 1 つだけです（入れ子にしたいときは、いったん変数に入れてください）"), MSG0("parse.019", "内包表記の 'for' が 2 つあります"));
 
     expect_close(p, close, open);
 
@@ -684,10 +668,7 @@ static Node *postfix(Parser *p) {
         if (consume(p, ".")) {
             Token *name_tok = peek(p);
             if (name_tok->kind != TK_IDENT)
-                error_at_hint(name_tok,
-                              "'.' の後にはフィールド名かメソッド名を書きます"
-                              "（例: t.kind / xs.append(1)）",
-                              "フィールド名かメソッド名が必要です");
+                error_at_hint_m(name_tok, MSG0("parse.022", "'.' の後にはフィールド名かメソッド名を書きます（例: t.kind / xs.append(1)）"), MSG0("parse.021", "フィールド名かメソッド名が必要です"));
             advance(p);
 
             Token *mopen = peek(p);
@@ -725,10 +706,10 @@ static Node *postfix(Parser *p) {
         // 呼べるのは名前だけ（第一級関数は v1 未対応）
         if (n->kind != ND_VAR) {
             Diag d = {0};
-            d.message = "この式は呼び出せません";
+            d.message = MSG0("parse.135", "この式は呼び出せません");
             d.primary.tok = n->tok;
-            d.primary.label = "呼び出せるのは関数の名前だけです";
-            d.hint = "関数を値として扱うことは v1 では対応していません";
+            d.primary.label = MSG0("parse.136", "呼び出せるのは関数の名前だけです");
+            d.hint = MSG0("parse.137", "関数を値として扱うことは v1 では対応していません");
             diag_fail(&d);
         }
 
@@ -832,9 +813,7 @@ static Node *lambda_expr(Parser *p) {
         for (;;) {
             Token *a = peek(p);
             if (a->kind != TK_IDENT)
-                error_at_hint(a, "lambda の引数は名前で書きます"
-                                 "（例: lambda x, y: x + y）",
-                              "引数の名前が必要です");
+                error_at_hint_m(a, MSG0("parse.024", "lambda の引数は名前で書きます（例: lambda x, y: x + y）"), MSG0("parse.023", "引数の名前が必要です"));
             advance(p);
 
             // .T0 / .T1 …（利用者が書けない名前にします）
@@ -857,8 +836,7 @@ static Node *lambda_expr(Parser *p) {
     }
 
     if (!consume(p, ":"))
-        error_at_hint(peek(p), "lambda は「lambda 引数: 式」の形で書きます",
-                      "':' が必要です");
+        error_at_hint_m(peek(p), MSG0("parse.026", "lambda は「lambda 引数: 式」の形で書きます"), MSG0("parse.025", "':' が必要です"));
 
     // 戻り型の型引数 .R
     Node *rp = new_node(ND_TYPEREF, kw);
@@ -1057,13 +1035,12 @@ static Node *comparison(Parser *p) {
     Token *t2 = peek(p);
     if (compare_op(t2) >= 0) {
         Diag d = {0};
-        d.message = "比較演算子を連鎖させることはできません";
+        d.message = MSG0("parse.138", "比較演算子を連鎖させることはできません");
         d.primary.tok = t2;
-        d.primary.label = "2 つ目の比較演算子です";
+        d.primary.label = MSG0("parse.139", "2 つ目の比較演算子です");
         d.related.tok = t;
-        d.related.label = "1 つ目の比較演算子はここです";
-        d.hint = "Python と違い連鎖比較は使えません。'and' で繋いでください"
-                 "（例: a < b and b < c）";
+        d.related.label = MSG0("parse.140", "1 つ目の比較演算子はここです");
+        d.hint = MSG0("parse.141", "Python と違い連鎖比較は使えません。'and' で繋いでください（例: a < b and b < c）");
         diag_fail(&d);
     }
 
@@ -1124,11 +1101,10 @@ static Node *expr(Parser *p) {
     n->lhs = or_expr(p);       // 条件
     if (!consume_kw(p, "else")) {
         Diag d = {0};
-        d.message = "三項演算子に 'else' がありません";
+        d.message = MSG0("parse.142", "三項演算子に 'else' がありません");
         d.primary.tok = peek(p);
-        d.primary.label = "ここに 'else' が必要です";
-        d.hint = "書き方は 'a if 条件 else b' です（値を返す式なので、"
-                 "条件が偽のときの値も必ず要ります）";
+        d.primary.label = MSG0("parse.143", "ここに 'else' が必要です");
+        d.hint = MSG0("parse.144", "書き方は 'a if 条件 else b' です（値を返す式なので、条件が偽のときの値も必ず要ります）");
         diag_fail(&d);
     }
     n->els = expr(p);          // 偽のときの値
@@ -1140,10 +1116,10 @@ static void expect_newline(Parser *p) {
     Token *t = peek(p);
     if (t->kind != TK_NEWLINE) {
         Diag d = {0};
-        d.message = "文の後に余分なトークンがあります";
+        d.message = MSG0("parse.145", "文の後に余分なトークンがあります");
         d.primary.tok = t;
-        d.primary.label = "ここから先が解釈できません";
-        d.hint = "1 行に書けるのは 1 つの文です（改行で区切ってください）";
+        d.primary.label = MSG0("parse.146", "ここから先が解釈できません");
+        d.hint = MSG0("parse.147", "1 行に書けるのは 1 つの文です（改行で区切ってください）");
         diag_fail(&d);
     }
     advance(p);
@@ -1158,15 +1134,15 @@ static Node *var_decl(Parser *p) {
 
     // 型注釈。ここでは「名前を記録する」だけで、
     // それが有効な型かどうかの判断は sema に任せます。
-    Node *tr = type_ref(p, "型注釈には型名を書きます（例: x: int = 0）");
+    Node *tr = type_ref(p, MSG0("parse.148", "型注釈には型名を書きます（例: x: int = 0）"));
 
     // 初期化式は必須（言語仕様 5.1：未初期化変数を作らせない）
     if (!tok_is(peek(p), "=")) {
         Diag d = {0};
-        d.message = "変数宣言には初期化式が必要です";
+        d.message = MSG0("parse.149", "変数宣言には初期化式が必要です");
         d.primary.tok = peek(p);
-        d.primary.label = "ここに '= 初期値' が必要です";
-        d.hint = "本言語では未初期化の変数を作れません（例: x: int = 0）";
+        d.primary.label = MSG0("parse.150", "ここに '= 初期値' が必要です");
+        d.hint = MSG0("parse.151", "本言語では未初期化の変数を作れません（例: x: int = 0）");
         diag_fail(&d);
     }
     advance(p);  // "="
@@ -1255,7 +1231,7 @@ static Node *aug_assign(Parser *p, Token *t, OpKind op, Node *target, Node *rhs)
             Node *nx = ix->next;
             ix->next = NULL;
             if (nidx == 8)
-                error_at(target->tok, "添字が多すぎます（8 個までです）");
+                error_at_m(target->tok, MSG0("parse.027", "添字が多すぎます（8 個までです）"));
             idx[nidx] = hidden_name(p, "aug.idx");
             cur->next = hidden_decl(target->tok, idx[nidx], ix);
             cur = cur->next;
@@ -1387,8 +1363,7 @@ static Node *simple_stmt(Parser *p) {
         for (;;) {
             Token *nm = peek(p);
             if (nm->kind != TK_IDENT)
-                error_at_hint(nm, "受け取る名前を書いてください（例: q, r = f()）",
-                              "名前が必要です");
+                error_at_hint_m(nm, MSG0("parse.029", "受け取る名前を書いてください（例: q, r = f()）"), MSG0("parse.028", "名前が必要です"));
             advance(p);
             Node *v = new_node(ND_VARDECL, nm);
             v->name = nm->text;
@@ -1397,9 +1372,7 @@ static Node *simple_stmt(Parser *p) {
             if (!consume(p, ",")) break;
         }
         if (!consume(p, "="))
-            error_at_hint(peek(p),
-                          "分解代入は 'q, r = f()' の形で書きます",
-                          "'=' が必要です");
+            error_at_hint_m(peek(p), MSG0("parse.031", "分解代入は 'q, r = f()' の形で書きます"), MSG0("parse.030", "'=' が必要です"));
         n->rhs = expr(p);
 
         // ★ 右辺もカンマで並べられます（`a, b = b, a`）。
@@ -1429,10 +1402,7 @@ static Node *simple_stmt(Parser *p) {
             int nnames = 0;
             for (Node *v = n->params; v; v = v->next) nnames++;
             if (nnames != nvals)
-                error_at_hint(ut,
-                              diag_fmt("左辺は %d 個、右辺は %d 個です", nnames,
-                                       nvals),
-                              "受け取る名前と値の数が違います");
+                error_at_hint_m(ut, MSG2("parse.033", "左辺は {0} 個、右辺は {1} 個です", diag_fmt("%d", nnames), diag_fmt("%d", nvals)), MSG0("parse.032", "受け取る名前と値の数が違います"));
 
             Node head = {0};
             Node *cur = &head;
@@ -1446,8 +1416,7 @@ static Node *simple_stmt(Parser *p) {
                 // 注意: 上限は selfhost/parser にも同じ数を書いてあります
                 //   （2 実装で同じものを受け付けるため）。
                 if (k == 8)
-                    error_at_hint(ut, "並べられるのは 8 個までです",
-                                  "値が多すぎます");
+                    error_at_hint_m(ut, MSG0("parse.035", "並べられるのは 8 個までです"), MSG0("parse.034", "値が多すぎます"));
                 tmp[k] = hidden_name(p, "swap");
                 cur->next = hidden_decl(ut, tmp[k], v);
                 cur = cur->next;
@@ -1483,10 +1452,10 @@ static Node *simple_stmt(Parser *p) {
         //   文として書けました。足場を外したので本来の厳しさに戻します。
         if (lhs->kind != ND_CALL && lhs->kind != ND_METHOD) {
             Diag d = {0};
-            d.message = "この式は文として書けません";
+            d.message = MSG0("parse.152", "この式は文として書けません");
             d.primary.tok = lhs->tok;
-            d.primary.label = "計算した値がどこにも使われていません";
-            d.hint = "結果を変数に代入するか、関数の呼び出しを書いてください";
+            d.primary.label = MSG0("parse.153", "計算した値がどこにも使われていません");
+            d.hint = MSG0("parse.154", "結果を変数に代入するか、関数の呼び出しを書いてください");
             diag_fail(&d);
         }
         return lhs;  // 式文（呼び出し）
@@ -1497,10 +1466,10 @@ static Node *simple_stmt(Parser *p) {
     //   t.kind = v も、また 1 つ足すだけです。
     if (lhs->kind != ND_VAR && lhs->kind != ND_INDEX && lhs->kind != ND_FIELD) {
         Diag d = {0};
-        d.message = "この式には代入できません";
+        d.message = MSG0("parse.155", "この式には代入できません");
         d.primary.tok = lhs->tok;
-        d.primary.label = "代入先にできるのは変数・添字 xs[i]・フィールド t.f だけです";
-        d.hint = "計算結果を代入したい場合は、左辺に変数を書いてください";
+        d.primary.label = MSG0("parse.156", "代入先にできるのは変数・添字 xs[i]・フィールド t.f だけです");
+        d.hint = MSG0("parse.157", "計算結果を代入したい場合は、左辺に変数を書いてください");
         diag_fail(&d);
     }
     advance(p);  // "=" または複合代入記号
@@ -1526,10 +1495,10 @@ static void expect_colon(Parser *p, const char *what) {
     if (consume(p, ":")) return;
 
     Diag d = {0};
-    d.message = diag_fmt("%sの後に ':' が必要です", what);
+    d.message = MSG1("parse.036", "{0}の後に ':' が必要です", what);
     d.primary.tok = peek(p);
-    d.primary.label = "ここに ':' が必要です";
-    d.hint = "ブロックを開く行は ':' で終わり、次の行を字下げします";
+    d.primary.label = MSG0("parse.158", "ここに ':' が必要です");
+    d.hint = MSG0("parse.159", "ブロックを開く行は ':' で終わり、次の行を字下げします");
     diag_fail(&d);
 }
 
@@ -1543,9 +1512,9 @@ static Node *stmt(Parser *p);
 static Node *block(Parser *p) {
     Token *head_tok = peek(p);
 
-    expect(p, TK_NEWLINE, "改行", "':' の後は改行してブロックを字下げしてください");
-    expect(p, TK_INDENT, "字下げされたブロック",
-           "':' の次の行は字下げしてください（スペース 4 個を推奨）");
+    expect(p, TK_NEWLINE, MSG0("parse.118", "改行"), MSG0("parse.160", "':' の後は改行してブロックを字下げしてください"));
+    expect(p, TK_INDENT, MSG0("parse.161", "字下げされたブロック"),
+           MSG0("parse.162", "':' の次の行は字下げしてください（スペース 4 個を推奨）"));
 
     Node head = {0};
     Node *cur = &head;
@@ -1555,7 +1524,7 @@ static Node *block(Parser *p) {
         cur->next = stmt(p);
         cur = cur->next;
     }
-    expect(p, TK_DEDENT, "ブロックの終わり", NULL);
+    expect(p, TK_DEDENT, MSG0("parse.163", "ブロックの終わり"), NULL);
 
     Node *blk = new_node(ND_BLOCK, head_tok);
     blk->body = head.next;
@@ -1597,9 +1566,9 @@ static Node *match_stmt(Parser *p) {
     n->lhs = expr(p);
 
     expect_colon(p, "match");
-    expect(p, TK_NEWLINE, "改行", "':' の後は改行して case を字下げしてください");
-    expect(p, TK_INDENT, "字下げされた case",
-           "case は字下げして書きます（スペース 4 個を推奨）");
+    expect(p, TK_NEWLINE, MSG0("parse.118", "改行"), MSG0("parse.164", "':' の後は改行して case を字下げしてください"));
+    expect(p, TK_INDENT, MSG0("parse.165", "字下げされた case"),
+           MSG0("parse.166", "case は字下げして書きます（スペース 4 個を推奨）"));
 
     Node head = {0};
     Node *cur = &head;
@@ -1607,10 +1576,10 @@ static Node *match_stmt(Parser *p) {
         Token *c = peek(p);
         if (!(c->kind == TK_IDENT && strcmp(c->text, "case") == 0)) {
             Diag d = {0};
-            d.message = "match の中に書けるのは case だけです";
+            d.message = MSG0("parse.167", "match の中に書けるのは case だけです");
             d.primary.tok = c;
-            d.primary.label = "ここには case を書きます";
-            d.hint = "書き方は case <値>: です（どれにも当たらないときは case _:）";
+            d.primary.label = MSG0("parse.168", "ここには case を書きます");
+            d.hint = MSG0("parse.169", "書き方は case <値>: です（どれにも当たらないときは case _:）");
             diag_fail(&d);
         }
         advance(p);  // "case"
@@ -1633,11 +1602,10 @@ static Node *match_stmt(Parser *p) {
         cur->next = cn;
         cur = cur->next;
     }
-    expect(p, TK_DEDENT, "字下げの終わり", "match の本体が閉じていません");
+    expect(p, TK_DEDENT, MSG0("parse.120", "字下げの終わり"), MSG0("parse.170", "match の本体が閉じていません"));
 
     if (!head.next)
-        error_at_hint(kw, "case を 1 つ以上書いてください",
-                      "空の match は書けません");
+        error_at_hint_m(kw, MSG0("parse.038", "case を 1 つ以上書いてください"), MSG0("parse.037", "空の match は書けません"));
     n->body = head.next;
     return n;
 }
@@ -1649,7 +1617,7 @@ static Node *if_stmt(Parser *p) {
 
     Node *n = new_node(ND_IF, t);
     n->lhs = expr(p);
-    expect_colon(p, "if の条件");
+    expect_colon(p, MSG0("parse.171", "if の条件"));
     n->body = block(p);
 
     if (tok_is_kw(peek(p), "elif")) {
@@ -1765,8 +1733,7 @@ static Node *for_stmt(Parser *p) {
 
     Token *var_tok = peek(p);
     if (var_tok->kind != TK_IDENT)
-        error_at_hint(var_tok, "for のループ変数は名前で書きます（例: for x in xs:）",
-                      "ループ変数の名前が必要です");
+        error_at_hint_m(var_tok, MSG0("parse.039", "for のループ変数は名前で書きます（例: for x in xs:）"), MSG0("parse.010", "ループ変数の名前が必要です"));
     advance(p);
 
     // ★ for i, x in enumerate(xs)
@@ -1779,15 +1746,12 @@ static Node *for_stmt(Parser *p) {
         idx_tok = var_tok;          // 1 つ目が添字
         var_tok = peek(p);          // 2 つ目が要素
         if (var_tok->kind != TK_IDENT)
-            error_at_hint(var_tok,
-                          "書き方は 'for i, x in enumerate(xs):' です",
-                          "2 つ目のループ変数の名前が必要です");
+            error_at_hint_m(var_tok, MSG0("parse.041", "書き方は 'for i, x in enumerate(xs):' です"), MSG0("parse.040", "2 つ目のループ変数の名前が必要です"));
         advance(p);
     }
 
     if (!consume_kw(p, "in"))
-        error_at_hint(peek(p), "for は「for 変数 in 対象:」の形で書きます",
-                      "'in' が必要です");
+        error_at_hint_m(peek(p), MSG0("parse.042", "for は「for 変数 in 対象:」の形で書きます"), MSG0("parse.012", "'in' が必要です"));
 
     Node *iter = NULL;
 
@@ -1803,10 +1767,10 @@ static Node *for_stmt(Parser *p) {
         tok_is(peek_at(p, 1), "(")) {
         if (!idx_tok) {
             Diag d = {0};
-            d.message = "enumerate には 2 つのループ変数が必要です";
+            d.message = MSG0("parse.172", "enumerate には 2 つのループ変数が必要です");
             d.primary.tok = peek(p);
-            d.primary.label = "添字と要素の 2 つを受け取ります";
-            d.hint = "書き方は 'for i, x in enumerate(xs):' です";
+            d.primary.label = MSG0("parse.173", "添字と要素の 2 つを受け取ります");
+            d.hint = MSG0("parse.041", "書き方は 'for i, x in enumerate(xs):' です");
             diag_fail(&d);
         }
         advance(p);                     // enumerate
@@ -1814,17 +1778,17 @@ static Node *for_stmt(Parser *p) {
         iter = expr(p);
         expect_close(p, ")", eopen);
 
-        expect_colon(p, "for の対象");
+        expect_colon(p, MSG0("parse.174", "for の対象"));
         Node *ebody = block(p);
         return for_over_list(p, t, iter, var_tok, idx_tok, ebody);
     }
 
     if (idx_tok) {
         Diag d = {0};
-        d.message = "ループ変数を 2 つ書けるのは enumerate だけです";
+        d.message = MSG0("parse.175", "ループ変数を 2 つ書けるのは enumerate だけです");
         d.primary.tok = peek(p);
-        d.primary.label = "ここには enumerate(...) が必要です";
-        d.hint = "タプルはありません。'for i, x in enumerate(xs):' の形だけです";
+        d.primary.label = MSG0("parse.176", "ここには enumerate(...) が必要です");
+        d.hint = MSG0("parse.177", "タプルはありません。'for i, x in enumerate(xs):' の形だけです");
         diag_fail(&d);
     }
 
@@ -1861,20 +1825,16 @@ static Node *for_stmt(Parser *p) {
                 lit = lit->lhs;
             }
             if (lit->kind != ND_INT)
-                error_at_hint(a3->tok,
-                              "増分は整数リテラルで書いてください（例: range(0, 10, 2)）。"
-                              "変数を使いたい場合は while で書けます",
-                              "range の増分が定数ではありません");
+                error_at_hint_m(a3->tok, MSG0("parse.043", "増分は整数リテラルで書いてください（例: range(0, 10, 2)）。変数を使いたい場合は while で書けます"), MSG0("parse.015", "range の増分が定数ではありません"));
             step = sign * lit->ival;
             if (step == 0)
-                error_at_hint(a3->tok, "増分が 0 だと無限ループになります",
-                              "range の増分に 0 は使えません");
+                error_at_hint_m(a3->tok, MSG0("parse.018", "増分が 0 だと無限ループになります"), MSG0("parse.017", "range の増分に 0 は使えません"));
         }
     } else {
         iter = expr(p);
     }
 
-    expect_colon(p, "for の対象");
+    expect_colon(p, MSG0("parse.174", "for の対象"));
     Node *body = block(p);
 
     // ── ここから脱糖 ──
@@ -1961,7 +1921,7 @@ static Node *while_stmt(Parser *p) {
 
     Node *n = new_node(ND_WHILE, t);
     n->lhs = expr(p);
-    expect_colon(p, "while の条件");
+    expect_colon(p, MSG0("parse.178", "while の条件"));
     n->body = block(p);
     return n;
 }
@@ -1983,15 +1943,13 @@ static Node *try_stmt(Parser *p) {
     while (tok_is_kw(peek(p), "except")) {
         Token *ek = advance(p);
         Node *ex = new_node(ND_EXCEPT, ek);
-        ex->type_ref = type_ref(p, "except には捕まえるエラーの型名を書きます"
-                                   "（例: except IOError:）");
+        ex->type_ref = type_ref(p, MSG0("parse.179", "except には捕まえるエラーの型名を書きます（例: except IOError:）"));
         // as で受け取る名前（省略できる）
         if (tok_is_kw(peek(p), "as")) {
             advance(p);
             Token *nm = peek(p);
             if (nm->kind != TK_IDENT)
-                error_at_hint(nm, "as の後には変数名を書きます（例: except IOError as e:）",
-                              "変数名が必要です");
+                error_at_hint_m(nm, MSG0("parse.045", "as の後には変数名を書きます（例: except IOError as e:）"), MSG0("parse.044", "変数名が必要です"));
             advance(p);
             ex->name = nm->text;
         }
@@ -2002,9 +1960,7 @@ static Node *try_stmt(Parser *p) {
     }
 
     if (!head.next)
-        error_at_hint(peek(p),
-                      "try には except を 1 つ以上書きます（例: except IOError as e:）",
-                      "この try には except がありません");
+        error_at_hint_m(peek(p), MSG0("parse.047", "try には except を 1 つ以上書きます（例: except IOError as e:）"), MSG0("parse.046", "この try には except がありません"));
     n->els = head.next;
     return n;
 }
@@ -2032,8 +1988,7 @@ static Node *stmt(Parser *p) {
         Token *kw = advance(p);
         Token *name = peek(p);
         if (name->kind != TK_IDENT)
-            error_at_hint(name, "pragma の後には設定名を書きます（例: pragma target \"...\"）",
-                          "設定名が必要です");
+            error_at_hint_m(name, MSG0("parse.049", "pragma の後には設定名を書きます（例: pragma target \"...\"）"), MSG0("parse.048", "設定名が必要です"));
         advance(p);
         Node *n = new_node(ND_PRAGMA, kw);
         n->name = name->text;
@@ -2114,10 +2069,10 @@ static Node *stmt(Parser *p) {
     // 捕まりますが、それでは何が悪いのか分かりません。
     if (tok_is_kw(t, "elif") || tok_is_kw(t, "else")) {
         Diag d = {0};
-        d.message = diag_fmt("対応する if がない '%s' です", t->text);
+        d.message = MSG1("parse.050", "対応する if がない '{0}' です", t->text);
         d.primary.tok = t;
-        d.primary.label = "この行に対応する 'if' が見つかりません";
-        d.hint = "'elif' / 'else' は 'if' と同じ字下げの位置に書いてください";
+        d.primary.label = MSG0("parse.180", "この行に対応する 'if' が見つかりません");
+        d.hint = MSG0("parse.181", "'elif' / 'else' は 'if' と同じ字下げの位置に書いてください");
         diag_fail(&d);
     }
 
@@ -2136,7 +2091,7 @@ static Token *type_name_token(Parser *p, const char *what) {
         advance(p);
         return t;
     }
-    error_at_hint(t, what, "型名が必要です");
+    error_at_hint_m(t, what, MSG0("parse.051", "型名が必要です"));
 }
 
 // type_ref ::= [ IDENT "." ] IDENT [ "[" type_ref "]" ]
@@ -2155,7 +2110,7 @@ static Node *type_ref(Parser *p, const char *what) {
         n->name = "(tuple)";
         Node *tail = NULL;
         for (;;) {
-            Node *a = type_ref(p, "タプルの要素の型を書いてください");
+            Node *a = type_ref(p, MSG0("parse.182", "タプルの要素の型を書いてください"));
             Node *slot = new_node(ND_TYPEREF, a->tok);
             slot->lhs = a;
             if (tail) tail->next = slot; else n->targs = slot;
@@ -2166,9 +2121,7 @@ static Node *type_ref(Parser *p, const char *what) {
         int cnt = 0;
         for (Node *a = n->targs; a; a = a->next) cnt++;
         if (cnt < 2)
-            error_at_hint(tuo,
-                          "2 つ以上の型を書いてください（1 要素のタプルはありません）",
-                          "タプルの要素が %d 個です", cnt);
+            error_at_hint_m(tuo, MSG0("parse.053", "2 つ以上の型を書いてください（1 要素のタプルはありません）"), MSG1("parse.052", "タプルの要素が {0} 個です", diag_fmt("%d", cnt)));
         return n;
     }
 
@@ -2190,7 +2143,7 @@ static Node *type_ref(Parser *p, const char *what) {
         Node *tail = NULL;
         if (!tok_is(peek(p), ")")) {
             for (;;) {
-                Node *a = type_ref(p, "引数の型を書いてください");
+                Node *a = type_ref(p, MSG0("parse.183", "引数の型を書いてください"));
                 if (tail) tail->next = a; else n->body = a;
                 tail = a;
                 if (!consume(p, ",")) break;
@@ -2200,13 +2153,13 @@ static Node *type_ref(Parser *p, const char *what) {
 
         if (!consume(p, "->")) {
             Diag d = {0};
-            d.message = "関数型には戻り型が必要です";
+            d.message = MSG0("parse.184", "関数型には戻り型が必要です");
             d.primary.tok = peek(p);
-            d.primary.label = "ここに '->' と戻り型を書いてください";
-            d.hint = "書き方は fn(int, str) -> bool です";
+            d.primary.label = MSG0("parse.185", "ここに '->' と戻り型を書いてください");
+            d.hint = MSG0("parse.186", "書き方は fn(int, str) -> bool です");
             diag_fail(&d);
         }
-        n->rhs = type_ref(p, "戻り型を書いてください");
+        n->rhs = type_ref(p, MSG0("parse.187", "戻り型を書いてください"));
         return n;
     }
 
@@ -2218,8 +2171,7 @@ static Node *type_ref(Parser *p, const char *what) {
     // モジュール修飾 lexer.Token（★ 1 段だけ。a.b.Token は書けない）
     if (tok_is(peek(p), ".")) {
         advance(p);
-        Token *m = type_name_token(p, "モジュール修飾の後には型名を書きます"
-                                      "（例: lexer.Token）");
+        Token *m = type_name_token(p, MSG0("parse.188", "モジュール修飾の後には型名を書きます（例: lexer.Token）"));
         n->mod_name = n->name;
         n->name = m->text;
         n->tok = m;
@@ -2227,8 +2179,7 @@ static Node *type_ref(Parser *p, const char *what) {
         //   最後の 1 つが型名で、その手前までがモジュール名です。
         while (tok_is(peek(p), ".")) {
             advance(p);
-            Token *seg = type_name_token(p, "モジュール修飾の後には型名を書きます"
-                                            "（例: pkg.mod.Token）");
+            Token *seg = type_name_token(p, MSG0("parse.189", "モジュール修飾の後には型名を書きます（例: pkg.mod.Token）"));
             StrBuf mn;
             sb_init(&mn);
             sb_printf(&mn, "%s.%s", n->mod_name, n->name);
@@ -2245,7 +2196,7 @@ static Node *type_ref(Parser *p, const char *what) {
         //     を読む側のコードを変えずに済ませるためです。
         Node *ta_tail = NULL;
         for (;;) {
-            Node *a = type_ref(p, "型引数を書いてください（例: list[int]）");
+            Node *a = type_ref(p, MSG0("parse.190", "型引数を書いてください（例: list[int]）"));
             if (!n->lhs) n->lhs = a;
             Node *slot = new_node(ND_TYPEREF, a->tok);
             slot->lhs = a;
@@ -2263,10 +2214,7 @@ static Node *type_ref(Parser *p, const char *what) {
     if (tok_is(peek(p), "|")) {
         Token *bar = advance(p);
         if (!tok_is_kw(peek(p), "None"))
-            error_at_hint(peek(p),
-                          "型の '|' の後ろに書けるのは None だけです"
-                          "（共用体型はありません）",
-                          "'| None' の形で書いてください");
+            error_at_hint_m(peek(p), MSG0("parse.055", "型の '|' の後ろに書けるのは None だけです（共用体型はありません）"), MSG0("parse.054", "'| None' の形で書いてください"));
         advance(p);
         n->nullable = true;
         n->tok = bar;
@@ -2280,14 +2228,13 @@ static Node *type_ref(Parser *p, const char *what) {
 //    「T | None」の '|' と読んでしまうからです。
 //    **同じ記号でも、読む文脈が違えば別の文法**です（同じ判断です）。
 static Node *raises_type(Parser *p) {
-    Token *t = type_name_token(p, "raises にはエラーの型名を書きます"
-                                 "（例: raises IOError）");
+    Token *t = type_name_token(p, MSG0("parse.191", "raises にはエラーの型名を書きます（例: raises IOError）"));
     Node *n = new_node(ND_TYPEREF, t);
     n->name = t->text;
 
     if (tok_is(peek(p), ".")) {  // モジュール修飾（例: errors.IOError）
         advance(p);
-        Token *m = type_name_token(p, "モジュール修飾の後には型名を書きます");
+        Token *m = type_name_token(p, MSG0("parse.192", "モジュール修飾の後には型名を書きます"));
         n->mod_name = n->name;
         n->name = m->text;
         n->tok = m;
@@ -2328,8 +2275,7 @@ static Node *default_value(Parser *p, Token *pname) {
             advance(p);
             Token *seg = peek(p);
             if (seg->kind != TK_IDENT)
-                error_at_hint(seg, "'.' の後には名前を書きます",
-                              "ここには名前が必要です");
+                error_at_hint_m(seg, MSG0("parse.057", "'.' の後には名前を書きます"), MSG0("parse.056", "ここには名前が必要です"));
             advance(p);
             Node *fld = new_node(ND_FIELD, seg);
             fld->lhs = e;
@@ -2342,22 +2288,19 @@ static Node *default_value(Parser *p, Token *pname) {
         if (tok_is(peek(p), "(") || tok_is(peek(p), "[")) {
             Diag d = {0};
             d.message = tok_is(peek(p), "(")
-                            ? "既定値に呼び出しは書けません"
-                            : "既定値に添字は書けません";
+                            ? MSG0("parse.193", "既定値に呼び出しは書けません")
+                            : MSG0("parse.194", "既定値に添字は書けません");
             d.primary.tok = peek(p);
-            d.primary.label = "ここは実行しないと決まりません";
-            d.hint = "数 / 文字列 / True / False / None / 列挙の枝 だけが書けます"
-                     "（既定値は呼び出し側に置き換わるので、"
-                     "実行して決まる値は書けません）";
+            d.primary.label = MSG0("parse.195", "ここは実行しないと決まりません");
+            d.hint = MSG0("parse.196", "数 / 文字列 / True / False / None / 列挙の枝 だけが書けます（既定値は呼び出し側に置き換わるので、実行して決まる値は書けません）");
             diag_fail(&d);
         }
         if (e->kind != ND_FIELD) {
             Diag d = {0};
-            d.message = "既定値に変数は書けません";
+            d.message = MSG0("parse.197", "既定値に変数は書けません");
             d.primary.tok = t;
-            d.primary.label = "ここには値を書きます";
-            d.hint = "数 / 文字列 / True / False / None / 列挙の枝 だけが書けます"
-                     "（変えられる値を既定値にすると、呼ぶたびに答えが変わります）";
+            d.primary.label = MSG0("parse.198", "ここには値を書きます");
+            d.hint = MSG0("parse.199", "数 / 文字列 / True / False / None / 列挙の枝 だけが書けます（変えられる値を既定値にすると、呼ぶたびに答えが変わります）");
             diag_fail(&d);
         }
         return e;
@@ -2368,13 +2311,10 @@ static Node *default_value(Parser *p, Token *pname) {
         return primary(p);
 
     Diag d = {0};
-    d.message = diag_fmt("引数 '%s' の既定値に書けるのはリテラルだけです",
-                         pname->text);
+    d.message = MSG1("parse.058", "引数 '{0}' の既定値に書けるのはリテラルだけです", pname->text);
     d.primary.tok = t;
-    d.primary.label = "ここは実行しないと決まりません";
-    d.hint = "数 / 文字列 / True / False / None / 列挙の枝 だけが書けます。"
-             "list が要るときは 'xs: list[int] | None = None' と書きます"
-             "（既定値の list は呼び出しをまたいで共有されるため、書けません）";
+    d.primary.label = MSG0("parse.195", "ここは実行しないと決まりません");
+    d.hint = MSG0("parse.200", "数 / 文字列 / True / False / None / 列挙の枝 だけが書けます。list が要るときは 'xs: list[int] | None = None' と書きます（既定値の list は呼び出しをまたいで共有されるため、書けません）");
     diag_fail(&d);
     return NULL;
 }
@@ -2403,15 +2343,13 @@ static Node *param(Parser *p, bool allow_self) {
 
     Token *name_tok = peek(p);
     if (name_tok->kind != TK_IDENT)
-        error_at_hint(name_tok, "引数は「名前: 型」の形で書きます（例: n: int）",
-                      "引数名が必要です");
+        error_at_hint_m(name_tok, MSG0("parse.060", "引数は「名前: 型」の形で書きます（例: n: int）"), MSG0("parse.059", "引数名が必要です"));
     advance(p);
 
     if (allow_self && strcmp(name_tok->text, "self") == 0 &&
         !tok_is(peek(p), ":")) {
         if (lead && tok_is_kw(lead, "own"))
-            error_at_hint(lead, "self の所有権は奪えません（'mut self' なら書けます）",
-                          "self に 'own' は書けません");
+            error_at_hint_m(lead, MSG0("parse.062", "self の所有権は奪えません（'mut self' なら書けます）"), MSG0("parse.061", "self に 'own' は書けません"));
         Node *n = new_node(ND_PARAM, name_tok);
         n->name = name_tok->text;
         n->mode = lead ? PM_MUT : PM_BORROW;
@@ -2419,14 +2357,10 @@ static Node *param(Parser *p, bool allow_self) {
     }
 
     if (lead)
-        error_at_hint(lead,
-                      diag_fmt("'%s' は型の前に書きます（例: %s: %s list[int]）",
-                               lead->text, name_tok->text, lead->text),
-                      "ここには書けません");
+        error_at_hint_m(lead, MSG3("parse.064", "'{0}' は型の前に書きます（例: {1}: {2} list[int]）", lead->text, name_tok->text, lead->text), MSG0("parse.063", "ここには書けません"));
 
     if (!consume(p, ":"))
-        error_at_hint(peek(p), "引数には型注釈が必須です（例: n: int）",
-                      "引数名の後に ':' が必要です");
+        error_at_hint_m(peek(p), MSG0("parse.066", "引数には型注釈が必須です（例: n: int）"), MSG0("parse.065", "引数名の後に ':' が必要です"));
 
     // ★ 型の前の own / mut
     ParamMode mode = PM_BORROW;
@@ -2438,7 +2372,7 @@ static Node *param(Parser *p, bool allow_self) {
         mode = PM_MUT;
     }
 
-    Node *tr = type_ref(p, "引数には型注釈が必須です（例: n: int）");
+    Node *tr = type_ref(p, MSG0("parse.066", "引数には型注釈が必須です（例: n: int）"));
 
     Node *n = new_node(ND_PARAM, name_tok);
     n->name = name_tok->text;
@@ -2473,8 +2407,7 @@ static Node *func_def_x(Parser *p, bool in_class, bool in_iface) {
 
     Token *name_tok = peek(p);
     if (name_tok->kind != TK_IDENT)
-        error_at_hint(name_tok, "def の後には関数名を書きます（例: def f() -> int:）",
-                      "関数名が必要です");
+        error_at_hint_m(name_tok, MSG0("parse.068", "def の後には関数名を書きます（例: def f() -> int:）"), MSG0("parse.067", "関数名が必要です"));
     advance(p);
 
     Node *n = new_node(ND_FUNC, kw);
@@ -2489,8 +2422,7 @@ static Node *func_def_x(Parser *p, bool in_class, bool in_iface) {
         for (;;) {
             Token *tp = peek(p);
             if (tp->kind != TK_IDENT)
-                error_at_hint(tp, "型引数は名前で書きます（例: def f[T](x: T) -> T:）",
-                              "型引数の名前が必要です");
+                error_at_hint_m(tp, MSG0("parse.070", "型引数は名前で書きます（例: def f[T](x: T) -> T:）"), MSG0("parse.069", "型引数の名前が必要です"));
             advance(p);
             Node *slot = new_node(ND_TYPEREF, tp);
             slot->name = tp->text;
@@ -2503,8 +2435,7 @@ static Node *func_def_x(Parser *p, bool in_class, bool in_iface) {
 
     Token *open = peek(p);
     if (!consume(p, "("))
-        error_at_hint(open, "関数名の後には引数リストが必要です（例: f() や f(n: int)）",
-                      "'(' が必要です");
+        error_at_hint_m(open, MSG0("parse.072", "関数名の後には引数リストが必要です（例: f() や f(n: int)）"), MSG0("parse.071", "'(' が必要です"));
 
     Node head = {0};
     Node *cur = &head;
@@ -2523,12 +2454,10 @@ static Node *func_def_x(Parser *p, bool in_class, bool in_iface) {
     // 注意: ここで弾いておけば、sema は「メソッドの第 1 引数は self」と仮定できます。
     if (in_class && (!n->params || strcmp(n->params->name, "self") != 0)) {
         Diag d = {0};
-        d.message = diag_fmt("メソッド '%s' の第 1 引数は self でなければなりません",
-                             n->name);
+        d.message = MSG1("parse.073", "メソッド '{0}' の第 1 引数は self でなければなりません", n->name);
         d.primary.tok = n->params ? n->params->tok : name_tok;
-        d.primary.label = "ここに self が必要です";
-        d.hint = "本言語は self を明示的に書きます"
-                 "（例: def show(self) -> None:）";
+        d.primary.label = MSG0("parse.201", "ここに self が必要です");
+        d.hint = MSG0("parse.202", "本言語は self を明示的に書きます（例: def show(self) -> None:）");
         diag_fail(&d);
     }
 
@@ -2536,11 +2465,9 @@ static Node *func_def_x(Parser *p, bool in_class, bool in_iface) {
     // 省略を許すと再帰関数で「戻り型を知るには本体が要り、
     //    本体を見るには戻り型が要る」という循環に陥ります。
     if (!consume(p, "->"))
-        error_at_hint(peek(p),
-                      "戻り型は省略できません。値を返さないなら -> None と書きます",
-                      "'->' と戻り型が必要です");
+        error_at_hint_m(peek(p), MSG0("parse.075", "戻り型は省略できません。値を返さないなら -> None と書きます"), MSG0("parse.074", "'->' と戻り型が必要です"));
 
-    n->type_ref = type_ref(p, "戻り型には型名を書きます（例: -> int / -> None）");
+    n->type_ref = type_ref(p, MSG0("parse.203", "戻り型には型名を書きます（例: -> int / -> None）"));
 
     // ── raises 節 ──
     //
@@ -2567,18 +2494,17 @@ static Node *func_def_x(Parser *p, bool in_class, bool in_iface) {
     if (in_iface) {
         if (tok_is(peek(p), ":")) {
             Diag d = {0};
-            d.message = "インタフェースのメソッドに本体は書けません";
+            d.message = MSG0("parse.204", "インタフェースのメソッドに本体は書けません");
             d.primary.tok = peek(p);
-            d.primary.label = "ここに ':' は書けません";
-            d.hint = "インタフェースは「何ができるか」だけを並べます"
-                     "（実装はクラス側に書きます）";
+            d.primary.label = MSG0("parse.205", "ここに ':' は書けません");
+            d.hint = MSG0("parse.206", "インタフェースは「何ができるか」だけを並べます（実装はクラス側に書きます）");
             diag_fail(&d);
         }
         expect_newline(p);
         return n;
     }
 
-    expect_colon(p, "def の宣言");
+    expect_colon(p, MSG0("parse.207", "def の宣言"));
     n->body = block(p);
     return n;
 }
@@ -2596,38 +2522,35 @@ static Node *iface_def(Parser *p) {
 
     Token *name_tok = peek(p);
     if (name_tok->kind != TK_IDENT)
-        error_at_hint(name_tok,
-                      "interface の後には名前を書きます（例: interface Show:）",
-                      "インタフェース名が必要です");
+        error_at_hint_m(name_tok, MSG0("parse.077", "interface の後には名前を書きます（例: interface Show:）"), MSG0("parse.076", "インタフェース名が必要です"));
     advance(p);
 
     Node *n = new_node(ND_IFACE, kw);
     n->name = name_tok->text;
 
-    expect_colon(p, "interface の宣言");
-    expect(p, TK_NEWLINE, "改行", "':' の後は改行して本体を字下げしてください");
-    expect(p, TK_INDENT, "字下げされた本体",
-           "インタフェースの中身は字下げして書きます（スペース 4 個を推奨）");
+    expect_colon(p, MSG0("parse.208", "interface の宣言"));
+    expect(p, TK_NEWLINE, MSG0("parse.118", "改行"), MSG0("parse.209", "':' の後は改行して本体を字下げしてください"));
+    expect(p, TK_INDENT, MSG0("parse.210", "字下げされた本体"),
+           MSG0("parse.211", "インタフェースの中身は字下げして書きます（スペース 4 個を推奨）"));
 
     Node head = {0};
     Node *cur = &head;
     while (peek(p)->kind != TK_DEDENT && peek(p)->kind != TK_EOF) {
         if (!tok_is_kw(peek(p), "def")) {
             Diag d = {0};
-            d.message = "インタフェースに書けるのはメソッドの宣言だけです";
+            d.message = MSG0("parse.212", "インタフェースに書けるのはメソッドの宣言だけです");
             d.primary.tok = peek(p);
-            d.primary.label = "ここには def を書きます";
-            d.hint = "フィールドは持てません（持てるようにすると継承になります）";
+            d.primary.label = MSG0("parse.213", "ここには def を書きます");
+            d.hint = MSG0("parse.214", "フィールドは持てません（持てるようにすると継承になります）");
             diag_fail(&d);
         }
         cur->next = func_def_x(p, true, true);
         cur = cur->next;
     }
-    expect(p, TK_DEDENT, "字下げの終わり", "インタフェースの本体が閉じていません");
+    expect(p, TK_DEDENT, MSG0("parse.120", "字下げの終わり"), MSG0("parse.215", "インタフェースの本体が閉じていません"));
 
     if (!head.next)
-        error_at_hint(kw, "メソッドを 1 つ以上書いてください",
-                      "空のインタフェースは書けません");
+        error_at_hint_m(kw, MSG0("parse.079", "メソッドを 1 つ以上書いてください"), MSG0("parse.078", "空のインタフェースは書けません"));
     n->body = head.next;
     return n;
 }
@@ -2753,18 +2676,16 @@ static Node *enum_def(Parser *p) {
 
     Token *name_tok = peek(p);
     if (name_tok->kind != TK_IDENT)
-        error_at_hint(name_tok,
-                      "enum の後には名前を書きます（例: enum Color:）",
-                      "列挙の名前が必要です");
+        error_at_hint_m(name_tok, MSG0("parse.081", "enum の後には名前を書きます（例: enum Color:）"), MSG0("parse.080", "列挙の名前が必要です"));
     advance(p);
 
     Node *n = new_node(ND_ENUM, kw);
     n->name = name_tok->text;
 
-    expect_colon(p, "enum の宣言");
-    expect(p, TK_NEWLINE, "改行", "':' の後は改行して本体を字下げしてください");
-    expect(p, TK_INDENT, "字下げされた本体",
-           "列挙の枝は字下げして書きます（スペース 4 個を推奨）");
+    expect_colon(p, MSG0("parse.216", "enum の宣言"));
+    expect(p, TK_NEWLINE, MSG0("parse.118", "改行"), MSG0("parse.209", "':' の後は改行して本体を字下げしてください"));
+    expect(p, TK_INDENT, MSG0("parse.210", "字下げされた本体"),
+           MSG0("parse.217", "列挙の枝は字下げして書きます（スペース 4 個を推奨）"));
 
     Node head = {0};
     Node *cur = &head;
@@ -2773,10 +2694,10 @@ static Node *enum_def(Parser *p) {
         Token *v = peek(p);
         if (v->kind != TK_IDENT) {
             Diag d = {0};
-            d.message = "列挙に書けるのは枝の名前だけです";
+            d.message = MSG0("parse.218", "列挙に書けるのは枝の名前だけです");
             d.primary.tok = v;
-            d.primary.label = "ここには名前を書きます";
-            d.hint = "1 行に 1 つ、名前だけを書きます（中身を持つ枝はまだありません）";
+            d.primary.label = MSG0("parse.219", "ここには名前を書きます");
+            d.hint = MSG0("parse.220", "1 行に 1 つ、名前だけを書きます（中身を持つ枝はまだありません）");
             diag_fail(&d);
         }
         advance(p);
@@ -2789,10 +2710,10 @@ static Node *enum_def(Parser *p) {
             advance(p);
             if (tok_is(peek(p), ")")) {
                 Diag d = {0};
-                d.message = "中身のない枝に '()' は付けません";
+                d.message = MSG0("parse.221", "中身のない枝に '()' は付けません");
                 d.primary.tok = fopen;
-                d.primary.label = "ここは空です";
-                d.hint = diag_fmt("中身が無いなら '%s' とだけ書きます", v->text);
+                d.primary.label = MSG0("parse.222", "ここは空です");
+                d.hint = MSG1("parse.082", "中身が無いなら '{0}' とだけ書きます", v->text);
                 diag_fail(&d);
             }
             Node fh = {0};
@@ -2811,11 +2732,11 @@ static Node *enum_def(Parser *p) {
         for (Node *q = head.next; q; q = q->next)
             if (strcmp(q->name, v->text) == 0) {
                 Diag d = {0};
-                d.message = diag_fmt("枝 '%s' が 2 回あります", v->text);
+                d.message = MSG1("parse.083", "枝 '{0}' が 2 回あります", v->text);
                 d.primary.tok = v;
-                d.primary.label = "2 つめの定義です";
+                d.primary.label = MSG0("parse.223", "2 つめの定義です");
                 d.related.tok = q->tok;
-                d.related.label = "最初の定義はここです";
+                d.related.label = MSG0("parse.224", "最初の定義はここです");
                 diag_fail(&d);
             }
 
@@ -2825,13 +2746,12 @@ static Node *enum_def(Parser *p) {
         ev->params = fields;        // A-41（無ければ NULL）
         cur->next = ev;
         cur = cur->next;
-        expect(p, TK_NEWLINE, "改行", "枝は 1 行に 1 つ書きます");
+        expect(p, TK_NEWLINE, MSG0("parse.118", "改行"), MSG0("parse.225", "枝は 1 行に 1 つ書きます"));
     }
-    expect(p, TK_DEDENT, "字下げの終わり", "列挙の本体が閉じていません");
+    expect(p, TK_DEDENT, MSG0("parse.120", "字下げの終わり"), MSG0("parse.226", "列挙の本体が閉じていません"));
 
     if (!head.next)
-        error_at_hint(kw, "枝を 1 つ以上書いてください",
-                      "空の列挙は書けません");
+        error_at_hint_m(kw, MSG0("parse.085", "枝を 1 つ以上書いてください"), MSG0("parse.084", "空の列挙は書けません"));
     n->body = head.next;
 
     // ★ 中身を持つ枝が 1 つでもあれば、**全部の枝**を隠しクラスにします（A-41）。
@@ -2853,15 +2773,14 @@ static Node *field_decl(Parser *p) {
 
     Node *n = new_node(ND_FIELDDECL, name_tok);
     n->name = name_tok->text;
-    n->type_ref = type_ref(p, "フィールドには型注釈が必須です（例: kind: int）");
+    n->type_ref = type_ref(p, MSG0("parse.227", "フィールドには型注釈が必須です（例: kind: int）"));
 
     if (tok_is(peek(p), "=")) {
         Diag d = {0};
-        d.message = "フィールドに初期値は書けません";
+        d.message = MSG0("parse.228", "フィールドに初期値は書けません");
         d.primary.tok = peek(p);
-        d.primary.label = "ここに '=' は書けません";
-        d.hint = "初期値は init メソッドで代入してください"
-                 "（例: def init(self) -> None: / self.kind = 0）";
+        d.primary.label = MSG0("parse.229", "ここに '=' は書けません");
+        d.hint = MSG0("parse.230", "初期値は init メソッドで代入してください（例: def init(self) -> None: / self.kind = 0）");
         diag_fail(&d);
     }
     expect_newline(p);
@@ -2877,8 +2796,7 @@ static Node *class_def(Parser *p) {
 
     Token *name_tok = peek(p);
     if (name_tok->kind != TK_IDENT)
-        error_at_hint(name_tok, "class の後にはクラス名を書きます（例: class Token:）",
-                      "クラス名が必要です");
+        error_at_hint_m(name_tok, MSG0("parse.087", "class の後にはクラス名を書きます（例: class Token:）"), MSG0("parse.086", "クラス名が必要です"));
     advance(p);
 
     Node *n = new_node(ND_CLASS, kw);
@@ -2892,8 +2810,7 @@ static Node *class_def(Parser *p) {
         for (;;) {
             Token *tp = peek(p);
             if (tp->kind != TK_IDENT)
-                error_at_hint(tp, "型引数は名前で書きます（例: class Dict[K, V]:）",
-                              "型引数の名前が必要です");
+                error_at_hint_m(tp, MSG0("parse.088", "型引数は名前で書きます（例: class Dict[K, V]:）"), MSG0("parse.069", "型引数の名前が必要です"));
             advance(p);
             Node *slot = new_node(ND_TYPEREF, tp);
             slot->name = tp->text;
@@ -2913,10 +2830,7 @@ static Node *class_def(Parser *p) {
         for (;;) {
             Token *it = peek(p);
             if (it->kind != TK_IDENT)
-                error_at_hint(it,
-                              "class の '(' に書けるのはインタフェース名です"
-                              "（継承はありません）",
-                              "インタフェース名が必要です");
+                error_at_hint_m(it, MSG0("parse.089", "class の '(' に書けるのはインタフェース名です（継承はありません）"), MSG0("parse.076", "インタフェース名が必要です"));
             advance(p);
             Node *slot = new_node(ND_TYPEREF, it);
             slot->name = it->text;
@@ -2925,8 +2839,7 @@ static Node *class_def(Parser *p) {
                 advance(p);
                 Token *m = peek(p);
                 if (m->kind != TK_IDENT)
-                    error_at_hint(m, "モジュール修飾の後には名前を書きます",
-                                  "インタフェース名が必要です");
+                    error_at_hint_m(m, MSG0("parse.090", "モジュール修飾の後には名前を書きます"), MSG0("parse.076", "インタフェース名が必要です"));
                 advance(p);
                 slot->mod_name = slot->name;
                 slot->name = m->text;
@@ -2939,10 +2852,10 @@ static Node *class_def(Parser *p) {
         expect_close(p, ")", iopen);
     }
 
-    expect_colon(p, "class の宣言");
-    expect(p, TK_NEWLINE, "改行", "':' の後は改行してクラス本体を字下げしてください");
-    expect(p, TK_INDENT, "字下げされたクラス本体",
-           "クラスの中身は字下げして書きます（スペース 4 個を推奨）");
+    expect_colon(p, MSG0("parse.231", "class の宣言"));
+    expect(p, TK_NEWLINE, MSG0("parse.118", "改行"), MSG0("parse.232", "':' の後は改行してクラス本体を字下げしてください"));
+    expect(p, TK_INDENT, MSG0("parse.233", "字下げされたクラス本体"),
+           MSG0("parse.234", "クラスの中身は字下げして書きます（スペース 4 個を推奨）"));
 
     // ★ フィールドとメソッドを 1 本のリストにまとめます。
     //   program() がトップレベルで def とグローバル変数を混ぜているのと同じ形です。
@@ -2965,13 +2878,12 @@ static Node *class_def(Parser *p) {
             //    レイアウトを確定してからメソッドを型検査したいためです。
             if (first_method) {
                 Diag d = {0};
-                d.message = "フィールドはメソッドより前に書いてください";
+                d.message = MSG0("parse.235", "フィールドはメソッドより前に書いてください");
                 d.primary.tok = t;
-                d.primary.label = "このフィールド宣言がメソッドより後ろにあります";
+                d.primary.label = MSG0("parse.236", "このフィールド宣言がメソッドより後ろにあります");
                 d.related.tok = first_method->tok;
-                d.related.label = "最初のメソッドはここです";
-                d.hint = "クラス本体は「フィールドを全部 → メソッドを全部」の順です"
-                         "（文法定義 3 節）";
+                d.related.label = MSG0("parse.237", "最初のメソッドはここです");
+                d.hint = MSG0("parse.238", "クラス本体は「フィールドを全部 → メソッドを全部」の順です（文法定義 3 節）");
                 diag_fail(&d);
             }
             cur->next = field_decl(p);
@@ -2983,26 +2895,21 @@ static Node *class_def(Parser *p) {
         if (tok_is_kw(t, "extern")) {
             Diag d = {0};
             d.code = "E-EXPORT-6";
-            d.message = "メソッドは外へ出せません";
+            d.message = MSG0("parse.239", "メソッドは外へ出せません");
             d.primary.tok = t;
-            d.primary.label = "extern はモジュールの一番外側にだけ書けます";
-            d.hint = "モジュールの一番外側に extern def を書き、その中からクラスを使ってください";
+            d.primary.label = MSG0("parse.240", "extern はモジュールの一番外側にだけ書けます");
+            d.hint = MSG0("parse.241", "モジュールの一番外側に extern def を書き、その中からクラスを使ってください");
             diag_fail(&d);
         }
 
         Diag d = {0};
-        d.message = "クラスの中に書けるのはフィールドとメソッドだけです";
+        d.message = MSG0("parse.242", "クラスの中に書けるのはフィールドとメソッドだけです");
         d.primary.tok = t;
-        d.primary.label = "ここには書けません";
-        d.hint = "フィールドは「名前: 型」、メソッドは 'def' で始めます:\n"
-                 "             class Token:\n"
-                 "                 kind: int\n"
-                 "\n"
-                 "                 def show(self) -> None:\n"
-                 "                     print(self.kind)";
+        d.primary.label = MSG0("parse.063", "ここには書けません");
+        d.hint = MSG0("parse.243", "フィールドは「名前: 型」、メソッドは 'def' で始めます:\n             class Token:\n                 kind: int\n\n                 def show(self) -> None:\n                     print(self.kind)");
         diag_fail(&d);
     }
-    expect(p, TK_DEDENT, "クラス本体の終わり", NULL);
+    expect(p, TK_DEDENT, MSG0("parse.244", "クラス本体の終わり"), NULL);
 
     n->body = head.next;
     return n;
@@ -3047,21 +2954,17 @@ static Node *extern_def(Parser *p) {
     advance(p);  // "extern"
 
     if (!tok_is_kw(peek(p), "def"))
-        error_at_hint(peek(p), "extern の後には def を書きます"
-                               "（例: extern def pl_system(cmd: str) -> int）",
-                      "extern の後に def が必要です");
+        error_at_hint_m(peek(p), MSG0("parse.092", "extern の後には def を書きます（例: extern def pl_system(cmd: str) -> int）"), MSG0("parse.091", "extern の後に def が必要です"));
     advance(p);  // "def"
 
     Token *name_tok = peek(p);
     if (name_tok->kind != TK_IDENT)
-        error_at_hint(name_tok, "extern def の後には C の関数名を書きます",
-                      "関数名が必要です");
+        error_at_hint_m(name_tok, MSG0("parse.093", "extern def の後には C の関数名を書きます"), MSG0("parse.067", "関数名が必要です"));
     advance(p);
 
     Token *open = peek(p);
     if (!consume(p, "("))
-        error_at_hint(peek(p), "引数リストを書いてください（例: (path: str)）",
-                      "'(' が必要です");
+        error_at_hint_m(peek(p), MSG0("parse.094", "引数リストを書いてください（例: (path: str)）"), MSG0("parse.071", "'(' が必要です"));
 
     Node head = {0};
     Node *cur = &head;
@@ -3075,21 +2978,18 @@ static Node *extern_def(Parser *p) {
     expect_close(p, ")", open);
 
     if (!consume(p, "->"))
-        error_at_hint(peek(p), "戻り型を書いてください（例: -> int）",
-                      "'->' が必要です");
+        error_at_hint_m(peek(p), MSG0("parse.096", "戻り型を書いてください（例: -> int）"), MSG0("parse.095", "'->' が必要です"));
 
     Node *n = new_node(ND_FUNC, name_tok);
     n->name = name_tok->text;
     n->params = head.next;
-    n->type_ref = type_ref(p, "戻り型を書いてください（例: -> int）");
+    n->type_ref = type_ref(p, MSG0("parse.096", "戻り型を書いてください（例: -> int）"));
 
     // 注意: 本体は読みません。':' を書いていたらここで気づけるようにします。
     //   ここに来る ':' は「1 行に本体を書いた」形です（本体つきの extern def は
     //   行末が ':' なので、上の extern_has_body が先に拾います）。
     if (tok_is(peek(p), ":"))
-        error_at_hint(peek(p), "本体を書くなら ':' の後で改行して字下げしてください"
-                               "（外へ出す関数になります）。宣言だけなら ':' は要りません",
-                      "extern def の本体は ':' の次の行から書きます");
+        error_at_hint_m(peek(p), MSG0("parse.098", "本体を書くなら ':' の後で改行して字下げしてください（外へ出す関数になります）。宣言だけなら ':' は要りません"), MSG0("parse.097", "extern def の本体は ':' の次の行から書きます"));
     expect_newline(p);
 
     n->body = NULL;  // ★ extern の印
@@ -3106,9 +3006,7 @@ static Node *import_stmt(Parser *p) {
 
     Token *name_tok = peek(p);
     if (name_tok->kind != TK_IDENT)
-        error_at_hint(name_tok,
-                      "import の後にはモジュール名を書きます（例: import lexer）",
-                      "モジュール名が必要です");
+        error_at_hint_m(name_tok, MSG0("parse.100", "import の後にはモジュール名を書きます（例: import lexer）"), MSG0("parse.099", "モジュール名が必要です"));
     advance(p);
 
     // ★ パッケージ（A-32）：`import pkg.mod` と書けます。
@@ -3124,9 +3022,7 @@ static Node *import_stmt(Parser *p) {
         advance(p);
         Token *seg = peek(p);
         if (seg->kind != TK_IDENT)
-            error_at_hint(seg, "ドットの後にはモジュール名を書きます"
-                               "（例: import pkg.mod）",
-                          "モジュール名が必要です");
+            error_at_hint_m(seg, MSG0("parse.101", "ドットの後にはモジュール名を書きます（例: import pkg.mod）"), MSG0("parse.099", "モジュール名が必要です"));
         advance(p);
         sb_printf(&full, ".%s", seg->text);
     }
@@ -3151,11 +3047,10 @@ static Node *int_literal(Parser *p, const char *what) {
     }
     if (t->kind != TK_INT) {
         Diag d = {0};
-        d.message = "ここには整数のリテラルが必要です";
+        d.message = MSG0("parse.245", "ここには整数のリテラルが必要です");
         d.primary.tok = t;
         d.primary.label = what;
-        d.hint = "範囲の端はコンパイル時に決まっている必要があります"
-                 "（例: type Percent = int range(0, 100)）";
+        d.hint = MSG0("parse.246", "範囲の端はコンパイル時に決まっている必要があります（例: type Percent = int range(0, 100)）");
         diag_fail(&d);
     }
     advance(p);
@@ -3177,36 +3072,32 @@ static Node *range_decl(Parser *p) {
     advance(p);                      // "="
 
     // 基底の型。いまは int だけです。
-    Token *base = type_name_token(p, "範囲型の基底は int です（例: int range(0, 100)）");
+    Token *base = type_name_token(p, MSG0("parse.247", "範囲型の基底は int です（例: int range(0, 100)）"));
     if (strcmp(base->text, "int") != 0)
-        error_at_hint(base, "いま範囲を付けられるのは int だけです",
-                      "'%s' には範囲を付けられません", base->text);
+        error_at_hint_m(base, MSG0("parse.103", "いま範囲を付けられるのは int だけです"), MSG1("parse.102", "'{0}' には範囲を付けられません", base->text));
 
     Token *rw = peek(p);
     if (rw->kind != TK_IDENT || strcmp(rw->text, "range") != 0) {
         Diag d = {0};
-        d.message = "範囲型には range(下端, 上端) が必要です";
+        d.message = MSG0("parse.248", "範囲型には range(下端, 上端) が必要です");
         d.primary.tok = rw;
-        d.primary.label = "ここに range(...) を書いてください";
-        d.hint = "書き方は type Percent = int range(0, 100) です（両端を含みます）";
+        d.primary.label = MSG0("parse.249", "ここに range(...) を書いてください");
+        d.hint = MSG0("parse.250", "書き方は type Percent = int range(0, 100) です（両端を含みます）");
         diag_fail(&d);
     }
     advance(p);                      // "range"
     Token *open = peek(p);
     if (!consume(p, "("))
-        error_at_hint(open, "range の後には '(' が必要です",
-                      "ここに '(' を書いてください");
+        error_at_hint_m(open, MSG0("parse.105", "range の後には '(' が必要です"), MSG0("parse.104", "ここに '(' を書いてください"));
 
-    Node *lo = int_literal(p, "下端には整数のリテラルを書いてください");
+    Node *lo = int_literal(p, MSG0("parse.251", "下端には整数のリテラルを書いてください"));
     if (!consume(p, ","))
-        error_at_hint(peek(p), "下端と上端はカンマで区切ります（例: range(0, 100)）",
-                      "ここに ',' が必要です");
-    Node *hi = int_literal(p, "上端には整数のリテラルを書いてください");
+        error_at_hint_m(peek(p), MSG0("parse.107", "下端と上端はカンマで区切ります（例: range(0, 100)）"), MSG0("parse.106", "ここに ',' が必要です"));
+    Node *hi = int_literal(p, MSG0("parse.252", "上端には整数のリテラルを書いてください"));
     expect_close(p, ")", open);
 
     if (lo->ival > hi->ival)
-        error_at_hint(name_tok, "下端は上端以下でなければなりません",
-                      "range(%lld, %lld) は空の範囲です", lo->ival, hi->ival);
+        error_at_hint_m(name_tok, MSG0("parse.109", "下端は上端以下でなければなりません"), MSG2("parse.108", "range({0}, {1}) は空の範囲です", diag_fmt("%lld", lo->ival), diag_fmt("%lld", hi->ival)));
 
     Node *n = new_node(ND_RANGEDECL, name_tok);
     n->name = name_tok->text;
@@ -3228,11 +3119,10 @@ static Node *program(Parser *p) {
 
         if (t->kind == TK_INDENT) {
             Diag d = {0};
-            d.message = "予期しないインデントです";
+            d.message = MSG0("parse.253", "予期しないインデントです");
             d.primary.tok = t;
-            d.primary.label = "この行が余分に字下げされています";
-            d.hint = "トップレベルに書けるのは def / class / import / extern とグローバル変数だけです"
-                     "（言語仕様 6.3）";
+            d.primary.label = MSG0("parse.254", "この行が余分に字下げされています");
+            d.hint = MSG0("parse.255", "トップレベルに書けるのは def / class / import / extern とグローバル変数だけです（言語仕様 6.3）");
             diag_fail(&d);
         }
         if (t->kind == TK_DEDENT) {
@@ -3312,13 +3202,10 @@ static Node *program(Parser *p) {
 
         // それ以外はトップレベルに書けない
         Diag d = {0};
-        d.message = "トップレベルに実行文は書けません";
+        d.message = MSG0("parse.256", "トップレベルに実行文は書けません");
         d.primary.tok = t;
-        d.primary.label = "ここに書けるのは def / class / import / extern とグローバル変数だけです";
-        d.hint = "処理は main の中に書いてください:\n"
-                 "             def main() -> int:\n"
-                 "                 ...\n"
-                 "                 return 0";
+        d.primary.label = MSG0("parse.257", "ここに書けるのは def / class / import / extern とグローバル変数だけです");
+        d.hint = MSG0("parse.258", "処理は main の中に書いてください:\n             def main() -> int:\n                 ...\n                 return 0");
         diag_fail(&d);
     }
 

@@ -75,6 +75,10 @@ _Noreturn void error_at(Token *tok, const char *fmt, ...);
 // ヒント付き。hint は最後の行に "= ヒント: " として出ます。
 _Noreturn void error_at_hint(Token *tok, const char *hint, const char *fmt, ...);
 
+// 組み立て済みの文面をそのまま出す版（MSGn で組み立てたものを渡す）
+_Noreturn void error_at_m(Token *tok, const char *msg);
+_Noreturn void error_at_hint_m(Token *tok, const char *hint, const char *msg);
+
 // ── 言語の切り替え（docs/design/i18n-diagnostics.md）──────────
 //
 // ★ 日本語が正本で、既定です。英語は msgs/en.tsv を鍵で引きます。
@@ -93,7 +97,9 @@ _Noreturn void error_at_hint(Token *tok, const char *hint, const char *fmt, ...)
 bool msg_set_lang(const char *spec);
 // いまの言語が英語か
 bool msg_is_en(void);
-const char *msgv(const char *key, const char *ja, const char **args, int nargs);
+char *msgv(const char *key, const char *ja, const char **args, int nargs);
+// 静的な表の初期値に並べる形（鍵と日本語の 2 つのフィールドになる。使う側で msgv に渡す）
+#define MSGK(k, ja) (k), (ja)
 #define MSG0(k, ja) msgv((k), (ja), NULL, 0)
 #define MSG1(k, ja, a) msgv((k), (ja), (const char *[]){(a)}, 1)
 #define MSG2(k, ja, a, b) msgv((k), (ja), (const char *[]){(a), (b)}, 2)
@@ -101,5 +107,7 @@ const char *msgv(const char *key, const char *ja, const char **args, int nargs);
 #define MSG4(k, ja, a, b, c, d) msgv((k), (ja), (const char *[]){(a), (b), (c), (d)}, 4)
 #define MSG5(k, ja, a, b, c, d, e2) \
     msgv((k), (ja), (const char *[]){(a), (b), (c), (d), (e2)}, 5)
+#define MSG7(k, ja, a, b, c, d, e2, f, g) \
+    msgv((k), (ja), (const char *[]){(a), (b), (c), (d), (e2), (f), (g)}, 7)
 
 #endif  // PLC_DIAG_H

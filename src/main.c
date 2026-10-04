@@ -97,8 +97,7 @@ static void check_shell_safe(const char *path, const char *what) {
         if (c == '\\') bad = 1;
 #endif
         if (bad)
-            error("%s に使えない字 '%c' が入っています"
-                  "（シェルが解釈してしまうため断ります）", what, c);
+            error("%s", MSG2("cli.001", "{0} に使えない字 '{1}' が入っています（シェルが解釈してしまうため断ります）", what, diag_fmt("%c", c)));
     }
 }
 
@@ -116,56 +115,9 @@ static void print_version(void) {
 
 static void usage(int status) {
     FILE *out = status == 0 ? stdout : stderr;
-    fprintf(out,
-            PLC_LANG_NAME " コンパイラ (stage0)\n"
-            "\n"
-            "使い方: " PLC_LANG_CC " [オプション] <入力" PLC_LANG_EXT ">\n"
-            "\n"
-            "オプション:\n"
-            "  -o <file>       出力する実行ファイル名（既定: a.out）\n"
-            "  -S              LLVM IR を標準出力に書いて終了\n"
-            "  --dump-tokens   トークン列を表示して終了（字句解析のデバッグ用）\n"
-            "  --dump-ast      AST を S 式で表示して終了（構文解析のデバッグ用）\n"
-            "  --keep-ll       実行ファイル生成後も .ll を残す\n"
-            "  --check         型検査までで止める（エラーが無ければ何も出さない）\n"
-            "  --warn-own      所有権の指摘を警告に落とす（既定はエラー）\n"
-            "                  注意: 0.17 以前の既定です。逃げ道であって、\n"
-            "                  これを付けたコードは安全性を保証しません\n"
-            "  --deny-move     移動済みの値の使用をエラーにする（既定）\n"
-            "  --deny-borrow   借用した値の保存・返却をエラーにする（既定）\n"
-            "  --deny-mut      読み取り専用の借用への書き換えをエラーにする（既定）\n"
-            "  --deny-store-borrow\n"
-            "                  借りものを所有スロットへ入れる箇所をエラーにする（既定）\n"
-            "                  ★ --deny-* は --warn-own の後に書くと、\n"
-            "                  その検査だけエラーに戻せます（後勝ち）\n"
-            "  --explain-mut   呼び出しで変更される実引数を一覧表示して終了\n"
-            "  --drop          スコープの出口に解放（drop）を挿入する（既定）\n"
-            "  --no-drop       解放を挿入しない（--drop を打ち消す。後勝ち）\n"
-            "  --no-overflow-check\n"
-            "                  数の実行時検査を外す（既定は検査する）:\n"
-            "                  整数の + - * の桁あふれ／float の 0 除算\n"
-            "  -g              デバッグ情報を出す（デバッガ・perf が行を出せます）\n"
-            "  --no-prove      証明で実行時検査を消さない（A-34）\n"
-            "  --verify-prove  消せると判断した検査を**残す**（解析の誤りを捕まえる）\n"
-            "  --prove-report  消えた検査の数を出す\n"
-            "  -l<名前> / -L<dir> / -framework <名前>\n"
-            "                  リンクのときに clang へそのまま渡す\n"
-            "                  （C のライブラリを extern で呼ぶときに使います）\n"
-            "  -I <dir>        import を探す場所を足す（何度でも書ける）\n"
-            "                  パッケージマネージャ " PLC_LANG_PM " が使います\n"
-            "  -c              リンクせずオブジェクト（.o）を出す\n"
-            "  --shared        共有ライブラリを作る（extern def を C から呼べる形で出す）\n"
-            "                  -o を省くと lib<モジュール名>.<拡張子>\n"
-            "  --python        Python のライブラリを作る（-o はディレクトリ。既定は .）\n"
-            "                  _<モジュール名>.<拡張子> と <モジュール名>.py を置きます\n"
-            "  -j <N>          clang を同時に何本走らせるか（既定: コア数）\n"
-            "                  注意: 出来上がる実行ファイルは並列度で変わりません\n"
-            "  --target=<t>    生成する IR の target triple を指定する\n"
-            "                  （例: --target=riscv64-unknown-elf）\n"
-            "  -O0|-O1|-O2|-O3 clang に渡す最適化レベル（既定: -O0）\n"
-            "  -h, --help      この使い方を表示\n"
-            "  --version       版番号と target triple を表示\n"
-            "  --print-lib-dir 標準ライブラリの場所を表示（" PLC_LANG_PM " が使います）\n");
+    fprintf(out, "%s",
+            MSG4("cli.usage", "{0} コンパイラ (stage0)\n\n使い方: {1} [オプション] <入力{2}>\n\nオプション:\n  -o <file>       出力する実行ファイル名（既定: a.out）\n  -S              LLVM IR を標準出力に書いて終了\n  --dump-tokens   トークン列を表示して終了（字句解析のデバッグ用）\n  --dump-ast      AST を S 式で表示して終了（構文解析のデバッグ用）\n  --keep-ll       実行ファイル生成後も .ll を残す\n  --check         型検査までで止める（エラーが無ければ何も出さない）\n  --warn-own      所有権の指摘を警告に落とす（既定はエラー）\n                  注意: 0.17 以前の既定です。逃げ道であって、\n                  これを付けたコードは安全性を保証しません\n  --deny-move     移動済みの値の使用をエラーにする（既定）\n  --deny-borrow   借用した値の保存・返却をエラーにする（既定）\n  --deny-mut      読み取り専用の借用への書き換えをエラーにする（既定）\n  --deny-store-borrow\n                  借りものを所有スロットへ入れる箇所をエラーにする（既定）\n                  ★ --deny-* は --warn-own の後に書くと、\n                  その検査だけエラーに戻せます（後勝ち）\n  --explain-mut   呼び出しで変更される実引数を一覧表示して終了\n  --drop          スコープの出口に解放（drop）を挿入する（既定）\n  --no-drop       解放を挿入しない（--drop を打ち消す。後勝ち）\n  --no-overflow-check\n                  数の実行時検査を外す（既定は検査する）:\n                  整数の + - * の桁あふれ／float の 0 除算\n  -g              デバッグ情報を出す（デバッガ・perf が行を出せます）\n  --no-prove      証明で実行時検査を消さない（A-34）\n  --verify-prove  消せると判断した検査を**残す**（解析の誤りを捕まえる）\n  --prove-report  消えた検査の数を出す\n  -l<名前> / -L<dir> / -framework <名前>\n                  リンクのときに clang へそのまま渡す\n                  （C のライブラリを extern で呼ぶときに使います）\n  -I <dir>        import を探す場所を足す（何度でも書ける）\n                  パッケージマネージャ {3} が使います\n  -c              リンクせずオブジェクト（.o）を出す\n  --shared        共有ライブラリを作る（extern def を C から呼べる形で出す）\n                  -o を省くと lib<モジュール名>.<拡張子>\n  --python        Python のライブラリを作る（-o はディレクトリ。既定は .）\n                  _<モジュール名>.<拡張子> と <モジュール名>.py を置きます\n  -j <N>          clang を同時に何本走らせるか（既定: コア数）\n                  注意: 出来上がる実行ファイルは並列度で変わりません\n  --target=<t>    生成する IR の target triple を指定する\n                  （例: --target=riscv64-unknown-elf）\n  -O0|-O1|-O2|-O3 clang に渡す最適化レベル（既定: -O0）\n  -h, --help      この使い方を表示\n  --version       版番号と target triple を表示\n  --print-lib-dir 標準ライブラリの場所を表示（{3} が使います）\n",
+                 PLC_LANG_NAME, PLC_LANG_CC, PLC_LANG_EXT, PLC_LANG_PM));
     exit(status);
 }
 
@@ -254,10 +206,10 @@ static Options parse_args(int argc, char **argv) {
         }
 
         if (strcmp(a, "-o") == 0) {
-            if (i + 1 >= argc) error("-o の後に出力ファイル名が必要です");
+            if (i + 1 >= argc) error("%s", MSG0("cli.002", "-o の後に出力ファイル名が必要です"));
             // clang へはシェル経由で渡ります。中間の .ll の名前も
             //   ここから作るので、**入口で 1 回**確かめれば足ります。
-            check_shell_safe(argv[i + 1], "出力ファイル名");
+            check_shell_safe(argv[i + 1], MSG0("cli.027", "出力ファイル名"));
             o.output = argv[++i];
             o.output_set = 1;
             continue;
@@ -279,7 +231,7 @@ static Options parse_args(int argc, char **argv) {
         // ★ 診断の言語（docs/design/i18n-diagnostics.md）。既定は日本語。
         if (strncmp(a, "--lang=", 7) == 0) {
             if (!msg_set_lang(a + 7))
-                error("--lang に書けるのは ja / en / auto です（'%s'）", a + 7);
+                error("%s", MSG1("cli.003", "--lang に書けるのは ja / en / auto です（'{0}'）", a + 7));
             continue;
         }
         if (strcmp(a, "--warn-own") == 0) {
@@ -323,14 +275,14 @@ static Options parse_args(int argc, char **argv) {
         //
         // シェル経由で渡るので、`-o` と同じように**入口で 1 回**確かめます。
         if ((strncmp(a, "-l", 2) == 0 || strncmp(a, "-L", 2) == 0) && a[2]) {
-            check_shell_safe(a, "リンクの指定");
+            check_shell_safe(a, MSG0("cli.028", "リンクの指定"));
             o.link = xrealloc_ptrs(o.link, o.nlink);
             o.link[o.nlink++] = a;
             continue;
         }
         if (strcmp(a, "-framework") == 0) {
-            if (i + 1 >= argc) error("-framework の後に名前が必要です");
-            check_shell_safe(argv[i + 1], "framework の名前");
+            if (i + 1 >= argc) error("%s", MSG0("cli.004", "-framework の後に名前が必要です"));
+            check_shell_safe(argv[i + 1], MSG0("cli.029", "framework の名前"));
             o.link = xrealloc_ptrs(o.link, o.nlink);
             o.link[o.nlink++] = "-framework";
             o.link = xrealloc_ptrs(o.link, o.nlink);
@@ -343,12 +295,12 @@ static Options parse_args(int argc, char **argv) {
         //   注意: 出来上がる実行ファイルは並列度によって変わりません。
         if (strncmp(a, "-j", 2) == 0 && a[2] != '\0') {
             o.jobs = atoi(a + 2);
-            if (o.jobs < 0) error("-j には 0 以上を指定してください: %s", a);
+            if (o.jobs < 0) error("%s", MSG1("cli.005", "-j には 0 以上を指定してください: {0}", a));
             continue;
         }
         if (strncmp(a, "--jobs=", 7) == 0) {
             o.jobs = atoi(a + 7);
-            if (o.jobs < 0) error("--jobs には 0 以上を指定してください: %s", a);
+            if (o.jobs < 0) error("%s", MSG1("cli.006", "--jobs には 0 以上を指定してください: {0}", a));
             continue;
         }
         if (strncmp(a, "--target=", 9) == 0) { o.target = a + 9; continue; }
@@ -357,12 +309,12 @@ static Options parse_args(int argc, char **argv) {
         if (strcmp(a, "-I") == 0 || strncmp(a, "-I", 2) == 0) {
             const char *dir = NULL;
             if (strcmp(a, "-I") == 0) {
-                if (i + 1 >= argc) error("-I の後にディレクトリ名が必要です");
+                if (i + 1 >= argc) error("%s", MSG0("cli.007", "-I の後にディレクトリ名が必要です"));
                 dir = argv[++i];
             } else {
                 dir = a + 2;
             }
-            if (!dir[0]) error("-I に空のディレクトリは指定できません");
+            if (!dir[0]) error("%s", MSG0("cli.008", "-I に空のディレクトリは指定できません"));
             const char **p = xmalloc(sizeof(char *) * (size_t)(o.ninc + 1));
             for (int k = 0; k < o.ninc; k++) p[k] = o.inc[k];
             p[o.ninc++] = dir;
@@ -378,9 +330,9 @@ static Options parse_args(int argc, char **argv) {
             continue;
         }
 
-        if (a[0] == '-' && a[1] != '\0') error("不明なオプション: %s", a);
+        if (a[0] == '-' && a[1] != '\0') error("%s", MSG1("cli.009", "不明なオプション: {0}", a));
 
-        if (o.input) error("入力ファイルが複数指定されています: %s と %s", o.input, a);
+        if (o.input) error("%s", MSG2("cli.010", "入力ファイルが複数指定されています: {0} と {1}", o.input, a));
         o.input = a;
     }
 
@@ -644,15 +596,12 @@ int main(int argc, char **argv) {
         ProveStats ps = {0};
         prove_program(mods, &ps, opt.no_ovf != 0);
         if (opt.prove_report) {
-            fprintf(stderr, "証明で消した実行時検査:\n");
-            fprintf(stderr, "  桁あふれ  %6d 消 / %6d 残\n", ps.ovf, ps.ovf_left);
-            fprintf(stderr, "  添字      %6d 消 / %6d 残\n", ps.bounds,
-                    ps.bounds_left);
-            fprintf(stderr, "  範囲型    %6d 消 / %6d 残\n", ps.range,
-                    ps.range_left);
-            fprintf(stderr, "  契約      %6d 消 / %6d 残\n", ps.contract,
-                    ps.contract_left);
-            fprintf(stderr, "  0 除算    %6d 消 / %6d 残\n", ps.div, ps.div_left);
+            fprintf(stderr, "%s", MSG0("cli.011", "証明で消した実行時検査:\n"));
+            fprintf(stderr, "%s", MSG2("cli.012", "  桁あふれ  {0} 消 / {1} 残\n", diag_fmt("%6d", ps.ovf), diag_fmt("%6d", ps.ovf_left)));
+            fprintf(stderr, "%s", MSG2("cli.013", "  添字      {0} 消 / {1} 残\n", diag_fmt("%6d", ps.bounds), diag_fmt("%6d", ps.bounds_left)));
+            fprintf(stderr, "%s", MSG2("cli.014", "  範囲型    {0} 消 / {1} 残\n", diag_fmt("%6d", ps.range), diag_fmt("%6d", ps.range_left)));
+            fprintf(stderr, "%s", MSG2("cli.015", "  契約      {0} 消 / {1} 残\n", diag_fmt("%6d", ps.contract), diag_fmt("%6d", ps.contract_left)));
+            fprintf(stderr, "%s", MSG2("cli.016", "  0 除算    {0} 消 / {1} 残\n", diag_fmt("%6d", ps.div), diag_fmt("%6d", ps.div_left)));
         }
     }
 
@@ -673,11 +622,9 @@ int main(int argc, char **argv) {
         for (Node *d = m->ast->body; d; d = d->next)
             if (d->kind == ND_FUNC && d->is_export) has_export = true;
     if (opt.shared && !has_export)
-        error("--shared / --python には、外へ出す関数（本体つきの extern def）が"
-              "少なくとも 1 つ要ります");
+        error("%s", MSG0("cli.017", "--shared / --python には、外へ出す関数（本体つきの extern def）が少なくとも 1 つ要ります"));
     if (!has_main && !opt.shared && opt.stage == STAGE_ALL && !opt.emit_obj)
-        error("main がありません。ライブラリにするなら --shared か --python を"
-              "付けてください（実行ファイルには main が要ります）");
+        error("%s", MSG0("cli.018", "main がありません。ライブラリにするなら --shared か --python を付けてください（実行ファイルには main が要ります）"));
 
     // ── 共有ライブラリの名前（ffi.md §6）──
     //
@@ -746,8 +693,7 @@ int main(int argc, char **argv) {
     //    モジュールごとに .o を作って自分でリンクしてください。
     if (opt.emit_obj) {
         if (mods->next)
-            error("-c は 1 モジュールのファイルにだけ使えます"
-                  "（import があるときは、モジュールごとに分けてください）");
+            error("%s", MSG0("cli.019", "-c は 1 モジュールのファイルにだけ使えます（import があるときは、モジュールごとに分けてください）"));
 
         StrBuf oc;
         sb_init(&oc);
@@ -764,8 +710,7 @@ int main(int argc, char **argv) {
 
         int orc = system(sb_str(&oc));
         if (orc != 0) {
-            fprintf(stderr, "error: オブジェクトの生成に失敗しました\n  %s\n",
-                    sb_str(&oc));
+            fprintf(stderr, "%s", MSG1("cli.020", "error: オブジェクトの生成に失敗しました\n  {0}\n", sb_str(&oc)));
             return 1;
         }
         if (!opt.keep_ll) unlink(entry->ll_path);
@@ -876,9 +821,7 @@ int main(int argc, char **argv) {
     if (rc != 0) {
         // ここに来たら、生成した IR に問題があるということ。
         // .ll を残して調査できるようにする。
-        fprintf(stderr,
-                "error: clang の実行に失敗しました（生成した IR に問題があります）\n"
-                "  生成された IR を残しました:\n");
+        fprintf(stderr, "%s", MSG0("cli.021", "error: clang の実行に失敗しました（生成した IR に問題があります）\n  生成された IR を残しました:\n"));
         for (Module *m = mods; m; m = m->next)
             fprintf(stderr, "    %s\n", m->ll_path);
         return 1;

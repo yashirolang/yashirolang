@@ -182,19 +182,17 @@ def path_for(ld: Loader, name: str, from_: rc[token.Token] | None) -> str:
 
     # ★ 優先順位は決めません。2 つ以上で見つかったらエラーにします（14.4 節）。
     if len(hits) > 1:
-        tail: str = "名前が重ならないようにしてください"
+        tail: str = diag.msg0("mod.010", "名前が重ならないようにしてください")
         if len(hits) == 2:
-            tail = "どちらかの名前を変えてください"
-        msg: str = "モジュール '" + name + "' が複数の探索場所にあります"
+            tail = diag.msg0("mod.009", "どちらかの名前を変えてください")
+        msg: str = diag.msg("mod.003", "モジュール '{0}' が複数の探索場所にあります", [copy(name)])
         if lib_hit:
-            msg = "モジュール '" + name + "' が標準ライブラリと衝突しています"
-        hint: str = ("見つかった場所:\n             " +
-                     strings.join(hits, "\n             ") +
-                     "\n             " + tail)
+            msg = diag.msg("mod.002", "モジュール '{0}' が標準ライブラリと衝突しています", [copy(name)])
+        hint: str = (diag.msg("smodule.001", "見つかった場所:\n             {0}\n             {1}", [copy(strings.join(hits, "\n             ")), copy(tail)]))
         if from_ is None:
             panic(msg)
         else:
-            diag.error_full(from_, msg, "どちらを指しているか決められません",
+            diag.error_full(from_, msg, diag.msg0("mod.011", "どちらを指しているか決められません"),
                             None, "", hint)
     # ★ move_out で「持っていく」。hits と cand は関数の出口で解放されるので、
     #   そのまま return hits[0] と書くと解放済みの文字列を返していました
@@ -248,23 +246,18 @@ def load(ld: mut Loader, name: str, path: str, from_: rc[token.Token] | None) ->
     if found is not None:
         if found.state == 1:   # 訪問中に再訪 → 循環
             if from_ is None:
-                panic("循環 import です")
+                panic(diag.msg0("smodule.002", "循環 import です"))
             else:
                 diag.error_full(from_,
-                                "循環 import です: " + cycle_path(ld, name),
-                                "この import が循環を作っています", None, "",
-                                "モジュールの依存関係は一方通行（DAG）にしてください。" +
-                                "共通部分を 3 つ目のモジュールに切り出すと解けます")
+                                diag.msg("mod.004", "循環 import です: {0}", [copy(cycle_path(ld, name))]),
+                                diag.msg0("mod.012", "この import が循環を作っています"), None, "",
+                                diag.msg0("mod.013", "モジュールの依存関係は一方通行（DAG）にしてください。共通部分を 3 つ目のモジュールに切り出すと解けます"))
         return found
 
     if from_ is not None and not io.exists(path):
-        diag.error_full(from_, "モジュール '" + name + "' が見つかりません",
-                        "この import を解決できません", None, "",
-                        "次のパスを探しました:\n             " + searched_list(ld, name) +
-                        "\n             モジュール名はファイル名（" + langinfo.ext() +
-                        " を除いたもの）です" +
-                        "\n             （'pkg.mod' は 'pkg/mod" + langinfo.ext() +
-                        "' を指します）")
+        diag.error_full(from_, diag.msg("mod.005", "モジュール '{0}' が見つかりません", [copy(name)]),
+                        diag.msg0("mod.014", "この import を解決できません"), None, "",
+                        diag.msg("mod.015", "次のパスを探しました:\n             {0}\n             モジュール名はファイル名（{1} を除いたもの）です\n             （'pkg.mod' は 'pkg/mod{2}' を指します）", [copy(searched_list(ld, name)), copy(langinfo.ext()), copy(langinfo.ext())]))
 
     m: rc[Module] = rc(Module(name, path, ld.dir))
     m.src = lexer.read_source(path)
@@ -284,15 +277,15 @@ def load(ld: mut Loader, name: str, path: str, from_: rc[token.Token] | None) ->
             if d.kind == ast.ND_IMPORT:
                 if d.name == m.name:
                     diag.error_at_hint(tok_of(d),
-                                       "モジュールは自分自身を import できません",
-                                       "'" + d.name + "' は自分自身です")
+                                       diag.msg0("mod.007", "モジュールは自分自身を import できません"),
+                                       diag.msg("mod.006", "'{0}' は自分自身です", [copy(d.name)]))
                 k: int = 0
                 while k < len(m.deps):
                     if m.deps[k].name == d.name:
                         diag.error_full(tok_of(d),
-                                        "'" + d.name + "' は既に import されています",
-                                        "重複した import です", None, "",
-                                        "同じモジュールを 2 回書く必要はありません")
+                                        diag.msg("mod.008", "'{0}' は既に import されています", [copy(d.name)]),
+                                        diag.msg0("mod.017", "重複した import です"), None, "",
+                                        diag.msg0("mod.018", "同じモジュールを 2 回書く必要はありません"))
                     k = k + 1
                 dep: rc[Module] = load(ld, d.name, path_for(ld, d.name, tok_of(d)),
                                    tok_of(d))

@@ -220,8 +220,7 @@ static void read_int(Lexer *lx) {
         const char *valid = base == 16 ? "0-9 a-f A-F"
                           : base == 8  ? "0-7"
                                        : "0-1";
-        error_at_hint(&tmp, diag_fmt("基数 %d で使える数字は %s です", base, valid),
-                      "数値リテラルに数字がありません");
+        error_at_hint_m(&tmp, MSG2("lex.002", "基数 {0} で使える数字は {1} です", diag_fmt("%d", base), valid), MSG0("lex.001", "数値リテラルに数字がありません"));
     }
 
     // ── 浮動小数点リテラルか？（10 進のときだけ）──
@@ -259,8 +258,7 @@ static void read_int(Lexer *lx) {
         if (is_float) {
             if (isalpha((unsigned char)*lx->p) || *lx->p == '_') {
                 Token tmp = span_token(lx, start, lx->p + 1);
-                error_at_hint(&tmp, "数値と識別子の間に空白が必要かもしれません",
-                              "数値リテラルの直後に文字が続いています");
+                error_at_hint_m(&tmp, MSG0("lex.004", "数値と識別子の間に空白が必要かもしれません"), MSG0("lex.003", "数値リテラルの直後に文字が続いています"));
             }
             char norm[128];
             normalize_float(norm, sizeof(norm), mant, expbuf);
@@ -273,8 +271,7 @@ static void read_int(Lexer *lx) {
     // 数字の直後が識別子文字なら、それは 123abc や 0xFFg のような不正なリテラル
     if (isalpha((unsigned char)*lx->p) || *lx->p == '_') {
         Token tmp = span_token(lx, start, lx->p + 1);
-        error_at_hint(&tmp, "数値と識別子の間に空白が必要かもしれません",
-                      "数値リテラルの直後に文字が続いています");
+        error_at_hint_m(&tmp, MSG0("lex.004", "数値と識別子の間に空白が必要かもしれません"), MSG0("lex.003", "数値リテラルの直後に文字が続いています"));
     }
 
     // 文字列 → long long。オーバーフローを errno で検出する。
@@ -286,9 +283,7 @@ static void read_int(Lexer *lx) {
     long long v = strtoll(digits, &end, base);
     if (errno == ERANGE) {
         Token tmp = span_token(lx, start, lx->p);
-        error_at_hint(&tmp,
-                      "int が表せるのは -9223372036854775808 〜 9223372036854775807 です",
-                      "整数リテラルが int の範囲 (64bit) を超えています");
+        error_at_hint_m(&tmp, MSG0("lex.006", "int が表せるのは -9223372036854775808 〜 9223372036854775807 です"), MSG0("lex.005", "整数リテラルが int の範囲 (64bit) を超えています"));
     }
 
     Token *t = tv_push(lx, TK_INT, start, (int)(lx->p - start));
@@ -330,10 +325,7 @@ static int scan_indent(Lexer *lx) {
         // タブは字句エラー（言語仕様 2.4）
         if (*lx->p == '\t') {
             Token tmp = span_token(lx, lx->p, lx->p + 1);
-            error_at_hint(&tmp,
-                          "タブ幅の解釈によってインデントの意味が変わるのを防ぐため、"
-                          "本言語ではタブを禁止しています（半角スペース 4 個を推奨）",
-                          "タブ文字は使えません");
+            error_at_hint_m(&tmp, MSG0("lex.008", "タブ幅の解釈によってインデントの意味が変わるのを防ぐため、本言語ではタブを禁止しています（半角スペース 4 個を推奨）"), MSG0("lex.007", "タブ文字は使えません"));
         }
 
         if (*lx->p == '\n') {  // 空行 → インデントに影響させない
@@ -365,7 +357,7 @@ static void emit_indent_tokens(Lexer *lx, int width) {
         //    インデント 1 段 = INDENT 1 個です。幅は任意（言語仕様 2.4）。
         if (lx->indent_len >= MAX_INDENT_DEPTH) {
             Token tmp = span_token(lx, lx->p, lx->p + 1);
-            error_at(&tmp, "インデントが深すぎます（最大 %d 段）", MAX_INDENT_DEPTH - 1);
+            error_at_m(&tmp, MSG1("lex.009", "インデントが深すぎます（最大 {0} 段）", diag_fmt("%d", MAX_INDENT_DEPTH - 1)));
         }
         lx->indent_stack[lx->indent_len++] = width;
         tv_push(lx, TK_INDENT, lx->p, 0);
@@ -394,9 +386,7 @@ static void emit_indent_tokens(Lexer *lx, int width) {
         //           y           indent 4 ← 8 でも 0 でもない。不正
         if (lx->indent_stack[lx->indent_len - 1] != width) {
             Token tmp = span_token(lx, lx->line_start, lx->p);
-            error_at_hint(&tmp,
-                          "外側のブロックのインデント幅と正確に一致させてください",
-                          "インデントが揃っていません（どのブロックにも対応しません）");
+            error_at_hint_m(&tmp, MSG0("lex.011", "外側のブロックのインデント幅と正確に一致させてください"), MSG0("lex.010", "インデントが揃っていません（どのブロックにも対応しません）"));
         }
     }
     // width == top なら何も出さない（同じブロックの続き）
@@ -457,8 +447,7 @@ static void read_string_kind(Lexer *lx, bool is_f) {
         //    遠くなって原因が分からなくなります。
         if (c == '\0' || c == '\n') {
             Token tmp = span_token(lx, start, start + 1);
-            error_at_hint(&tmp, "文字列は同じ行の中で閉じてください",
-                          "文字列が閉じられていません");
+            error_at_hint_m(&tmp, MSG0("lex.013", "文字列は同じ行の中で閉じてください"), MSG0("lex.012", "文字列が閉じられていません"));
         }
 
         if (c == quote) {
@@ -474,10 +463,7 @@ static void read_string_kind(Lexer *lx, bool is_f) {
 
             if (!to) {
                 Token tmp = span_token(lx, lx->p, lx->p + 2);
-                error_at_hint(&tmp,
-                              "使えるのは \\n \\t \\r \\0 \\\\ \\\" \\' です。"
-                              "バックスラッシュそのものを書くには \\\\ とします",
-                              "未知のエスケープシーケンス '\\%c' です", e);
+                error_at_hint_m(&tmp, MSG0("lex.015", "使えるのは \\n \\t \\r \\0 \\\\ \\\" \\' です。バックスラッシュそのものを書くには \\\\ とします"), MSG1("lex.014", "未知のエスケープシーケンス '\\{0}' です", diag_fmt("%c", e)));
             }
             sb_printf(&sb, "%c", *to);
             len++;
@@ -614,10 +600,7 @@ TokenVec tokenize(const char *file, const char *src) {
         // タブは字句エラー（言語仕様 2.4：インデントの曖昧さを排除するため）
         if (*lx.p == '\t') {
             Token tmp = span_token(&lx, lx.p, lx.p + 1);
-            error_at_hint(&tmp,
-                          "タブ幅の解釈によってインデントの意味が変わるのを防ぐため、"
-                          "本言語ではタブを禁止しています（半角スペース 4 個を推奨）",
-                          "タブ文字は使えません");
+            error_at_hint_m(&tmp, MSG0("lex.008", "タブ幅の解釈によってインデントの意味が変わるのを防ぐため、本言語ではタブを禁止しています（半角スペース 4 個を推奨）"), MSG0("lex.007", "タブ文字は使えません"));
         }
 
         // コメント：# から行末まで（改行は次の周回で処理する）
@@ -662,8 +645,8 @@ TokenVec tokenize(const char *file, const char *src) {
         Token tmp = span_token(&lx, lx.p, lx.p + 1);
         unsigned char c = (unsigned char)*lx.p;
         if (c < 0x20 || c >= 0x7f)
-            error_at(&tmp, "解釈できない文字です (0x%02X)", c);
-        error_at(&tmp, "解釈できない文字です: '%c'", c);
+            error_at(&tmp, MSG0("lex.017", "解釈できない文字です (0x%02X)"), c);
+        error_at_m(&tmp, MSG1("lex.016", "解釈できない文字です: '{0}'", diag_fmt("%c", c)));
     }
 
     // 入力の終わりを示すトークンを必ず 1 個置く。

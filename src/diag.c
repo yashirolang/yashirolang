@@ -13,7 +13,7 @@ char *diag_fmt(const char *fmt, ...) {
     va_start(ap, fmt);
     int need = vsnprintf(NULL, 0, fmt, ap);
     va_end(ap);
-    if (need < 0) error("diag_fmt: 書式化に失敗しました");
+    if (need < 0) error("%s", MSG0("diag.001", "diag_fmt: 書式化に失敗しました"));
 
     char *buf = xmalloc((size_t)need + 1);
     va_start(ap, fmt);
@@ -122,8 +122,12 @@ static void load_en(void) {
                     g_en_keys = nk;
                     g_en_vals = nv;
                 }
+                // 3 列目（日本語の控え）は読みません
+                size_t rest = len - (size_t)(tab - line) - 1;
+                char *tab2 = memchr(tab + 1, '\t', rest);
+                if (tab2) rest = (size_t)(tab2 - tab - 1);
                 g_en_keys[g_en_n] = xstrndup(line, (size_t)(tab - line));
-                g_en_vals[g_en_n] = unescape(tab + 1, len - (size_t)(tab - line) - 1);
+                g_en_vals[g_en_n] = unescape(tab + 1, rest);
                 g_en_n++;
             }
         }
@@ -132,10 +136,30 @@ static void load_en(void) {
     }
 }
 
+static int cmp_key(const void *a, const void *b) {
+    return strcmp(g_en_keys[*(const int *)a], g_en_keys[*(const int *)b]);
+}
+
+// 注意: 型検査は正常な道でも文面の部品（「関数」など）を引くので、
+//   1 回ごとに表を頭から舐めると遅くなります。鍵で並べた添字を二分探索します。
+static int *g_en_order;
+
 static const char *en_lookup(const char *key) {
     load_en();
-    for (int i = 0; i < g_en_n; i++)
-        if (strcmp(g_en_keys[i], key) == 0) return g_en_vals[i];
+    if (g_en_n == 0) return NULL;
+    if (!g_en_order) {
+        g_en_order = xmalloc(sizeof(int) * (size_t)g_en_n);
+        for (int i = 0; i < g_en_n; i++) g_en_order[i] = i;
+        qsort(g_en_order, (size_t)g_en_n, sizeof(int), cmp_key);
+    }
+    int lo = 0, hi = g_en_n - 1;
+    while (lo <= hi) {
+        int mid = lo + (hi - lo) / 2;
+        int c = strcmp(key, g_en_keys[g_en_order[mid]]);
+        if (c == 0) return g_en_vals[g_en_order[mid]];
+        if (c < 0) hi = mid - 1;
+        else lo = mid + 1;
+    }
     return NULL;
 }
 
@@ -162,9 +186,9 @@ static char *fill(const char *tpl, const char **args, int nargs) {
     return sb_str(&sb);
 }
 
-const char *msgv(const char *key, const char *ja, const char **args, int nargs) {
+char *msgv(const char *key, const char *ja, const char **args, int nargs) {
     const char *tpl = ja;
-    if (cur_lang() == LANG_EN) {
+    if (key && cur_lang() == LANG_EN) {
         const char *en = en_lookup(key);
         if (en) tpl = en;
     }
@@ -428,4 +452,10 @@ _Noreturn void error_at_hint(Token *tok, const char *hint, const char *fmt, ...)
     d.primary.tok = tok;
     d.hint = hint;
     diag_fail(&d);
+}
+
+_Noreturn void error_at_m(Token *tok, const char *msg) { error_at(tok, "%s", msg); }
+
+_Noreturn void error_at_hint_m(Token *tok, const char *hint, const char *msg) {
+    error_at_hint(tok, hint, "%s", msg);
 }

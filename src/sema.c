@@ -500,17 +500,16 @@ static void reject_module_name(Sema *s, const char *name, Token *tok,
     if (!ms) return;
 
     Diag d = {0};
-    d.message = diag_fmt("'%s' は import したモジュールの名前です", name);
+    d.message = MSG1("sema.001", "'{0}' は import したモジュールの名前です", name);
     d.primary.tok = tok;
-    d.primary.label = diag_fmt("この名前の%sは宣言できません", what);
-    d.hint = diag_fmt("モジュール名と同じ名前を使うと '%s.x' が曖昧になります",
-                      name);
+    d.primary.label = MSG1("sema.002", "この名前の{0}は宣言できません", what);
+    d.hint = MSG1("sema.003", "モジュール名と同じ名前を使うと '{0}.x' が曖昧になります", name);
     diag_fail(&d);
 }
 
 // ローカル変数として登録する（IR 名は %x 形式）
 static VarEntry *declare(Sema *s, char *name, Type *type, Token *tok) {
-    reject_module_name(s, name, tok, "変数");
+    reject_module_name(s, name, tok, MSG0("sema.366", "変数"));
 
     StrBuf sb;
     sb_init(&sb);
@@ -587,12 +586,10 @@ static Node *range_coerce(Sema *s, Node *val, Type *want) {
     if (val->kind == ND_INT) {
         if (val->ival < want->lo || val->ival > want->hi) {
             Diag d = {0};
-            d.message = diag_fmt("%lld は '%s' の範囲（%lld..%lld）の外です",
-                                 val->ival, want->name, want->lo, want->hi);
+            d.message = MSG4("sema.004", "{0} は '{1}' の範囲（{2}..{3}）の外です", diag_fmt("%lld", val->ival), want->name, diag_fmt("%lld", want->lo), diag_fmt("%lld", want->hi));
             d.primary.tok = val->tok;
-            d.primary.label = "この値はこの型に入りません";
-            d.hint = diag_fmt("'%s' に入れられるのは %lld から %lld までです",
-                              want->name, want->lo, want->hi);
+            d.primary.label = MSG0("sema.367", "この値はこの型に入りません");
+            d.hint = MSG3("sema.005", "'{0}' に入れられるのは {1} から {2} までです", want->name, diag_fmt("%lld", want->lo), diag_fmt("%lld", want->hi));
             diag_fail(&d);
         }
         return val;
@@ -627,11 +624,10 @@ static Type *resolve_type(Sema *s, Node *tr) {
 
     if (!type_can_be_opt(base)) {
         Diag d = {0};
-        d.message = diag_fmt("'%s | None' は書けません", type_name(base));
+        d.message = MSG1("sema.006", "'{0} | None' は書けません", type_name(base));
         d.primary.tok = tr->tok;
-        d.primary.label = "この型は None になれません";
-        d.hint = "None はヌルポインタとして表すので、int や bool には付けられません"
-                 "（nullable にできるのは str / list[T] / class です）";
+        d.primary.label = MSG0("sema.368", "この型は None になれません");
+        d.hint = MSG0("sema.369", "None はヌルポインタとして表すので、int や bool には付けられません（nullable にできるのは str / list[T] / class です）");
         diag_fail(&d);
     }
     return type_opt(base);
@@ -681,12 +677,11 @@ static Type *instantiate_class(Sema *s, Class *tmpl, Type **args, int nargs,
     for (Node *tp = tmpl->node->targs; tp; tp = tp->next) want++;
     if (nargs != want) {
         Diag d = {0};
-        d.message = diag_fmt("'%s' は型引数を %d 個取りますが、%d 個書かれました",
-                             tmpl->name, want, nargs);
+        d.message = MSG3("sema.007", "'{0}' は型引数を {1} 個取りますが、{2} 個書かれました", tmpl->name, diag_fmt("%d", want), diag_fmt("%d", nargs));
         d.primary.tok = at;
-        d.primary.label = "型引数の個数が違います";
+        d.primary.label = MSG0("sema.370", "型引数の個数が違います");
         d.related.tok = tmpl->tok;
-        d.related.label = "このクラスの定義です";
+        d.related.label = MSG0("sema.371", "このクラスの定義です");
         diag_fail(&d);
     }
 
@@ -833,7 +828,7 @@ static int collect_targs(Sema *s, Node *tr, Type **out, int max) {
     int n = 0;
     for (Node *a = tr->targs; a; a = a->next) {
         if (n >= max)
-            error_at(tr->tok, "型引数が多すぎます（最大 %d 個です）", max);
+            error_at_m(tr->tok, MSG1("sema.008", "型引数が多すぎます（最大 {0} 個です）", diag_fmt("%d", max)));
         out[n++] = resolve_type(s, a->lhs);
     }
     return n;
@@ -848,20 +843,17 @@ static Type *resolve_base_type(Sema *s, Node *tr) {
         ModuleSyms *ms = lookup_import(s, tr->mod_name);
         if (!ms) {
             Diag d = {0};
-            d.message = diag_fmt("モジュール '%s' を import していません", tr->mod_name);
+            d.message = MSG1("sema.009", "モジュール '{0}' を import していません", tr->mod_name);
             d.primary.tok = tr->tok;
-            d.primary.label = "この修飾を解決できません";
-            d.hint = diag_fmt("ファイルの先頭に 'import %s' を書いてください",
-                              tr->mod_name);
+            d.primary.label = MSG0("sema.372", "この修飾を解決できません");
+            d.hint = MSG1("sema.010", "ファイルの先頭に 'import {0}' を書いてください", tr->mod_name);
             diag_fail(&d);
         }
         // ★ 他のモジュールの範囲型（A-28）
         RangeTy *mr = lookup_range_in(ms, tr->name);
         if (mr) {
             if (tr->lhs)
-                error_at_hint(tr->tok, "範囲型は要素型を取りません",
-                              "型 '%s.%s' は要素型を取りません", tr->mod_name,
-                              tr->name);
+                error_at_hint_m(tr->tok, MSG0("sema.012", "範囲型は要素型を取りません"), MSG2("sema.011", "型 '{0}.{1}' は要素型を取りません", tr->mod_name, tr->name));
             return mr->type;
         }
 
@@ -870,9 +862,7 @@ static Type *resolve_base_type(Sema *s, Node *tr) {
         EnumDef *me = lookup_enum_in(ms, tr->name);
         if (me) {
             if (tr->lhs)
-                error_at_hint(tr->tok, "列挙は要素型を取りません",
-                              "型 '%s.%s' は要素型を取りません", tr->mod_name,
-                              tr->name);
+                error_at_hint_m(tr->tok, MSG0("sema.013", "列挙は要素型を取りません"), MSG2("sema.011", "型 '{0}.{1}' は要素型を取りません", tr->mod_name, tr->name));
             return me->type;
         }
 
@@ -882,12 +872,10 @@ static Type *resolve_base_type(Sema *s, Node *tr) {
         Class *c = lookup_class_in(ms, tr->name);
         if (!c) {
             Diag d = {0};
-            d.message = diag_fmt("モジュール '%s' にクラス '%s' はありません",
-                                 tr->mod_name, tr->name);
+            d.message = MSG2("sema.014", "モジュール '{0}' にクラス '{1}' はありません", tr->mod_name, tr->name);
             d.primary.tok = tr->tok;
-            d.primary.label = "このクラスは定義されていません";
-            d.hint = "他のモジュールから使えるのはクラスだけです"
-                     "（int や list はモジュール修飾なしで書きます）";
+            d.primary.label = MSG0("sema.373", "このクラスは定義されていません");
+            d.hint = MSG0("sema.374", "他のモジュールから使えるのはクラスだけです（int や list はモジュール修飾なしで書きます）");
             diag_fail(&d);
         }
         // ★ 他のモジュールのジェネリッククラスも実体化できます
@@ -897,19 +885,16 @@ static Type *resolve_base_type(Sema *s, Node *tr) {
             return instantiate_class(s, c, args, n, tr->tok);
         }
         if (tr->lhs)
-            error_at_hint(tr->tok, "要素型を取るのは list / rc / mutex / Thread だけです",
-                          "型 '%s.%s' は要素型を取りません", tr->mod_name, tr->name);
+            error_at_hint_m(tr->tok, MSG0("sema.015", "要素型を取るのは list / rc / mutex / Thread だけです"), MSG2("sema.011", "型 '{0}.{1}' は要素型を取りません", tr->mod_name, tr->name));
         return c->type;
     }
 
     if (strcmp(tr->name, "list") == 0) {
         if (!tr->lhs)
-            error_at_hint(tr->tok, "要素型を書いてください（例: list[int]）",
-                          "list には要素型が必要です");
+            error_at_hint_m(tr->tok, MSG0("sema.017", "要素型を書いてください（例: list[int]）"), MSG0("sema.016", "list には要素型が必要です"));
         Type *elem = resolve_type(s, tr->lhs);  // ★ 再帰
         if (elem->kind == TY_NONE)
-            error_at_hint(tr->tok, "None 型の値は存在しないので要素にできません",
-                          "list の要素型に None は使えません");
+            error_at_hint_m(tr->tok, MSG0("sema.019", "None 型の値は存在しないので要素にできません"), MSG0("sema.018", "list の要素型に None は使えません"));
         return type_list(elem);
     }
 
@@ -919,12 +904,10 @@ static Type *resolve_base_type(Sema *s, Node *tr) {
     //   そこに「本言語の型」は載っていないからです（仕様 §10.2）。
     if (strcmp(tr->name, "ptr") == 0) {
         if (!tr->lhs)
-            error_at_hint(tr->tok, "中身の型を書いてください（例: ptr[int]）",
-                          "ptr には中身の型が必要です");
+            error_at_hint_m(tr->tok, MSG0("sema.021", "中身の型を書いてください（例: ptr[int]）"), MSG0("sema.020", "ptr には中身の型が必要です"));
         Type *elem = resolve_type(s, tr->lhs);
         if (elem->kind != TY_INT)
-            error_at_hint(tr->tok, "いま ptr に書けるのは int だけです（例: ptr[int]）",
-                          "'%s' は ptr に入れられません", type_name(elem));
+            error_at_hint_m(tr->tok, MSG0("sema.023", "いま ptr に書けるのは int だけです（例: ptr[int]）"), MSG1("sema.022", "'{0}' は ptr に入れられません", type_name(elem)));
         return type_ptr(elem);
     }
 
@@ -935,13 +918,10 @@ static Type *resolve_base_type(Sema *s, Node *tr) {
     //   それはクラスとして書かれるからです（仕様 §7.1）。
     if (strcmp(tr->name, "rc") == 0) {
         if (!tr->lhs)
-            error_at_hint(tr->tok, "中身の型を書いてください（例: rc[Node]）",
-                          "rc には中身の型が必要です");
+            error_at_hint_m(tr->tok, MSG0("sema.025", "中身の型を書いてください（例: rc[Node]）"), MSG0("sema.024", "rc には中身の型が必要です"));
         Type *elem = resolve_type(s, tr->lhs);
         if (elem->kind != TY_CLASS)
-            error_at_hint(tr->tok,
-                          "rc に入れられるのはクラスだけです（例: rc[Node]）",
-                          "'%s' は rc に入れられません", type_name(elem));
+            error_at_hint_m(tr->tok, MSG0("sema.027", "rc に入れられるのはクラスだけです（例: rc[Node]）"), MSG1("sema.026", "'{0}' は rc に入れられません", type_name(elem)));
         return type_rc(elem);
     }
 
@@ -951,8 +931,7 @@ static Type *resolve_base_type(Sema *s, Node *tr) {
     //   join が返します。
     if (strcmp(tr->name, "Thread") == 0) {
         if (!tr->lhs)
-            error_at_hint(tr->tok, "戻り型を書いてください（例: Thread[int]）",
-                          "Thread には戻り型が必要です");
+            error_at_hint_m(tr->tok, MSG0("sema.029", "戻り型を書いてください（例: Thread[int]）"), MSG0("sema.028", "Thread には戻り型が必要です"));
         return type_thread(resolve_type(s, tr->lhs));
     }
 
@@ -961,14 +940,10 @@ static Type *resolve_base_type(Sema *s, Node *tr) {
     //   （lock に渡した関数が受け取るのは中身で、書き換えるには参照が要る）。
     if (strcmp(tr->name, "mutex") == 0) {
         if (!tr->lhs)
-            error_at_hint(tr->tok, "中身の型を書いてください（例: mutex[Counter]）",
-                          "mutex には中身の型が必要です");
+            error_at_hint_m(tr->tok, MSG0("sema.031", "中身の型を書いてください（例: mutex[Counter]）"), MSG0("sema.030", "mutex には中身の型が必要です"));
         Type *elem = resolve_type(s, tr->lhs);
         if (elem->kind != TY_CLASS && elem->kind != TY_LIST)
-            error_at_hint(tr->tok,
-                          "mutex に入れられるのはクラスかリストだけです"
-                          "（例: mutex[Counter] / mutex[list[float]]）",
-                          "'%s' は mutex に入れられません", type_name(elem));
+            error_at_hint_m(tr->tok, MSG0("sema.033", "mutex に入れられるのはクラスかリストだけです（例: mutex[Counter] / mutex[list[float]]）"), MSG1("sema.032", "'{0}' は mutex に入れられません", type_name(elem)));
         return type_mutex(elem);
     }
 
@@ -977,16 +952,14 @@ static Type *resolve_base_type(Sema *s, Node *tr) {
     Type *tv = lookup_tbind(s, tr->name);
     if (tv) {
         if (tr->lhs)
-            error_at_hint(tr->tok, "型引数そのものは型引数を取りません",
-                          "型 '%s' は型引数を取りません", tr->name);
+            error_at_hint_m(tr->tok, MSG0("sema.035", "型引数そのものは型引数を取りません"), MSG1("sema.034", "型 '{0}' は型引数を取りません", tr->name));
         return tv;
     }
 
     Type *t = type_from_name(tr->name);
     if (t) {
         if (tr->lhs)
-            error_at_hint(tr->tok, "要素型を取るのは list と rc だけです",
-                          "型 '%s' は要素型を取りません", tr->name);
+            error_at_hint_m(tr->tok, MSG0("sema.037", "要素型を取るのは list と rc だけです"), MSG1("sema.036", "型 '{0}' は要素型を取りません", tr->name));
         return t;
     }
 
@@ -994,8 +967,7 @@ static Type *resolve_base_type(Sema *s, Node *tr) {
     RangeTy *rt = lookup_range(s, tr->name);
     if (rt) {
         if (tr->lhs)
-            error_at_hint(tr->tok, "範囲型は要素型を取りません",
-                          "型 '%s' は要素型を取りません", tr->name);
+            error_at_hint_m(tr->tok, MSG0("sema.012", "範囲型は要素型を取りません"), MSG1("sema.036", "型 '{0}' は要素型を取りません", tr->name));
         return rt->type;
     }
 
@@ -1003,8 +975,7 @@ static Type *resolve_base_type(Sema *s, Node *tr) {
     EnumDef *et0 = lookup_enum(s, tr->name);
     if (et0) {
         if (tr->lhs)
-            error_at_hint(tr->tok, "列挙は要素型を取りません",
-                          "型 '%s' は要素型を取りません", tr->name);
+            error_at_hint_m(tr->tok, MSG0("sema.013", "列挙は要素型を取りません"), MSG1("sema.036", "型 '{0}' は要素型を取りません", tr->name));
         return et0->type;
     }
 
@@ -1020,8 +991,7 @@ static Type *resolve_base_type(Sema *s, Node *tr) {
         for (Node *a = tr->targs; a; a = a->next) {
             Type *et = resolve_type(s, a->lhs);
             if (et->kind == TY_NONE)
-                error_at_hint(a->tok, "None 型の値は存在しないので要素にできません",
-                              "タプルの要素に None は使えません");
+                error_at_hint_m(a->tok, MSG0("sema.019", "None 型の値は存在しないので要素にできません"), MSG0("sema.038", "タプルの要素に None は使えません"));
             t->params[k++] = et;
         }
         return t;
@@ -1031,8 +1001,7 @@ static Type *resolve_base_type(Sema *s, Node *tr) {
     Iface *ifc0 = lookup_iface(s, tr->name);
     if (ifc0) {
         if (tr->lhs)
-            error_at_hint(tr->tok, "インタフェースは型引数を取りません",
-                          "型 '%s' は型引数を取りません", tr->name);
+            error_at_hint_m(tr->tok, MSG0("sema.039", "インタフェースは型引数を取りません"), MSG1("sema.034", "型 '{0}' は型引数を取りません", tr->name));
         return type_iface(ifc0->name, ifc0);
     }
 
@@ -1047,16 +1016,15 @@ static Type *resolve_base_type(Sema *s, Node *tr) {
             return instantiate_class(s, c, args, n, tr->tok);
         }
         if (tr->lhs)
-            error_at_hint(tr->tok, "要素型を取るのは list と rc だけです",
-                          "型 '%s' は要素型を取りません", tr->name);
+            error_at_hint_m(tr->tok, MSG0("sema.037", "要素型を取るのは list と rc だけです"), MSG1("sema.036", "型 '{0}' は要素型を取りません", tr->name));
         return c->type;
     }
 
     Diag d = {0};
-    d.message = diag_fmt("未知の型名 '%s' です", tr->name);
+    d.message = MSG1("sema.040", "未知の型名 '{0}' です", tr->name);
     d.primary.tok = tr->tok;
-    d.primary.label = "この型は存在しません";
-    d.hint = diag_fmt("現在使える型: %s、および定義したクラス名", type_name_list());
+    d.primary.label = MSG0("sema.375", "この型は存在しません");
+    d.hint = MSG1("sema.041", "現在使える型: {0}、および定義したクラス名", type_name_list());
     diag_fail(&d);
 }
 
@@ -1069,32 +1037,23 @@ static Type *resolve_base_type(Sema *s, Node *tr) {
 static const char *no_implicit_hint(Type *got, Type *want) {
     if (got->kind == TY_CLASS && want->kind == TY_CLASS &&
         strcmp(got->cls->name, want->cls->name) == 0)
-        return diag_fmt("'%s' と '%s' は名前が同じだけの別のクラスです"
-                        "（同じ型かどうかは名前ではなく定義で決まります）",
-                        got->cls->ir_name, want->cls->ir_name);
+        return MSG2("sema.042", "'{0}' と '{1}' は名前が同じだけの別のクラスです（同じ型かどうかは名前ではなく定義で決まります）", got->cls->ir_name, want->cls->ir_name);
     // ★ 関数型どうしなら、**どこが違うのか**を言います。
     //   「暗黙の型変換がありません」では、何を直せばよいか分かりません。
     if (got->kind == TY_FN && want->kind == TY_FN) {
         if (got->nparams != want->nparams)
-            return diag_fmt("引数の数が違います（%d 個と %d 個）", got->nparams,
-                            want->nparams);
+            return MSG2("sema.043", "引数の数が違います（{0} 個と {1} 個）", diag_fmt("%d", got->nparams), diag_fmt("%d", want->nparams));
         for (int i = 0; i < got->nparams; i++)
             if (!type_equal(got->params[i], want->params[i]))
-                return diag_fmt("%d 番目の引数の型が違います（'%s' と '%s'）",
-                                i + 1, type_name(got->params[i]),
-                                type_name(want->params[i]));
-        return diag_fmt("戻り型が違います（'%s' と '%s'）", type_name(got->elem),
-                        type_name(want->elem));
+                return MSG3("sema.044", "{0} 番目の引数の型が違います（'{1}' と '{2}'）", diag_fmt("%d", i + 1), type_name(got->params[i]), type_name(want->params[i]));
+        return MSG2("sema.045", "戻り型が違います（'{0}' と '{1}'）", type_name(got->elem), type_name(want->elem));
     }
 
     // ★ クラス → インタフェースなら、実装宣言の書き忘れを疑います。
     if (want->kind == TY_IFACE && got->kind == TY_CLASS)
-        return diag_fmt("'%s' が '%s' を実装すると宣言していません"
-                        "（'class %s(%s):' と書きます）",
-                        got->cls->name, want->iface->name, got->cls->name,
-                        want->iface->name);
+        return MSG4("sema.046", "'{0}' が '{1}' を実装すると宣言していません（'class {2}({3}):' と書きます）", got->cls->name, want->iface->name, got->cls->name, want->iface->name);
 
-    return "本言語には暗黙の型変換がありません（言語仕様 3.5）";
+    return MSG0("sema.376", "本言語には暗黙の型変換がありません（言語仕様 3.5）");
 }
 
 // ── None リテラルと is / is not ──────────────────────
@@ -1109,25 +1068,22 @@ static Type *check_is(Sema *s, Node *n) {
     if (n->rhs->kind != ND_NONE) {
         Type *r = check_expr(s, n->rhs);
         Diag d = {0};
-        d.message = diag_fmt("%s は None との比較にだけ使えます", op_symbol(n->op));
+        d.message = MSG1("sema.047", "{0} は None との比較にだけ使えます", op_symbol(n->op));
         d.primary.tok = n->rhs->tok;
-        d.primary.label = diag_fmt("ここには None を書いてください（型 '%s' の式です）",
-                                   type_name(r));
-        d.hint = "値が等しいかを調べるには == を使ってください";
+        d.primary.label = MSG1("sema.048", "ここには None を書いてください（型 '{0}' の式です）", type_name(r));
+        d.hint = MSG0("sema.377", "値が等しいかを調べるには == を使ってください");
         diag_fail(&d);
     }
     n->rhs->type = ty_null;
 
     if (l->kind != TY_OPT) {
         Diag d = {0};
-        d.message = diag_fmt("型 '%s' の値が None になることはありません",
-                             type_name(l));
+        d.message = MSG1("sema.049", "型 '{0}' の値が None になることはありません", type_name(l));
         d.primary.tok = n->lhs->tok;
-        d.primary.label = "この式は必ず値を持ちます";
+        d.primary.label = MSG0("sema.378", "この式は必ず値を持ちます");
         d.hint = type_can_be_opt(l)
-                     ? diag_fmt("None を入れたいなら、型注釈を '%s | None' に"
-                                "してください", type_name(l))
-                     : "None になれるのは str / list[T] / class だけです";
+                     ? MSG1("sema.050", "None を入れたいなら、型注釈を '{0} | None' にしてください", type_name(l))
+                     : MSG0("sema.379", "None になれるのは str / list[T] / class だけです");
         diag_fail(&d);
     }
     return ty_bool;
@@ -1193,11 +1149,10 @@ static Type *bool_required(const char *message, const char *where_label,
     Diag d = {0};
     d.message = message;
     d.primary.tok = operand->tok;
-    d.primary.label = diag_fmt("これは '%s' 型です", type_name(actual));
+    d.primary.label = MSG1("sema.051", "これは '{0}' 型です", type_name(actual));
     d.related.tok = where_tok;
     d.related.label = where_label;
-    d.hint = "本言語は int を真偽値として扱いません（言語仕様 4.4）。"
-             "比較を書いてください（例: x != 0）";
+    d.hint = MSG0("sema.380", "本言語は int を真偽値として扱いません（言語仕様 4.4）。比較を書いてください（例: x != 0）");
     diag_fail(&d);
 }
 
@@ -1282,10 +1237,7 @@ static Type *check_binop(Sema *s, Node *n) {
             call->args->next = NULL;
             Type *rt = check_class_method(s, call, l->cls);
             if (rt->kind != TY_BOOL)
-                error_at(n->tok,
-                         "'!=' に使うには __eq__ が bool を返す必要があります"
-                         "（いまは '%s' を返しています）",
-                         type_name(rt));
+                error_at_m(n->tok, MSG1("sema.052", "'!=' に使うには __eq__ が bool を返す必要があります（いまは '{0}' を返しています）", type_name(rt)));
             call->type = rt;
             n->kind = ND_UNARY;
             n->op = OP_NOT;
@@ -1311,10 +1263,9 @@ static Type *check_binop(Sema *s, Node *n) {
     //   この順にするとコードが短くなり、エラーメッセージも的確になります。
     if (!type_equal(l, r)) {
         Diag d = {0};
-        d.message = diag_fmt("型 '%s' と '%s' に演算子 '%s' は適用できません",
-                             type_name(l), type_name(r), op_symbol(n->op));
+        d.message = MSG3("sema.053", "型 '{0}' と '{1}' に演算子 '{2}' は適用できません", type_name(l), type_name(r), op_symbol(n->op));
         d.primary.tok = n->tok;
-        d.primary.label = "この演算子の両辺の型が違います";
+        d.primary.label = MSG0("sema.381", "この演算子の両辺の型が違います");
         d.hint = no_implicit_hint(l, r);
         diag_fail(&d);
     }
@@ -1323,20 +1274,11 @@ static Type *check_binop(Sema *s, Node *n) {
         if (n->op == OP_TRUEDIV) {
             // 当初は codegen で弾いていた検査を、本来の担当である
             // 意味解析パスに移しました。
-            error_at_hint(n->tok,
-                          "切り捨て除算の '//' を使ってください"
-                          "（本言語には暗黙の型変換がないため、'/' は float 専用です）",
-                          "整数の除算に '/' は使えません");
+            error_at_hint_m(n->tok, MSG0("sema.055", "切り捨て除算の '//' を使ってください（本言語には暗黙の型変換がないため、'/' は float 専用です）"), MSG0("sema.054", "整数の除算に '/' は使えません"));
         }
         if (l->kind == TY_CLASS && op_method_name(n->op))
-            error_at_hint(n->tok,
-                          diag_fmt("クラス '%s' に '%s(self, other) -> …' を"
-                                   "定義すると、この演算子が使えます",
-                                   l->cls->name, op_method_name(n->op)),
-                          "型 '%s' に演算子 '%s' は適用できません", type_name(l),
-                          op_symbol(n->op));
-        error_at(n->tok, "型 '%s' に演算子 '%s' は適用できません", type_name(l),
-                 op_symbol(n->op));
+            error_at_hint_m(n->tok, MSG2("sema.057", "クラス '{0}' に '{1}(self, other) -> …' を定義すると、この演算子が使えます", l->cls->name, op_method_name(n->op)), MSG2("sema.056", "型 '{0}' に演算子 '{1}' は適用できません", type_name(l), op_symbol(n->op)));
+        error_at_m(n->tok, MSG2("sema.056", "型 '{0}' に演算子 '{1}' は適用できません", type_name(l), op_symbol(n->op)));
     }
 
     // 0 除算のうち、右辺がリテラル 0 の場合はここで弾く。
@@ -1344,11 +1286,11 @@ static Type *check_binop(Sema *s, Node *n) {
     if ((n->op == OP_FLOORDIV || n->op == OP_MOD) && n->rhs->kind == ND_INT &&
         n->rhs->ival == 0) {
         Diag d = {0};
-        d.message = "0 で除算しています";
+        d.message = MSG0("sema.382", "0 で除算しています");
         d.primary.tok = n->rhs->tok;
-        d.primary.label = "この 0 で割ろうとしています";
+        d.primary.label = MSG0("sema.383", "この 0 で割ろうとしています");
         d.related.tok = n->tok;
-        d.related.label = diag_fmt("演算子 '%s' はここです", op_symbol(n->op));
+        d.related.label = MSG1("sema.058", "演算子 '{0}' はここです", op_symbol(n->op));
         diag_fail(&d);
     }
 
@@ -1392,8 +1334,8 @@ static Type *check_logical(Sema *s, Node *n) {
     Type *r = check_expr(s, n->rhs);
     narrow_restore(&sc);
 
-    char *msg = diag_fmt("演算子 '%s' には bool が必要です", op_symbol(n->op));
-    char *lbl = diag_fmt("演算子 '%s' はここです", op_symbol(n->op));
+    char *msg = MSG1("sema.059", "演算子 '{0}' には bool が必要です", op_symbol(n->op));
+    char *lbl = MSG1("sema.058", "演算子 '{0}' はここです", op_symbol(n->op));
     if (l->kind != TY_BOOL) return bool_required(msg, lbl, n->tok, n->lhs, l);
     if (r->kind != TY_BOOL) return bool_required(msg, lbl, n->tok, n->rhs, r);
     return ty_bool;
@@ -1410,11 +1352,10 @@ static Type *check_tuple(Sema *s, Node *n) {
 
     if (want && want->kind == TY_TUPLE && want->nparams != n_elems) {
         Diag d = {0};
-        d.message = diag_fmt("タプルの要素の数が違います（%d 個と %d 個）",
-                             n_elems, want->nparams);
+        d.message = MSG2("sema.060", "タプルの要素の数が違います（{0} 個と {1} 個）", diag_fmt("%d", n_elems), diag_fmt("%d", want->nparams));
         d.primary.tok = n->tok;
-        d.primary.label = diag_fmt("ここは %d 個です", n_elems);
-        d.hint = diag_fmt("'%s' が必要です", type_name(want));
+        d.primary.label = MSG1("sema.061", "ここは {0} 個です", diag_fmt("%d", n_elems));
+        d.hint = MSG1("sema.062", "'{0}' が必要です", type_name(want));
         diag_fail(&d);
     }
 
@@ -1430,11 +1371,10 @@ static Type *check_tuple(Sema *s, Node *n) {
         if (want && want->kind == TY_TUPLE &&
             !type_assignable(et, want->params[k])) {
             Diag d = {0};
-            d.message = diag_fmt("タプルの %d 番目の型が合いません", k + 1);
+            d.message = MSG1("sema.063", "タプルの {0} 番目の型が合いません", diag_fmt("%d", k + 1));
             d.primary.tok = x->tok;
-            d.primary.label = diag_fmt("これは '%s' 型です", type_name(et));
-            d.hint = diag_fmt("ここには '%s' が必要です",
-                              type_name(want->params[k]));
+            d.primary.label = MSG1("sema.051", "これは '{0}' 型です", type_name(et));
+            d.hint = MSG1("sema.064", "ここには '{0}' が必要です", type_name(want->params[k]));
             diag_fail(&d);
         }
         t->params[k] = (want && want->kind == TY_TUPLE) ? want->params[k] : et;
@@ -1451,22 +1391,20 @@ static Type *check_slice(Sema *s, Node *n) {
     Type *t = check_expr(s, n->lhs);
     if (t->kind != TY_STR && t->kind != TY_LIST) {
         Diag d = {0};
-        d.message = diag_fmt("'%s' 型はスライスできません", type_name(t));
+        d.message = MSG1("sema.065", "'{0}' 型はスライスできません", type_name(t));
         d.primary.tok = n->lhs->tok;
-        d.primary.label = "ここには str か list[T] が必要です";
+        d.primary.label = MSG0("sema.384", "ここには str か list[T] が必要です");
         diag_fail(&d);
     }
     if (n->rhs) {
         Type *a = check_expr(s, n->rhs);
         if (a->kind != TY_INT)
-            error_at(n->rhs->tok, "スライスの開始は int です（'%s' 型でした）",
-                     type_name(a));
+            error_at_m(n->rhs->tok, MSG1("sema.066", "スライスの開始は int です（'{0}' 型でした）", type_name(a)));
     }
     if (n->els) {
         Type *b = check_expr(s, n->els);
         if (b->kind != TY_INT)
-            error_at(n->els->tok, "スライスの終端は int です（'%s' 型でした）",
-                     type_name(b));
+            error_at_m(n->els->tok, MSG1("sema.067", "スライスの終端は int です（'{0}' 型でした）", type_name(b)));
     }
     return t;
 }
@@ -1501,10 +1439,7 @@ static Type *check_in(Sema *s, Node *n) {
             n->rhs = NULL;
             Type *rt = check_class_method(s, n, r->cls);
             if (rt->kind != TY_BOOL)
-                error_at(n->tok,
-                         "'in' に使うには __contains__ が bool を返す必要が"
-                         "あります（いまは '%s' を返しています）",
-                         type_name(rt));
+                error_at_m(n->tok, MSG1("sema.068", "'in' に使うには __contains__ が bool を返す必要があります（いまは '{0}' を返しています）", type_name(rt)));
             return ty_bool;
         }
 
@@ -1515,10 +1450,7 @@ static Type *check_in(Sema *s, Node *n) {
         call->args = arg;
         Type *rt = check_class_method(s, call, r->cls);
         if (rt->kind != TY_BOOL)
-            error_at(n->tok,
-                     "'not in' に使うには __contains__ が bool を返す必要が"
-                     "あります（いまは '%s' を返しています）",
-                     type_name(rt));
+            error_at_m(n->tok, MSG1("sema.069", "'not in' に使うには __contains__ が bool を返す必要があります（いまは '{0}' を返しています）", type_name(rt)));
         call->type = rt;
         n->kind = ND_UNARY;
         n->op = OP_NOT;
@@ -1529,33 +1461,29 @@ static Type *check_in(Sema *s, Node *n) {
 
     if (r->kind == TY_STR) {
         if (l->kind != TY_STR)
-            error_at(n->tok,
-                     "str の 'in' には str が必要です（左辺は '%s' 型です）",
-                     type_name(l));
+            error_at_m(n->tok, MSG1("sema.070", "str の 'in' には str が必要です（左辺は '{0}' 型です）", type_name(l)));
         return ty_bool;
     }
     if (r->kind == TY_LIST) {
         if (!type_assignable(l, r->elem)) {
             Diag d = {0};
-            d.message = "'in' の左辺が要素の型と合いません";
+            d.message = MSG0("sema.385", "'in' の左辺が要素の型と合いません");
             d.primary.tok = n->lhs->tok;
-            d.primary.label = diag_fmt("これは '%s' 型です", type_name(l));
+            d.primary.label = MSG1("sema.051", "これは '{0}' 型です", type_name(l));
             d.related.tok = n->rhs->tok;
-            d.related.label = diag_fmt("こちらの要素は '%s' 型です",
-                                       type_name(r->elem));
+            d.related.label = MSG1("sema.071", "こちらの要素は '{0}' 型です", type_name(r->elem));
             diag_fail(&d);
         }
         return ty_bool;
     }
 
     Diag d = {0};
-    d.message = diag_fmt("'%s' 型に 'in' は使えません", type_name(r));
+    d.message = MSG1("sema.072", "'{0}' 型に 'in' は使えません", type_name(r));
     d.primary.tok = n->rhs->tok;
-    d.primary.label = "ここには list[T] か str が必要です";
+    d.primary.label = MSG0("sema.386", "ここには list[T] か str が必要です");
     d.hint = r->kind == TY_CLASS
-                 ? diag_fmt("クラス '%s' に '__contains__(self, x) -> bool' を"
-                            "定義すると、'in' が使えます", r->cls->name)
-                 : "dict の鍵を調べるには d.has(k) を使ってください";
+                 ? MSG1("sema.073", "クラス '{0}' に '__contains__(self, x) -> bool' を定義すると、'in' が使えます", r->cls->name)
+                 : MSG0("sema.387", "dict の鍵を調べるには d.has(k) を使ってください");
     diag_fail(&d);
     return ty_bool;
 }
@@ -1565,8 +1493,8 @@ static Type *check_in(Sema *s, Node *n) {
 static Type *check_ternary(Sema *s, Node *n) {
     Type *c = check_expr(s, n->lhs);
     if (c->kind != TY_BOOL)
-        bool_required("三項演算子の条件には bool が必要です",
-                      "この 'if' の条件です", n->tok, n->lhs, c);
+        bool_required(MSG0("sema.388", "三項演算子の条件には bool が必要です"),
+                      MSG0("sema.389", "この 'if' の条件です"), n->tok, n->lhs, c);
 
     Type *a = check_expr(s, n->rhs);
     Type *b = check_expr(s, n->els);
@@ -1577,12 +1505,12 @@ static Type *check_ternary(Sema *s, Node *n) {
     if (type_assignable(a, b)) return b;
 
     Diag d = {0};
-    d.message = "三項演算子の両側で型が違います";
+    d.message = MSG0("sema.390", "三項演算子の両側で型が違います");
     d.primary.tok = n->els->tok;
-    d.primary.label = diag_fmt("こちらは '%s' 型です", type_name(b));
+    d.primary.label = MSG1("sema.074", "こちらは '{0}' 型です", type_name(b));
     d.related.tok = n->rhs->tok;
-    d.related.label = diag_fmt("こちらは '%s' 型です", type_name(a));
-    d.hint = "式の型は 1 つに決まらなければなりません（どちらかを合わせてください）";
+    d.related.label = MSG1("sema.074", "こちらは '{0}' 型です", type_name(a));
+    d.hint = MSG0("sema.391", "式の型は 1 つに決まらなければなりません（どちらかを合わせてください）");
     diag_fail(&d);
     return a;
 }
@@ -1594,8 +1522,8 @@ static Type *check_unary(Sema *s, Node *n) {
     if (n->op == OP_NOT) {
         if (t->kind != TY_BOOL)
             return bool_required(
-                diag_fmt("演算子 '%s' には bool が必要です", op_symbol(n->op)),
-                diag_fmt("演算子 '%s' はここです", op_symbol(n->op)), n->tok, n->lhs,
+                MSG1("sema.059", "演算子 '{0}' には bool が必要です", op_symbol(n->op)),
+                MSG1("sema.058", "演算子 '{0}' はここです", op_symbol(n->op)), n->tok, n->lhs,
                 t);
         return ty_bool;
     }
@@ -1611,14 +1539,12 @@ static Type *check_unary(Sema *s, Node *n) {
     // ★ float には - と + が使えます（~ はビット演算なので int だけ）。
     if (t->kind == TY_FLOAT) {
         if (n->op == OP_NEG || n->op == OP_POS) return t;
-        error_at(n->tok, "型 '%s' に単項演算子 '%s' は適用できません", type_name(t),
-                 op_symbol(n->op));
+        error_at_m(n->tok, MSG2("sema.075", "型 '{0}' に単項演算子 '{1}' は適用できません", type_name(t), op_symbol(n->op)));
     }
 
     // - + ~ は int のみ
     if (t->kind != TY_INT)
-        error_at(n->tok, "型 '%s' に単項演算子 '%s' は適用できません", type_name(t),
-                 op_symbol(n->op));
+        error_at_m(n->tok, MSG2("sema.075", "型 '{0}' に単項演算子 '{1}' は適用できません", type_name(t), op_symbol(n->op)));
     return t;
 }
 
@@ -1643,11 +1569,10 @@ static Type *check_var(Sema *s, Node *n) {
         Type *ret = s->cur_func ? s->cur_func->ret : NULL;
         if (!ret || ret->kind == TY_NONE) {
             Diag d = {0};
-            d.message = "戻り値の無い関数では 'result' を書けません";
+            d.message = MSG0("sema.392", "戻り値の無い関数では 'result' を書けません");
             d.primary.tok = n->tok;
-            d.primary.label = "この関数は値を返しません";
-            d.hint = "戻り値を見ない ensures（グローバルの条件など）にするか、"
-                     "戻り型を付けてください";
+            d.primary.label = MSG0("sema.393", "この関数は値を返しません");
+            d.hint = MSG0("sema.394", "戻り値を見ない ensures（グローバルの条件など）にするか、戻り型を付けてください");
             diag_fail(&d);
         }
         n->kind = ND_RESULT;   // ★ 箱は作りません（codegen が返す値をそのまま使う）
@@ -1677,23 +1602,19 @@ static Type *check_var(Sema *s, Node *n) {
         if (f && f->tmpl) {
             // ジェネリック関数そのものは値にできません（型引数が決まらない）。
             Diag d = {0};
-            d.message = diag_fmt("'%s' は型引数を取る関数なので、値にできません",
-                                 n->name);
+            d.message = MSG1("sema.076", "'{0}' は型引数を取る関数なので、値にできません", n->name);
             d.primary.tok = n->tok;
-            d.primary.label = "ここでは値として使えません";
-            d.hint = "値にするには型が 1 つに決まっている必要があります"
-                     "（呼び出しなら実引数から決まります）";
+            d.primary.label = MSG0("sema.395", "ここでは値として使えません");
+            d.hint = MSG0("sema.396", "値にするには型が 1 つに決まっている必要があります（呼び出しなら実引数から決まります）");
             diag_fail(&d);
         }
         if (f) {
             if (f->nraises > 0) {
                 Diag d = {0};
-                d.message = diag_fmt("'%s' は raises する関数なので値にできません",
-                                     n->name);
+                d.message = MSG1("sema.077", "'{0}' は raises する関数なので値にできません", n->name);
                 d.primary.tok = n->tok;
-                d.primary.label = "ここでは値として使えません";
-                d.hint = "関数型はエラーの受け渡しを表せません"
-                         "（raises しない関数で包んでください）";
+                d.primary.label = MSG0("sema.395", "ここでは値として使えません");
+                d.hint = MSG0("sema.397", "関数型はエラーの受け渡しを表せません（raises しない関数で包んでください）");
                 diag_fail(&d);
             }
             n->ir_name = f->ir_name;
@@ -1706,10 +1627,10 @@ static Type *check_var(Sema *s, Node *n) {
         // ★ モジュール名そのものは値ではありません。
         if (lookup_import(s, n->name)) {
             Diag d = {0};
-            d.message = diag_fmt("モジュール '%s' は値として使えません", n->name);
+            d.message = MSG1("sema.078", "モジュール '{0}' は値として使えません", n->name);
             d.primary.tok = n->tok;
-            d.primary.label = "ここにはモジュール名を書けません";
-            d.hint = diag_fmt("モジュールの中身は '%s.名前' の形で使います", n->name);
+            d.primary.label = MSG0("sema.398", "ここにはモジュール名を書けません");
+            d.hint = MSG1("sema.079", "モジュールの中身は '{0}.名前' の形で使います", n->name);
             diag_fail(&d);
         }
 
@@ -1717,11 +1638,10 @@ static Type *check_var(Sema *s, Node *n) {
         // ★ 「未定義の名前です」で突き放さず、書き忘れを指摘します。
         if (module_file_exists(s->cur->mod->dir, n->name)) {
             Diag d = {0};
-            d.message = diag_fmt("モジュール '%s' を import していません", n->name);
+            d.message = MSG1("sema.009", "モジュール '{0}' を import していません", n->name);
             d.primary.tok = n->tok;
-            d.primary.label = "このモジュールはここからは見えません";
-            d.hint = diag_fmt("ファイルの先頭に 'import %s' を書いてください",
-                              n->name);
+            d.primary.label = MSG0("sema.399", "このモジュールはここからは見えません");
+            d.hint = MSG1("sema.010", "ファイルの先頭に 'import {0}' を書いてください", n->name);
             diag_fail(&d);
         }
 
@@ -1730,21 +1650,18 @@ static Type *check_var(Sema *s, Node *n) {
         //   「未定義の名前です」で突き放すと、何が起きたのか分かりません。
         if (s->cur_func && s->cur_func->is_lambda) {
             Diag d = {0};
-            d.message = diag_fmt("lambda の中から外の変数 '%s' は使えません",
-                                 n->name);
+            d.message = MSG1("sema.080", "lambda の中から外の変数 '{0}' は使えません", n->name);
             d.primary.tok = n->tok;
-            d.primary.label = "この名前は lambda の外のものです";
-            d.hint = "捕獲（クロージャ）はまだありません。"
-                     "使う値は引数で受け取るか、def で書いた関数にしてください"
-                     "（グローバルなら使えます）";
+            d.primary.label = MSG0("sema.400", "この名前は lambda の外のものです");
+            d.hint = MSG0("sema.401", "捕獲（クロージャ）はまだありません。使う値は引数で受け取るか、def で書いた関数にしてください（グローバルなら使えます）");
             diag_fail(&d);
         }
 
         Diag d = {0};
-        d.message = diag_fmt("未定義の名前 '%s' です", n->name);
+        d.message = MSG1("sema.081", "未定義の名前 '{0}' です", n->name);
         d.primary.tok = n->tok;
-        d.primary.label = "この名前は宣言されていません";
-        d.hint = diag_fmt("使う前に宣言してください（例: %s: int = 0）", n->name);
+        d.primary.label = MSG0("sema.402", "この名前は宣言されていません");
+        d.hint = MSG1("sema.082", "使う前に宣言してください（例: {0}: int = 0）", n->name);
         diag_fail(&d);
     }
     n->ir_name = v->ir_name;  // ★ codegen はこれを使う
@@ -1808,20 +1725,19 @@ static void check_vardecl(Sema *s, Node *n) {
     if (n->type_ref) {
         declared = resolve_type(s, n->type_ref);
         if (declared->kind == TY_NONE)
-            error_at_hint(n->tok, "None 型の値は存在しないので変数にできません",
-                          "変数の型に None は使えません");
+            error_at_hint_m(n->tok, MSG0("sema.084", "None 型の値は存在しないので変数にできません"), MSG0("sema.083", "変数の型に None は使えません"));
     }
 
     // ② 同じスコープでの再宣言を禁止（言語仕様 5.1）
     VarEntry *prev = lookup_local(s, n->name);
     if (prev) {
         Diag d = {0};
-        d.message = diag_fmt("変数 '%s' は既に宣言されています", n->name);
+        d.message = MSG1("sema.085", "変数 '{0}' は既に宣言されています", n->name);
         d.primary.tok = n->tok;
-        d.primary.label = "ここで再宣言されています";
+        d.primary.label = MSG0("sema.403", "ここで再宣言されています");
         d.related.tok = prev->decl_tok;
-        d.related.label = "最初の宣言はここです";
-        d.hint = "既存の変数に代入するなら型注釈を外してください（例: x = 1）";
+        d.related.label = MSG0("sema.404", "最初の宣言はここです");
+        d.hint = MSG0("sema.405", "既存の変数に代入するなら型注釈を外してください（例: x = 1）");
         diag_fail(&d);
     }
 
@@ -1833,13 +1749,12 @@ static void check_vardecl(Sema *s, Node *n) {
     VarEntry *outer = lookup(s, n->name);
     if (outer) {
         Diag d = {0};
-        d.message = diag_fmt("変数 '%s' は外側のスコープの変数を隠しています", n->name);
+        d.message = MSG1("sema.086", "変数 '{0}' は外側のスコープの変数を隠しています", n->name);
         d.primary.tok = n->tok;
-        d.primary.label = "シャドーイングは禁止されています（言語仕様 5.1）";
+        d.primary.label = MSG0("sema.406", "シャドーイングは禁止されています（言語仕様 5.1）");
         d.related.tok = outer->decl_tok;
-        d.related.label = "外側の宣言はここです";
-        d.hint = "別の名前にするか、型注釈を外して既存の変数に代入してください"
-                 "（例: x = 1）";
+        d.related.label = MSG0("sema.407", "外側の宣言はここです");
+        d.hint = MSG0("sema.408", "別の名前にするか、型注釈を外して既存の変数に代入してください（例: x = 1）");
         diag_fail(&d);
     }
 
@@ -1852,8 +1767,7 @@ static void check_vardecl(Sema *s, Node *n) {
     // 型注釈が無ければ、初期化式の型がそのまま変数の型になる
     if (!declared) {
         if (actual->kind == TY_NONE)
-            error_at_hint(n->rhs->tok, "値を返さない式は変数に入れられません",
-                          "None 型の値は変数にできません");
+            error_at_hint_m(n->rhs->tok, MSG0("sema.088", "値を返さない式は変数に入れられません"), MSG0("sema.087", "None 型の値は変数にできません"));
         declared = actual;
     }
 
@@ -1869,13 +1783,12 @@ static void check_vardecl(Sema *s, Node *n) {
 
     if (!type_assignable(actual, declared)) {
         Diag d = {0};
-        d.message = "型が一致しません";
+        d.message = MSG0("sema.409", "型が一致しません");
         d.primary.tok = n->rhs->tok;
-        d.primary.label = diag_fmt("型 '%s' の式", type_name(actual));
+        d.primary.label = MSG1("sema.089", "型 '{0}' の式", type_name(actual));
         d.related.tok = n->tok;
         d.related.label =
-            diag_fmt("変数 '%s' は '%s' 型として宣言されています", n->name,
-                     type_name(declared));
+            MSG2("sema.090", "変数 '{0}' は '{1}' 型として宣言されています", n->name, type_name(declared));
         d.hint = no_implicit_hint(actual, declared);
         diag_fail(&d);
     }
@@ -1902,11 +1815,7 @@ static void check_assign(Sema *s, Node *n) {
         Type *ot = check_expr(s, target->lhs);
         if (ot->kind == TY_CLASS && ot->cls) {
             if (!class_has_method(ot->cls, "__setitem__"))
-                error_at_hint(target->tok,
-                              diag_fmt("クラス '%s' に '__setitem__(self, …, 値) -> None' を"
-                                       "定義すると、添字への代入が使えます",
-                                       ot->cls->name),
-                              "型 '%s' の添字には代入できません", type_name(ot));
+                error_at_hint_m(target->tok, MSG1("sema.092", "クラス '{0}' に '__setitem__(self, …, 値) -> None' を定義すると、添字への代入が使えます", ot->cls->name), MSG1("sema.091", "型 '{0}' の添字には代入できません", type_name(ot)));
 
             Node *args = target->rhs;
             Node *last = args;
@@ -1931,29 +1840,24 @@ static void check_assign(Sema *s, Node *n) {
 
         // 注意: タプルの要素には代入できません
         if (ot->kind == TY_TUPLE)
-            error_at_hint(target->tok,
-                          "タプルは作ったら変わりません（新しいタプルを作って"
-                          "ください）",
-                          "タプルの要素には代入できません");
+            error_at_hint_m(target->tok, MSG0("sema.094", "タプルは作ったら変わりません（新しいタプルを作ってください）"), MSG0("sema.093", "タプルの要素には代入できません"));
 
         // 注意: str は不変（immutable）なので s[0] = "x" は書けません（言語仕様 3.1）
         if (target->lhs->type->kind == TY_STR)
-            error_at_hint(target->tok,
-                          "str は不変（immutable）です。新しい文字列を作ってください",
-                          "文字列の要素には代入できません");
+            error_at_hint_m(target->tok, MSG0("sema.096", "str は不変（immutable）です。新しい文字列を作ってください"), MSG0("sema.095", "文字列の要素には代入できません"));
 
         s->expected = et;
         Type *actual = check_expr(s, n->rhs);
         s->expected = NULL;
-        reject_escaping_closure(n->rhs, "しまうことが");   // A-43
+        reject_escaping_closure(n->rhs, MSG0("sema.410", "しまうことが"));   // A-43
 
         if (!type_assignable(actual, et)) {
             Diag d = {0};
-            d.message = "型が一致しません";
+            d.message = MSG0("sema.409", "型が一致しません");
             d.primary.tok = n->rhs->tok;
-            d.primary.label = diag_fmt("型 '%s' の式", type_name(actual));
+            d.primary.label = MSG1("sema.089", "型 '{0}' の式", type_name(actual));
             d.related.tok = target->tok;
-            d.related.label = diag_fmt("この要素は '%s' 型です", type_name(et));
+            d.related.label = MSG1("sema.097", "この要素は '{0}' 型です", type_name(et));
             d.hint = no_implicit_hint(actual, et);
             diag_fail(&d);
         }
@@ -1970,17 +1874,16 @@ static void check_assign(Sema *s, Node *n) {
 
         s->expected = ft;
         Type *actual = check_expr(s, n->rhs);
-        reject_escaping_closure(n->rhs, "しまうことが");   // A-43
+        reject_escaping_closure(n->rhs, MSG0("sema.410", "しまうことが"));   // A-43
         s->expected = NULL;
 
         if (!type_assignable(actual, ft)) {
             Diag d = {0};
-            d.message = "型が一致しません";
+            d.message = MSG0("sema.409", "型が一致しません");
             d.primary.tok = n->rhs->tok;
-            d.primary.label = diag_fmt("型 '%s' の式", type_name(actual));
+            d.primary.label = MSG1("sema.089", "型 '{0}' の式", type_name(actual));
             d.related.tok = target->field->tok;
-            d.related.label = diag_fmt("フィールド '%s' は '%s' 型として宣言されています",
-                                       target->field->name, type_name(ft));
+            d.related.label = MSG2("sema.098", "フィールド '{0}' は '{1}' 型として宣言されています", target->field->name, type_name(ft));
             d.hint = no_implicit_hint(actual, ft);
             diag_fail(&d);
         }
@@ -1994,11 +1897,10 @@ static void check_assign(Sema *s, Node *n) {
     VarEntry *v = lookup(s, target->name);
     if (!v) {
         Diag d = {0};
-        d.message = diag_fmt("未定義の名前 '%s' に代入しています", target->name);
+        d.message = MSG1("sema.099", "未定義の名前 '{0}' に代入しています", target->name);
         d.primary.tok = target->tok;
-        d.primary.label = "この名前は宣言されていません";
-        d.hint = diag_fmt("初めて使うときは型注釈が必要です（例: %s: int = 0）",
-                          target->name);
+        d.primary.label = MSG0("sema.402", "この名前は宣言されていません");
+        d.hint = MSG1("sema.100", "初めて使うときは型注釈が必要です（例: {0}: int = 0）", target->name);
         diag_fail(&d);
     }
     target->type = v->type;
@@ -2009,16 +1911,15 @@ static void check_assign(Sema *s, Node *n) {
     s->expected = v->declared;  // ★ xs = [] のため
     Type *actual = check_expr(s, n->rhs);
     // ★ グローバルは枠より長生きするので、捕獲した lambda は入れられません（A-43）
-    if (v->is_global) reject_escaping_closure(n->rhs, "しまうことが");
+    if (v->is_global) reject_escaping_closure(n->rhs, MSG0("sema.410", "しまうことが"));
     s->expected = NULL;
     if (!type_assignable(actual, v->declared)) {
         Diag d = {0};
-        d.message = "型が一致しません";
+        d.message = MSG0("sema.409", "型が一致しません");
         d.primary.tok = n->rhs->tok;
-        d.primary.label = diag_fmt("型 '%s' の式", type_name(actual));
+        d.primary.label = MSG1("sema.089", "型 '{0}' の式", type_name(actual));
         d.related.tok = v->decl_tok;
-        d.related.label = diag_fmt("変数 '%s' は '%s' 型として宣言されています",
-                                   v->name, type_name(v->declared));
+        d.related.label = MSG2("sema.090", "変数 '{0}' は '{1}' 型として宣言されています", v->name, type_name(v->declared));
         d.hint = no_implicit_hint(actual, v->declared);
         diag_fail(&d);
     }
@@ -2038,8 +1939,8 @@ static void check_assign(Sema *s, Node *n) {
 static void check_cond(Sema *s, const char *where, Node *stmt_node, Node *cond) {
     Type *t = check_expr(s, cond);
     if (t->kind != TY_BOOL)
-        bool_required(diag_fmt("%sには bool が必要です", where),
-                      diag_fmt("%sはここです", where), stmt_node->tok, cond, t);
+        bool_required(MSG1("sema.101", "{0}には bool が必要です", where),
+                      MSG1("sema.102", "{0}はここです", where), stmt_node->tok, cond, t);
 }
 
 // ブロックは新しいスコープを作る。
@@ -2252,11 +2153,10 @@ static Type *check_builtin_call(Sema *s, Node *n) {
 
     if (nargs != 1) {
         Diag d = {0};
-        d.message = diag_fmt("%s は 1 個の引数を取りますが、%d 個渡されました",
-                             n->name, nargs);
+        d.message = MSG2("sema.103", "{0} は 1 個の引数を取りますが、{1} 個渡されました", n->name, diag_fmt("%d", nargs));
         d.primary.tok = n->tok;
-        d.primary.label = "引数の個数が違います";
-        d.hint = diag_fmt("%s(値) の形で使ってください", n->name);
+        d.primary.label = MSG0("sema.197", "引数の個数が違います");
+        d.hint = MSG1("sema.104", "{0}(値) の形で使ってください", n->name);
         diag_fail(&d);
     }
 
@@ -2271,12 +2171,10 @@ static Type *check_builtin_call(Sema *s, Node *n) {
         TypeKind ek = at->elem->kind;
         if (ek != TY_INT && ek != TY_FLOAT && ek != TY_STR && ek != TY_BOOL) {
             Diag d = {0};
-            d.message = diag_fmt("'%s' はそのまま %s できません", type_name(at),
-                                 n->name);
+            d.message = MSG2("sema.105", "'{0}' はそのまま {1} できません", type_name(at), n->name);
             d.primary.tok = n->args->tok;
-            d.primary.label = diag_fmt("要素が '%s' 型です", type_name(at->elem));
-            d.hint = "そのまま出せるのは list[int] / list[float] / list[str] / "
-                     "list[bool] だけです。ほかは for でまわしてください";
+            d.primary.label = MSG1("sema.106", "要素が '{0}' 型です", type_name(at->elem));
+            d.hint = MSG0("sema.411", "そのまま出せるのは list[int] / list[float] / list[str] / list[bool] だけです。ほかは for でまわしてください");
             diag_fail(&d);
         }
         n->is_list_str = true;
@@ -2304,21 +2202,19 @@ static Type *check_builtin_call(Sema *s, Node *n) {
                         (a->kind == ND_VAR && a->is_global);
         if (!is_place) {
             Diag d = {0};
-            d.message = "move_out は「場所」からしか取り出せません";
+            d.message = MSG0("sema.412", "move_out は「場所」からしか取り出せません");
             d.primary.tok = a->tok;
-            d.primary.label = "ここは書き戻せる場所ではありません";
-            d.hint = "move_out(self.xs) / move_out(obj.f) / move_out(xs[i]) の形で使ってください"
-                     "（局所変数は、そのまま返せば所有権ごと動きます）";
+            d.primary.label = MSG0("sema.413", "ここは書き戻せる場所ではありません");
+            d.hint = MSG0("sema.414", "move_out(self.xs) / move_out(obj.f) / move_out(xs[i]) の形で使ってください（局所変数は、そのまま返せば所有権ごと動きます）");
             diag_fail(&d);
         }
         // ② 空の値を作れる型だけ。str は ""、list[T] は [] を書き戻します。
         if (at->kind != TY_STR && at->kind != TY_LIST) {
             Diag d = {0};
-            d.message = diag_fmt("move_out は '%s' 型を取り出せません", type_name(at));
+            d.message = MSG1("sema.107", "move_out は '{0}' 型を取り出せません", type_name(at));
             d.primary.tok = a->tok;
-            d.primary.label = diag_fmt("これは '%s' 型です", type_name(at));
-            d.hint = "move_out が受け取れるのは str と list[T] です"
-                     "（取り出したあとに書き戻す「空の値」が要るためです）";
+            d.primary.label = MSG1("sema.051", "これは '{0}' 型です", type_name(at));
+            d.hint = MSG0("sema.415", "move_out が受け取れるのは str と list[T] です（取り出したあとに書き戻す「空の値」が要るためです）");
             diag_fail(&d);
         }
         n->is_move_out = true;  // ★ codegen と ownck はこれを見る
@@ -2333,15 +2229,13 @@ static Type *check_builtin_call(Sema *s, Node *n) {
     }
 
     Diag d = {0};
-    d.message = diag_fmt("%s は '%s' 型を受け取れません", n->name, type_name(at));
+    d.message = MSG2("sema.108", "{0} は '{1}' 型を受け取れません", n->name, type_name(at));
     d.primary.tok = n->args->tok;
-    d.primary.label = diag_fmt("これは '%s' 型です", type_name(at));
+    d.primary.label = MSG1("sema.051", "これは '{0}' 型です", type_name(at));
     if (s->inst_site)
         d.related = (DiagLabel){s->inst_site,
-                                diag_fmt("この実体化（%s）で使われました",
-                                         s->inst_name)};
-    d.hint = diag_fmt("%s が受け取れるのは %s です", n->name,
-                      builtin_arg_types(n->name));
+                                MSG1("sema.109", "この実体化（{0}）で使われました", s->inst_name)};
+    d.hint = MSG2("sema.110", "{0} が受け取れるのは {1} です", n->name, builtin_arg_types(n->name));
     diag_fail(&d);
 }
 
@@ -2353,11 +2247,10 @@ static Type *check_list_lit(Sema *s, Node *n) {
         // 空リストは、それ自身から要素型が決まらない
         if (!want || want->kind != TY_LIST) {
             Diag d = {0};
-            d.message = "空のリストの要素型が決まりません";
+            d.message = MSG0("sema.416", "空のリストの要素型が決まりません");
             d.primary.tok = n->tok;
-            d.primary.label = "この [] がどんなリストなのか分かりません";
-            d.hint = "型注釈を書いてください（例: xs: list[int] = []）。"
-                     "関数の引数に直接渡す場合は、いったん変数に入れてください";
+            d.primary.label = MSG0("sema.417", "この [] がどんなリストなのか分かりません");
+            d.hint = MSG0("sema.418", "型注釈を書いてください（例: xs: list[int] = []）。関数の引数に直接渡す場合は、いったん変数に入れてください");
             diag_fail(&d);
         }
         return want;
@@ -2371,7 +2264,7 @@ static Type *check_list_lit(Sema *s, Node *n) {
     //   それに従うのが素直です（「空リストの期待型」の延長）。
     s->expected = want && want->kind == TY_LIST ? want->elem : NULL;
     Type *first = check_expr(s, n->body);
-    reject_escaping_closure(n->body, "しまうことが");   // A-43
+    reject_escaping_closure(n->body, MSG0("sema.410", "しまうことが"));   // A-43
     Type *et = first;
     if (want && want->kind == TY_LIST && type_assignable(first, want->elem))
         et = want->elem;
@@ -2385,15 +2278,15 @@ static Type *check_list_lit(Sema *s, Node *n) {
     for (Node *el = n->body->next; el; el = el->next, i++) {
         s->expected = et;
         Type *t = check_expr(s, el);
-        reject_escaping_closure(el, "しまうことが");   // A-43
+        reject_escaping_closure(el, MSG0("sema.410", "しまうことが"));   // A-43
         if (!type_assignable(t, et)) {
             Diag d = {0};
-            d.message = diag_fmt("リストの要素の型がそろっていません（第 %d 要素）", i);
+            d.message = MSG1("sema.111", "リストの要素の型がそろっていません（第 {0} 要素）", diag_fmt("%d", i));
             d.primary.tok = el->tok;
-            d.primary.label = diag_fmt("これは '%s' 型です", type_name(t));
+            d.primary.label = MSG1("sema.051", "これは '{0}' 型です", type_name(t));
             d.related.tok = n->body->tok;
-            d.related.label = diag_fmt("最初の要素は '%s' 型です", type_name(et));
-            d.hint = "リストの要素はすべて同じ型でなければなりません";
+            d.related.label = MSG1("sema.112", "最初の要素は '{0}' 型です", type_name(et));
+            d.hint = MSG0("sema.419", "リストの要素はすべて同じ型でなければなりません");
             diag_fail(&d);
         }
         // ★ A-28：差し替えたら、次の周回のために el を進め直します
@@ -2447,12 +2340,11 @@ static void old_walk(Node *n, Node **decls, int *nd, bool inside) {
     for (; n; n = n->next) {
         if (n->kind == ND_CALL && n->name && strcmp(n->name, "old") == 0 && !n->mod_name) {
             if (inside)
-                error_at_hint(n->tok, "old(...) の中に old は書けません", "old の入れ子です");
+                error_at_hint_m(n->tok, MSG0("sema.114", "old(...) の中に old は書けません"), MSG0("sema.113", "old の入れ子です"));
             if (!n->args || n->args->next)
-                error_at_hint(n->tok, "old には式を 1 つだけ渡します（例: old(len(xs))）",
-                              "old の引数の数が違います");
+                error_at_hint_m(n->tok, MSG0("sema.116", "old には式を 1 つだけ渡します（例: old(len(xs))）"), MSG0("sema.115", "old の引数の数が違います"));
             if (*nd >= OLD_MAX)
-                error_at_hint(n->tok, "old は 1 つの関数に 256 個までです", "old が多すぎます");
+                error_at_hint_m(n->tok, MSG0("sema.118", "old は 1 つの関数に 256 個までです"), MSG0("sema.117", "old が多すぎます"));
             Node *arg = n->args;
             old_walk(arg, decls, nd, true);   // 入れ子を見つけるため
             StrBuf sb;
@@ -2483,10 +2375,10 @@ static void check_old_types(Node *n) {
             TypeKind k = n->type->kind;
             if (k != TY_INT && k != TY_BOOL && k != TY_FLOAT) {
                 Diag d = {0};
-                d.message = diag_fmt("old(...) に書けるのは int / bool / float の式です");
+                d.message = MSG0("sema.119", "old(...) に書けるのは int / bool / float の式です");
                 d.primary.tok = n->tok;
-                d.primary.label = diag_fmt("これは '%s' 型です", type_name(n->type));
-                d.hint = "list なら old(len(xs)) のように、比べたい数にして書いてください";
+                d.primary.label = MSG1("sema.051", "これは '{0}' 型です", type_name(n->type));
+                d.hint = MSG0("sema.420", "list なら old(len(xs)) のように、比べたい数にして書いてください");
                 diag_fail(&d);
             }
         }
@@ -2538,19 +2430,17 @@ static Type *check_listcomp(Sema *s, Node *n) {
         for (Node *a = n->args; a; a = a->next) {
             Type *at = check_expr(s, a);
             if (at->kind != TY_INT)
-                error_at_hint(a->tok, "range の引数は int です",
-                              "これは '%s' 型です", type_name(at));
+                error_at_hint_m(a->tok, MSG0("sema.120", "range の引数は int です"), MSG1("sema.051", "これは '{0}' 型です", type_name(at)));
         }
         elem_t = ty_int;
     } else {
         Type *it = check_expr(s, n->rhs);
         if (it->kind != TY_LIST) {
             Diag d = {0};
-            d.message = diag_fmt("'%s' 型は内包表記の対象にできません",
-                                 type_name(it));
+            d.message = MSG1("sema.121", "'{0}' 型は内包表記の対象にできません", type_name(it));
             d.primary.tok = n->rhs->tok;
-            d.primary.label = diag_fmt("これは '%s' 型です", type_name(it));
-            d.hint = "対象にできるのは list[T] と range(...) です";
+            d.primary.label = MSG1("sema.051", "これは '{0}' 型です", type_name(it));
+            d.hint = MSG0("sema.421", "対象にできるのは list[T] と range(...) です");
             diag_fail(&d);
         }
         elem_t = it->elem;
@@ -2565,18 +2455,17 @@ static Type *check_listcomp(Sema *s, Node *n) {
     Type *et = check_expr(s, n->lhs);
     if (et->kind == TY_NONE) {
         Diag d = {0};
-        d.message = "内包表記の要素が値を持ちません";
+        d.message = MSG0("sema.422", "内包表記の要素が値を持ちません");
         d.primary.tok = n->lhs->tok;
-        d.primary.label = "この式は None 型です";
-        d.hint = "値を返す式を書いてください";
+        d.primary.label = MSG0("sema.423", "この式は None 型です");
+        d.hint = MSG0("sema.424", "値を返す式を書いてください");
         diag_fail(&d);
     }
 
     if (n->els) {
         Type *ct = check_expr(s, n->els);
         if (ct->kind != TY_BOOL)
-            error_at_hint(n->els->tok, "内包表記の 'if' には bool が必要です",
-                          "これは '%s' 型です", type_name(ct));
+            error_at_hint_m(n->els->tok, MSG0("sema.122", "内包表記の 'if' には bool が必要です"), MSG1("sema.051", "これは '{0}' 型です", type_name(ct)));
     }
     scope_pop(s);
 
@@ -2585,10 +2474,10 @@ static Type *check_listcomp(Sema *s, Node *n) {
     if (n->name) {
         if (et->kind != TY_BOOL) {
             Diag d = {0};
-            d.message = diag_fmt("%s(...) の中の式は bool でなければなりません", n->name);
+            d.message = MSG1("sema.123", "{0}(...) の中の式は bool でなければなりません", n->name);
             d.primary.tok = n->lhs->tok;
-            d.primary.label = diag_fmt("これは '%s' 型です", type_name(et));
-            d.hint = diag_fmt("例: %s(xs[i] >= 0 for i in range(len(xs)))", n->name);
+            d.primary.label = MSG1("sema.051", "これは '{0}' 型です", type_name(et));
+            d.hint = MSG1("sema.124", "例: {0}(xs[i] >= 0 for i in range(len(xs)))", n->name);
             diag_fail(&d);
         }
         res->type = ty_bool;
@@ -2619,10 +2508,7 @@ static Type *check_index_expr(Sema *s, Node *n) {
     //   注意: 添字は **並び**なので、そのまま実引数のリストになります。
     if (ot->kind == TY_CLASS && ot->cls) {
         if (!class_has_method(ot->cls, "__getitem__"))
-            error_at_hint(n->tok,
-                          diag_fmt("クラス '%s' に '__getitem__(self, …) -> …' を"
-                                   "定義すると、添字が使えます", ot->cls->name),
-                          "型 '%s' は添字を取れません", type_name(ot));
+            error_at_hint_m(n->tok, MSG1("sema.126", "クラス '{0}' に '__getitem__(self, …) -> …' を定義すると、添字が使えます", ot->cls->name), MSG1("sema.125", "型 '{0}' は添字を取れません", type_name(ot)));
         n->kind = ND_METHOD;
         n->name = "__getitem__";
         n->args = n->rhs;
@@ -2636,25 +2522,21 @@ static Type *check_index_expr(Sema *s, Node *n) {
     //     位置ごとに型が違うので、添字が実行時に決まると**式の型が決まりません**。
     if (ot->kind == TY_TUPLE) {
         if (n->rhs->next)
-            error_at_hint(n->rhs->next->tok,
-                          "タプルの添字は 1 つだけです",
-                          "添字が 2 つ以上あります");
+            error_at_hint_m(n->rhs->next->tok, MSG0("sema.128", "タプルの添字は 1 つだけです"), MSG0("sema.127", "添字が 2 つ以上あります"));
         if (n->rhs->kind != ND_INT) {
             Diag d = {0};
-            d.message = "タプルの添字は整数リテラルでなければなりません";
+            d.message = MSG0("sema.425", "タプルの添字は整数リテラルでなければなりません");
             d.primary.tok = n->rhs->tok;
-            d.primary.label = "ここは定数である必要があります";
-            d.hint = "要素ごとに型が違うので、添字が実行時に決まると"
-                     "式の型が決められません（分解代入 a, b = t も使えます）";
+            d.primary.label = MSG0("sema.426", "ここは定数である必要があります");
+            d.hint = MSG0("sema.427", "要素ごとに型が違うので、添字が実行時に決まると式の型が決められません（分解代入 a, b = t も使えます）");
             diag_fail(&d);
         }
         long long k = n->rhs->ival;
         if (k < 0 || k >= ot->nparams) {
             Diag d = {0};
-            d.message = diag_fmt("タプルの添字が範囲外です（%lld）", k);
+            d.message = MSG1("sema.129", "タプルの添字が範囲外です（{0}）", diag_fmt("%lld", k));
             d.primary.tok = n->rhs->tok;
-            d.primary.label = diag_fmt("要素は %d 個です（0 〜 %d）",
-                                       ot->nparams, ot->nparams - 1);
+            d.primary.label = MSG2("sema.130", "要素は {0} 個です（0 〜 {1}）", diag_fmt("%d", ot->nparams), diag_fmt("%d", ot->nparams - 1));
             diag_fail(&d);
         }
         n->rhs->type = ty_int;
@@ -2664,11 +2546,10 @@ static Type *check_index_expr(Sema *s, Node *n) {
     // list[T] と str の添字は 1 つだけです
     if (n->rhs->next) {
         Diag d = {0};
-        d.message = diag_fmt("型 '%s' に添字を 2 つ以上は書けません", type_name(ot));
+        d.message = MSG1("sema.131", "型 '{0}' に添字を 2 つ以上は書けません", type_name(ot));
         d.primary.tok = n->rhs->next->tok;
-        d.primary.label = "2 つめの添字はここです";
-        d.hint = "2 次元の添字（m[i, j]）が使えるのは __getitem__ を"
-                 "定義したクラスだけです";
+        d.primary.label = MSG0("sema.428", "2 つめの添字はここです");
+        d.hint = MSG0("sema.429", "2 次元の添字（m[i, j]）が使えるのは __getitem__ を定義したクラスだけです");
         diag_fail(&d);
     }
 
@@ -2676,9 +2557,9 @@ static Type *check_index_expr(Sema *s, Node *n) {
 
     if (it->kind != TY_INT) {
         Diag d = {0};
-        d.message = "添字は int でなければなりません";
+        d.message = MSG0("sema.430", "添字は int でなければなりません");
         d.primary.tok = n->rhs->tok;
-        d.primary.label = diag_fmt("これは '%s' 型です", type_name(it));
+        d.primary.label = MSG1("sema.051", "これは '{0}' 型です", type_name(it));
         diag_fail(&d);
     }
 
@@ -2687,10 +2568,10 @@ static Type *check_index_expr(Sema *s, Node *n) {
     if (ot->kind == TY_STR) return ty_str;
 
     Diag d = {0};
-    d.message = diag_fmt("型 '%s' は添字を取れません", type_name(ot));
+    d.message = MSG1("sema.125", "型 '{0}' は添字を取れません", type_name(ot));
     d.primary.tok = n->lhs->tok;
-    d.primary.label = diag_fmt("これは '%s' 型です", type_name(ot));
-    d.hint = "添字が使えるのは list[T] と str です";
+    d.primary.label = MSG1("sema.051", "これは '{0}' 型です", type_name(ot));
+    d.hint = MSG0("sema.431", "添字が使えるのは list[T] と str です");
     diag_fail(&d);
 }
 
@@ -2750,20 +2631,15 @@ static Type *check_module_global(Sema *s, Node *n, ModuleSyms *ms) {
 
     if (!v) {
         Diag d = {0};
-        d.message = diag_fmt("モジュール '%s' に '%s' はありません", ms->mod->name,
-                             n->name);
+        d.message = MSG2("sema.132", "モジュール '{0}' に '{1}' はありません", ms->mod->name, n->name);
         d.primary.tok = n->tok;
-        d.primary.label = "この名前は定義されていません";
+        d.primary.label = MSG0("sema.432", "この名前は定義されていません");
         if (lookup_func_in(ms, n->name))
-            d.hint = diag_fmt("'%s' は関数です。'%s.%s(...)' と呼んでください",
-                              n->name, ms->mod->name, n->name);
+            d.hint = MSG3("sema.133", "'{0}' は関数です。'{1}.{2}(...)' と呼んでください", n->name, ms->mod->name, n->name);
         else if (lookup_class_in(ms, n->name))
-            d.hint = diag_fmt("'%s' はクラスです。生成するには '%s.%s(...)' と"
-                              "書いてください",
-                              n->name, ms->mod->name, n->name);
+            d.hint = MSG3("sema.134", "'{0}' はクラスです。生成するには '{1}.{2}(...)' と書いてください", n->name, ms->mod->name, n->name);
         else
-            d.hint = "モジュールから使えるのは、そのファイルのトップレベルの"
-                     "関数・クラス・グローバル変数です";
+            d.hint = MSG0("sema.433", "モジュールから使えるのは、そのファイルのトップレベルの関数・クラス・グローバル変数です");
         diag_fail(&d);
     }
 
@@ -2780,21 +2656,15 @@ static Type *check_module_global(Sema *s, Node *n, ModuleSyms *ms) {
 static _Noreturn void reject_opt_access(Node *obj, Node *at, const char *what,
                                         Type *ot) {
     Diag d = {0};
-    d.message = diag_fmt("型 '%s' の値には%sがありません", type_name(ot), what);
+    d.message = MSG2("sema.135", "型 '{0}' の値には{1}がありません", type_name(ot), what);
     d.primary.tok = at->tok;
-    d.primary.label = "None かもしれない値です";
+    d.primary.label = MSG0("sema.434", "None かもしれない値です");
     d.related.tok = obj->tok;
-    d.related.label = diag_fmt("この式は '%s' 型です", type_name(ot));
+    d.related.label = MSG1("sema.136", "この式は '{0}' 型です", type_name(ot));
     if (obj->kind == ND_VAR)
-        d.hint = diag_fmt("先に None を除いてください:\n"
-                          "             if %s is not None:\n"
-                          "                 ...",
-                          obj->name);
+        d.hint = MSG1("sema.137", "先に None を除いてください:\n             if {0} is not None:\n                 ...", obj->name);
     else
-        d.hint = "一度ローカル変数に入れてから絞り込んでください:\n"
-                 "             x: T | None = ...\n"
-                 "             if x is not None:\n"
-                 "                 ...";
+        d.hint = MSG0("sema.435", "一度ローカル変数に入れてから絞り込んでください:\n             x: T | None = ...\n             if x is not None:\n                 ...");
     diag_fail(&d);
 }
 
@@ -2825,17 +2695,15 @@ static Type *make_enum_value(Sema *s, Node *n, EnumDef *e, EnumVal *v,
                              Node *args, int nargs) {
     if (nargs != v->nfields) {
         Diag d = {0};
-        d.message = diag_fmt("枝 '%s.%s' は %d 個の中身を取りますが、%d 個渡されました",
-                             e->name, v->name, v->nfields, nargs);
+        d.message = MSG4("sema.138", "枝 '{0}.{1}' は {2} 個の中身を取りますが、{3} 個渡されました", e->name, v->name, diag_fmt("%d", v->nfields), diag_fmt("%d", nargs));
         d.primary.tok = n->tok;
-        d.primary.label = v->nfields == 0 ? "この枝は中身を持ちません"
-                                          : "中身の数が違います";
+        d.primary.label = v->nfields == 0 ? MSG0("sema.436", "この枝は中身を持ちません")
+                                          : MSG0("sema.437", "中身の数が違います");
         d.related.tok = v->tok;
-        d.related.label = "枝の定義はここです";
+        d.related.label = MSG0("sema.438", "枝の定義はここです");
         d.hint = v->nfields == 0
-                     ? diag_fmt("'%s.%s' とだけ書きます", e->name, v->name)
-                     : diag_fmt("'%s.%s(…)' に %d 個書きます", e->name, v->name,
-                                v->nfields);
+                     ? MSG2("sema.139", "'{0}.{1}' とだけ書きます", e->name, v->name)
+                     : MSG3("sema.140", "'{0}.{1}(…)' に {2} 個書きます", e->name, v->name, diag_fmt("%d", v->nfields));
         diag_fail(&d);
     }
 
@@ -2875,18 +2743,18 @@ static Type *fold_enum_value(Sema *s, Node *n) {
     EnumVal *v = lookup_enum_val(e, n->name);
     if (!v) {
         Diag d = {0};
-        d.message = diag_fmt("列挙 '%s' に枝 '%s' はありません", e->name, n->name);
+        d.message = MSG2("sema.141", "列挙 '{0}' に枝 '{1}' はありません", e->name, n->name);
         d.primary.tok = n->tok;
-        d.primary.label = "この枝は定義されていません";
+        d.primary.label = MSG0("sema.439", "この枝は定義されていません");
         d.related.tok = e->tok;
-        d.related.label = "列挙の定義はここです";
+        d.related.label = MSG0("sema.440", "列挙の定義はここです");
         StrBuf sb;
         sb_init(&sb);
-        sb_printf(&sb, "書ける枝は ");
+        sb_printf(&sb, "%s", MSG0("sema.142", "書ける枝は "));
         int k = 0;
         for (EnumVal *q = e->vals; q; q = q->next)
             sb_printf(&sb, "%s%s", k++ ? " / " : "", q->name);
-        sb_printf(&sb, " です");
+        sb_printf(&sb, "%s", MSG0("sema.143", " です"));
         d.hint = sb_str(&sb);
         diag_fail(&d);
     }
@@ -2916,27 +2784,26 @@ static Type *check_field(Sema *s, Node *n) {
 
     Type *ot = auto_deref(check_expr(s, n->lhs));  // rc[T] は中身のように使える
 
-    if (ot->kind == TY_OPT) reject_opt_access(n->lhs, n, "フィールド", ot);
+    if (ot->kind == TY_OPT) reject_opt_access(n->lhs, n, MSG0("sema.441", "フィールド"), ot);
 
     if (ot->kind != TY_CLASS) {
         Diag d = {0};
-        d.message = diag_fmt("型 '%s' にフィールドはありません", type_name(ot));
+        d.message = MSG1("sema.144", "型 '{0}' にフィールドはありません", type_name(ot));
         d.primary.tok = n->lhs->tok;
-        d.primary.label = diag_fmt("これは '%s' 型です", type_name(ot));
-        d.hint = "'.' でフィールドを読めるのは class のインスタンスだけです";
+        d.primary.label = MSG1("sema.051", "これは '{0}' 型です", type_name(ot));
+        d.hint = MSG0("sema.442", "'.' でフィールドを読めるのは class のインスタンスだけです");
         diag_fail(&d);
     }
 
     Field *f = lookup_field(ot->cls, n->name);
     if (!f) {
         Diag d = {0};
-        d.message = diag_fmt("クラス '%s' にフィールド '%s' はありません",
-                             ot->cls->name, n->name);
+        d.message = MSG2("sema.145", "クラス '{0}' にフィールド '{1}' はありません", ot->cls->name, n->name);
         d.primary.tok = n->tok;
-        d.primary.label = "このフィールドは宣言されていません";
+        d.primary.label = MSG0("sema.443", "このフィールドは宣言されていません");
         d.related.tok = ot->cls->tok;
-        d.related.label = "クラスの定義はここです";
-        d.hint = "クラス本体の先頭に「名前: 型」の形で宣言してください";
+        d.related.label = MSG0("sema.444", "クラスの定義はここです");
+        d.hint = MSG0("sema.445", "クラス本体の先頭に「名前: 型」の形で宣言してください");
         diag_fail(&d);
     }
 
@@ -2973,14 +2840,13 @@ static Type *check_class_method(Sema *s, Node *n, Class *c) {
     FuncSig *f = lookup_func_in(c->owner, mname);
     if (!f) {
         Diag d = {0};
-        d.message = diag_fmt("クラス '%s' にメソッド '%s' はありません", c->name,
-                             n->name);
+        d.message = MSG2("sema.146", "クラス '{0}' にメソッド '{1}' はありません", c->name, n->name);
         d.primary.tok = n->tok;
-        d.primary.label = "このメソッドは定義されていません";
+        d.primary.label = MSG0("sema.446", "このメソッドは定義されていません");
         d.related.tok = c->tok;
-        d.related.label = "クラスの定義はここです";
+        d.related.label = MSG0("sema.444", "クラスの定義はここです");
         if (lookup_field(c, n->name))
-            d.hint = diag_fmt("'%s' はフィールドです。'()' を外してください", n->name);
+            d.hint = MSG1("sema.147", "'{0}' はフィールドです。'()' を外してください", n->name);
         diag_fail(&d);
     }
 
@@ -2989,28 +2855,27 @@ static Type *check_class_method(Sema *s, Node *n, Class *c) {
     if (strcmp(n->name, "drop") == 0) {
         Diag d = {0};
         d.code = "E-DROP-2";
-        d.message = "drop は自分で呼べません（解放のときに自動で呼ばれます）";
+        d.message = MSG0("sema.447", "drop は自分で呼べません（解放のときに自動で呼ばれます）");
         d.primary.tok = n->tok;
-        d.primary.label = "ここで呼ぶと、解放のときにもう一度呼ばれます";
-        d.hint = "早く後始末をしたいときは、別の名前のメソッド（close など）に分けてください（仕様 §6.2）";
+        d.primary.label = MSG0("sema.448", "ここで呼ぶと、解放のときにもう一度呼ばれます");
+        d.hint = MSG0("sema.449", "早く後始末をしたいときは、別の名前のメソッド（close など）に分けてください（仕様 §6.2）");
         diag_fail(&d);
     }
 
     // ★ 並べ替えと既定値の穴埋め（A-38）。self のぶん 1 つ飛ばします。
-    bind_args_sig(n, f, 1, diag_fmt("メソッド '%s'", mname));
+    bind_args_sig(n, f, 1, MSG1("sema.148", "メソッド '{0}'", mname));
 
     // 引数の個数（self は数えない）
     int nargs = 0;
     for (Node *a = n->args; a; a = a->next) nargs++;
     if (nargs != f->nparams - 1) {
         Diag d = {0};
-        d.message = diag_fmt("メソッド '%s' は %d 個の引数を取りますが、%d 個渡されました",
-                             mname, f->nparams - 1, nargs);
+        d.message = MSG3("sema.149", "メソッド '{0}' は {1} 個の引数を取りますが、{2} 個渡されました", mname, diag_fmt("%d", f->nparams - 1), diag_fmt("%d", nargs));
         d.primary.tok = n->tok;
-        d.primary.label = "呼び出しの引数の個数が違います";
+        d.primary.label = MSG0("sema.450", "呼び出しの引数の個数が違います");
         d.related.tok = f->tok;
-        d.related.label = "このメソッドはここで定義されています";
-        d.hint = "self は自動的に渡されるので、書く必要はありません";
+        d.related.label = MSG0("sema.451", "このメソッドはここで定義されています");
+        d.hint = MSG0("sema.452", "self は自動的に渡されるので、書く必要はありません");
         diag_fail(&d);
     }
 
@@ -3024,18 +2889,15 @@ static Type *check_class_method(Sema *s, Node *n, Class *c) {
         // 注意: 定義の木が無いときは「しまう」と答えます（安全側）
         if (a->caps && (!f->node ||
                         fn_param_escapes_at(s, f->node->body, f->pnames[i + 1], 0)))
-            reject_escaping_closure(a, "しまうことが");
+            reject_escaping_closure(a, MSG0("sema.410", "しまうことが"));
         mark_arg_own_rc(a, f, i + 1);
         if (!type_assignable(at, f->params[i + 1])) {
             Diag d = {0};
-            d.message = diag_fmt("メソッド '%s' の第 %d 引数: 型 '%s' を '%s' に渡せません",
-                                 mname, i + 1, type_name(at),
-                                 type_name(f->params[i + 1]));
+            d.message = MSG4("sema.150", "メソッド '{0}' の第 {1} 引数: 型 '{2}' を '{3}' に渡せません", mname, diag_fmt("%d", i + 1), type_name(at), type_name(f->params[i + 1]));
             d.primary.tok = a->tok;
-            d.primary.label = diag_fmt("これは '%s' 型です", type_name(at));
+            d.primary.label = MSG1("sema.051", "これは '{0}' 型です", type_name(at));
             d.related.tok = f->tok;
-            d.related.label = diag_fmt("引数 '%s' は '%s' 型です", f->pnames[i + 1],
-                                       type_name(f->params[i + 1]));
+            d.related.label = MSG2("sema.151", "引数 '{0}' は '{1}' 型です", f->pnames[i + 1], type_name(f->params[i + 1]));
             d.hint = no_implicit_hint(at, f->params[i + 1]);
             diag_fail(&d);
         }
@@ -3073,20 +2935,18 @@ static Type *check_module_call(Sema *s, Node *n, ModuleSyms *ms) {
 
     if (!f) {
         Diag d = {0};
-        d.message = diag_fmt("モジュール '%s' に関数 '%s' はありません",
-                             ms->mod->name, n->name);
+        d.message = MSG2("sema.152", "モジュール '{0}' に関数 '{1}' はありません", ms->mod->name, n->name);
         d.primary.tok = n->tok;
-        d.primary.label = "この関数は定義されていません";
+        d.primary.label = MSG0("sema.453", "この関数は定義されていません");
         d.hint = lookup_global_in(ms, n->name)
-                     ? diag_fmt("'%s' はグローバル変数です。'()' を外してください",
-                                n->name)
-                     : "そのモジュールのトップレベルに def があるか確認してください";
+                     ? MSG1("sema.153", "'{0}' はグローバル変数です。'()' を外してください", n->name)
+                     : MSG0("sema.454", "そのモジュールのトップレベルに def があるか確認してください");
         diag_fail(&d);
     }
 
     n->ir_name = f->ir_name;
     n->is_extern = f->owner != s->cur;
-    return check_call_sig(s, n, f, "関数");
+    return check_call_sig(s, n, f, MSG0("sema.455", "関数"));
 }
 
 
@@ -3115,20 +2975,17 @@ static void scope_escape(Sema *s, Node *n, int loop_depth, int try_depth) {
             case ND_CALL:
             case ND_METHOD:
                 // 注意: 失敗しうる呼び出しは、捕まえないと外へ飛びます。
-                if (n->can_fail && try_depth == 0) what = "失敗しうる呼び出し";
+                if (n->can_fail && try_depth == 0) what = MSG0("sema.456", "失敗しうる呼び出し");
                 break;
             default: break;
         }
         if (what) {
             Diag d = {0};
             d.code = "E-SCOPE-1";
-            d.message = diag_fmt("scope: の中から '%s' で抜けることはできません",
-                                 what);
+            d.message = MSG1("sema.154", "scope: の中から '{0}' で抜けることはできません", what);
             d.primary.tok = n->tok;
-            d.primary.label = "ここで scope: の外へ出ようとしています";
-            d.hint = "scope: の出口では、始めたスレッドを全部 join します。"
-                     "途中で抜けるとそれが飛ぶので、"
-                     "結果を変数に受けてからブロックを出てください";
+            d.primary.label = MSG0("sema.457", "ここで scope: の外へ出ようとしています");
+            d.hint = MSG0("sema.458", "scope: の出口では、始めたスレッドを全部 join します。途中で抜けるとそれが飛ぶので、結果を変数に受けてからブロックを出てください");
             diag_fail(&d);
         }
 
@@ -3170,31 +3027,24 @@ static void check_copyable(Sema *s, Type *t, Token *at) {
             FuncSig *f = lookup_func_in(c->owner, mangle(c->name, "__copy__"));
             if (f && f->nparams == 1 && type_equal(f->ret, t)) return;
             Diag d = {0};
-            d.message = diag_fmt("クラス '%s' は copy できません", c->name);
+            d.message = MSG1("sema.155", "クラス '{0}' は copy できません", c->name);
             d.primary.tok = at;
-            d.primary.label = diag_fmt("'%s' 型です", type_name(t));
+            d.primary.label = MSG1("sema.156", "'{0}' 型です", type_name(t));
             d.related.tok = c->tok;
-            d.related.label = "クラスの定義はここです";
-            d.hint = f ? diag_fmt("'__copy__' は 'def __copy__(self) -> %s:' "
-                                  "の形で書きます", c->name)
-                       : diag_fmt("複製できるようにするには __copy__ を書きます:\n"
-                                  "             def __copy__(self) -> %s:\n"
-                                  "                 return %s(…)",
-                                  c->name, c->name);
+            d.related.label = MSG0("sema.444", "クラスの定義はここです");
+            d.hint = f ? MSG1("sema.157", "'__copy__' は 'def __copy__(self) -> {0}:' の形で書きます", c->name)
+                       : MSG2("sema.158", "複製できるようにするには __copy__ を書きます:\n             def __copy__(self) -> {0}:\n                 return {1}(…)", c->name, c->name);
             diag_fail(&d);
         }
         default: break;
     }
     Diag d = {0};
-    d.message = diag_fmt("'%s' 型は copy できません", type_name(t));
+    d.message = MSG1("sema.159", "'{0}' 型は copy できません", type_name(t));
     d.primary.tok = at;
-    d.primary.label = "ここは複製できる型ではありません";
+    d.primary.label = MSG0("sema.459", "ここは複製できる型ではありません");
     d.hint = t->kind == TY_RC
-                 ? "rc[T] は「1 つの値を 2 か所から持つ」ための型です"
-                   "（複製ではありません）。中身を複製するなら copy(r.get()) の"
-                   "ように中身を渡してください"
-                 : "複製できるのは 値型 / str / list / __copy__ を持つクラス / "
-                   "列挙 と、それらの T | None です";
+                 ? MSG0("sema.460", "rc[T] は「1 つの値を 2 か所から持つ」ための型です（複製ではありません）。中身を複製するなら copy(r.get()) のように中身を渡してください")
+                 : MSG0("sema.461", "複製できるのは 値型 / str / list / __copy__ を持つクラス / 列挙 と、それらの T | None です");
     diag_fail(&d);
 }
 
@@ -3225,7 +3075,7 @@ static void reject_kwargs(Node *args, const char *message, const char *why) {
         Diag d = {0};
         d.message = message;
         d.primary.tok = a->arg_name_tok;
-        d.primary.label = diag_fmt("'%s = …' と書いています", a->arg_name);
+        d.primary.label = MSG1("sema.160", "'{0} = …' と書いています", a->arg_name);
         d.hint = why;
         diag_fail(&d);
     }
@@ -3241,23 +3091,21 @@ static Type *check_method(Sema *s, Node *n) {
             EnumVal *v = lookup_enum_val(e, n->name);
             if (!v) {
                 Diag d = {0};
-                d.message = diag_fmt("列挙 '%s' に枝 '%s' はありません", e->name,
-                                     n->name);
+                d.message = MSG2("sema.141", "列挙 '{0}' に枝 '{1}' はありません", e->name, n->name);
                 d.primary.tok = n->tok;
-                d.primary.label = "この枝は定義されていません";
+                d.primary.label = MSG0("sema.439", "この枝は定義されていません");
                 d.related.tok = e->tok;
-                d.related.label = "列挙の定義はここです";
+                d.related.label = MSG0("sema.440", "列挙の定義はここです");
                 diag_fail(&d);
             }
             if (!e->has_payload) {
                 Diag d = {0};
-                d.message = diag_fmt("枝 '%s.%s' は中身を持ちません", e->name,
-                                     v->name);
+                d.message = MSG2("sema.161", "枝 '{0}.{1}' は中身を持ちません", e->name, v->name);
                 d.primary.tok = n->tok;
-                d.primary.label = "ここに '(' は書けません";
+                d.primary.label = MSG0("sema.462", "ここに '(' は書けません");
                 d.related.tok = v->tok;
-                d.related.label = "枝の定義はここです";
-                d.hint = diag_fmt("'%s.%s' とだけ書きます", e->name, v->name);
+                d.related.label = MSG0("sema.438", "枝の定義はここです");
+                d.hint = MSG2("sema.139", "'{0}.{1}' とだけ書きます", e->name, v->name);
                 diag_fail(&d);
             }
             int nargs = 0;
@@ -3270,7 +3118,7 @@ static Type *check_method(Sema *s, Node *n) {
     if (ms) return check_module_call(s, n, ms);
 
     Type *ot = auto_deref(check_expr(s, n->lhs));
-    if (ot->kind == TY_OPT) reject_opt_access(n->lhs, n, "メソッド", ot);
+    if (ot->kind == TY_OPT) reject_opt_access(n->lhs, n, MSG0("sema.463", "メソッド"), ot);
 
     if (ot->kind == TY_CLASS) return check_class_method(s, n, ot->cls);
 
@@ -3279,14 +3127,11 @@ static Type *check_method(Sema *s, Node *n) {
     //   使えません（どの実装の名前を見ればよいか決まらないため）。
     reject_kwargs(n->args,
                   ot->kind == TY_IFACE
-                      ? "インタフェース越しの呼び出しでは、名前で引数を渡せません"
-                      : diag_fmt("'%s' は名前で引数を受け取りません", n->name),
+                      ? MSG0("sema.464", "インタフェース越しの呼び出しでは、名前で引数を渡せません")
+                      : MSG1("sema.162", "'{0}' は名前で引数を受け取りません", n->name),
                   ot->kind == TY_IFACE
-                      ? "どの実装が呼ばれるかは実行時に決まります。"
-                        "名前と既定値が使えるのは、クラスの型が分かっている"
-                        "ときだけです"
-                      : "名前で渡せるのは、この言語で定義した"
-                        "関数・メソッド・生成だけです");
+                      ? MSG0("sema.465", "どの実装が呼ばれるかは実行時に決まります。名前と既定値が使えるのは、クラスの型が分かっているときだけです")
+                      : MSG0("sema.466", "名前で渡せるのは、この言語で定義した関数・メソッド・生成だけです"));
 
     // ★ インタフェース越しの呼び出し。
     //   どの実装が呼ばれるかは **実行時に**決まります（vtable を引く）。
@@ -3297,13 +3142,12 @@ static Type *check_method(Sema *s, Node *n) {
             if (strcmp(q->name, n->name) == 0) { im = q; break; }
         if (!im) {
             Diag d = {0};
-            d.message = diag_fmt("インタフェース '%s' に '%s' はありません",
-                                 ifc->name, n->name);
+            d.message = MSG2("sema.163", "インタフェース '{0}' に '{1}' はありません", ifc->name, n->name);
             d.primary.tok = n->tok;
-            d.primary.label = "このメソッドは宣言されていません";
+            d.primary.label = MSG0("sema.467", "このメソッドは宣言されていません");
             d.related.tok = ifc->tok;
-            d.related.label = "インタフェースの定義はここです";
-            d.hint = "インタフェース越しに呼べるのは、そこに宣言したものだけです";
+            d.related.label = MSG0("sema.468", "インタフェースの定義はここです");
+            d.hint = MSG0("sema.469", "インタフェース越しに呼べるのは、そこに宣言したものだけです");
             diag_fail(&d);
         }
 
@@ -3314,10 +3158,7 @@ static Type *check_method(Sema *s, Node *n) {
         int nargs = 0;
         for (Node *a = n->args; a; a = a->next) nargs++;
         if (nargs != want)
-            error_at_hint(n->tok,
-                          diag_fmt("'%s.%s' は %d 個の引数を取ります", ifc->name,
-                                   n->name, want),
-                          "引数の個数が違います（%d 個渡されました）", nargs);
+            error_at_hint_m(n->tok, MSG3("sema.165", "'{0}.{1}' は {2} 個の引数を取ります", ifc->name, n->name, diag_fmt("%d", want)), MSG1("sema.164", "引数の個数が違います（{0} 個渡されました）", diag_fmt("%d", nargs)));
 
         int k = 1;
         Node *pm = sig->params->next;
@@ -3327,9 +3168,7 @@ static Type *check_method(Sema *s, Node *n) {
             Type *at = check_expr(s, a);
             s->expected = NULL;
             if (!type_assignable(at, wt))
-                error_at_hint(a->tok,
-                              diag_fmt("ここには '%s' が必要です", type_name(wt)),
-                              "%d 番目の引数が '%s' 型です", k, type_name(at));
+                error_at_hint_m(a->tok, MSG1("sema.064", "ここには '{0}' が必要です", type_name(wt)), MSG2("sema.166", "{0} 番目の引数が '{1}' 型です", diag_fmt("%d", k), type_name(at)));
         }
 
         n->iface_slot = im->slot;
@@ -3357,11 +3196,9 @@ static Type *check_method(Sema *s, Node *n) {
     //    ownck 側です（Thread[R] は移動する型として扱われます）。
     if (ot->kind == TY_THREAD) {
         if (strcmp(n->name, "join") != 0)
-            error_at_hint(n->tok, "Thread にあるのは join() だけです",
-                          "'Thread' に '%s' はありません", n->name);
+            error_at_hint_m(n->tok, MSG0("sema.168", "Thread にあるのは join() だけです"), MSG1("sema.167", "'Thread' に '{0}' はありません", n->name));
         if (n->args)
-            error_at_hint(n->tok, "t.join() の形で使ってください",
-                          "join は引数を取りません");
+            error_at_hint_m(n->tok, MSG0("sema.170", "t.join() の形で使ってください"), MSG0("sema.169", "join は引数を取りません"));
         return ot->elem;
     }
 
@@ -3371,25 +3208,16 @@ static Type *check_method(Sema *s, Node *n) {
     //   閉じ込めます（設計文書 §4）。
     if (ot->kind == TY_MUTEX) {
         if (strcmp(n->name, "lock") != 0)
-            error_at_hint(n->tok, "mutex にあるのは lock(関数) だけです",
-                          "'mutex' に '%s' はありません", n->name);
+            error_at_hint_m(n->tok, MSG0("sema.172", "mutex にあるのは lock(関数) だけです"), MSG1("sema.171", "'mutex' に '{0}' はありません", n->name));
         int nargs = 0;
         for (Node *a = n->args; a; a = a->next) nargs++;
         if (nargs != 1)
-            error_at_hint(n->tok, "m.lock(関数) の形で使ってください",
-                          "lock は 1 個の引数（関数）を取ります"
-                          "（%d 個渡されました）", nargs);
+            error_at_hint_m(n->tok, MSG0("sema.174", "m.lock(関数) の形で使ってください"), MSG1("sema.173", "lock は 1 個の引数（関数）を取ります（{0} 個渡されました）", diag_fmt("%d", nargs)));
         Type *ft = check_expr(s, n->args);
         if (ft->kind != TY_FN || ft->nparams != 1)
-            error_at_hint(n->args->tok,
-                          diag_fmt("lock には 'fn(%s) -> R' の関数を渡してください",
-                                   type_name(ot->elem)),
-                          "'%s' はその形の関数ではありません", type_name(ft));
+            error_at_hint_m(n->args->tok, MSG1("sema.176", "lock には 'fn({0}) -> R' の関数を渡してください", type_name(ot->elem)), MSG1("sema.175", "'{0}' はその形の関数ではありません", type_name(ft)));
         if (!type_assignable(ot->elem, ft->params[0]))
-            error_at_hint(n->args->tok,
-                          diag_fmt("中身は '%s' です", type_name(ot->elem)),
-                          "この関数は '%s' を受け取ります",
-                          type_name(ft->params[0]));
+            error_at_hint_m(n->args->tok, MSG1("sema.178", "中身は '{0}' です", type_name(ot->elem)), MSG1("sema.177", "この関数は '{0}' を受け取ります", type_name(ft->params[0])));
         return ft->elem;
     }
 
@@ -3400,16 +3228,16 @@ static Type *check_method(Sema *s, Node *n) {
     //     retk: 'e'=要素型 / 'i'=int / 'n'=None / 'l'=同じ list
     if (ot->kind == TY_LIST) {
         static const struct { const char *name; char argk; char retk;
-                              const char *usage; } LM[] = {
-            {"pop",     '-', 'e', "xs.pop()"},
-            {"insert",  'i', 'n', "xs.insert(位置, 値)"},   // 引数 2 個（下で特別扱い）
-            {"remove",  'i', 'e', "xs.remove(位置)"},
-            {"index",   'e', 'i', "xs.index(値)"},
-            {"reverse", '-', 'n', "xs.reverse()"},
-            {"clear",   '-', 'n', "xs.clear()"},
-            {"copy",    '-', 'l', "xs.copy()"},
-            {"extend",  'l', 'n', "xs.extend(別のリスト)"},
-            {NULL, 0, 0, NULL},
+                              const char *ukey; const char *usage; } LM[] = {
+            {"pop",     '-', 'e', NULL, "xs.pop()"},
+            {"insert",  'i', 'n', MSGK("sema.470", "xs.insert(位置, 値)")},   // 引数 2 個（下で特別扱い）
+            {"remove",  'i', 'e', MSGK("sema.471", "xs.remove(位置)")},
+            {"index",   'e', 'i', MSGK("sema.472", "xs.index(値)")},
+            {"reverse", '-', 'n', NULL, "xs.reverse()"},
+            {"clear",   '-', 'n', NULL, "xs.clear()"},
+            {"copy",    '-', 'l', NULL, "xs.copy()"},
+            {"extend",  'l', 'n', MSGK("sema.473", "xs.extend(別のリスト)")},
+            {NULL, 0, 0, NULL, NULL},
         };
         for (int i = 0; LM[i].name; i++) {
             if (strcmp(n->name, LM[i].name) != 0) continue;
@@ -3420,11 +3248,10 @@ static Type *check_method(Sema *s, Node *n) {
             for (Node *a = n->args; a; a = a->next) nargs++;
             if (nargs != want) {
                 Diag d = {0};
-                d.message = diag_fmt("%s は %d 個の引数を取りますが、%d 個渡されました",
-                                     n->name, want, nargs);
+                d.message = MSG3("sema.179", "{0} は {1} 個の引数を取りますが、{2} 個渡されました", n->name, diag_fmt("%d", want), diag_fmt("%d", nargs));
                 d.primary.tok = n->tok;
-                d.primary.label = "引数の個数が違います";
-                d.hint = diag_fmt("%s の形で使ってください", LM[i].usage);
+                d.primary.label = MSG0("sema.197", "引数の個数が違います");
+                d.hint = MSG1("sema.180", "{0} の形で使ってください", msgv(LM[i].ukey, LM[i].usage, NULL, 0));
                 diag_fail(&d);
             }
 
@@ -3432,32 +3259,26 @@ static Type *check_method(Sema *s, Node *n) {
             if (strcmp(n->name, "insert") == 0) {
                 Type *a0 = check_expr(s, n->args);
                 if (a0->kind != TY_INT)
-                    error_at(n->args->tok, "insert の位置は int です（'%s' 型でした）",
-                             type_name(a0));
+                    error_at_m(n->args->tok, MSG1("sema.181", "insert の位置は int です（'{0}' 型でした）", type_name(a0)));
                 s->expected = ot->elem;
                 Type *a1 = check_expr(s, n->args->next);
                 s->expected = NULL;
                 if (!type_assignable(a1, ot->elem))
-                    error_at(n->args->next->tok,
-                             "'%s' のリストに '%s' は入れられません",
-                             type_name(ot->elem), type_name(a1));
+                    error_at_m(n->args->next->tok, MSG2("sema.182", "'{0}' のリストに '{1}' は入れられません", type_name(ot->elem), type_name(a1)));
             } else if (LM[i].argk == 'i') {
                 Type *a0 = check_expr(s, n->args);
                 if (a0->kind != TY_INT)
-                    error_at(n->args->tok, "%s の引数は int です（'%s' 型でした）",
-                             n->name, type_name(a0));
+                    error_at_m(n->args->tok, MSG2("sema.183", "{0} の引数は int です（'{1}' 型でした）", n->name, type_name(a0)));
             } else if (LM[i].argk == 'e') {
                 s->expected = ot->elem;
                 Type *a0 = check_expr(s, n->args);
                 s->expected = NULL;
                 if (!type_assignable(a0, ot->elem))
-                    error_at(n->args->tok, "'%s' のリストから '%s' は探せません",
-                             type_name(ot->elem), type_name(a0));
+                    error_at_m(n->args->tok, MSG2("sema.184", "'{0}' のリストから '{1}' は探せません", type_name(ot->elem), type_name(a0)));
             } else if (LM[i].argk == 'l') {
                 Type *a0 = check_expr(s, n->args);
                 if (!type_assignable(a0, ot))
-                    error_at(n->args->tok, "extend には同じ型のリストが必要です"
-                             "（'%s' でした）", type_name(a0));
+                    error_at_m(n->args->tok, MSG1("sema.185", "extend には同じ型のリストが必要です（'{0}' でした）", type_name(a0)));
             }
 
             if (LM[i].retk == 'e') return ot->elem;
@@ -3472,11 +3293,10 @@ static Type *check_method(Sema *s, Node *n) {
         for (Node *a = n->args; a; a = a->next) nargs++;
         if (nargs != 1) {
             Diag d = {0};
-            d.message = diag_fmt("append は 1 個の引数を取りますが、%d 個渡されました",
-                                 nargs);
+            d.message = MSG1("sema.186", "append は 1 個の引数を取りますが、{0} 個渡されました", diag_fmt("%d", nargs));
             d.primary.tok = n->tok;
-            d.primary.label = "引数の個数が違います";
-            d.hint = "xs.append(値) の形で使ってください";
+            d.primary.label = MSG0("sema.197", "引数の個数が違います");
+            d.hint = MSG0("sema.474", "xs.append(値) の形で使ってください");
             diag_fail(&d);
         }
 
@@ -3488,10 +3308,9 @@ static Type *check_method(Sema *s, Node *n) {
         //    append するのを弾くには、要素型の再帰比較が要ります。
         if (!type_assignable(at, ot->elem)) {
             Diag d = {0};
-            d.message = diag_fmt("'%s' のリストに '%s' を追加できません",
-                                 type_name(ot->elem), type_name(at));
+            d.message = MSG2("sema.187", "'{0}' のリストに '{1}' を追加できません", type_name(ot->elem), type_name(at));
             d.primary.tok = n->args->tok;
-            d.primary.label = diag_fmt("これは '%s' 型です", type_name(at));
+            d.primary.label = MSG1("sema.051", "これは '{0}' 型です", type_name(at));
             d.hint = no_implicit_hint(at, ot->elem);
             diag_fail(&d);
         }
@@ -3501,13 +3320,10 @@ static Type *check_method(Sema *s, Node *n) {
     }
 
     Diag d = {0};
-    d.message = diag_fmt("型 '%s' にメソッド '%s' はありません", type_name(ot),
-                         n->name);
+    d.message = MSG2("sema.188", "型 '{0}' にメソッド '{1}' はありません", type_name(ot), n->name);
     d.primary.tok = n->tok;
-    d.primary.label = "このメソッドは存在しません";
-    d.hint = "list[T] で使えるのは append / pop / insert / remove / index / "
-             "reverse / clear / copy / extend です"
-             "（class のメソッドは自分で定義できます）";
+    d.primary.label = MSG0("sema.475", "このメソッドは存在しません");
+    d.hint = MSG0("sema.476", "list[T] で使えるのは append / pop / insert / remove / index / reverse / clear / copy / extend です（class のメソッドは自分で定義できます）");
     diag_fail(&d);
 }
 
@@ -3530,14 +3346,12 @@ static Type *check_new(Sema *s, Node *n, Class *c) {
             !want->cls->from_template ||
             want->cls->from_template != c) {
             Diag d = {0};
-            d.message = diag_fmt("'%s' のどの実体を作るのか決められません", c->name);
+            d.message = MSG1("sema.189", "'{0}' のどの実体を作るのか決められません", c->name);
             d.primary.tok = n->tok;
-            d.primary.label = "型引数が決まりません";
+            d.primary.label = MSG0("sema.477", "型引数が決まりません");
             d.related.tok = c->tok;
-            d.related.label = "このクラスは型引数を取ります";
-            d.hint = diag_fmt("変数の型から決めます。"
-                              "'x: %s[型, ...] = %s(...)' の形で書いてください",
-                              c->name, c->name);
+            d.related.label = MSG0("sema.478", "このクラスは型引数を取ります");
+            d.hint = MSG2("sema.190", "変数の型から決めます。'x: {0}[型, ...] = {1}(...)' の形で書いてください", c->name, c->name);
             diag_fail(&d);
         }
         c = want->cls;   // ★ 以降は実体を相手にします
@@ -3552,14 +3366,12 @@ static Type *check_new(Sema *s, Node *n, Class *c) {
     if (!c->has_init) {
         if (nargs != 0) {
             Diag d = {0};
-            d.message = diag_fmt("クラス '%s' には init が無いので引数を渡せません",
-                                 c->name);
+            d.message = MSG1("sema.191", "クラス '{0}' には init が無いので引数を渡せません", c->name);
             d.primary.tok = n->tok;
-            d.primary.label = diag_fmt("%d 個の引数が渡されています", nargs);
+            d.primary.label = MSG1("sema.192", "{0} 個の引数が渡されています", diag_fmt("%d", nargs));
             d.related.tok = c->tok;
-            d.related.label = "クラスの定義はここです";
-            d.hint = "引数を受け取るには init メソッドを定義してください:\n"
-                     "             def init(self, ...) -> None:";
+            d.related.label = MSG0("sema.444", "クラスの定義はここです");
+            d.hint = MSG0("sema.479", "引数を受け取るには init メソッドを定義してください:\n             def init(self, ...) -> None:");
             diag_fail(&d);
         }
         return c->type;
@@ -3569,19 +3381,18 @@ static Type *check_new(Sema *s, Node *n, Class *c) {
     FuncSig *f = lookup_func_in(c->owner, mangle(c->name, "init"));
 
     // ★ 並べ替えと既定値の穴埋め（A-38）。self のぶん 1 つ飛ばします。
-    bind_args_sig(n, f, 1, diag_fmt("クラス '%s'", c->name));
+    bind_args_sig(n, f, 1, MSG1("sema.193", "クラス '{0}'", c->name));
     nargs = 0;
     for (Node *a = n->args; a; a = a->next) nargs++;
 
     if (nargs != f->nparams - 1) {
         Diag d = {0};
-        d.message = diag_fmt("'%s' の生成には %d 個の引数が必要ですが、%d 個渡されました",
-                             c->name, f->nparams - 1, nargs);
+        d.message = MSG3("sema.194", "'{0}' の生成には {1} 個の引数が必要ですが、{2} 個渡されました", c->name, diag_fmt("%d", f->nparams - 1), diag_fmt("%d", nargs));
         d.primary.tok = n->tok;
-        d.primary.label = "引数の個数が違います";
+        d.primary.label = MSG0("sema.197", "引数の個数が違います");
         d.related.tok = f->tok;
-        d.related.label = "init はここで定義されています";
-        d.hint = "self は自動的に渡されるので、書く必要はありません";
+        d.related.label = MSG0("sema.480", "init はここで定義されています");
+        d.hint = MSG0("sema.452", "self は自動的に渡されるので、書く必要はありません");
         diag_fail(&d);
     }
 
@@ -3594,18 +3405,15 @@ static Type *check_new(Sema *s, Node *n, Class *c) {
         // 注意: 定義の木が無いときは「しまう」と答えます（安全側）
         if (a->caps && (!f->node ||
                         fn_param_escapes_at(s, f->node->body, f->pnames[i + 1], 0)))
-            reject_escaping_closure(a, "しまうことが");
+            reject_escaping_closure(a, MSG0("sema.410", "しまうことが"));
         mark_arg_own_rc(a, f, i + 1);
         if (!type_assignable(at, f->params[i + 1])) {
             Diag d = {0};
-            d.message = diag_fmt("'%s' の生成の第 %d 引数: 型 '%s' を '%s' に渡せません",
-                                 c->name, i + 1, type_name(at),
-                                 type_name(f->params[i + 1]));
+            d.message = MSG4("sema.195", "'{0}' の生成の第 {1} 引数: 型 '{2}' を '{3}' に渡せません", c->name, diag_fmt("%d", i + 1), type_name(at), type_name(f->params[i + 1]));
             d.primary.tok = a->tok;
-            d.primary.label = diag_fmt("これは '%s' 型です", type_name(at));
+            d.primary.label = MSG1("sema.051", "これは '{0}' 型です", type_name(at));
             d.related.tok = f->tok;
-            d.related.label = diag_fmt("引数 '%s' は '%s' 型です", f->pnames[i + 1],
-                                       type_name(f->params[i + 1]));
+            d.related.label = MSG2("sema.151", "引数 '{0}' は '{1}' 型です", f->pnames[i + 1], type_name(f->params[i + 1]));
             d.hint = no_implicit_hint(at, f->params[i + 1]);
             diag_fail(&d);
         }
@@ -3666,26 +3474,22 @@ static Type *check_lowlevel_call(Sema *s, Node *n, const LowLevel *ll) {
     if (s->unsafe_depth == 0) {
         Diag d = {0};
         d.code = "E-UNSAFE-1";
-        d.message = diag_fmt("'%s' は unsafe: の中でしか使えません", n->name);
+        d.message = MSG1("sema.196", "'{0}' は unsafe: の中でしか使えません", n->name);
         d.primary.tok = n->tok;
-        d.primary.label = "生ポインタを触っています";
-        d.hint = "unsafe: ブロックで囲んでください:\n"
-                 "             unsafe:\n"
-                 "                 poke8(p, 0, 65)";
+        d.primary.label = MSG0("sema.481", "生ポインタを触っています");
+        d.hint = MSG0("sema.482", "unsafe: ブロックで囲んでください:\n             unsafe:\n                 poke8(p, 0, 65)");
         diag_fail(&d);
     }
 
     int nargs = 0;
     for (Node *a = n->args; a; a = a->next) nargs++;
     if (nargs != ll->nargs)
-        error_at_hint(n->tok, diag_fmt("%s は %d 個の引数を取ります", n->name, ll->nargs),
-                      "引数の個数が違います");
+        error_at_hint_m(n->tok, MSG2("sema.198", "{0} は {1} 個の引数を取ります", n->name, diag_fmt("%d", ll->nargs)), MSG0("sema.197", "引数の個数が違います"));
 
     // ★ asm 系は第 1 引数が「文字列リテラル」（実行時に組み立てられては困る）
     bool is_asm = strncmp(n->name, "asm", 3) == 0;
     if (is_asm && (!n->args || n->args->kind != ND_STR))
-        error_at_hint(n->tok, "命令はリテラルで書いてください（例: asm(\"wfi\")）",
-                      "asm の第 1 引数は文字列リテラルです");
+        error_at_hint_m(n->tok, MSG0("sema.200", "命令はリテラルで書いてください（例: asm(\"wfi\")）"), MSG0("sema.199", "asm の第 1 引数は文字列リテラルです"));
 
     int i = 0;
     for (Node *a = n->args; a; a = a->next, i++) {
@@ -3696,11 +3500,9 @@ static Type *check_lowlevel_call(Sema *s, Node *n, const LowLevel *ll) {
         Type *at = check_expr(s, a);
         bool want_ptr = ll->takes_ptr && i == 0;
         if (want_ptr && at->kind != TY_PTR)
-            error_at_hint(a->tok, "第 1 引数には ptr[int] を渡してください",
-                          "'%s' はポインタではありません", type_name(at));
+            error_at_hint_m(a->tok, MSG0("sema.202", "第 1 引数には ptr[int] を渡してください"), MSG1("sema.201", "'{0}' はポインタではありません", type_name(at)));
         if (!want_ptr && at->kind != TY_INT)
-            error_at_hint(a->tok, "低レベルの操作が扱うのは int だけです",
-                          "'%s' はここに渡せません", type_name(at));
+            error_at_hint_m(a->tok, MSG0("sema.204", "低レベルの操作が扱うのは int だけです"), MSG1("sema.203", "'{0}' はここに渡せません", type_name(at)));
     }
 
     n->builtin = NULL;
@@ -3718,20 +3520,16 @@ static Type *check_call(Sema *s, Node *n) {
         Type *ft = fv->type;
         // ★ 関数型には引数の**名前が入っていません**（A-38）。
         reject_kwargs(n->args,
-                      diag_fmt("関数の値 '%s' は名前で引数を受け取りません",
-                               n->name),
-                      diag_fmt("この変数の型は '%s' です。"
-                               "関数の型には引数の名前が入らないので、"
-                               "位置で渡してください", type_name(ft)));
+                      MSG1("sema.205", "関数の値 '{0}' は名前で引数を受け取りません", n->name),
+                      MSG1("sema.206", "この変数の型は '{0}' です。関数の型には引数の名前が入らないので、位置で渡してください", type_name(ft)));
         int nargs = 0;
         for (Node *a = n->args; a; a = a->next) nargs++;
         if (nargs != ft->nparams) {
             Diag d = {0};
-            d.message = diag_fmt("'%s' は %d 個の引数を取りますが、%d 個渡されました",
-                                 n->name, ft->nparams, nargs);
+            d.message = MSG3("sema.207", "'{0}' は {1} 個の引数を取りますが、{2} 個渡されました", n->name, diag_fmt("%d", ft->nparams), diag_fmt("%d", nargs));
             d.primary.tok = n->tok;
-            d.primary.label = "引数の個数が違います";
-            d.hint = diag_fmt("この変数の型は '%s' です", type_name(ft));
+            d.primary.label = MSG0("sema.197", "引数の個数が違います");
+            d.hint = MSG1("sema.208", "この変数の型は '{0}' です", type_name(ft));
             diag_fail(&d);
         }
         int i = 0;
@@ -3741,11 +3539,10 @@ static Type *check_call(Sema *s, Node *n) {
             s->expected = NULL;
             if (!type_assignable(at, ft->params[i])) {
                 Diag d = {0};
-                d.message = diag_fmt("%d 番目の引数の型が合いません", i + 1);
+                d.message = MSG1("sema.209", "{0} 番目の引数の型が合いません", diag_fmt("%d", i + 1));
                 d.primary.tok = a->tok;
-                d.primary.label = diag_fmt("これは '%s' 型です", type_name(at));
-                d.hint = diag_fmt("ここには '%s' が必要です",
-                                  type_name(ft->params[i]));
+                d.primary.label = MSG1("sema.051", "これは '{0}' 型です", type_name(at));
+                d.hint = MSG1("sema.064", "ここには '{0}' が必要です", type_name(ft->params[i]));
                 diag_fail(&d);
             }
         }
@@ -3759,9 +3556,8 @@ static Type *check_call(Sema *s, Node *n) {
     //   注意: クラス名なら生成なので、ここでは断りません（init の名前が使えます）。
     if (!lookup_func(s, n->name) && !lookup_class(s, n->name))
         reject_kwargs(n->args,
-                      diag_fmt("'%s' は名前で引数を受け取りません", n->name),
-                      "名前で渡せるのは、この言語で定義した"
-                      "関数・メソッド・生成だけです");
+                      MSG1("sema.162", "'{0}' は名前で引数を受け取りません", n->name),
+                      MSG0("sema.466", "名前で渡せるのは、この言語で定義した関数・メソッド・生成だけです"));
 
     // ── 低レベルの組み込み ──
     const LowLevel *ll = lowlevel_of(n->name);
@@ -3776,18 +3572,14 @@ static Type *check_call(Sema *s, Node *n) {
         int nargs = 0;
         for (Node *a = n->args; a; a = a->next) nargs++;
         if (nargs != 2)
-            error_at_hint(n->tok, diag_fmt("%s(a, b) の形で使ってください", n->name),
-                          diag_fmt("%s は 2 個の引数を取ります", n->name));
+            error_at_hint(n->tok, MSG1("sema.210", "{0}(a, b) の形で使ってください", n->name),
+                          MSG1("sema.211", "{0} は 2 個の引数を取ります", n->name));
         Type *a0 = check_expr(s, n->args);
         Type *a1 = check_expr(s, n->args->next);
         if (!type_equal(a0, a1))
-            error_at(n->args->next->tok,
-                     "%s の 2 つの引数は同じ型である必要があります（'%s' と '%s'）",
-                     n->name, type_name(a0), type_name(a1));
+            error_at_m(n->args->next->tok, MSG3("sema.212", "{0} の 2 つの引数は同じ型である必要があります（'{1}' と '{2}'）", n->name, type_name(a0), type_name(a1)));
         if (a0->kind != TY_INT && a0->kind != TY_FLOAT)
-            error_at_hint(n->args->tok,
-                          "min / max が使えるのは int と float です",
-                          "'%s' 型には使えません", type_name(a0));
+            error_at_hint_m(n->args->tok, MSG0("sema.214", "min / max が使えるのは int と float です"), MSG1("sema.213", "'{0}' 型には使えません", type_name(a0)));
         n->builtin = NULL;
         n->ir_name = NULL;
         n->is_minmax = true;
@@ -3805,19 +3597,15 @@ static Type *check_call(Sema *s, Node *n) {
         int nargs = 0;
         for (Node *a = n->args; a; a = a->next) nargs++;
         if (nargs != 2)
-            error_at_hint(n->tok, diag_fmt("%s(a, b) の形で使ってください", n->name),
-                          diag_fmt("%s は 2 個の引数を取ります", n->name));
+            error_at_hint(n->tok, MSG1("sema.210", "{0}(a, b) の形で使ってください", n->name),
+                          MSG1("sema.211", "{0} は 2 個の引数を取ります", n->name));
         Type *a0 = check_expr(s, n->args);
         Type *a1 = check_expr(s, n->args->next);
         // 注意: **問題のある側の引数**を指します（2 つとも int でないときは左から）
         if (a0->kind != TY_INT)
-            error_at_hint(n->args->tok,
-                          "折り返す算術が使えるのは int だけです",
-                          "'%s' 型には使えません", type_name(a0));
+            error_at_hint_m(n->args->tok, MSG0("sema.215", "折り返す算術が使えるのは int だけです"), MSG1("sema.213", "'{0}' 型には使えません", type_name(a0)));
         if (a1->kind != TY_INT)
-            error_at_hint(n->args->next->tok,
-                          "折り返す算術が使えるのは int だけです",
-                          "'%s' 型には使えません", type_name(a1));
+            error_at_hint_m(n->args->next->tok, MSG0("sema.215", "折り返す算術が使えるのは int だけです"), MSG1("sema.213", "'{0}' 型には使えません", type_name(a1)));
         n->builtin = NULL;
         n->ir_name = NULL;
         n->is_wrap = true;
@@ -3833,13 +3621,10 @@ static Type *check_call(Sema *s, Node *n) {
         int nargs = 0;
         for (Node *a = n->args; a; a = a->next) nargs++;
         if (nargs != 1)
-            error_at_hint(n->tok, "rc(値) の形で使ってください",
-                          "rc は 1 個の引数を取ります");
+            error_at_hint_m(n->tok, MSG0("sema.217", "rc(値) の形で使ってください"), MSG0("sema.216", "rc は 1 個の引数を取ります"));
         Type *at = check_expr(s, n->args);
         if (at->kind != TY_CLASS)
-            error_at_hint(n->args->tok,
-                          "rc に入れられるのはクラスのインスタンスだけです",
-                          "'%s' は rc に入れられません", type_name(at));
+            error_at_hint_m(n->args->tok, MSG0("sema.218", "rc に入れられるのはクラスのインスタンスだけです"), MSG1("sema.026", "'{0}' は rc に入れられません", type_name(at)));
         n->is_extern = false;
         n->name = "rc";
         return type_rc(at);
@@ -3860,30 +3645,21 @@ static Type *check_call(Sema *s, Node *n) {
         int nargs = 0;
         for (Node *a = n->args; a; a = a->next) nargs++;
         if (nargs < 1)
-            error_at_hint(n->tok, "spawn(関数, 引数…) の形で使ってください",
-                          "spawn には少なくとも関数が要ります");
+            error_at_hint_m(n->tok, MSG0("sema.220", "spawn(関数, 引数…) の形で使ってください"), MSG0("sema.219", "spawn には少なくとも関数が要ります"));
         Type *ft = check_expr(s, n->args);
         if (ft->kind != TY_FN)
-            error_at_hint(n->args->tok,
-                          "spawn の 1 つ目は関数です（例: spawn(work, job)）",
-                          "'%s' は関数ではありません", type_name(ft));
+            error_at_hint_m(n->args->tok, MSG0("sema.222", "spawn の 1 つ目は関数です（例: spawn(work, job)）"), MSG1("sema.221", "'{0}' は関数ではありません", type_name(ft)));
         // ★ 別のスレッドは、作った枠より長生きしえます（A-43）
-        reject_escaping_closure(n->args, "別のスレッドへ渡すことが");
+        reject_escaping_closure(n->args, MSG0("sema.483", "別のスレッドへ渡すことが"));
         if (ft->nparams != nargs - 1)
-            error_at_hint(n->args->tok,
-                          diag_fmt("'%s' は %d 個の引数を取ります", type_name(ft),
-                                   ft->nparams),
-                          "spawn に渡した引数が %d 個です", nargs - 1);
+            error_at_hint_m(n->args->tok, MSG2("sema.224", "'{0}' は {1} 個の引数を取ります", type_name(ft), diag_fmt("%d", ft->nparams)), MSG1("sema.223", "spawn に渡した引数が {0} 個です", diag_fmt("%d", nargs - 1)));
         int k = 0;
         for (Node *a = n->args->next; a; a = a->next, k++) {
             s->expected = ft->params[k];
             Type *at = check_expr(s, a);
             s->expected = NULL;
             if (!type_assignable(at, ft->params[k]))
-                error_at_hint(a->tok,
-                              diag_fmt("ここには '%s' が必要です",
-                                       type_name(ft->params[k])),
-                              "%d 番目の引数が '%s' 型です", k + 1, type_name(at));
+                error_at_hint_m(a->tok, MSG1("sema.064", "ここには '{0}' が必要です", type_name(ft->params[k])), MSG2("sema.166", "{0} 番目の引数が '{1}' 型です", diag_fmt("%d", k + 1), type_name(at)));
         }
         n->is_extern = false;
         return type_thread(ft->elem);
@@ -3896,13 +3672,10 @@ static Type *check_call(Sema *s, Node *n) {
         int nargs = 0;
         for (Node *a = n->args; a; a = a->next) nargs++;
         if (nargs != 1)
-            error_at_hint(n->tok, "mutex(値) の形で使ってください",
-                          "mutex は 1 個の引数を取ります");
+            error_at_hint_m(n->tok, MSG0("sema.226", "mutex(値) の形で使ってください"), MSG0("sema.225", "mutex は 1 個の引数を取ります"));
         Type *at = check_expr(s, n->args);
         if (at->kind != TY_CLASS && at->kind != TY_LIST)
-            error_at_hint(n->args->tok,
-                          "mutex に入れられるのはクラスかリストだけです",
-                          "'%s' は mutex に入れられません", type_name(at));
+            error_at_hint_m(n->args->tok, MSG0("sema.227", "mutex に入れられるのはクラスかリストだけです"), MSG1("sema.032", "'{0}' は mutex に入れられません", type_name(at)));
         n->is_extern = false;
         n->name = "mutex";
         return type_mutex(at);
@@ -3925,15 +3698,12 @@ static Type *check_call(Sema *s, Node *n) {
             if (!type_assignable(at, need)) {
                 Diag d = {0};
                 d.message = is_pad
-                    ? diag_fmt("書式（桁揃え）は '%s' 型には使えません",
-                               type_name(at))
-                    : diag_fmt("小数の書式は '%s' 型には使えません",
-                               type_name(at));
+                    ? MSG1("sema.228", "書式（桁揃え）は '{0}' 型には使えません", type_name(at))
+                    : MSG1("sema.229", "小数の書式は '{0}' 型には使えません", type_name(at));
                 d.primary.tok = a->tok;
-                d.primary.label = diag_fmt("これは '%s' 型です", type_name(at));
-                d.hint = is_pad ? "桁揃えは文字列にしてから行います"
-                                : "'.2f' のような書式は float にだけ使えます"
-                                  "（int なら float(x) にしてください）";
+                d.primary.label = MSG1("sema.051", "これは '{0}' 型です", type_name(at));
+                d.hint = is_pad ? MSG0("sema.484", "桁揃えは文字列にしてから行います")
+                                : MSG0("sema.485", "'.2f' のような書式は float にだけ使えます（int なら float(x) にしてください）");
                 diag_fail(&d);
             }
         }
@@ -3958,9 +3728,7 @@ static Type *check_call(Sema *s, Node *n) {
         int nargs = 0;
         for (Node *a = n->args; a; a = a->next) nargs++;
         if (nargs != 1)
-            error_at_hint(n->tok, "copy(値) の形で使ってください",
-                          "copy は 1 個の引数を取りますが、%d 個渡されました",
-                          nargs);
+            error_at_hint_m(n->tok, MSG0("sema.231", "copy(値) の形で使ってください"), MSG1("sema.230", "copy は 1 個の引数を取りますが、{0} 個渡されました", diag_fmt("%d", nargs)));
         Type *t = auto_deref(check_expr(s, n->args));
         check_copyable(s, t, n->args->tok);
         n->builtin = NULL;
@@ -3984,11 +3752,10 @@ static Type *check_call(Sema *s, Node *n) {
 
     if (!f) {
         Diag d = {0};
-        d.message = diag_fmt("未定義の関数 '%s' です", n->name);
+        d.message = MSG1("sema.232", "未定義の関数 '{0}' です", n->name);
         d.primary.tok = n->tok;
-        d.primary.label = "この関数は定義されていません";
-        d.hint = "関数名の綴りを確認してください"
-                 "（定義の順序は問いません。後ろで定義した関数も呼べます）";
+        d.primary.label = MSG0("sema.453", "この関数は定義されていません");
+        d.hint = MSG0("sema.486", "関数名の綴りを確認してください（定義の順序は問いません。後ろで定義した関数も呼べます）");
         diag_fail(&d);
     }
 
@@ -3997,7 +3764,7 @@ static Type *check_call(Sema *s, Node *n) {
     n->is_extern = f->owner != s->cur;
 
     // ③④ 引数の個数と型
-    return check_call_sig(s, n, f, "関数");
+    return check_call_sig(s, n, f, MSG0("sema.455", "関数"));
 }
 
 // 失敗しうる呼び出しを、誰が受け止めるかを決める（R1 / R2）。
@@ -4016,21 +3783,17 @@ static void check_can_fail(Sema *s, Node *n, FuncSig *f, const char *shown) {
         Diag d = {0};
         d.primary.tok = n->tok;
         d.related.tok = f->tok;
-        d.related.label = diag_fmt("'%s' はここで宣言されています", shown);
+        d.related.label = MSG1("sema.233", "'{0}' はここで宣言されています", shown);
         if (s->cur_func && s->cur_func->nraises == 0) {
             d.code = "E-RAISE-1";
-            d.message = diag_fmt("失敗しうる呼び出し '%s' を処理していません", shown);
-            d.primary.label = diag_fmt("この呼び出しは '%s' を返すことがあります",
-                                       ec->name);
-            d.hint = diag_fmt("try で捕まえるか、この関数に 'raises %s' を足してください",
-                              ec->name);
+            d.message = MSG1("sema.234", "失敗しうる呼び出し '{0}' を処理していません", shown);
+            d.primary.label = MSG1("sema.235", "この呼び出しは '{0}' を返すことがあります", ec->name);
+            d.hint = MSG1("sema.236", "try で捕まえるか、この関数に 'raises {0}' を足してください", ec->name);
         } else {
             d.code = "E-RAISE-2";
-            d.message = diag_fmt("エラー '%s' が宣言されていません", ec->name);
-            d.primary.label = diag_fmt("'%s' は '%s' を返すことがあります", shown,
-                                       ec->name);
-            d.hint = diag_fmt("この関数の raises に '%s' を足すか、try で捕まえてください",
-                              ec->name);
+            d.message = MSG1("sema.237", "エラー '{0}' が宣言されていません", ec->name);
+            d.primary.label = MSG2("sema.238", "'{0}' は '{1}' を返すことがあります", shown, ec->name);
+            d.hint = MSG1("sema.239", "この関数の raises に '{0}' を足すか、try で捕まえてください", ec->name);
         }
         diag_fail(&d);
     }
@@ -4090,24 +3853,23 @@ static void bind_args(Node *n, int nparams, char **pnames, Node **defaults,
             //   読む人が「この値は何番目の引数か」を数え直すことになります。
             if (seen_kw) {
                 Diag d = {0};
-                d.message = "位置で渡す引数は、名前で渡す引数より前に書きます";
+                d.message = MSG0("sema.487", "位置で渡す引数は、名前で渡す引数より前に書きます");
                 d.primary.tok = a->tok;
-                d.primary.label = "ここは名前つきの引数より後ろです";
+                d.primary.label = MSG0("sema.488", "ここは名前つきの引数より後ろです");
                 d.related.tok = kw_first->arg_name_tok;
-                d.related.label = "名前で渡し始めたのはここです";
-                d.hint = "名前を付けるか、この引数を前へ動かしてください";
+                d.related.label = MSG0("sema.489", "名前で渡し始めたのはここです");
+                d.hint = MSG0("sema.490", "名前を付けるか、この引数を前へ動かしてください");
                 diag_fail(&d);
             }
             if (pos >= nparams) {
                 Diag d = {0};
-                d.message = diag_fmt("%s に渡せる引数は多くとも %d 個です（%d 個渡されました）",
-                                     subject, nparams, nargs);
+                d.message = MSG3("sema.240", "{0} に渡せる引数は多くとも {1} 個です（{2} 個渡されました）", subject, diag_fmt("%d", nparams), diag_fmt("%d", nargs));
                 d.primary.tok = a->tok;
-                d.primary.label = "この引数に当たるものがありません";
+                d.primary.label = MSG0("sema.491", "この引数に当たるものがありません");
                 d.related.tok = deftok;
-                d.related.label = "この関数はここで定義されています";
+                d.related.label = MSG0("sema.492", "この関数はここで定義されています");
                 if (has_self)
-                    d.hint = "self は自動的に渡されるので、書く必要はありません";
+                    d.hint = MSG0("sema.452", "self は自動的に渡されるので、書く必要はありません");
                 diag_fail(&d);
             }
             slot[pos++] = a;
@@ -4123,29 +3885,28 @@ static void bind_args(Node *n, int nparams, char **pnames, Node **defaults,
         if (at < 0) {
             StrBuf sb;
             sb_init(&sb);
-            sb_printf(&sb, "書ける名前は ");
+            sb_printf(&sb, "%s", MSG0("sema.241", "書ける名前は "));
             for (int i = 0; i < nparams; i++)
                 sb_printf(&sb, "%s%s", i ? " / " : "", pnames[i]);
-            sb_printf(&sb, " です");
+            sb_printf(&sb, "%s", MSG0("sema.143", " です"));
             Diag d = {0};
-            d.message = diag_fmt("%s に引数 '%s' はありません", subject,
-                                 a->arg_name);
+            d.message = MSG2("sema.242", "{0} に引数 '{1}' はありません", subject, a->arg_name);
             d.primary.tok = a->arg_name_tok;
-            d.primary.label = "この名前の引数は定義されていません";
+            d.primary.label = MSG0("sema.493", "この名前の引数は定義されていません");
             d.related.tok = deftok;
-            d.related.label = "この関数はここで定義されています";
+            d.related.label = MSG0("sema.492", "この関数はここで定義されています");
             d.hint = sb_str(&sb);
             diag_fail(&d);
         }
         if (slot[at]) {
             Diag d = {0};
-            d.message = diag_fmt("引数 '%s' に 2 回渡しています", a->arg_name);
+            d.message = MSG1("sema.243", "引数 '{0}' に 2 回渡しています", a->arg_name);
             d.primary.tok = a->arg_name_tok;
-            d.primary.label = "2 回目です";
+            d.primary.label = MSG0("sema.494", "2 回目です");
             d.related.tok = slot[at]->tok;
-            d.related.label = "1 回目はここです";
-            d.hint = at < pos ? "位置で渡したものに、名前でもう一度渡しています"
-                              : "同じ名前を 2 回書いています";
+            d.related.label = MSG0("sema.495", "1 回目はここです");
+            d.hint = at < pos ? MSG0("sema.496", "位置で渡したものに、名前でもう一度渡しています")
+                              : MSG0("sema.497", "同じ名前を 2 回書いています");
             diag_fail(&d);
         }
         slot[at] = a;
@@ -4157,14 +3918,12 @@ static void bind_args(Node *n, int nparams, char **pnames, Node **defaults,
         Node *dflt = defaults ? defaults[i] : NULL;
         if (!dflt) {
             Diag d = {0};
-            d.message = diag_fmt("%s の引数 '%s' が渡されていません", subject,
-                                 pnames[i]);
+            d.message = MSG2("sema.244", "{0} の引数 '{1}' が渡されていません", subject, pnames[i]);
             d.primary.tok = n->tok;
-            d.primary.label = diag_fmt("引数 '%s' に当たるものがありません",
-                                       pnames[i]);
+            d.primary.label = MSG1("sema.245", "引数 '{0}' に当たるものがありません", pnames[i]);
             d.related.tok = deftok;
-            d.related.label = "この関数はここで定義されています";
-            d.hint = "この引数には既定値がないので、呼ぶときに必ず書きます";
+            d.related.label = MSG0("sema.492", "この関数はここで定義されています");
+            d.hint = MSG0("sema.498", "この引数には既定値がないので、呼ぶときに必ず書きます");
             diag_fail(&d);
         }
         // ★ **呼び出しごとに複製**します（共有しません）。
@@ -4209,12 +3968,11 @@ static Type *check_call_sig(Sema *s, Node *n, FuncSig *f, const char *what) {
     for (Node *a = n->args; a; a = a->next) nargs++;
     if (nargs != f->nparams) {
         Diag d = {0};
-        d.message = diag_fmt("%s '%s' は %d 個の引数を取りますが、%d 個渡されました",
-                             what, shown, f->nparams, nargs);
+        d.message = MSG4("sema.246", "{0} '{1}' は {2} 個の引数を取りますが、{3} 個渡されました", what, shown, diag_fmt("%d", f->nparams), diag_fmt("%d", nargs));
         d.primary.tok = n->tok;
-        d.primary.label = "呼び出しの引数の個数が違います";
+        d.primary.label = MSG0("sema.450", "呼び出しの引数の個数が違います");
         d.related.tok = f->tok;
-        d.related.label = "この関数はここで定義されています";
+        d.related.label = MSG0("sema.492", "この関数はここで定義されています");
         diag_fail(&d);
     }
 
@@ -4233,15 +3991,12 @@ static Type *check_call_sig(Sema *s, Node *n, FuncSig *f, const char *what) {
         if (a->caps && f->node && i < f->nparams &&
             fn_param_escapes_at(s, f->node->body, f->pnames[i], 0)) {
             Diag d = {0};
-            d.message = diag_fmt("捕獲した lambda を '%s' に渡せません", shown);
+            d.message = MSG1("sema.247", "捕獲した lambda を '{0}' に渡せません", shown);
             d.primary.tok = a->tok;
-            d.primary.label = "この lambda は外の変数を捕まえています";
+            d.primary.label = MSG0("sema.499", "この lambda は外の変数を捕まえています");
             d.related.tok = f->tok;
-            d.related.label = diag_fmt("'%s' は受け取った関数をしまいます",
-                                       f->pnames[i]);
-            d.hint = "捕まえた値は作った関数の枠の上にあるので、"
-                     "しまわれると読めなくなります。"
-                     "捕獲しない lambda か、def で書いた関数を渡してください";
+            d.related.label = MSG1("sema.248", "'{0}' は受け取った関数をしまいます", f->pnames[i]);
+            d.hint = MSG0("sema.500", "捕まえた値は作った関数の枠の上にあるので、しまわれると読めなくなります。捕獲しない lambda か、def で書いた関数を渡してください");
             diag_fail(&d);
         }
         // ★ codegen へ「この実引数は借用で渡す」と**分かっている**ことを伝えます。
@@ -4253,14 +4008,11 @@ static Type *check_call_sig(Sema *s, Node *n, FuncSig *f, const char *what) {
         mark_arg_own_rc(a, f, i);
         if (!type_assignable(at, f->params[i])) {
             Diag d = {0};
-            d.message = diag_fmt("%s '%s' の第 %d 引数: 型 '%s' を '%s' に渡せません",
-                                 what, shown, i + 1, type_name(at),
-                                 type_name(f->params[i]));
+            d.message = MSG5("sema.249", "{0} '{1}' の第 {2} 引数: 型 '{3}' を '{4}' に渡せません", what, shown, diag_fmt("%d", i + 1), type_name(at), type_name(f->params[i]));
             d.primary.tok = a->tok;
-            d.primary.label = diag_fmt("これは '%s' 型です", type_name(at));
+            d.primary.label = MSG1("sema.051", "これは '{0}' 型です", type_name(at));
             d.related.tok = f->tok;
-            d.related.label = diag_fmt("引数 '%s' は '%s' 型です", f->pnames[i],
-                                       type_name(f->params[i]));
+            d.related.label = MSG2("sema.151", "引数 '{0}' は '{1}' 型です", f->pnames[i], type_name(f->params[i]));
             d.hint = no_implicit_hint(at, f->params[i]);
             diag_fail(&d);
         }
@@ -4280,14 +4032,12 @@ static Type *check_call_sig(Sema *s, Node *n, FuncSig *f, const char *what) {
 static void reject_escaping_closure(Node *v, const char *what) {
     if (!v || !v->caps) return;
     Diag d = {0};
-    d.message = diag_fmt("捕獲した lambda は%sできません", what);
+    d.message = MSG1("sema.250", "捕獲した lambda は{0}できません", what);
     d.primary.tok = v->tok;
-    d.primary.label = "この lambda は外の変数を捕まえています";
+    d.primary.label = MSG0("sema.499", "この lambda は外の変数を捕まえています");
     d.related.tok = v->caps->tok;
-    d.related.label = diag_fmt("'%s' を捕まえています", v->caps->name);
-    d.hint = "捕まえた値は**作った関数の枠の上**にあるので、"
-             "その関数より長生きできません。"
-             "引数として渡す（呼んでもらう）のは できます";
+    d.related.label = MSG1("sema.251", "'{0}' を捕まえています", v->caps->name);
+    d.hint = MSG0("sema.501", "捕まえた値は**作った関数の枠の上**にあるので、その関数より長生きできません。引数として渡す（呼んでもらう）のは できます");
     diag_fail(&d);
 }
 
@@ -4343,12 +4093,11 @@ static void check_return(Sema *s, Node *n) {
     if (!n->lhs) {  // return（値なし）
         if (want->kind != TY_NONE) {
             Diag d = {0};
-            d.message = diag_fmt("関数 '%s' は '%s' を返さなければなりません",
-                                 s->cur_func->name, type_name(want));
+            d.message = MSG2("sema.252", "関数 '{0}' は '{1}' を返さなければなりません", s->cur_func->name, type_name(want));
             d.primary.tok = n->tok;
-            d.primary.label = "この return には値がありません";
+            d.primary.label = MSG0("sema.502", "この return には値がありません");
             d.related.tok = s->cur_func->tok;
-            d.related.label = "戻り型はここで宣言されています";
+            d.related.label = MSG0("sema.503", "戻り型はここで宣言されています");
             diag_fail(&d);
         }
         return;
@@ -4357,25 +4106,23 @@ static void check_return(Sema *s, Node *n) {
     s->expected = want;  // ★ return [] のため
     Type *got = check_expr(s, n->lhs);
     s->expected = NULL;
-    reject_escaping_closure(n->lhs, "返すことが");   // A-43
+    reject_escaping_closure(n->lhs, MSG0("sema.504", "返すことが"));   // A-43
     if (want->kind == TY_NONE) {
         Diag d = {0};
-        d.message = diag_fmt("戻り型が None の関数 '%s' は値を返せません",
-                             s->cur_func->name);
+        d.message = MSG1("sema.253", "戻り型が None の関数 '{0}' は値を返せません", s->cur_func->name);
         d.primary.tok = n->lhs->tok;
-        d.primary.label = diag_fmt("型 '%s' の式", type_name(got));
+        d.primary.label = MSG1("sema.089", "型 '{0}' の式", type_name(got));
         d.related.tok = s->cur_func->tok;
-        d.related.label = "戻り型はここで宣言されています";
+        d.related.label = MSG0("sema.503", "戻り型はここで宣言されています");
         diag_fail(&d);
     }
     if (!type_assignable(got, want)) {
         Diag d = {0};
-        d.message = "return の型が戻り型と一致しません";
+        d.message = MSG0("sema.505", "return の型が戻り型と一致しません");
         d.primary.tok = n->lhs->tok;
-        d.primary.label = diag_fmt("型 '%s' の式", type_name(got));
+        d.primary.label = MSG1("sema.089", "型 '{0}' の式", type_name(got));
         d.related.tok = s->cur_func->tok;
-        d.related.label = diag_fmt("関数 '%s' の戻り型は '%s' です", s->cur_func->name,
-                                   type_name(want));
+        d.related.label = MSG2("sema.254", "関数 '{0}' の戻り型は '{1}' です", s->cur_func->name, type_name(want));
         d.hint = no_implicit_hint(got, want);
         diag_fail(&d);
     }
@@ -4390,11 +4137,10 @@ static void check_unpack(Sema *s, Node *n) {
     Type *rt = check_expr(s, n->rhs);
     if (rt->kind != TY_TUPLE) {
         Diag d = {0};
-        d.message = "分解代入の右辺がタプルではありません";
+        d.message = MSG0("sema.506", "分解代入の右辺がタプルではありません");
         d.primary.tok = n->rhs->tok;
-        d.primary.label = diag_fmt("これは '%s' 型です", type_name(rt));
-        d.hint = "分解できるのは (A, B) を返すものだけです"
-                 "（複数の値を返す関数を書いてください）";
+        d.primary.label = MSG1("sema.051", "これは '{0}' 型です", type_name(rt));
+        d.hint = MSG0("sema.507", "分解できるのは (A, B) を返すものだけです（複数の値を返す関数を書いてください）");
         diag_fail(&d);
     }
 
@@ -4402,11 +4148,10 @@ static void check_unpack(Sema *s, Node *n) {
     for (Node *v = n->params; v; v = v->next) nvars++;
     if (nvars != rt->nparams) {
         Diag d = {0};
-        d.message = diag_fmt("受け取る数が合いません（%d 個と %d 個）", nvars,
-                             rt->nparams);
+        d.message = MSG2("sema.255", "受け取る数が合いません（{0} 個と {1} 個）", diag_fmt("%d", nvars), diag_fmt("%d", rt->nparams));
         d.primary.tok = n->tok;
-        d.primary.label = diag_fmt("ここは %d 個です", nvars);
-        d.hint = diag_fmt("右辺は '%s' です", type_name(rt));
+        d.primary.label = MSG1("sema.061", "ここは {0} 個です", diag_fmt("%d", nvars));
+        d.hint = MSG1("sema.256", "右辺は '{0}' です", type_name(rt));
         diag_fail(&d);
     }
 
@@ -4445,11 +4190,10 @@ static EnumVal *pattern_branch(Sema *s, Node *pat, EnumDef *e) {
     const char *bname = pat->name;
     if (!owner || (pat->kind != ND_FIELD && pat->kind != ND_METHOD)) {
         Diag d = {0};
-        d.message = "case には枝を書きます";
+        d.message = MSG0("sema.508", "case には枝を書きます");
         d.primary.tok = pat->tok;
-        d.primary.label = "ここは枝ではありません";
-        d.hint = diag_fmt("'%s.枝名' か '%s.枝名(中身…)' の形で書きます",
-                          e->name, e->name);
+        d.primary.label = MSG0("sema.509", "ここは枝ではありません");
+        d.hint = MSG2("sema.257", "'{0}.枝名' か '{1}.枝名(中身…)' の形で書きます", e->name, e->name);
         diag_fail(&d);
     }
     // 列挙の名前が合っているか（`Other.Branch` を断ります）
@@ -4457,22 +4201,21 @@ static EnumVal *pattern_branch(Sema *s, Node *pat, EnumDef *e) {
     if (!same && owner->kind == ND_FIELD) same = strcmp(owner->name, e->name) == 0;
     if (!same) {
         Diag d = {0};
-        d.message = diag_fmt("'%s' の match に、別の列挙の枝は書けません",
-                             e->name);
+        d.message = MSG1("sema.258", "'{0}' の match に、別の列挙の枝は書けません", e->name);
         d.primary.tok = pat->tok;
-        d.primary.label = "ここは違う列挙です";
+        d.primary.label = MSG0("sema.510", "ここは違う列挙です");
         d.related.tok = e->tok;
-        d.related.label = "調べている列挙はこれです";
+        d.related.label = MSG0("sema.511", "調べている列挙はこれです");
         diag_fail(&d);
     }
     EnumVal *v = lookup_enum_val(e, bname);
     if (!v) {
         Diag d = {0};
-        d.message = diag_fmt("列挙 '%s' に枝 '%s' はありません", e->name, bname);
+        d.message = MSG2("sema.141", "列挙 '{0}' に枝 '{1}' はありません", e->name, bname);
         d.primary.tok = pat->tok;
-        d.primary.label = "この枝は定義されていません";
+        d.primary.label = MSG0("sema.439", "この枝は定義されていません");
         d.related.tok = e->tok;
-        d.related.label = "列挙の定義はここです";
+        d.related.label = MSG0("sema.440", "列挙の定義はここです");
         diag_fail(&d);
     }
     return v;
@@ -4487,17 +4230,15 @@ static void bind_pattern(Sema *s, Node *c, Node *pat, EnumDef *e, EnumVal *v,
 
     if (nargs != v->nfields) {
         Diag d = {0};
-        d.message = diag_fmt("枝 '%s.%s' の中身は %d 個です（%d 個書かれています）",
-                             e->name, v->name, v->nfields, nargs);
+        d.message = MSG4("sema.259", "枝 '{0}.{1}' の中身は {2} 個です（{3} 個書かれています）", e->name, v->name, diag_fmt("%d", v->nfields), diag_fmt("%d", nargs));
         d.primary.tok = pat->tok;
-        d.primary.label = v->nfields == 0 ? "この枝は中身を持ちません"
-                                          : "中身の数が合っていません";
+        d.primary.label = v->nfields == 0 ? MSG0("sema.436", "この枝は中身を持ちません")
+                                          : MSG0("sema.512", "中身の数が合っていません");
         d.related.tok = v->tok;
-        d.related.label = "枝の定義はここです";
+        d.related.label = MSG0("sema.438", "枝の定義はここです");
         d.hint = v->nfields == 0
-                     ? diag_fmt("'case %s.%s:' と書きます", e->name, v->name)
-                     : diag_fmt("'case %s.%s(…)' に %d 個の名前を書きます",
-                                e->name, v->name, v->nfields);
+                     ? MSG2("sema.260", "'case {0}.{1}:' と書きます", e->name, v->name)
+                     : MSG3("sema.261", "'case {0}.{1}(…)' に {2} 個の名前を書きます", e->name, v->name, diag_fmt("%d", v->nfields));
         diag_fail(&d);
     }
     if (nargs == 0) return;
@@ -4506,21 +4247,20 @@ static void bind_pattern(Sema *s, Node *c, Node *pat, EnumDef *e, EnumVal *v,
     for (Node *a = pat->args; a; a = a->next) {
         if (a->kind != ND_VAR) {
             Diag d = {0};
-            d.message = "case の中身には名前を書きます";
+            d.message = MSG0("sema.513", "case の中身には名前を書きます");
             d.primary.tok = a->tok;
-            d.primary.label = "ここは名前ではありません";
-            d.hint = "束縛する名前を書きます（例: case Shape.Circle(r):）。"
-                     "値で絞りたいときは本体で if を使ってください";
+            d.primary.label = MSG0("sema.514", "ここは名前ではありません");
+            d.hint = MSG0("sema.515", "束縛する名前を書きます（例: case Shape.Circle(r):）。値で絞りたいときは本体で if を使ってください");
             diag_fail(&d);
         }
         for (Node *q = pat->args; q != a; q = q->next)
             if (strcmp(q->name, a->name) == 0) {
                 Diag d = {0};
-                d.message = diag_fmt("束縛する名前 '%s' が 2 回あります", a->name);
+                d.message = MSG1("sema.262", "束縛する名前 '{0}' が 2 回あります", a->name);
                 d.primary.tok = a->tok;
-                d.primary.label = "2 つめです";
+                d.primary.label = MSG0("sema.516", "2 つめです");
                 d.related.tok = q->tok;
-                d.related.label = "最初はここです";
+                d.related.label = MSG0("sema.517", "最初はここです");
                 diag_fail(&d);
             }
     }
@@ -4644,15 +4384,14 @@ static void check_iter_sig(FuncSig *f, const char *name, int nparams,
     if (ok) return;
 
     Diag d = {0};
-    d.message = diag_fmt("'%s.%s' の形が for の規約と違います", c->name, name);
+    d.message = MSG2("sema.263", "'{0}.{1}' の形が for の規約と違います", c->name, name);
     d.primary.tok = at;
-    d.primary.label = "この for がその規約を使います";
+    d.primary.label = MSG0("sema.518", "この for がその規約を使います");
     d.related.tok = f->tok;
-    d.related.label = "このメソッドです";
+    d.related.label = MSG0("sema.519", "このメソッドです");
     d.hint = strcmp(name, "__get__") == 0
-                 ? "def __get__(self, cur: int) -> T の形で書いてください"
-                 : diag_fmt("def %s(%s) -> int の形で書いてください", name,
-                            nparams == 2 ? "self, cur: int" : "self");
+                 ? MSG0("sema.520", "def __get__(self, cur: int) -> T の形で書いてください")
+                 : MSG2("sema.264", "def {0}({1}) -> int の形で書いてください", name, nparams == 2 ? "self, cur: int" : "self");
     diag_fail(&d);
 }
 
@@ -4701,18 +4440,12 @@ static void check_foreach(Sema *s, Node *n) {
         FuncSig *get = iter_method(s, c, "__get__");
         if (!first || !next || !get) {
             Diag d = {0};
-            d.message = diag_fmt("クラス '%s' は for で回せません", c->name);
+            d.message = MSG1("sema.265", "クラス '{0}' は for で回せません", c->name);
             d.primary.tok = iter->tok;
-            d.primary.label = diag_fmt("'%s' 型です", type_name(ct));
+            d.primary.label = MSG1("sema.156", "'{0}' 型です", type_name(ct));
             d.related.tok = c->tok;
-            d.related.label = "クラスの定義はここです";
-            d.hint = "for で回すには 3 つのメソッドが要ります:\n"
-                     "             def __first__(self) -> int          "
-                     "最初のカーソル（無ければ -1）\n"
-                     "             def __next__(self, cur: int) -> int "
-                     "次のカーソル（無ければ -1）\n"
-                     "             def __get__(self, cur: int) -> T    "
-                     "そのカーソルの要素";
+            d.related.label = MSG0("sema.444", "クラスの定義はここです");
+            d.hint = MSG0("sema.521", "for で回すには 3 つのメソッドが要ります:\n             def __first__(self) -> int          最初のカーソル（無ければ -1）\n             def __next__(self, cur: int) -> int 次のカーソル（無ければ -1）\n             def __get__(self, cur: int) -> T    そのカーソルの要素");
             diag_fail(&d);
         }
         check_iter_sig(first, "__first__", 1, ty_int, t, c);
@@ -4762,11 +4495,10 @@ static void check_foreach(Sema *s, Node *n) {
                                   new_int_node(t, 1));
     } else {
         Diag d = {0};
-        d.message = diag_fmt("'%s' 型は for で回せません", type_name(ct));
+        d.message = MSG1("sema.266", "'{0}' 型は for で回せません", type_name(ct));
         d.primary.tok = iter->tok;
-        d.primary.label = "ここは回せる形ではありません";
-        d.hint = "回せるのは list / str / range(...) と、"
-                 "__first__ / __next__ / __get__ を持つクラスです";
+        d.primary.label = MSG0("sema.522", "ここは回せる形ではありません");
+        d.hint = MSG0("sema.523", "回せるのは list / str / range(...) と、__first__ / __next__ / __get__ を持つクラスです");
         diag_fail(&d);
     }
 
@@ -4798,7 +4530,7 @@ static void check_stmt(Sema *s, Node *n) {
         case ND_PASS: break;  // 何もしない
 
         case ND_IF: {
-            check_cond(s, "if の条件", n, n->lhs);
+            check_cond(s, MSG0("parse.171", "if の条件"), n, n->lhs);
 
             // ★ then 節では条件が成り立っている
             NarrowSet ns = {0};
@@ -4844,12 +4576,10 @@ static void check_stmt(Sema *s, Node *n) {
             bool is_enum = men != NULL;
             if (!is_enum && st->kind != TY_INT && st->kind != TY_STR) {
                 Diag d = {0};
-                d.message = diag_fmt("'%s' は match で調べられません",
-                                     type_name(st));
+                d.message = MSG1("sema.267", "'{0}' は match で調べられません", type_name(st));
                 d.primary.tok = n->lhs->tok;
-                d.primary.label = "ここに書けるのは 列挙 / int / str です";
-                d.hint = "クラスの場合分けはインタフェースで書きます"
-                         "（どの枝かを型が持ちます）";
+                d.primary.label = MSG0("sema.524", "ここに書けるのは 列挙 / int / str です");
+                d.hint = MSG0("sema.525", "クラスの場合分けはインタフェースで書きます（どの枝かを型が持ちます）");
                 diag_fail(&d);
             }
             if (is_enum) n->en = men;
@@ -4865,19 +4595,17 @@ static void check_stmt(Sema *s, Node *n) {
                     //   なりません**（後ろの case は決して選ばれないため）。
                     if (has_default) {
                         Diag d = {0};
-                        d.message = "case _ が 2 つあります";
+                        d.message = MSG0("sema.526", "case _ が 2 つあります");
                         d.primary.tok = c->tok;
-                        d.primary.label = "2 つめです";
+                        d.primary.label = MSG0("sema.516", "2 つめです");
                         d.related.tok = default_at->tok;
-                        d.related.label = "最初の case _ はここです";
+                        d.related.label = MSG0("sema.527", "最初の case _ はここです");
                         diag_fail(&d);
                     }
                     has_default = true;
                     default_at = c;
                     if (c->next)
-                        error_at_hint(c->next->tok,
-                                      "case _ より後ろの case は決して選ばれません",
-                                      "この case は届きません");
+                        error_at_hint_m(c->next->tok, MSG0("sema.269", "case _ より後ろの case は決して選ばれません"), MSG0("sema.268", "この case は届きません"));
                     check_block(s, c->body);
                     continue;
                 }
@@ -4886,12 +4614,10 @@ static void check_stmt(Sema *s, Node *n) {
                 Type *ct = check_expr(s, c->lhs);
                 if (!type_equal(ct, st)) {
                     Diag d = {0};
-                    d.message = diag_fmt("case の値の型が違います"
-                                         "（'%s' を調べているのに '%s' です）",
-                                         type_name(st), type_name(ct));
+                    d.message = MSG2("sema.270", "case の値の型が違います（'{0}' を調べているのに '{1}' です）", type_name(st), type_name(ct));
                     d.primary.tok = c->lhs->tok;
-                    d.primary.label = diag_fmt("ここは '%s' です", type_name(ct));
-                    d.hint = "match は暗黙の変換をしません（言語全体と同じです）";
+                    d.primary.label = MSG1("sema.271", "ここは '{0}' です", type_name(ct));
+                    d.hint = MSG0("sema.528", "match は暗黙の変換をしません（言語全体と同じです）");
                     diag_fail(&d);
                 }
 
@@ -4900,12 +4626,12 @@ static void check_stmt(Sema *s, Node *n) {
                 //   「if の連なり」と同じになり、網羅を確かめられません。
                 if (c->lhs->kind != ND_INT && c->lhs->kind != ND_STR) {
                     Diag d = {0};
-                    d.message = "case には決まった値を書きます";
+                    d.message = MSG0("sema.529", "case には決まった値を書きます");
                     d.primary.tok = c->lhs->tok;
-                    d.primary.label = "ここはコンパイル時に決まりません";
+                    d.primary.label = MSG0("sema.530", "ここはコンパイル時に決まりません");
                     d.hint = is_enum
-                        ? "列挙の枝（例: Color.Red）を書いてください"
-                        : "リテラルを書いてください（変えられる値は if で比べます）";
+                        ? MSG0("sema.531", "列挙の枝（例: Color.Red）を書いてください")
+                        : MSG0("sema.532", "リテラルを書いてください（変えられる値は if で比べます）");
                     diag_fail(&d);
                 }
 
@@ -4921,11 +4647,11 @@ static void check_stmt(Sema *s, Node *n) {
                                  (size_t)c->lhs->slen) == 0;
                     if (same) {
                         Diag d = {0};
-                        d.message = "同じ値の case が 2 つあります";
+                        d.message = MSG0("sema.533", "同じ値の case が 2 つあります");
                         d.primary.tok = c->lhs->tok;
-                        d.primary.label = "2 つめは決して選ばれません";
+                        d.primary.label = MSG0("sema.534", "2 つめは決して選ばれません");
                         d.related.tok = q->lhs->tok;
-                        d.related.label = "最初の case はここです";
+                        d.related.label = MSG0("sema.535", "最初の case はここです");
                         diag_fail(&d);
                     }
                 }
@@ -4949,14 +4675,12 @@ static void check_stmt(Sema *s, Node *n) {
                     }
                     if (nmiss) {
                         Diag d = {0};
-                        d.message = diag_fmt("match に書いていない枝があります: %s",
-                                             sb_str(&missing));
+                        d.message = MSG1("sema.272", "match に書いていない枝があります: {0}", sb_str(&missing));
                         d.primary.tok = n->tok;
-                        d.primary.label = "ここで全部の枝を扱ってください";
+                        d.primary.label = MSG0("sema.536", "ここで全部の枝を扱ってください");
                         d.related.tok = men->tok;
-                        d.related.label = "列挙の定義はここです";
-                        d.hint = "どれにも当たらないときの動きが要るなら "
-                                 "case _: を書いてください";
+                        d.related.label = MSG0("sema.440", "列挙の定義はここです");
+                        d.hint = MSG0("sema.537", "どれにも当たらないときの動きが要るなら case _: を書いてください");
                         diag_fail(&d);
                     }
                     // ★ 全部書いてあるなら case _ は要りません（書くと
@@ -4967,21 +4691,17 @@ static void check_stmt(Sema *s, Node *n) {
                     for (Node *c = n->body; c; c = c->next)
                         if (c->lhs) ncase++;
                     if (ncase == men->nvals)
-                        error_at_hint(default_at->tok,
-                                      "枝を全部書いてあるので case _ は届きません",
-                                      "この case は選ばれません");
+                        error_at_hint_m(default_at->tok, MSG0("sema.274", "枝を全部書いてあるので case _ は届きません"), MSG0("sema.273", "この case は選ばれません"));
                 }
             } else if (!has_default) {
                 // ★ int / str は値が無限にあるので、網羅を静的に示せません。
                 //   **case _ を必須にします** — 無いと「どれにも当たらない」
                 //   ときの動きが書かれていないことになります。
                 Diag d = {0};
-                d.message = diag_fmt("'%s' の match には case _ が要ります",
-                                     type_name(st));
+                d.message = MSG1("sema.275", "'{0}' の match には case _ が要ります", type_name(st));
                 d.primary.tok = n->tok;
-                d.primary.label = "どれにも当たらないときの動きがありません";
-                d.hint = "最後に case _: を書いてください"
-                         "（値が無限にあるので、全部を書き尽くせません）";
+                d.primary.label = MSG0("sema.538", "どれにも当たらないときの動きがありません");
+                d.hint = MSG0("sema.539", "最後に case _: を書いてください（値が無限にあるので、全部を書き尽くせません）");
                 diag_fail(&d);
             }
             break;
@@ -4994,7 +4714,7 @@ static void check_stmt(Sema *s, Node *n) {
             break;
 
         case ND_WHILE: {
-            check_cond(s, "while の条件", n, n->lhs);
+            check_cond(s, MSG0("parse.178", "while の条件"), n, n->lhs);
             s->loop_depth++;
 
             // ★ 本体に入れたということは条件が成り立っている。
@@ -5014,11 +4734,9 @@ static void check_stmt(Sema *s, Node *n) {
             bool is_target = strcmp(n->name, "target") == 0;
             bool is_no_rt = strcmp(n->name, "no_runtime") == 0;
             if (!is_target && !is_no_rt)
-                error_at_hint(n->tok, "いま使える pragma は target と no_runtime です",
-                              "未知の pragma '%s' です", n->name);
+                error_at_hint_m(n->tok, MSG0("sema.277", "いま使える pragma は target と no_runtime です"), MSG1("sema.276", "未知の pragma '{0}' です", n->name));
             if (is_target && !n->sval)
-                error_at_hint(n->tok, "pragma target \"riscv64-unknown-elf\" の形で書きます",
-                              "pragma target には文字列が必要です");
+                error_at_hint_m(n->tok, MSG0("sema.279", "pragma target \"riscv64-unknown-elf\" の形で書きます"), MSG0("sema.278", "pragma target には文字列が必要です"));
             break;
         }
 
@@ -5034,11 +4752,10 @@ static void check_stmt(Sema *s, Node *n) {
             if (n->kind == ND_ENSURES) check_old_types(n->lhs);
             if (t->kind != TY_BOOL) {
                 Diag d = {0};
-                d.message = diag_fmt("%s には bool の式を書きます",
-                                     n->kind == ND_REQUIRES ? "requires" : "ensures");
+                d.message = MSG1("sema.280", "{0} には bool の式を書きます", n->kind == ND_REQUIRES ? "requires" : "ensures");
                 d.primary.tok = n->lhs->tok;
-                d.primary.label = diag_fmt("これは '%s' 型です", type_name(t));
-                d.hint = "比べる式を書いてください（例: requires b != 0）";
+                d.primary.label = MSG1("sema.051", "これは '{0}' 型です", type_name(t));
+                d.hint = MSG0("sema.540", "比べる式を書いてください（例: requires b != 0）");
                 diag_fail(&d);
             }
             break;
@@ -5070,10 +4787,10 @@ static void check_stmt(Sema *s, Node *n) {
                 Type *t = resolve_type(s, ex->type_ref);
                 if (t->kind != TY_CLASS) {
                     Diag d = {0};
-                    d.message = diag_fmt("'%s' はエラー型として使えません", type_name(t));
+                    d.message = MSG1("sema.281", "'{0}' はエラー型として使えません", type_name(t));
                     d.primary.tok = ex->tok;
-                    d.primary.label = "except に書けるのはクラスだけです";
-                    d.hint = "エラーはふつうのクラスとして定義してください";
+                    d.primary.label = MSG0("sema.541", "except に書けるのはクラスだけです");
+                    d.hint = MSG0("sema.542", "エラーはふつうのクラスとして定義してください");
                     diag_fail(&d);
                 }
                 ex->type = t;
@@ -5102,10 +4819,10 @@ static void check_stmt(Sema *s, Node *n) {
                 Diag d = {0};
                 d.severity = "warning";
                 d.code = "E-RAISE-5";
-                d.message = "この try の中に、失敗しうる呼び出しがありません";
+                d.message = MSG0("sema.543", "この try の中に、失敗しうる呼び出しがありません");
                 d.primary.tok = n->tok;
-                d.primary.label = "except は決して実行されません";
-                d.hint = "raises を宣言した関数を呼んでいるか確かめてください";
+                d.primary.label = MSG0("sema.544", "except は決して実行されません");
+                d.hint = MSG0("sema.545", "raises を宣言した関数を呼んでいるか確かめてください");
                 diag_emit(&d);
             }
             break;
@@ -5115,10 +4832,10 @@ static void check_stmt(Sema *s, Node *n) {
             Type *t = check_expr(s, n->lhs);
             if (t->kind != TY_CLASS) {
                 Diag d = {0};
-                d.message = diag_fmt("'%s' は raise できません", type_name(t));
+                d.message = MSG1("sema.282", "'{0}' は raise できません", type_name(t));
                 d.primary.tok = n->lhs->tok;
-                d.primary.label = "raise にはエラーオブジェクトを渡します";
-                d.hint = "エラーはふつうのクラスです（例: raise IOError(\"見つかりません\")）";
+                d.primary.label = MSG0("sema.546", "raise にはエラーオブジェクトを渡します");
+                d.hint = MSG0("sema.547", "エラーはふつうのクラスです（例: raise IOError(\"見つかりません\")）");
                 diag_fail(&d);
             }
 
@@ -5128,20 +4845,17 @@ static void check_stmt(Sema *s, Node *n) {
                 d.primary.tok = n->tok;
                 if (s->cur_func && s->cur_func->nraises == 0) {
                     d.code = "E-RAISE-1";
-                    d.message = diag_fmt("'%s' を raise していますが、宣言がありません",
-                                         t->cls->name);
-                    d.primary.label = "この関数は失敗しないと宣言されています";
-                    d.hint = diag_fmt("関数の宣言に 'raises %s' を足してください",
-                                      t->cls->name);
+                    d.message = MSG1("sema.283", "'{0}' を raise していますが、宣言がありません", t->cls->name);
+                    d.primary.label = MSG0("sema.548", "この関数は失敗しないと宣言されています");
+                    d.hint = MSG1("sema.284", "関数の宣言に 'raises {0}' を足してください", t->cls->name);
                 } else {
                     d.code = "E-RAISE-2";
-                    d.message = diag_fmt("エラー '%s' が宣言されていません", t->cls->name);
-                    d.primary.label = "raises に含まれていません";
-                    d.hint = diag_fmt("この関数の raises に '%s' を足してください",
-                                      t->cls->name);
+                    d.message = MSG1("sema.237", "エラー '{0}' が宣言されていません", t->cls->name);
+                    d.primary.label = MSG0("sema.549", "raises に含まれていません");
+                    d.hint = MSG1("sema.285", "この関数の raises に '{0}' を足してください", t->cls->name);
                 }
                 d.related.tok = s->cur_func ? s->cur_func->tok : NULL;
-                d.related.label = "関数の宣言はここです";
+                d.related.label = MSG0("sema.550", "関数の宣言はここです");
                 diag_fail(&d);
             }
             n->err_tag = err_tag_of(s, t->cls);
@@ -5156,10 +4870,10 @@ static void check_stmt(Sema *s, Node *n) {
             if (s->loop_depth > 0) break;
             const char *kw = n->kind == ND_BREAK ? "break" : "continue";
             Diag d = {0};
-            d.message = diag_fmt("'%s' はループの外では使えません", kw);
+            d.message = MSG1("sema.286", "'{0}' はループの外では使えません", kw);
             d.primary.tok = n->tok;
-            d.primary.label = diag_fmt("この '%s' を囲む while がありません", kw);
-            d.hint = diag_fmt("'%s' は while の中でだけ使えます", kw);
+            d.primary.label = MSG1("sema.287", "この '{0}' を囲む while がありません", kw);
+            d.hint = MSG1("sema.288", "'{0}' は while の中でだけ使えます", kw);
             diag_fail(&d);
             break;
         }
@@ -5298,22 +5012,20 @@ static bool always_returns(Node *n) {
 
 // 1a：クラス名と Type を作る。中身はまだ見ない。
 static void declare_class(Sema *s, Node *n) {
-    reject_module_name(s, n->name, n->tok, "クラス");
+    reject_module_name(s, n->name, n->tok, MSG0("sema.551", "クラス"));
     if (type_from_name(n->name))
-        error_at_hint(n->tok, diag_fmt("'%s' は組み込みの型名です", n->name),
-                      "クラス名 '%s' は使えません", n->name);
+        error_at_hint_m(n->tok, MSG1("sema.290", "'{0}' は組み込みの型名です", n->name), MSG1("sema.289", "クラス名 '{0}' は使えません", n->name));
     if (is_builtin_name(n->name))
-        error_at_hint(n->tok, diag_fmt("'%s' は組み込み関数の名前です", n->name),
-                      "クラス名 '%s' は使えません", n->name);
+        error_at_hint_m(n->tok, MSG1("sema.291", "'{0}' は組み込み関数の名前です", n->name), MSG1("sema.289", "クラス名 '{0}' は使えません", n->name));
 
     Class *prev = lookup_class(s, n->name);
     if (prev) {
         Diag d = {0};
-        d.message = diag_fmt("クラス '%s' は既に定義されています", n->name);
+        d.message = MSG1("sema.292", "クラス '{0}' は既に定義されています", n->name);
         d.primary.tok = n->tok;
-        d.primary.label = "ここで再定義されています";
+        d.primary.label = MSG0("sema.552", "ここで再定義されています");
         d.related.tok = prev->tok;
-        d.related.label = "最初の定義はここです";
+        d.related.label = MSG0("parse.224", "最初の定義はここです");
         diag_fail(&d);
     }
 
@@ -5370,23 +5082,23 @@ static void declare_method(Sema *s, Class *c, Node *fn) {
     FuncSig *prev = lookup_func(s, mname);
     if (prev) {
         Diag d = {0};
-        d.message = diag_fmt("メソッド '%s' は既に定義されています", mname);
+        d.message = MSG1("sema.293", "メソッド '{0}' は既に定義されています", mname);
         d.primary.tok = fn->tok;
-        d.primary.label = "ここで再定義されています";
+        d.primary.label = MSG0("sema.552", "ここで再定義されています");
         d.related.tok = prev->tok;
-        d.related.label = "最初の定義はここです";
+        d.related.label = MSG0("parse.224", "最初の定義はここです");
         diag_fail(&d);
     }
 
     Field *clash = lookup_field(c, fn->name);
     if (clash) {
         Diag d = {0};
-        d.message = diag_fmt("'%s' はフィールドと同じ名前です", fn->name);
+        d.message = MSG1("sema.294", "'{0}' はフィールドと同じ名前です", fn->name);
         d.primary.tok = fn->tok;
-        d.primary.label = "メソッド名がフィールド名と衝突しています";
+        d.primary.label = MSG0("sema.553", "メソッド名がフィールド名と衝突しています");
         d.related.tok = clash->tok;
-        d.related.label = "同名のフィールドはここです";
-        d.hint = "t.f が「フィールド」か「メソッド」か決められなくなるため禁止です";
+        d.related.label = MSG0("sema.554", "同名のフィールドはここです");
+        d.hint = MSG0("sema.555", "t.f が「フィールド」か「メソッド」か決められなくなるため禁止です");
         diag_fail(&d);
     }
 
@@ -5412,8 +5124,7 @@ static void declare_method(Sema *s, Class *c, Node *fn) {
         //   そのクラスの型をここで入れます。これが「self の暗黙の型」です。
         Type *pt = pm->type_ref ? resolve_type(s, pm->type_ref) : c->type;
         if (pt->kind == TY_NONE)
-            error_at_hint(pm->tok, "None 型の値は存在しないので引数にできません",
-                          "引数の型に None は使えません");
+            error_at_hint_m(pm->tok, MSG0("sema.296", "None 型の値は存在しないので引数にできません"), MSG0("sema.295", "引数の型に None は使えません"));
         f->params[i] = pt;
         f->pnames[i] = pm->name;
         f->pmodes[i] = pm->mode;   // A-21e
@@ -5425,16 +5136,13 @@ static void declare_method(Sema *s, Class *c, Node *fn) {
     // コンストラクタ init は値を返せない（生成した自分自身が返るため）
     if (strcmp(fn->name, "init") == 0) {
         if (ret->kind != TY_NONE)
-            error_at_hint(fn->tok,
-                          "init は戻り値を持てません（-> None と書いてください）",
-                          "init の戻り型は None でなければなりません");
+            error_at_hint_m(fn->tok, MSG0("sema.298", "init は戻り値を持てません（-> None と書いてください）"), MSG0("sema.297", "init の戻り型は None でなければなりません"));
         c->has_init = true;
     }
 
     resolve_raises(s, fn, f);
     if (strcmp(fn->name, "init") == 0 && f->nraises)
-        error_at_hint(fn->tok, "init は失敗できません（生成に失敗した値は誰も受け取れません）",
-                      "init に raises は書けません");
+        error_at_hint_m(fn->tok, MSG0("sema.300", "init は失敗できません（生成に失敗した値は誰も受け取れません）"), MSG0("sema.299", "init に raises は書けません"));
 
     // ★ drop はデストラクタです（仕様 §6.2）。解放のときに codegen が
     //   **self だけを渡して**呼ぶので、形が違うと引数の数が合わないまま呼ばれ、
@@ -5443,12 +5151,12 @@ static void declare_method(Sema *s, Class *c, Node *fn) {
         (nparams != 1 || ret->kind != TY_NONE || f->nraises)) {
         Diag d = {0};
         d.code = "E-DROP-1";
-        d.message = "drop はデストラクタです。形は 'def drop(self) -> None' か 'def drop(mut self) -> None' だけです";
+        d.message = MSG0("sema.556", "drop はデストラクタです。形は 'def drop(self) -> None' か 'def drop(mut self) -> None' だけです");
         d.primary.tok = fn->tok;
-        d.primary.label = nparams != 1        ? "引数を取れません（解放のときは self だけで呼ばれます）"
-                          : ret->kind != TY_NONE ? "値を返せません（解放のときに受け取る相手がいません）"
-                                                 : "失敗できません（解放の途中の失敗は誰も受け取れません）";
-        d.hint = "解放とは別の処理なら、別の名前にしてください（仕様 §6.2）";
+        d.primary.label = nparams != 1        ? MSG0("sema.557", "引数を取れません（解放のときは self だけで呼ばれます）")
+                          : ret->kind != TY_NONE ? MSG0("sema.558", "値を返せません（解放のときに受け取る相手がいません）")
+                                                 : MSG0("sema.559", "失敗できません（解放の途中の失敗は誰も受け取れません）");
+        d.hint = MSG0("sema.560", "解放とは別の処理なら、別の名前にしてください（仕様 §6.2）");
         diag_fail(&d);
     }
 
@@ -5556,20 +5264,17 @@ static void check_fields_initialized(Sema *s, Class *c) {
         if (init && definitely_assigns_stmt(init->body, f->name)) continue;
 
         Diag d = {0};
-        d.message = diag_fmt("フィールド '%s' は init で代入されていません", f->name);
+        d.message = MSG1("sema.301", "フィールド '{0}' は init で代入されていません", f->name);
         d.primary.tok = f->tok;
-        d.primary.label = "このフィールドは None から始まってしまいます";
+        d.primary.label = MSG0("sema.561", "このフィールドは None から始まってしまいます");
         if (init) {
             d.related.tok = init->tok;
-            d.related.label = "init はここです";
+            d.related.label = MSG0("sema.562", "init はここです");
         } else {
             d.related.tok = c->tok;
-            d.related.label = "このクラスには init がありません";
+            d.related.label = MSG0("sema.563", "このクラスには init がありません");
         }
-        d.hint = diag_fmt("次のどちらかにしてください:\n"
-                          "             ・型を '%s | None' にする\n"
-                          "             ・init の中で self.%s = ... と代入する",
-                          type_name(f->type), f->name);
+        d.hint = MSG2("sema.302", "次のどちらかにしてください:\n             ・型を '{0} | None' にする\n             ・init の中で self.{1} = ... と代入する", type_name(f->type), f->name);
         diag_fail(&d);
     }
 }
@@ -5594,9 +5299,9 @@ static void check_fields_initialized(Sema *s, Class *c) {
 static void declare_iface(Sema *s, Node *n) {
     if (lookup_iface(s, n->name) || lookup_class(s, n->name)) {
         Diag d = {0};
-        d.message = diag_fmt("'%s' は既に定義されています", n->name);
+        d.message = MSG1("sema.303", "'{0}' は既に定義されています", n->name);
         d.primary.tok = n->tok;
-        d.primary.label = "ここで再定義されています";
+        d.primary.label = MSG0("sema.552", "ここで再定義されています");
         diag_fail(&d);
     }
 
@@ -5612,22 +5317,17 @@ static void declare_iface(Sema *s, Node *n) {
     for (Node *m = n->body; m; m = m->next) {
         for (IMethod *q = tail.next; q; q = q->next)
             if (strcmp(q->name, m->name) == 0)
-                error_at_hint(m->tok,
-                              "同じ名前のメソッドを 2 度書くことはできません",
-                              "メソッド '%s' が重複しています", m->name);
+                error_at_hint_m(m->tok, MSG0("sema.305", "同じ名前のメソッドを 2 度書くことはできません"), MSG1("sema.304", "メソッド '{0}' が重複しています", m->name));
         // ★ インタフェースの宣言に既定値は書けません（A-38）。
         //   呼ぶ側はどの実装が入るか知らないので、既定値を埋める人が
         //   決まりません（実装ごとに違う既定値を書けてしまいます）。
         for (Node *pm = m->params; pm; pm = pm->next) {
             if (!pm->rhs) continue;
             Diag d = {0};
-            d.message = "インタフェースの宣言に既定値は書けません";
+            d.message = MSG0("sema.564", "インタフェースの宣言に既定値は書けません");
             d.primary.tok = pm->rhs->tok;
-            d.primary.label = "ここには既定値を書けません";
-            d.hint = "どの実装が呼ばれるかは実行時に決まるので、"
-                     "既定値を埋める人が決まりません。"
-                     "既定値はクラス側のメソッドに書いてください"
-                     "（インタフェース越しには使えません）";
+            d.primary.label = MSG0("sema.565", "ここには既定値を書けません");
+            d.hint = MSG0("sema.566", "どの実装が呼ばれるかは実行時に決まるので、既定値を埋める人が決まりません。既定値はクラス側のメソッドに書いてください（インタフェース越しには使えません）");
             diag_fail(&d);
         }
 
@@ -5636,10 +5336,10 @@ static void declare_iface(Sema *s, Node *n) {
         if (strcmp(m->name, "drop") == 0) {
             Diag d = {0};
             d.code = "E-DROP-2";
-            d.message = "インタフェースに drop は宣言できません（drop はデストラクタの名前です）";
+            d.message = MSG0("sema.567", "インタフェースに drop は宣言できません（drop はデストラクタの名前です）");
             d.primary.tok = m->tok;
-            d.primary.label = "インタフェース越しに呼べると、解放のときにもう一度呼ばれます";
-            d.hint = "早く後始末をしたいときは、別の名前のメソッド（close など）に分けてください（仕様 §6.2）";
+            d.primary.label = MSG0("sema.568", "インタフェース越しに呼べると、解放のときにもう一度呼ばれます");
+            d.hint = MSG0("sema.449", "早く後始末をしたいときは、別の名前のメソッド（close など）に分けてください（仕様 §6.2）");
             diag_fail(&d);
         }
 
@@ -5664,26 +5364,21 @@ static Iface *resolve_iface_ref(Sema *s, Node *tr) {
     if (tr->mod_name) {
         ModuleSyms *ms = lookup_import(s, tr->mod_name);
         if (!ms)
-            error_at_hint(tr->tok,
-                          diag_fmt("ファイルの先頭に 'import %s' を書いてください",
-                                   tr->mod_name),
-                          "モジュール '%s' を import していません", tr->mod_name);
+            error_at_hint_m(tr->tok, MSG1("sema.010", "ファイルの先頭に 'import {0}' を書いてください", tr->mod_name), MSG1("sema.009", "モジュール '{0}' を import していません", tr->mod_name));
         Iface *i = lookup_iface_in(ms, tr->name);
         if (!i)
-            error_at_hint(tr->tok, "インタフェース名を確認してください",
-                          "モジュール '%s' にインタフェース '%s' はありません",
-                          tr->mod_name, tr->name);
+            error_at_hint_m(tr->tok, MSG0("sema.307", "インタフェース名を確認してください"), MSG2("sema.306", "モジュール '{0}' にインタフェース '{1}' はありません", tr->mod_name, tr->name));
         return i;
     }
     Iface *i = lookup_iface(s, tr->name);
     if (!i) {
         Diag d = {0};
-        d.message = diag_fmt("インタフェース '%s' が見つかりません", tr->name);
+        d.message = MSG1("sema.308", "インタフェース '{0}' が見つかりません", tr->name);
         d.primary.tok = tr->tok;
-        d.primary.label = "ここに書けるのはインタフェース名だけです";
+        d.primary.label = MSG0("sema.569", "ここに書けるのはインタフェース名だけです");
         d.hint = lookup_class(s, tr->name)
-                     ? diag_fmt("'%s' はクラスです。継承はありません", tr->name)
-                     : "interface で宣言してから使ってください";
+                     ? MSG1("sema.309", "'{0}' はクラスです。継承はありません", tr->name)
+                     : MSG0("sema.570", "interface で宣言してから使ってください");
         diag_fail(&d);
     }
     return i;
@@ -5698,13 +5393,11 @@ static void check_implements(Sema *s, Class *c, Iface *ifc, Token *at) {
         FuncSig *f = lookup_func(s, sb_str(&key));
         if (!f) {
             Diag d = {0};
-            d.message = diag_fmt("クラス '%s' に '%s' がありません", c->name,
-                                 im->name);
+            d.message = MSG2("sema.310", "クラス '{0}' に '{1}' がありません", c->name, im->name);
             d.primary.tok = at;
-            d.primary.label = diag_fmt("'%s' を実装すると宣言しています",
-                                       ifc->name);
+            d.primary.label = MSG1("sema.311", "'{0}' を実装すると宣言しています", ifc->name);
             d.related.tok = im->sig->tok;
-            d.related.label = "このメソッドが必要です";
+            d.related.label = MSG0("sema.571", "このメソッドが必要です");
             diag_fail(&d);
         }
 
@@ -5714,12 +5407,11 @@ static void check_implements(Sema *s, Class *c, Iface *ifc, Token *at) {
         for (Node *pm = sig->params; pm; pm = pm->next) want++;
         if (f->nparams != want) {
             Diag d = {0};
-            d.message = diag_fmt("'%s.%s' の引数の数が宣言と違います", c->name,
-                                 im->name);
+            d.message = MSG2("sema.312", "'{0}.{1}' の引数の数が宣言と違います", c->name, im->name);
             d.primary.tok = f->tok;
-            d.primary.label = diag_fmt("%d 個です", f->nparams);
+            d.primary.label = MSG1("sema.313", "{0} 個です", diag_fmt("%d", f->nparams));
             d.related.tok = sig->tok;
-            d.related.label = diag_fmt("宣言では %d 個です", want);
+            d.related.label = MSG1("sema.314", "宣言では {0} 個です", diag_fmt("%d", want));
             diag_fail(&d);
         }
         int k = 0;
@@ -5732,37 +5424,33 @@ static void check_implements(Sema *s, Class *c, Iface *ifc, Token *at) {
             //   どちらの名前が正しいのか決められなくなります。
             if (strcmp(f->pnames[k], pm->name) != 0) {
                 Diag d = {0};
-                d.message = diag_fmt("'%s.%s' の %d 番目の引数の名前が宣言と違います",
-                                     c->name, im->name, k);
+                d.message = MSG3("sema.315", "'{0}.{1}' の {2} 番目の引数の名前が宣言と違います", c->name, im->name, diag_fmt("%d", k));
                 d.primary.tok = f->tok;
-                d.primary.label = diag_fmt("実装では '%s' です", f->pnames[k]);
+                d.primary.label = MSG1("sema.316", "実装では '{0}' です", f->pnames[k]);
                 d.related.tok = pm->tok;
-                d.related.label = diag_fmt("宣言では '%s' です", pm->name);
-                d.hint = "引数の名前は呼び出し側から見える約束です"
-                         "（名前で渡すときに使います）。宣言に合わせてください";
+                d.related.label = MSG1("sema.317", "宣言では '{0}' です", pm->name);
+                d.hint = MSG0("sema.572", "引数の名前は呼び出し側から見える約束です（名前で渡すときに使います）。宣言に合わせてください");
                 diag_fail(&d);
             }
             Type *wt = resolve_type(s, pm->type_ref);
             if (!type_equal(f->params[k], wt)) {
                 Diag d = {0};
-                d.message = diag_fmt("'%s.%s' の %d 番目の引数の型が宣言と違います",
-                                     c->name, im->name, k);
+                d.message = MSG3("sema.318", "'{0}.{1}' の {2} 番目の引数の型が宣言と違います", c->name, im->name, diag_fmt("%d", k));
                 d.primary.tok = f->tok;
-                d.primary.label = diag_fmt("'%s' 型です", type_name(f->params[k]));
+                d.primary.label = MSG1("sema.156", "'{0}' 型です", type_name(f->params[k]));
                 d.related.tok = pm->tok;
-                d.related.label = diag_fmt("宣言では '%s' 型です", type_name(wt));
+                d.related.label = MSG1("sema.319", "宣言では '{0}' 型です", type_name(wt));
                 diag_fail(&d);
             }
         }
         Type *wr = resolve_type(s, sig->type_ref);
         if (!type_equal(f->ret, wr)) {
             Diag d = {0};
-            d.message = diag_fmt("'%s.%s' の戻り型が宣言と違います", c->name,
-                                 im->name);
+            d.message = MSG2("sema.320", "'{0}.{1}' の戻り型が宣言と違います", c->name, im->name);
             d.primary.tok = f->tok;
-            d.primary.label = diag_fmt("'%s' を返します", type_name(f->ret));
+            d.primary.label = MSG1("sema.321", "'{0}' を返します", type_name(f->ret));
             d.related.tok = sig->tok;
-            d.related.label = diag_fmt("宣言では '%s' です", type_name(wr));
+            d.related.label = MSG1("sema.317", "宣言では '{0}' です", type_name(wr));
             diag_fail(&d);
         }
         // ★ raises も宣言の一部です（A-40）。
@@ -5776,15 +5464,12 @@ static void check_implements(Sema *s, Class *c, Iface *ifc, Token *at) {
         resolve_raises(s, sig, &decl);
         if (f->nraises != decl.nraises) {
             Diag d = {0};
-            d.message = diag_fmt("'%s.%s' の raises が宣言と違います", c->name,
-                                 im->name);
+            d.message = MSG2("sema.322", "'{0}.{1}' の raises が宣言と違います", c->name, im->name);
             d.primary.tok = f->tok;
-            d.primary.label = diag_fmt("実装は %d 個のエラーを宣言しています",
-                                       f->nraises);
+            d.primary.label = MSG1("sema.323", "実装は {0} 個のエラーを宣言しています", diag_fmt("%d", f->nraises));
             d.related.tok = sig->tok;
-            d.related.label = diag_fmt("宣言では %d 個です", decl.nraises);
-            d.hint = "インタフェース越しに呼ぶ側は宣言しか見ません。"
-                     "同じ raises を書いてください";
+            d.related.label = MSG1("sema.314", "宣言では {0} 個です", diag_fmt("%d", decl.nraises));
+            d.hint = MSG0("sema.573", "インタフェース越しに呼ぶ側は宣言しか見ません。同じ raises を書いてください");
             diag_fail(&d);
         }
         for (int i = 0; i < decl.nraises; i++) {
@@ -5793,15 +5478,12 @@ static void check_implements(Sema *s, Class *c, Iface *ifc, Token *at) {
                 if (f->raises[j] == decl.raises[i]) { found = true; break; }
             if (found) continue;
             Diag d = {0};
-            d.message = diag_fmt("'%s.%s' が '%s' を宣言していません", c->name,
-                                 im->name, decl.raises[i]->name);
+            d.message = MSG3("sema.324", "'{0}.{1}' が '{2}' を宣言していません", c->name, im->name, decl.raises[i]->name);
             d.primary.tok = f->tok;
-            d.primary.label = "このエラーが raises にありません";
+            d.primary.label = MSG0("sema.574", "このエラーが raises にありません");
             d.related.tok = sig->tok;
-            d.related.label = diag_fmt("宣言では '%s' を投げます",
-                                       decl.raises[i]->name);
-            d.hint = "インタフェース越しに呼ぶ側は宣言しか見ません。"
-                     "同じ raises を書いてください";
+            d.related.label = MSG1("sema.325", "宣言では '{0}' を投げます", decl.raises[i]->name);
+            d.hint = MSG0("sema.573", "インタフェース越しに呼ぶ側は宣言しか見ません。同じ raises を書いてください");
             diag_fail(&d);
         }
     }
@@ -5825,8 +5507,7 @@ static void declare_class_members(Sema *s, Node *n) {
         Iface *ifc = resolve_iface_ref(s, ir);
         for (IfaceList *l = c->impls; l; l = l->next)
             if (l->iface == ifc)
-                error_at_hint(ir->tok, "同じインタフェースを 2 度書けません",
-                              "'%s' は既に書かれています", ifc->name);
+                error_at_hint_m(ir->tok, MSG0("sema.327", "同じインタフェースを 2 度書けません"), MSG1("sema.326", "'{0}' は既に書かれています", ifc->name));
         IfaceList *nl = xmalloc(sizeof(IfaceList));
         nl->iface = ifc;
         nl->next = NULL;
@@ -5843,18 +5524,17 @@ static void declare_class_members(Sema *s, Node *n) {
         Field *prev = lookup_field(c, m->name);
         if (prev) {
             Diag d = {0};
-            d.message = diag_fmt("フィールド '%s' は既に宣言されています", m->name);
+            d.message = MSG1("sema.328", "フィールド '{0}' は既に宣言されています", m->name);
             d.primary.tok = m->tok;
-            d.primary.label = "ここで再宣言されています";
+            d.primary.label = MSG0("sema.403", "ここで再宣言されています");
             d.related.tok = prev->tok;
-            d.related.label = "最初の宣言はここです";
+            d.related.label = MSG0("sema.404", "最初の宣言はここです");
             diag_fail(&d);
         }
 
         Type *ft = resolve_type(s, m->type_ref);
         if (ft->kind == TY_NONE)
-            error_at_hint(m->tok, "None 型の値は存在しないのでフィールドにできません",
-                          "フィールドの型に None は使えません");
+            error_at_hint_m(m->tok, MSG0("sema.330", "None 型の値は存在しないのでフィールドにできません"), MSG0("sema.329", "フィールドの型に None は使えません"));
 
         Field *f = xmalloc(sizeof(Field));
         f->name = m->name;
@@ -5887,10 +5567,10 @@ static void declare_class_members(Sema *s, Node *n) {
 static void check_extern_type(Type *t, Token *tok, const char *what) {
     if (t->kind != TY_BOOL) return;
     Diag d = {0};
-    d.message = diag_fmt("extern の%sに bool は使えません", what);
+    d.message = MSG1("sema.331", "extern の{0}に bool は使えません", what);
     d.primary.tok = tok;
-    d.primary.label = "この型は C との境界を越えられません";
-    d.hint = "int で受け取り、本言語側で 'n == 1' と書いてください";
+    d.primary.label = MSG0("sema.575", "この型は C との境界を越えられません");
+    d.hint = MSG0("sema.576", "int で受け取り、本言語側で 'n == 1' と書いてください");
     diag_fail(&d);
 }
 
@@ -5914,28 +5594,27 @@ static bool export_type_ok(Type *t, bool is_ret) {
 static void check_export_type(Type *t, Token *tok, const char *what) {
     Diag d = {0};
     d.code = "E-EXPORT-1";
-    d.message = diag_fmt("'%s' は外へ出す関数の%sに使えません", type_name(t), what);
+    d.message = MSG2("sema.332", "'{0}' は外へ出す関数の{1}に使えません", type_name(t), what);
     d.primary.tok = tok;
-    d.primary.label = "この型は境界を越えられません";
-    d.hint = "使えるのは int / float / bool / str と、その list です"
-             "（クラスなどは外へ出さず、この関数の中で使ってください）";
+    d.primary.label = MSG0("sema.577", "この型は境界を越えられません");
+    d.hint = MSG0("sema.578", "使えるのは int / float / bool / str と、その list です（クラスなどは外へ出さず、この関数の中で使ってください）");
     diag_fail(&d);
 }
 
 static void check_export_sig(Node *n, FuncSig *f) {
-    if (!export_type_ok(f->ret, true)) check_export_type(f->ret, n->tok, "戻り値");
+    if (!export_type_ok(f->ret, true)) check_export_type(f->ret, n->tok, MSG0("sema.579", "戻り値"));
     int i = 0;
     for (Node *pm = n->params; pm; pm = pm->next, i++) {
         if (!export_type_ok(f->params[i], false))
-            check_export_type(f->params[i], pm->tok, "引数");
+            check_export_type(f->params[i], pm->tok, MSG0("sema.580", "引数"));
         // ★ 境界では写すので、書き換えても外には戻りません（ffi.md §3.1）
         if (pm->mode == PM_MUT) {
             Diag d = {0};
             d.code = "E-EXPORT-2";
-            d.message = diag_fmt("外へ出す関数の引数 '%s' は mut にできません", pm->name);
+            d.message = MSG1("sema.333", "外へ出す関数の引数 '{0}' は mut にできません", pm->name);
             d.primary.tok = pm->tok;
-            d.primary.label = "外から来た値は写しなので、書き換えても呼んだ側には戻りません";
-            d.hint = "書き換えた結果は戻り値で返してください";
+            d.primary.label = MSG0("sema.581", "外から来た値は写しなので、書き換えても呼んだ側には戻りません");
+            d.hint = MSG0("sema.582", "書き換えた結果は戻り値で返してください");
             diag_fail(&d);
         }
     }
@@ -5958,11 +5637,10 @@ static void resolve_raises(Sema *s, Node *fn, FuncSig *f) {
         Type *t = resolve_type(s, r);
         if (t->kind != TY_CLASS) {
             Diag d = {0};
-            d.message = diag_fmt("'%s' はエラー型として使えません", type_name(t));
+            d.message = MSG1("sema.281", "'{0}' はエラー型として使えません", type_name(t));
             d.primary.tok = r->tok;
-            d.primary.label = "raises に書けるのはクラスだけです";
-            d.hint = "エラーはふつうのクラスとして定義してください"
-                     "（例: class IOError:\n                 message: str）";
+            d.primary.label = MSG0("sema.583", "raises に書けるのはクラスだけです");
+            d.hint = MSG0("sema.584", "エラーはふつうのクラスとして定義してください（例: class IOError:\n                 message: str）");
             diag_fail(&d);
         }
         f->raises[i] = t->cls;
@@ -5974,31 +5652,28 @@ static void resolve_raises(Sema *s, Node *fn, FuncSig *f) {
 }
 
 static void declare_func(Sema *s, Node *n) {
-    reject_module_name(s, n->name, n->tok, "関数");
+    reject_module_name(s, n->name, n->tok, MSG0("sema.455", "関数"));
     if (lookup_class(s, n->name)) {
         Diag d = {0};
-        d.message = diag_fmt("'%s' はクラス名として使われています", n->name);
+        d.message = MSG1("sema.334", "'{0}' はクラス名として使われています", n->name);
         d.primary.tok = n->tok;
-        d.primary.label = "この名前の関数は定義できません";
+        d.primary.label = MSG0("sema.585", "この名前の関数は定義できません");
         d.related.tok = lookup_class(s, n->name)->tok;
-        d.related.label = "クラスの定義はここです";
-        d.hint = "クラス名は「インスタンス生成」の呼び出しに使われます"
-                 "（例: Token(1, \"x\")）";
+        d.related.label = MSG0("sema.444", "クラスの定義はここです");
+        d.hint = MSG0("sema.586", "クラス名は「インスタンス生成」の呼び出しに使われます（例: Token(1, \"x\")）");
         diag_fail(&d);
     }
     if (is_builtin_name(n->name))
-        error_at_hint(n->tok, diag_fmt("%s は組み込み関数です。別の名前を使ってください",
-                                       n->name),
-                      "'%s' は再定義できません", n->name);
+        error_at_hint_m(n->tok, MSG1("sema.336", "{0} は組み込み関数です。別の名前を使ってください", n->name), MSG1("sema.335", "'{0}' は再定義できません", n->name));
 
     FuncSig *prev = lookup_func(s, n->name);
     if (prev) {
         Diag d = {0};
-        d.message = diag_fmt("関数 '%s' は既に定義されています", n->name);
+        d.message = MSG1("sema.337", "関数 '{0}' は既に定義されています", n->name);
         d.primary.tok = n->tok;
-        d.primary.label = "ここで再定義されています";
+        d.primary.label = MSG0("sema.552", "ここで再定義されています");
         d.related.tok = prev->tok;
-        d.related.label = "最初の定義はここです";
+        d.related.label = MSG0("parse.224", "最初の定義はここです");
         diag_fail(&d);
     }
 
@@ -6009,10 +5684,10 @@ static void declare_func(Sema *s, Node *n) {
         if (n->is_export) {
             Diag d = {0};
             d.code = "E-EXPORT-1";
-            d.message = "型引数を持つ関数は外へ出せません";
+            d.message = MSG0("sema.587", "型引数を持つ関数は外へ出せません");
             d.primary.tok = n->tok;
-            d.primary.label = "外から見ると、型が決まりません";
-            d.hint = "型を決めた関数を extern def で書き、その中からこの関数を呼んでください";
+            d.primary.label = MSG0("sema.588", "外から見ると、型が決まりません");
+            d.hint = MSG0("sema.589", "型を決めた関数を extern def で書き、その中からこの関数を呼んでください");
             diag_fail(&d);
         }
         FuncSig *t = xmalloc(sizeof(FuncSig));
@@ -6047,8 +5722,7 @@ static void declare_func(Sema *s, Node *n) {
     for (Node *pm = n->params; pm; pm = pm->next, i++) {
         Type *pt = resolve_type(s, pm->type_ref);
         if (pt->kind == TY_NONE)
-            error_at_hint(pm->tok, "None 型の値は存在しないので引数にできません",
-                          "引数の型に None は使えません");
+            error_at_hint_m(pm->tok, MSG0("sema.296", "None 型の値は存在しないので引数にできません"), MSG0("sema.295", "引数の型に None は使えません"));
         f->params[i] = pt;
         f->pnames[i] = pm->name;
         f->pmodes[i] = pm->mode;   // A-21e
@@ -6062,17 +5736,16 @@ static void declare_func(Sema *s, Node *n) {
     //   避けること」なので、C のシンボルにはその目的が成立しません。
     bool is_extern_decl = n->body == NULL;
     if (is_extern_decl) {
-        check_extern_type(ret, n->tok, "戻り値");
+        check_extern_type(ret, n->tok, MSG0("sema.579", "戻り値"));
         for (Node *pm = n->params; pm; pm = pm->next)
-            check_extern_type(pm->type, pm->tok, "引数");
+            check_extern_type(pm->type, pm->tok, MSG0("sema.580", "引数"));
     }
 
     if (n->is_export) check_export_sig(n, f);
 
     resolve_raises(s, n, f);
     if (is_extern_decl && f->nraises)
-        error_at_hint(n->tok, "extern の関数は C 側の約束に従うので raises は書けません",
-                      "extern に raises は書けません");
+        error_at_hint_m(n->tok, MSG0("sema.339", "extern の関数は C 側の約束に従うので raises は書けません"), MSG0("sema.338", "extern に raises は書けません"));
 
     f->ir_name = is_extern_decl ? n->name : mod_mangle(s, n->name);
     f->owner = s->cur;
@@ -6162,21 +5835,18 @@ static FuncSig *instantiate_lambda(Sema *s, FuncSig *tmpl, Node *ref) {
     Type *want = s->expected;
     if (!want || want->kind != TY_FN) {
         Diag d = {0};
-        d.message = "この lambda がどんな関数になるのか決められません";
+        d.message = MSG0("sema.590", "この lambda がどんな関数になるのか決められません");
         d.primary.tok = ref->tok;
-        d.primary.label = "ここでは引数と戻り値の型が決まりません";
-        d.hint = "型注釈のある変数に入れるか、関数型の引数に渡してください:\n"
-                 "             p: fn(int) -> bool = lambda x: x > 0\n"
-                 "             count_if(xs, lambda x: x > 0)";
+        d.primary.label = MSG0("sema.591", "ここでは引数と戻り値の型が決まりません");
+        d.hint = MSG0("sema.592", "型注釈のある変数に入れるか、関数型の引数に渡してください:\n             p: fn(int) -> bool = lambda x: x > 0\n             count_if(xs, lambda x: x > 0)");
         diag_fail(&d);
     }
     if (want->nparams != np) {
         Diag d = {0};
-        d.message = diag_fmt("この lambda は %d 個の引数を取りますが、'%s' が要ります",
-                             np, type_name(want));
+        d.message = MSG2("sema.340", "この lambda は {0} 個の引数を取りますが、'{1}' が要ります", diag_fmt("%d", np), type_name(want));
         d.primary.tok = ref->tok;
-        d.primary.label = diag_fmt("引数が %d 個です", np);
-        d.hint = diag_fmt("ここに置けるのは %d 引数の lambda です", want->nparams);
+        d.primary.label = MSG1("sema.341", "引数が {0} 個です", diag_fmt("%d", np));
+        d.hint = MSG1("sema.342", "ここに置けるのは {0} 引数の lambda です", diag_fmt("%d", want->nparams));
         diag_fail(&d);
     }
 
@@ -6188,13 +5858,10 @@ static FuncSig *instantiate_lambda(Sema *s, FuncSig *tmpl, Node *ref) {
     for (Node *c = caps; c; c = c->next) {
         if (!capturable(c->type)) {
             Diag d = {0};
-            d.message = diag_fmt("'%s' は捕まえられません（'%s' 型）", c->name,
-                                 type_name(c->type));
+            d.message = MSG2("sema.343", "'{0}' は捕まえられません（'{1}' 型）", c->name, type_name(c->type));
             d.primary.tok = ref->tok;
-            d.primary.label = "この lambda が外の変数を使っています";
-            d.hint = "捕まえられるのは値型だけです"
-                     "（int / float / bool / 列挙 / 範囲型）。"
-                     "それ以外は引数で受け取るか、def で書いた関数にしてください";
+            d.primary.label = MSG0("sema.593", "この lambda が外の変数を使っています");
+            d.hint = MSG0("sema.594", "捕まえられるのは値型だけです（int / float / bool / 列挙 / 範囲型）。それ以外は引数で受け取るか、def で書いた関数にしてください");
             diag_fail(&d);
         }
         ncap++;
@@ -6204,7 +5871,7 @@ static FuncSig *instantiate_lambda(Sema *s, FuncSig *tmpl, Node *ref) {
     // 束ねる型の並び（引数 … と戻り型 … と捕まえた値の型）
     Type *args[MAX_TARGS];
     int nt = np + 1 + ncap;
-    if (nt > MAX_TARGS) error_at(ref->tok, "lambda の引数が多すぎます");
+    if (nt > MAX_TARGS) error_at_m(ref->tok, MSG0("sema.344", "lambda の引数が多すぎます"));
     for (int i = 0; i < np; i++) args[i] = want->params[i];
     args[np] = want->elem;
     {
@@ -6320,20 +5987,18 @@ static FuncSig *instantiate_func(Sema *s, FuncSig *tmpl, Node *call) {
             defaults[pi] = pm->rhs;
         }
         bind_args(call, want, pnames, defaults, tn->tok,
-                  diag_fmt("関数 '%s'", tmpl->name), false);
+                  MSG1("sema.345", "関数 '{0}'", tmpl->name), false);
     }
 
     int nargs = 0;
     for (Node *a = call->args; a; a = a->next) nargs++;
     if (nargs != want)
-        error_at_hint(call->tok,
-                      diag_fmt("'%s' は %d 個の引数を取ります", tmpl->name, want),
-                      "引数の個数が違います（%d 個渡されました）", nargs);
+        error_at_hint_m(call->tok, MSG2("sema.224", "'{0}' は {1} 個の引数を取ります", tmpl->name, diag_fmt("%d", want)), MSG1("sema.164", "引数の個数が違います（{0} 個渡されました）", diag_fmt("%d", nargs)));
 
     // ── 実引数の型を先に求める ──
     Type *atypes[MAX_TARGS * 4];
     if (nargs > (int)(sizeof(atypes) / sizeof(atypes[0])))
-        error_at(call->tok, "引数が多すぎます");
+        error_at_m(call->tok, MSG0("sema.346", "引数が多すぎます"));
     int k = 0;
     for (Node *a = call->args; a; a = a->next, k++) atypes[k] = check_expr(s, a);
 
@@ -6347,13 +6012,12 @@ static FuncSig *instantiate_func(Sema *s, FuncSig *tmpl, Node *call) {
             unify_tparam(tp->name, pm->type_ref, atypes[pi], &got);
         if (!got) {
             Diag d = {0};
-            d.message = diag_fmt("型引数 '%s' を決められません", tp->name);
+            d.message = MSG1("sema.347", "型引数 '{0}' を決められません", tp->name);
             d.primary.tok = call->tok;
-            d.primary.label = "実引数から決まりません";
+            d.primary.label = MSG0("sema.595", "実引数から決まりません");
             d.related.tok = tn->tok;
-            d.related.label = "この関数の定義です";
-            d.hint = "型引数は **引数の型から**決まります"
-                     "（戻り型にしか現れない型引数は書けません）";
+            d.related.label = MSG0("sema.596", "この関数の定義です");
+            d.hint = MSG0("sema.597", "型引数は **引数の型から**決まります（戻り型にしか現れない型引数は書けません）");
             diag_fail(&d);
         }
         args[ti] = got;
@@ -6419,20 +6083,19 @@ static FuncSig *instantiate_func(Sema *s, FuncSig *tmpl, Node *call) {
 
 // グローバル変数の登録（言語仕様 6.2）
 static void declare_global(Sema *s, Node *n) {
-    reject_module_name(s, n->name, n->tok, "グローバル変数");
+    reject_module_name(s, n->name, n->tok, MSG0("sema.598", "グローバル変数"));
     Type *declared = resolve_type(s, n->type_ref);
     if (declared->kind == TY_NONE)
-        error_at_hint(n->tok, "None 型の値は存在しないので変数にできません",
-                      "変数の型に None は使えません");
+        error_at_hint_m(n->tok, MSG0("sema.084", "None 型の値は存在しないので変数にできません"), MSG0("sema.083", "変数の型に None は使えません"));
 
     VarEntry *prev = lookup_local(s, n->name);
     if (prev) {
         Diag d = {0};
-        d.message = diag_fmt("変数 '%s' は既に宣言されています", n->name);
+        d.message = MSG1("sema.085", "変数 '{0}' は既に宣言されています", n->name);
         d.primary.tok = n->tok;
-        d.primary.label = "ここで再宣言されています";
+        d.primary.label = MSG0("sema.403", "ここで再宣言されています");
         d.related.tok = prev->decl_tok;
-        d.related.label = "最初の宣言はここです";
+        d.related.label = MSG0("sema.404", "最初の宣言はここです");
         diag_fail(&d);
     }
 
@@ -6441,23 +6104,22 @@ static void declare_global(Sema *s, Node *n) {
     if (n->rhs->kind != ND_INT && n->rhs->kind != ND_BOOL &&
         n->rhs->kind != ND_STR && n->rhs->kind != ND_FLOAT) {
         Diag d = {0};
-        d.message = "グローバル変数の初期化式は定数でなければなりません";
+        d.message = MSG0("sema.599", "グローバル変数の初期化式は定数でなければなりません");
         d.primary.tok = n->rhs->tok;
         d.primary.label =
-            "ここには整数・浮動小数点数・True / False・文字列リテラルだけが書けます";
-        d.hint = "計算が必要なら main の中でローカル変数にしてください";
+            MSG0("sema.600", "ここには整数・浮動小数点数・True / False・文字列リテラルだけが書けます");
+        d.hint = MSG0("sema.601", "計算が必要なら main の中でローカル変数にしてください");
         diag_fail(&d);
     }
 
     Type *actual = check_expr(s, n->rhs);
     if (!type_assignable(actual, declared)) {
         Diag d = {0};
-        d.message = "型が一致しません";
+        d.message = MSG0("sema.409", "型が一致しません");
         d.primary.tok = n->rhs->tok;
-        d.primary.label = diag_fmt("型 '%s' の式", type_name(actual));
+        d.primary.label = MSG1("sema.089", "型 '{0}' の式", type_name(actual));
         d.related.tok = n->tok;
-        d.related.label = diag_fmt("変数 '%s' は '%s' 型として宣言されています",
-                                   n->name, type_name(declared));
+        d.related.label = MSG2("sema.090", "変数 '{0}' は '{1}' 型として宣言されています", n->name, type_name(declared));
         diag_fail(&d);
     }
 
@@ -6516,13 +6178,11 @@ static void check_func(Sema *s, Node *n) {
                 st->kind == ND_REQUIRES || st->kind == ND_ENSURES;
             if (is_contract && seen_other) {
                 Diag d = {0};
-                d.message = diag_fmt("%s は関数の本体の先頭に書きます",
-                                     st->kind == ND_REQUIRES ? "requires"
+                d.message = MSG1("sema.348", "{0} は関数の本体の先頭に書きます", st->kind == ND_REQUIRES ? "requires"
                                                              : "ensures");
                 d.primary.tok = st->tok;
-                d.primary.label = "ここには書けません";
-                d.hint = "requires / ensures は def の直後に並べてください"
-                         "（入口と出口で確かめるものだからです）";
+                d.primary.label = MSG0("parse.063", "ここには書けません");
+                d.hint = MSG0("sema.602", "requires / ensures は def の直後に並べてください（入口と出口で確かめるものだからです）");
                 diag_fail(&d);
             }
             if (!is_contract) seen_other = true;
@@ -6537,11 +6197,10 @@ static void check_func(Sema *s, Node *n) {
     // 全経路で return するか（型システム 6.1）
     if (n->type->kind != TY_NONE && !always_returns(n->body)) {
         Diag d = {0};
-        d.message = diag_fmt("関数 '%s' は値を返さずに終わる経路があります", n->name);
+        d.message = MSG1("sema.349", "関数 '{0}' は値を返さずに終わる経路があります", n->name);
         d.primary.tok = n->tok;
-        d.primary.label = diag_fmt("戻り型は '%s' です", type_name(n->type));
-        d.hint = "すべての経路で return してください"
-                 "（if に else が無いと、条件が偽のとき素通りします）";
+        d.primary.label = MSG1("sema.350", "戻り型は '{0}' です", type_name(n->type));
+        d.hint = MSG0("sema.603", "すべての経路で return してください（if に else が無いと、条件が偽のとき素通りします）");
         diag_fail(&d);
     }
     s->cur_func = NULL;
@@ -6575,14 +6234,13 @@ static void check_export_names(Module *mods) {
                     Diag g = {0};
                     g.code = "E-EXPORT-5";
                     g.message = same_sym
-                        ? diag_fmt("外へ出す名前 '%s' が重なっています", sym)
-                        : diag_fmt("外へ出す関数 '%s' が 2 つあります", d->name);
+                        ? MSG1("sema.351", "外へ出す名前 '{0}' が重なっています", sym)
+                        : MSG1("sema.352", "外へ出す関数 '{0}' が 2 つあります", d->name);
                     g.primary.tok = d->tok;
-                    g.primary.label = "こちらと";
+                    g.primary.label = MSG0("sema.604", "こちらと");
                     g.related.tok = e->tok;
-                    g.related.label = "こちらが同じ名前になります";
-                    g.hint = "どちらかの名前を変えてください（Python からは関数名で、"
-                             "C からは「モジュール名_関数名」で呼びます）";
+                    g.related.label = MSG0("sema.605", "こちらが同じ名前になります");
+                    g.hint = MSG0("sema.606", "どちらかの名前を変えてください（Python からは関数名で、C からは「モジュール名_関数名」で呼びます）");
                     diag_fail(&g);
                 }
             }
@@ -6602,28 +6260,24 @@ static void check_main(Sema *s, Node *ast) {
     }
     if (!m) {
         Diag d = {0};
-        d.message = "main 関数がありません";
+        d.message = MSG0("sema.607", "main 関数がありません");
         d.primary.tok = ast->tok;
-        d.primary.label = "このファイルには入口がありません";
-        d.hint = "プログラムの入口として次を定義してください:\n"
-                 "             def main() -> int:\n"
-                 "                 return 0";
+        d.primary.label = MSG0("sema.608", "このファイルには入口がありません");
+        d.hint = MSG0("sema.609", "プログラムの入口として次を定義してください:\n             def main() -> int:\n                 return 0");
         diag_fail(&d);
     }
     if (m->nparams != 0)
-        error_at_hint(m->tok, "main は引数なしで定義してください（def main() -> int:）",
-                      "main は引数を取れません");
+        error_at_hint_m(m->tok, MSG0("sema.354", "main は引数なしで定義してください（def main() -> int:）"), MSG0("sema.353", "main は引数を取れません"));
     if (m->ret->kind != TY_INT)
-        error_at_hint(m->tok, "main の戻り値がプロセスの終了コードになります",
-                      "main の戻り型は int でなければなりません");
+        error_at_hint_m(m->tok, MSG0("sema.356", "main の戻り値がプロセスの終了コードになります"), MSG0("sema.355", "main の戻り型は int でなければなりません"));
     // ★ R4：main の失敗を受け取る相手はいません。
     if (m->nraises) {
         Diag d = {0};
         d.code = "E-RAISE-4";
-        d.message = "main は raises を宣言できません";
+        d.message = MSG0("sema.610", "main は raises を宣言できません");
         d.primary.tok = m->tok;
-        d.primary.label = "この失敗を受け取る相手がいません";
-        d.hint = "main の中で try で捕まえるか、panic で終わらせてください";
+        d.primary.label = MSG0("sema.611", "この失敗を受け取る相手がいません");
+        d.hint = MSG0("sema.612", "main の中で try で捕まえるか、panic で終わらせてください");
         diag_fail(&d);
     }
 }
@@ -6648,15 +6302,12 @@ static void check_defaults(Sema *s, FuncSig *f, Node *fn) {
         if (!f->defaults[i]) {
             if (first_default >= 0) {
                 Diag d = {0};
-                d.message = diag_fmt("既定値のある引数より後ろに、既定値の無い引数 '%s' があります",
-                                     pm->name);
+                d.message = MSG1("sema.357", "既定値のある引数より後ろに、既定値の無い引数 '{0}' があります", pm->name);
                 d.primary.tok = pm->tok;
-                d.primary.label = "この引数にも既定値が要ります";
+                d.primary.label = MSG0("sema.613", "この引数にも既定値が要ります");
                 d.related.tok = f->defaults[first_default]->tok;
-                d.related.label = diag_fmt("'%s' に既定値が付いています",
-                                           f->pnames[first_default]);
-                d.hint = "既定値のある引数は後ろにまとめてください"
-                         "（そうしないと、前から順に当てられません）";
+                d.related.label = MSG1("sema.358", "'{0}' に既定値が付いています", f->pnames[first_default]);
+                d.hint = MSG0("sema.614", "既定値のある引数は後ろにまとめてください（そうしないと、前から順に当てられません）");
                 diag_fail(&d);
             }
             continue;
@@ -6667,10 +6318,9 @@ static void check_defaults(Sema *s, FuncSig *f, Node *fn) {
         Type *dt = check_expr(s, f->defaults[i]);
         if (!type_assignable(dt, f->params[i])) {
             Diag d = {0};
-            d.message = diag_fmt("引数 '%s' の既定値の型が違います（'%s' に '%s' は入りません）",
-                                 pm->name, type_name(f->params[i]), type_name(dt));
+            d.message = MSG3("sema.359", "引数 '{0}' の既定値の型が違います（'{1}' に '{2}' は入りません）", pm->name, type_name(f->params[i]), type_name(dt));
             d.primary.tok = f->defaults[i]->tok;
-            d.primary.label = diag_fmt("これは '%s' 型です", type_name(dt));
+            d.primary.label = MSG1("sema.051", "これは '{0}' 型です", type_name(dt));
             d.hint = no_implicit_hint(dt, f->params[i]);
             diag_fail(&d);
         }
@@ -6685,24 +6335,21 @@ static void check_defaults(Sema *s, FuncSig *f, Node *fn) {
 //   互いに参照し合うことはありません）。
 static void declare_enum(Sema *s, Node *n) {
     if (type_from_name(n->name))
-        error_at_hint(n->tok, diag_fmt("'%s' は組み込みの型名です", n->name),
-                      "この名前は使えません");
+        error_at_hint_m(n->tok, MSG1("sema.290", "'{0}' は組み込みの型名です", n->name), MSG0("sema.360", "この名前は使えません"));
     EnumDef *old = lookup_enum(s, n->name);
     if (old) {
         Diag d = {0};
-        d.message = diag_fmt("型 '%s' はすでに定義されています", n->name);
+        d.message = MSG1("sema.361", "型 '{0}' はすでに定義されています", n->name);
         d.primary.tok = n->tok;
-        d.primary.label = "同じ名前の列挙が 2 つあります";
+        d.primary.label = MSG0("sema.615", "同じ名前の列挙が 2 つあります");
         d.related.tok = old->tok;
-        d.related.label = "最初の定義はここです";
+        d.related.label = MSG0("parse.224", "最初の定義はここです");
         diag_fail(&d);
     }
     if (lookup_class(s, n->name))
-        error_at_hint(n->tok, "クラスと同じ名前の列挙は作れません",
-                      "'%s' はクラス名として使われています", n->name);
+        error_at_hint_m(n->tok, MSG0("sema.362", "クラスと同じ名前の列挙は作れません"), MSG1("sema.334", "'{0}' はクラス名として使われています", n->name));
     if (lookup_range(s, n->name))
-        error_at_hint(n->tok, "範囲型と同じ名前の列挙は作れません",
-                      "'%s' は範囲型として使われています", n->name);
+        error_at_hint_m(n->tok, MSG0("sema.364", "範囲型と同じ名前の列挙は作れません"), MSG1("sema.363", "'{0}' は範囲型として使われています", n->name));
 
     EnumDef *e = xmalloc(sizeof(EnumDef));
     e->name = n->name;
@@ -6740,22 +6387,19 @@ static void declare_enum(Sema *s, Node *n) {
 
 static void declare_range(Sema *s, Node *n) {
     if (type_from_name(n->name))
-        error_at_hint(n->tok, diag_fmt("'%s' は組み込みの型名です", n->name),
-                      "この名前は使えません");
+        error_at_hint_m(n->tok, MSG1("sema.290", "'{0}' は組み込みの型名です", n->name), MSG0("sema.360", "この名前は使えません"));
     RangeTy *old = lookup_range(s, n->name);
     if (old) {
         Diag d = {0};
-        d.message = diag_fmt("型 '%s' はすでに定義されています", n->name);
+        d.message = MSG1("sema.361", "型 '{0}' はすでに定義されています", n->name);
         d.primary.tok = n->tok;
-        d.primary.label = "同じ名前の範囲型が 2 つあります";
+        d.primary.label = MSG0("sema.616", "同じ名前の範囲型が 2 つあります");
         d.related.tok = old->tok;
-        d.related.label = "最初の定義はここです";
+        d.related.label = MSG0("parse.224", "最初の定義はここです");
         diag_fail(&d);
     }
     if (lookup_class(s, n->name))
-        error_at_hint(n->tok,
-                      "クラスと同じ名前の範囲型は作れません",
-                      "'%s' はクラス名として使われています", n->name);
+        error_at_hint_m(n->tok, MSG0("sema.365", "クラスと同じ名前の範囲型は作れません"), MSG1("sema.334", "'{0}' はクラス名として使われています", n->name));
 
     RangeTy *r = xmalloc(sizeof(RangeTy));
     r->name = n->name;

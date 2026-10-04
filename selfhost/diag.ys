@@ -83,7 +83,7 @@ def load_en() -> None:
     if not io.exists(path):
         io.eprint("note: English messages not found; showing Japanese\n")
         return
-    EN_TEXT = io.read_file(path)
+    EN_TEXT = "\n" + io.read_file(path)
 
 # \n \t \\ を戻す
 def unescape(s: str) -> str:
@@ -112,18 +112,24 @@ def unescape(s: str) -> str:
 # 鍵を引く（無ければ ""。見つかったかは 2 つめで返す代わりに、found を見る）
 def en_lookup(key: str) -> str:
     load_en()
-    for line0 in strings.split(EN_TEXT, "\n"):
-        line: str = line0
-        if strings.endswith(line, "\r"):
-            line = line[0:len(line) - 1]
-        if len(line) == 0 or strings.startswith(line, "#"):
-            continue
-        tab: int = strings.find(line, "\t")
-        if tab < 0:
-            continue
-        if line[0:tab] == key:
-            return "\t" + unescape(line[tab + 1:len(line)])
-    return ""
+    # 注意: 行に分けて回すと、引くたびに表全体を切り分けることになります。
+    #   「改行 + 鍵 + タブ」を 1 回探すだけにします（EN_TEXT は改行で始めてあります）。
+    at: int = strings.find(EN_TEXT, "\n" + key + "\t")
+    if at < 0:
+        return ""
+    start: int = at + len(key) + 2
+    rest: str = EN_TEXT[start:len(EN_TEXT)]
+    end: int = strings.find(rest, "\n")
+    if end < 0:
+        end = len(rest)
+    val: str = rest[0:end]
+    if strings.endswith(val, "\r"):
+        val = val[0:len(val) - 1]
+    # 3 列目（日本語の控え）は読みません
+    tab2: int = strings.find(val, "\t")
+    if tab2 >= 0:
+        val = val[0:tab2]
+    return "\t" + unescape(val)
 
 # {0} {1} … を埋める。番号が無い・範囲外なら、そのまま残す。
 def fill(tpl: str, args: list[str]) -> str:

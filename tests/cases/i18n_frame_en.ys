@@ -1,9 +1,8 @@
 # FLAGS: --lang=en
-# ERROR: error[E-MUT-1]:
-# ERROR: = help: 引数を 'xs: mut list[int]' にしてください
-# 診断の言語の切り替え（docs/design/i18n-diagnostics.md 段階 0）。
-#   ★ --lang=en で、診断の枠の言葉（ヒント → help）が英語になります。
-#     文面そのものは、まだ訳していないので日本語のまま出ます（訳が無い鍵は日本語）。
+# ERROR: error[E-MUT-1]: modifying read-only borrow 'xs'
+# ERROR: = help: declare the parameter as 'xs: mut list[int]'
+# 診断の言語の切り替え（docs/design/i18n-diagnostics.md）。
+#   ★ --lang=en で、枠の言葉（ヒント → help）も文面も英語になります（段階 1〜3）。
 #   注意: error[E-MUT-1]: の形は言語によらず同じです（エディタ拡張がこの形で拾うため）。
 def add_item(xs: list[int], n: int) -> None:
     xs.append(n)

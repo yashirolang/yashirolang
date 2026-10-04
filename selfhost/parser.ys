@@ -86,34 +86,34 @@ class Parser:
         t: rc[token.Token] = self.peek()
         if t.is_punct(close):
             return self.advance()
-        diag.error_full(t, "閉じ括弧 '" + close + "' がありません",
-                        "ここに '" + close + "' が必要です",
-                        open_tok, "対応する '" + open_tok.raw + "' はここです",
-                        "括弧の対応を確認してください")
+        diag.error_full(t, diag.msg("parse.001", "閉じ括弧 '{0}' がありません", [copy(close)]),
+                        diag.msg("parse.002", "ここに '{0}' が必要です", [copy(close)]),
+                        open_tok, diag.msg("parse.003", "対応する '{0}' はここです", [copy(open_tok.raw)]),
+                        diag.msg0("parse.110", "括弧の対応を確認してください"))
         return t
 
     # トークン種別の日本語名（C 版 tok_kind_ja）
     def kind_ja(self, kind: int) -> str:
         if kind == token.TK_EOF:
-            return "ファイルの終わり"
+            return diag.msg0("parse.111", "ファイルの終わり")
         if kind == token.TK_INT:
-            return "整数"
+            return diag.msg0("parse.112", "整数")
         if kind == token.TK_FLOAT:
-            return "浮動小数点数"
+            return diag.msg0("parse.113", "浮動小数点数")
         if kind == token.TK_PUNCT:
-            return "記号"
+            return diag.msg0("parse.114", "記号")
         if kind == token.TK_IDENT:
-            return "名前"
+            return diag.msg0("parse.115", "名前")
         if kind == token.TK_KEYWORD:
-            return "予約語"
+            return diag.msg0("parse.116", "予約語")
         if kind == token.TK_STR:
-            return "文字列"
+            return diag.msg0("parse.117", "文字列")
         if kind == token.TK_NEWLINE:
-            return "改行"
+            return diag.msg0("parse.118", "改行")
         if kind == token.TK_INDENT:
-            return "字下げ"
+            return diag.msg0("parse.119", "字下げ")
         if kind == token.TK_DEDENT:
-            return "字下げの終わり"
+            return diag.msg0("parse.120", "字下げの終わり")
         panic("parser: unknown token kind")
         return ""
 
@@ -121,24 +121,24 @@ class Parser:
         t: rc[token.Token] = self.peek()
         if t.kind == kind:
             return self.advance()
-        diag.error_full(t, what + "が必要です", "ここは" + self.kind_ja(t.kind) + "です",
+        diag.error_full(t, diag.msg("parse.004", "{0}が必要です", [copy(what)]), diag.msg("parse.005", "ここは{0}です", [copy(self.kind_ja(t.kind))]),
                         None, "", hint)
         return t
 
     def expect_newline(mut self) -> None:
         t: rc[token.Token] = self.peek()
         if t.kind != token.TK_NEWLINE:
-            diag.error_full(t, "文の後に余分なトークンがあります",
-                            "ここから先が解釈できません", None, "",
-                            "1 行に書けるのは 1 つの文です（改行で区切ってください）")
+            diag.error_full(t, diag.msg0("parse.145", "文の後に余分なトークンがあります"),
+                            diag.msg0("parse.146", "ここから先が解釈できません"), None, "",
+                            diag.msg0("parse.147", "1 行に書けるのは 1 つの文です（改行で区切ってください）"))
         self.advance()
 
     def expect_colon(mut self, what: str) -> None:
         if self.consume(":") is not None:
             return
-        diag.error_full(self.peek(), what + "の後に ':' が必要です",
-                        "ここに ':' が必要です", None, "",
-                        "ブロックを開く行は ':' で終わり、次の行を字下げします")
+        diag.error_full(self.peek(), diag.msg("parse.036", "{0}の後に ':' が必要です", [copy(what)]),
+                        diag.msg0("parse.158", "ここに ':' が必要です"), None, "",
+                        diag.msg0("parse.159", "ブロックを開く行は ':' で終わり、次の行を字下げします"))
 
     # ── 式（優先順位の階層。C 版と同じ順序で並べる）────────
 
@@ -171,8 +171,8 @@ class Parser:
                 i = i + 2
                 continue
             if c == "}":
-                self.fail_full(t, "f-string に対応しない '}' があります",
-                               "ここです", "'}' そのものを書くには '}}' と重ねてください")
+                self.fail_full(t, diag.msg0("parse.121", "f-string に対応しない '}}' があります"),
+                               diag.msg0("parse.122", "ここです"), diag.msg0("parse.123", "'}}' そのものを書くには '}}}}' と重ねてください"))
             if c != "{":
                 lit.append(c)
                 i = i + 1
@@ -200,8 +200,8 @@ class Parser:
                 if depth > 0:
                     i = i + 1
             if depth != 0:
-                self.fail_full(t, "f-string の '{' が閉じられていません",
-                               "ここです", "")
+                self.fail_full(t, diag.msg0("parse.124", "f-string の '{{' が閉じられていません"),
+                               diag.msg0("parse.122", "ここです"), "")
             ex0: str = strings.substr(src, ex_start, i - ex_start)
             i = i + 1                      # '}'
 
@@ -228,8 +228,8 @@ class Parser:
                 si = si + 1
 
             if len(ex) == 0:
-                self.fail_full(t, "f-string の '{}' が空です",
-                               "ここに式が必要です", "")
+                self.fail_full(t, diag.msg0("parse.125", "f-string の '{{}}' が空です"),
+                               diag.msg0("parse.126", "ここに式が必要です"), "")
 
             # 注意: tokenize は行末に改行を要求するので足します
             sub: Parser = Parser(lexer.tokenize(t.src.file, ex + "\n"))
@@ -251,11 +251,9 @@ class Parser:
             rest: rc[token.Token] = sub.peek()
             if rest.kind != token.TK_NEWLINE and rest.kind != token.TK_EOF:
                 self.fail_full(t,
-                               "f-string の中の式を解釈できません: '" + ex + "'",
-                               "ここです",
-                               "式の書き方を確かめてください" +
-                               "（書式を付けるなら f\"{x:>8}\" のように " +
-                               "':' の後ろに書きます）")
+                               diag.msg("parse.006", "f-string の中の式を解釈できません: '{0}'", [copy(ex)]),
+                               diag.msg0("parse.122", "ここです"),
+                               diag.msg0("parse.127", "式の書き方を確かめてください（書式を付けるなら f\"{{x:>8}}\" のように ':' の後ろに書きます）"))
 
             # ★ 書式指定は**ここで脱糖します**（A-45）。出来上がるのは
             #   ふつうの呼び出しなので、sema も codegen も書式を知りません。
@@ -296,13 +294,12 @@ class Parser:
                     fixed = True
                     k = k + 1
                 if k != len(spec):
-                    self.fail_full(t, "書式指定を解釈できません: '" + spec + "'",
-                                   "ここです",
-                                   "書けるのは [埋め文字][< > ^][幅][.桁数][f] です" +
-                                   "（例: {x:>8} / {v:.2f} / {s:*^10}）")
+                    self.fail_full(t, diag.msg("parse.007", "書式指定を解釈できません: '{0}'", [copy(spec)]),
+                                   diag.msg0("parse.122", "ここです"),
+                                   diag.msg0("parse.128", "書けるのは [埋め文字][< > ^][幅][.桁数][f] です（例: {{x:>8}} / {{v:.2f}} / {{s:*^10}}）"))
                 if prec >= 0 and not fixed:
-                    self.fail_full(t, "小数の桁数には 'f' が要ります", "ここです",
-                                   "例: {v:.2f}（小数点以下 2 桁）")
+                    self.fail_full(t, diag.msg0("parse.129", "小数の桁数には 'f' が要ります"), diag.msg0("parse.122", "ここです"),
+                                   diag.msg0("parse.130", "例: {{v:.2f}}（小数点以下 2 桁）"))
                 if align < 0:
                     align = 0       # 既定は左寄せ
 
@@ -492,9 +489,8 @@ class Parser:
             while True:
                 a: rc[token.Token] = self.peek()
                 if a.kind != token.TK_IDENT:
-                    self.fail_hint(a, "lambda の引数は名前で書きます" +
-                                      "（例: lambda x, y: x + y）",
-                                   "引数の名前が必要です")
+                    self.fail_hint(a, diag.msg0("parse.024", "lambda の引数は名前で書きます（例: lambda x, y: x + y）"),
+                                   diag.msg0("parse.023", "引数の名前が必要です"))
                 self.advance()
 
                 # .T0 / .T1 …（利用者が書けない名前にします）
@@ -516,8 +512,8 @@ class Parser:
                     break
 
         if self.consume(":") is None:
-            self.fail_hint(self.peek(), "lambda は「lambda 引数: 式」の形で書きます",
-                           "':' が必要です")
+            self.fail_hint(self.peek(), diag.msg0("parse.026", "lambda は「lambda 引数: 式」の形で書きます"),
+                           diag.msg0("parse.025", "':' が必要です"))
 
         # 戻り型の型引数 .R
         rp: rc[ast.Node] = ast.new_node(ast.ND_TYPEREF, kw)
@@ -643,14 +639,14 @@ class Parser:
             return ast.new_bool_node(t, False)
 
         if t.kind == token.TK_KEYWORD:
-            self.fail_hint(t, "予約語は変数名として使えません（言語仕様 2.5）",
-                           "'" + t.text + "' は予約語です")
+            self.fail_hint(t, diag.msg0("parse.009", "予約語は変数名として使えません（言語仕様 2.5）"),
+                           diag.msg("parse.008", "'{0}' は予約語です", [copy(t.text)]))
 
-        label: str = "ここには式が来るはずです"
+        label: str = diag.msg0("parse.133", "ここには式が来るはずです")
         if t.kind == token.TK_EOF:
-            label = "ここでファイルが終わっています"
-        self.fail_full(t, "式が必要です", label,
-                       "式とは整数リテラル、変数名、または '(' で囲んだ式のことです")
+            label = diag.msg0("parse.132", "ここでファイルが終わっています")
+        self.fail_full(t, diag.msg0("parse.131", "式が必要です"), label,
+                       diag.msg0("parse.134", "式とは整数リテラル、変数名、または '(' で囲んだ式のことです"))
         return ast.new_node(ast.ND_PASS, t)
 
     # 内包表記
@@ -668,14 +664,14 @@ class Parser:
 
         var: rc[token.Token] = self.peek()
         if var.kind != token.TK_IDENT:
-            self.fail_hint(var, "内包表記は [式 for 変数 in 対象] の形で書きます",
-                           "ループ変数の名前が必要です")
+            self.fail_hint(var, diag.msg0("parse.011", "内包表記は [式 for 変数 in 対象] の形で書きます"),
+                           diag.msg0("parse.010", "ループ変数の名前が必要です"))
         self.advance()
 
         if not self.peek().is_kw("in"):
             self.fail_hint(self.peek(),
-                           "内包表記は [式 for 変数 in 対象] の形で書きます",
-                           "'in' が必要です")
+                           diag.msg0("parse.011", "内包表記は [式 for 変数 in 対象] の形で書きます"),
+                           diag.msg0("parse.012", "'in' が必要です"))
         self.advance()
 
         n: rc[ast.Node] = ast.new_node(ast.ND_LISTCOMP, open_tok)
@@ -694,8 +690,8 @@ class Parser:
         if it.kind == ast.ND_CALL and it.name == "range" and len(it.mod_name) == 0:
             a1: rc[ast.Node] | None = it.args
             if a1 is None:
-                self.fail_hint(self.tok_of(it), "range は 1〜3 個の引数を取ります",
-                               "range の引数の個数が違います")
+                self.fail_hint(self.tok_of(it), diag.msg0("parse.014", "range は 1〜3 個の引数を取ります"),
+                               diag.msg0("parse.013", "range の引数の個数が違います"))
             arg1: rc[ast.Node] = unwrap_node(a1)
             a2: rc[ast.Node] | None = arg1.next
             a3: rc[ast.Node] | None = None
@@ -704,8 +700,8 @@ class Parser:
             if a3 is not None:
                 if unwrap_node(a3).next is not None:
                     self.fail_hint(self.tok_of(it),
-                                   "range は 1〜3 個の引数を取ります",
-                                   "range の引数の個数が違います")
+                                   diag.msg0("parse.014", "range は 1〜3 個の引数を取ります"),
+                                   diag.msg0("parse.013", "range の引数の個数が違います"))
 
             start: rc[ast.Node] = arg1
             stop: rc[ast.Node] = arg1
@@ -724,15 +720,13 @@ class Parser:
                     lit = unwrap_node(lit.lhs)
                 if lit.kind != ast.ND_INT:
                     self.fail_hint(self.tok_of(unwrap_node(a3)),
-                                   "増分は整数リテラルで書いてください" +
-                                   "（例: range(0, 10, 2)）。変数を使いたい場合は " +
-                                   "for 文で書けます",
-                                   "range の増分が定数ではありません")
+                                   diag.msg0("parse.016", "増分は整数リテラルで書いてください（例: range(0, 10, 2)）。変数を使いたい場合は for 文で書けます"),
+                                   diag.msg0("parse.015", "range の増分が定数ではありません"))
                 step = sign * lit.ival
                 if step == 0:
                     self.fail_hint(self.tok_of(unwrap_node(a3)),
-                                   "増分が 0 だと無限ループになります",
-                                   "range の増分に 0 は使えません")
+                                   diag.msg0("parse.018", "増分が 0 だと無限ループになります"),
+                                   diag.msg0("parse.017", "range の増分に 0 は使えません"))
             start.next = stop
             stop.next = None
             n.args = start
@@ -747,9 +741,8 @@ class Parser:
 
         if self.peek().is_kw("for"):
             self.fail_hint(self.peek(),
-                           "for は 1 つだけです（入れ子にしたいときは、いったん" +
-                           "変数に入れてください）",
-                           "内包表記の 'for' が 2 つあります")
+                           diag.msg0("parse.020", "for は 1 つだけです（入れ子にしたいときは、いったん変数に入れてください）"),
+                           diag.msg0("parse.019", "内包表記の 'for' が 2 つあります"))
 
         self.expect_close(close, open_tok)
 
@@ -811,9 +804,8 @@ class Parser:
                 name_tok: rc[token.Token] = self.peek()
                 if name_tok.kind != token.TK_IDENT:
                     self.fail_hint(name_tok,
-                                   "'.' の後にはフィールド名かメソッド名を書きます" +
-                                   "（例: t.kind / xs.append(1)）",
-                                   "フィールド名かメソッド名が必要です")
+                                   diag.msg0("parse.022", "'.' の後にはフィールド名かメソッド名を書きます（例: t.kind / xs.append(1)）"),
+                                   diag.msg0("parse.021", "フィールド名かメソッド名が必要です"))
                 self.advance()
 
                 mopen: rc[token.Token] = self.peek()
@@ -837,9 +829,9 @@ class Parser:
 
             # 呼べるのは名前だけ（第一級関数は v1 未対応）
             if n.kind != ast.ND_VAR:
-                self.fail_full(self.tok_of(n), "この式は呼び出せません",
-                               "呼び出せるのは関数の名前だけです",
-                               "関数を値として扱うことは v1 では対応していません")
+                self.fail_full(self.tok_of(n), diag.msg0("parse.135", "この式は呼び出せません"),
+                               diag.msg0("parse.136", "呼び出せるのは関数の名前だけです"),
+                               diag.msg0("parse.137", "関数を値として扱うことは v1 では対応していません"))
 
             call: rc[ast.Node] = ast.new_node(ast.ND_CALL, n.tok)
             call.name = copy(n.name)
@@ -1053,11 +1045,10 @@ class Parser:
 
         # ★ 比較の連鎖を禁止する（構文の段階で捕まえる）
         if self.compare_op(self.peek()) >= 0:
-            diag.error_full(self.peek(), "比較演算子を連鎖させることはできません",
-                            "2 つ目の比較演算子です",
-                            t, "1 つ目の比較演算子はここです",
-                            "Python と違い連鎖比較は使えません。'and' で繋いでください" +
-                            "（例: a < b and b < c）")
+            diag.error_full(self.peek(), diag.msg0("parse.138", "比較演算子を連鎖させることはできません"),
+                            diag.msg0("parse.139", "2 つ目の比較演算子です"),
+                            t, diag.msg0("parse.140", "1 つ目の比較演算子はここです"),
+                            diag.msg0("parse.141", "Python と違い連鎖比較は使えません。'and' で繋いでください（例: a < b and b < c）"))
 
         return ast.new_binop_node(t, cop, lhs, rhs)
 
@@ -1105,10 +1096,9 @@ class Parser:
         n.rhs = lhs                 # 条件が真のときの値（前に書く）
         n.lhs = self.or_expr()      # 条件
         if self.consume_kw("else") is None:
-            diag.error_full(self.peek(), "三項演算子に 'else' がありません",
-                            "ここに 'else' が必要です", None, "",
-                            "書き方は 'a if 条件 else b' です（値を返す式なので、" +
-                            "条件が偽のときの値も必ず要ります）")
+            diag.error_full(self.peek(), diag.msg0("parse.142", "三項演算子に 'else' がありません"),
+                            diag.msg0("parse.143", "ここに 'else' が必要です"), None, "",
+                            diag.msg0("parse.144", "書き方は 'a if 条件 else b' です（値を返す式なので、条件が偽のときの値も必ず要ります）"))
         n.els = self.expr()         # 偽のときの値
         return n
 
@@ -1139,9 +1129,8 @@ class Parser:
             neg = True
             t = self.peek()
         if t.kind != token.TK_INT:
-            self.fail_full(t, "ここには整数のリテラルが必要です", what,
-                           "範囲の端はコンパイル時に決まっている必要があります" +
-                           "（例: type Percent = int range(0, 100)）")
+            self.fail_full(t, diag.msg0("parse.245", "ここには整数のリテラルが必要です"), what,
+                           diag.msg0("parse.246", "範囲の端はコンパイル時に決まっている必要があります（例: type Percent = int range(0, 100)）"))
         self.advance()
         v: int = t.ival
         if neg:
@@ -1164,35 +1153,33 @@ class Parser:
         self.advance()                                # "="
 
         base: rc[token.Token] = self.type_name_token(
-            "範囲型の基底は int です（例: int range(0, 100)）")
+            diag.msg0("parse.247", "範囲型の基底は int です（例: int range(0, 100)）"))
         if base.text != "int":
-            self.fail_hint(base, "いま範囲を付けられるのは int だけです",
-                           "'" + base.text + "' には範囲を付けられません")
+            self.fail_hint(base, diag.msg0("parse.103", "いま範囲を付けられるのは int だけです"),
+                           diag.msg("parse.102", "'{0}' には範囲を付けられません", [copy(base.text)]))
 
         rw: rc[token.Token] = self.peek()
         if rw.kind != token.TK_IDENT or rw.text != "range":
-            self.fail_full(rw, "範囲型には range(下端, 上端) が必要です",
-                           "ここに range(...) を書いてください",
-                           "書き方は type Percent = int range(0, 100) です" +
-                           "（両端を含みます）")
+            self.fail_full(rw, diag.msg0("parse.248", "範囲型には range(下端, 上端) が必要です"),
+                           diag.msg0("parse.249", "ここに range(...) を書いてください"),
+                           diag.msg0("parse.250", "書き方は type Percent = int range(0, 100) です（両端を含みます）"))
         self.advance()                                # "range"
         open_tok: rc[token.Token] = self.peek()
         if self.consume("(") is None:
-            self.fail_hint(open_tok, "range の後には '(' が必要です",
-                           "ここに '(' を書いてください")
+            self.fail_hint(open_tok, diag.msg0("parse.105", "range の後には '(' が必要です"),
+                           diag.msg0("parse.104", "ここに '(' を書いてください"))
 
-        lo: rc[ast.Node] = self.int_literal("下端には整数のリテラルを書いてください")
+        lo: rc[ast.Node] = self.int_literal(diag.msg0("parse.251", "下端には整数のリテラルを書いてください"))
         if self.consume(",") is None:
             self.fail_hint(self.peek(),
-                           "下端と上端はカンマで区切ります（例: range(0, 100)）",
-                           "ここに ',' が必要です")
-        hi: rc[ast.Node] = self.int_literal("上端には整数のリテラルを書いてください")
+                           diag.msg0("parse.107", "下端と上端はカンマで区切ります（例: range(0, 100)）"),
+                           diag.msg0("parse.106", "ここに ',' が必要です"))
+        hi: rc[ast.Node] = self.int_literal(diag.msg0("parse.252", "上端には整数のリテラルを書いてください"))
         self.expect_close(")", open_tok)
 
         if lo.ival > hi.ival:
-            self.fail_hint(name_tok, "下端は上端以下でなければなりません",
-                           "range(" + str(lo.ival) + ", " + str(hi.ival) +
-                           ") は空の範囲です")
+            self.fail_hint(name_tok, diag.msg0("parse.109", "下端は上端以下でなければなりません"),
+                           diag.msg("parse.108", "range({0}, {1}) は空の範囲です", [copy(str(lo.ival)), copy(str(hi.ival))]))
 
         n: rc[ast.Node] = ast.new_node(ast.ND_RANGEDECL, name_tok)
         n.name = copy(name_tok.text)
@@ -1204,12 +1191,12 @@ class Parser:
         name_tok: rc[token.Token] = self.advance()   # IDENT（呼び出し元が確認済み）
         self.advance()                           # ":"
 
-        tr: rc[ast.Node] = self.type_ref("型注釈には型名を書きます（例: x: int = 0）")
+        tr: rc[ast.Node] = self.type_ref(diag.msg0("parse.148", "型注釈には型名を書きます（例: x: int = 0）"))
 
         if not self.peek().is_punct("="):
-            self.fail_full(self.peek(), "変数宣言には初期化式が必要です",
-                           "ここに '= 初期値' が必要です",
-                           "本言語では未初期化の変数を作れません（例: x: int = 0）")
+            self.fail_full(self.peek(), diag.msg0("parse.149", "変数宣言には初期化式が必要です"),
+                           diag.msg0("parse.150", "ここに '= 初期値' が必要です"),
+                           diag.msg0("parse.151", "本言語では未初期化の変数を作れません（例: x: int = 0）"))
         self.advance()   # "="
 
         n: rc[ast.Node] = ast.new_node(ast.ND_VARDECL, name_tok)
@@ -1297,7 +1284,7 @@ class Parser:
                 nx: rc[ast.Node] | None = cur_ix.next
                 cur_ix.next = None
                 if len(idx) == 8:
-                    self.fail(self.tok_of(target), "添字が多すぎます（8 個までです）")
+                    self.fail(self.tok_of(target), diag.msg0("parse.027", "添字が多すぎます（8 個までです）"))
                 nm2: str = self.hidden_name("aug.idx")
                 idx.append(copy(nm2))
                 decl2: rc[ast.Node] = self.hidden_decl(target.tok, nm2, cur_ix)
@@ -1406,8 +1393,8 @@ class Parser:
             while True:
                 nm: rc[token.Token] = self.peek()
                 if nm.kind != token.TK_IDENT:
-                    self.fail_hint(nm, "受け取る名前を書いてください（例: q, r = f()）",
-                                   "名前が必要です")
+                    self.fail_hint(nm, diag.msg0("parse.029", "受け取る名前を書いてください（例: q, r = f()）"),
+                                   diag.msg0("parse.028", "名前が必要です"))
                 self.advance()
                 v: rc[ast.Node] = ast.new_node(ast.ND_VARDECL, nm)
                 v.name = copy(nm.text)
@@ -1420,8 +1407,8 @@ class Parser:
                     break
             if self.consume("=") is None:
                 self.fail_hint(self.peek(),
-                               "分解代入は 'q, r = f()' の形で書きます",
-                               "'=' が必要です")
+                               diag.msg0("parse.031", "分解代入は 'q, r = f()' の形で書きます"),
+                               diag.msg0("parse.030", "'=' が必要です"))
             first_val: rc[ast.Node] = self.expr()
             up.rhs = first_val
 
@@ -1448,16 +1435,15 @@ class Parser:
                     pv = cur_v.next
                 if len(names) != len(vals):
                     self.fail_hint(ut,
-                                   "左辺は " + str(len(names)) + " 個、右辺は " +
-                                   str(len(vals)) + " 個です",
-                                   "受け取る名前と値の数が違います")
+                                   diag.msg("parse.033", "左辺は {0} 個、右辺は {1} 個です", [copy(str(len(names))), copy(str(len(vals)))]),
+                                   diag.msg0("parse.032", "受け取る名前と値の数が違います"))
 
                 # 注意: C 版（src/parser.c）は隠し変数の名前を 8 個の配列で持つので、
                 #   **同じ上限**にします（2 実装で同じものを受け付けるため）。
                 #   注意: 個数の食い違いより**後**に見ること（C 版と順序を揃える）。
                 if len(vals) > 8:
-                    self.fail_hint(ut, "並べられるのは 8 個までです",
-                                   "値が多すぎます")
+                    self.fail_hint(ut, diag.msg0("parse.035", "並べられるのは 8 個までです"),
+                                   diag.msg0("parse.034", "値が多すぎます"))
 
                 head: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, ut)
                 cur: rc[ast.Node] = head
@@ -1495,17 +1481,17 @@ class Parser:
             # 式文になれるのは呼び出しだけ
             # 注意: 位置は「左辺のトークン」（C 版と揃える）
             if lhs.kind != ast.ND_CALL and lhs.kind != ast.ND_METHOD:
-                self.fail_full(self.tok_of(lhs), "この式は文として書けません",
-                               "計算した値がどこにも使われていません",
-                               "結果を変数に代入するか、関数の呼び出しを書いてください")
+                self.fail_full(self.tok_of(lhs), diag.msg0("parse.152", "この式は文として書けません"),
+                               diag.msg0("parse.153", "計算した値がどこにも使われていません"),
+                               diag.msg0("parse.154", "結果を変数に代入するか、関数の呼び出しを書いてください"))
             return lhs
 
         # ここから代入。左辺が代入先になれるか確認する
         if (lhs.kind != ast.ND_VAR and lhs.kind != ast.ND_INDEX and
                 lhs.kind != ast.ND_FIELD):
-            self.fail_full(self.tok_of(lhs), "この式には代入できません",
-                           "代入先にできるのは変数・添字 xs[i]・フィールド t.f だけです",
-                           "計算結果を代入したい場合は、左辺に変数を書いてください")
+            self.fail_full(self.tok_of(lhs), diag.msg0("parse.155", "この式には代入できません"),
+                           diag.msg0("parse.156", "代入先にできるのは変数・添字 xs[i]・フィールド t.f だけです"),
+                           diag.msg0("parse.157", "計算結果を代入したい場合は、左辺に変数を書いてください"))
         self.advance()   # "=" または複合代入記号
 
         rhs: rc[ast.Node] = self.expr()
@@ -1522,10 +1508,10 @@ class Parser:
     def block(mut self) -> rc[ast.Node]:
         head_tok: rc[token.Token] = self.peek()
 
-        self.expect(token.TK_NEWLINE, "改行",
-                    "':' の後は改行してブロックを字下げしてください")
-        self.expect(token.TK_INDENT, "字下げされたブロック",
-                    "':' の次の行は字下げしてください（スペース 4 個を推奨）")
+        self.expect(token.TK_NEWLINE, diag.msg0("parse.118", "改行"),
+                    diag.msg0("parse.160", "':' の後は改行してブロックを字下げしてください"))
+        self.expect(token.TK_INDENT, diag.msg0("parse.161", "字下げされたブロック"),
+                    diag.msg0("parse.162", "':' の次の行は字下げしてください（スペース 4 個を推奨）"))
 
         head: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, head_tok)
         cur: rc[ast.Node] = head
@@ -1535,7 +1521,7 @@ class Parser:
             st: rc[ast.Node] = self.stmt()
             cur.next = st
             cur = st
-        self.expect(token.TK_DEDENT, "ブロックの終わり", "")
+        self.expect(token.TK_DEDENT, diag.msg0("parse.163", "ブロックの終わり"), "")
 
         blk: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, head_tok)
         blk.body = head.next
@@ -1549,7 +1535,7 @@ class Parser:
 
         n: rc[ast.Node] = ast.new_node(ast.ND_IF, t)
         n.lhs = self.expr()
-        self.expect_colon("if の条件")
+        self.expect_colon(diag.msg0("parse.171", "if の条件"))
         n.body = self.block()
 
         if self.peek().is_kw("elif"):
@@ -1632,8 +1618,8 @@ class Parser:
         var_tok: rc[token.Token] = self.peek()
         if var_tok.kind != token.TK_IDENT:
             self.fail_hint(var_tok,
-                           "for のループ変数は名前で書きます（例: for x in xs:）",
-                           "ループ変数の名前が必要です")
+                           diag.msg0("parse.039", "for のループ変数は名前で書きます（例: for x in xs:）"),
+                           diag.msg0("parse.010", "ループ変数の名前が必要です"))
         self.advance()
 
         # ★ for i, x in enumerate(xs)
@@ -1647,13 +1633,13 @@ class Parser:
             var_tok = self.peek()       # 2 つ目が要素
             if var_tok.kind != token.TK_IDENT:
                 self.fail_hint(var_tok,
-                               "書き方は 'for i, x in enumerate(xs):' です",
-                               "2 つ目のループ変数の名前が必要です")
+                               diag.msg0("parse.041", "書き方は 'for i, x in enumerate(xs):' です"),
+                               diag.msg0("parse.040", "2 つ目のループ変数の名前が必要です"))
             self.advance()
 
         if self.consume_kw("in") is None:
-            self.fail_hint(self.peek(), "for は「for 変数 in 対象:」の形で書きます",
-                           "'in' が必要です")
+            self.fail_hint(self.peek(), diag.msg0("parse.042", "for は「for 変数 in 対象:」の形で書きます"),
+                           diag.msg0("parse.012", "'in' が必要です"))
 
         # range(...) は特別扱い（言語仕様 5.5）
         is_range: bool = (self.peek().kind == token.TK_IDENT and
@@ -1665,22 +1651,22 @@ class Parser:
                 self.peek().text == "enumerate" and self.peek_at(1).is_punct("(")):
             if idx_tok is None:
                 self.fail_full(self.peek(),
-                               "enumerate には 2 つのループ変数が必要です",
-                               "添字と要素の 2 つを受け取ります",
-                               "書き方は 'for i, x in enumerate(xs):' です")
+                               diag.msg0("parse.172", "enumerate には 2 つのループ変数が必要です"),
+                               diag.msg0("parse.173", "添字と要素の 2 つを受け取ります"),
+                               diag.msg0("parse.041", "書き方は 'for i, x in enumerate(xs):' です"))
             self.advance()
             eopen: rc[token.Token] = self.advance()
             eiter: rc[ast.Node] = self.expr()
             self.expect_close(")", eopen)
-            self.expect_colon("for の対象")
+            self.expect_colon(diag.msg0("parse.174", "for の対象"))
             ebody: rc[ast.Node] = self.block()
             return self.for_over_list(t, eiter, var_tok, idx_tok, ebody)
 
         if idx_tok is not None:
             self.fail_full(self.peek(),
-                           "ループ変数を 2 つ書けるのは enumerate だけです",
-                           "ここには enumerate(...) が必要です",
-                           "タプルはありません。'for i, x in enumerate(xs):' の形だけです")
+                           diag.msg0("parse.175", "ループ変数を 2 つ書けるのは enumerate だけです"),
+                           diag.msg0("parse.176", "ここには enumerate(...) が必要です"),
+                           diag.msg0("parse.177", "タプルはありません。'for i, x in enumerate(xs):' の形だけです"))
 
         iter_: rc[ast.Node] | None = None
         start: rc[ast.Node] | None = None
@@ -1720,18 +1706,16 @@ class Parser:
                         lit = inner
                 if lit.kind != ast.ND_INT:
                     self.fail_hint(self.tok_of(a3),
-                                   "増分は整数リテラルで書いてください" +
-                                   "（例: range(0, 10, 2)）。" +
-                                   "変数を使いたい場合は while で書けます",
-                                   "range の増分が定数ではありません")
+                                   diag.msg0("parse.043", "増分は整数リテラルで書いてください（例: range(0, 10, 2)）。変数を使いたい場合は while で書けます"),
+                                   diag.msg0("parse.015", "range の増分が定数ではありません"))
                 step = sign * lit.ival
                 if step == 0:
-                    self.fail_hint(self.tok_of(a3), "増分が 0 だと無限ループになります",
-                                   "range の増分に 0 は使えません")
+                    self.fail_hint(self.tok_of(a3), diag.msg0("parse.018", "増分が 0 だと無限ループになります"),
+                                   diag.msg0("parse.017", "range の増分に 0 は使えません"))
         else:
             iter_ = self.expr()
 
-        self.expect_colon("for の対象")
+        self.expect_colon(diag.msg0("parse.174", "for の対象"))
         body: rc[ast.Node] = self.block()
 
         # ── ここから脱糖 ──
@@ -1825,7 +1809,7 @@ class Parser:
 
         n: rc[ast.Node] = ast.new_node(ast.ND_WHILE, t)
         n.lhs = self.expr()
-        self.expect_colon("while の条件")
+        self.expect_colon(diag.msg0("parse.178", "while の条件"))
         n.body = self.block()
         return n
 
@@ -1887,9 +1871,9 @@ class Parser:
 
         # 対応する if が無い elif / else
         if t.is_kw("elif") or t.is_kw("else"):
-            self.fail_full(t, "対応する if がない '" + t.text + "' です",
-                           "この行に対応する 'if' が見つかりません",
-                           "'elif' / 'else' は 'if' と同じ字下げの位置に書いてください")
+            self.fail_full(t, diag.msg("parse.050", "対応する if がない '{0}' です", [copy(t.text)]),
+                           diag.msg0("parse.180", "この行に対応する 'if' が見つかりません"),
+                           diag.msg0("parse.181", "'elif' / 'else' は 'if' と同じ字下げの位置に書いてください"))
 
         s: rc[ast.Node] = self.simple_stmt()
         self.expect_newline()
@@ -1902,7 +1886,7 @@ class Parser:
         if t.kind == token.TK_IDENT or t.is_kw("None"):
             self.advance()
             return t
-        self.fail_hint(t, what, "型名が必要です")
+        self.fail_hint(t, what, diag.msg0("parse.051", "型名が必要です"))
         return t
 
     # type_ref ::= [ IDENT "." ] IDENT [ "[" type_ref "]" ] [ "|" None ]
@@ -1917,7 +1901,7 @@ class Parser:
             tn.name = "(tuple)"
             ttail: rc[ast.Node] | None = None
             while True:
-                ta: rc[ast.Node] = self.type_ref("タプルの要素の型を書いてください")
+                ta: rc[ast.Node] = self.type_ref(diag.msg0("parse.182", "タプルの要素の型を書いてください"))
                 slot: rc[ast.Node] = ast.new_node(ast.ND_TYPEREF, ta.tok)
                 slot.lhs = ta
                 if ttail is None:
@@ -1936,8 +1920,8 @@ class Parser:
                 ci = cn.next
             if cnt < 2:
                 self.fail_hint(tuo,
-                               "2 つ以上の型を書いてください（1 要素のタプルはありません）",
-                               "タプルの要素が " + str(cnt) + " 個です")
+                               diag.msg0("parse.053", "2 つ以上の型を書いてください（1 要素のタプルはありません）"),
+                               diag.msg("parse.052", "タプルの要素が {0} 個です", [copy(str(cnt))]))
             return tn
 
         # ★ 関数型 fn(A, B) -> C
@@ -1956,7 +1940,7 @@ class Parser:
             tail: rc[ast.Node] | None = None
             if not self.peek().is_punct(")"):
                 while True:
-                    a: rc[ast.Node] = self.type_ref("引数の型を書いてください")
+                    a: rc[ast.Node] = self.type_ref(diag.msg0("parse.183", "引数の型を書いてください"))
                     if tail is not None:
                         tail.next = a
                     else:
@@ -1967,10 +1951,10 @@ class Parser:
             self.expect_close(")", fopen)
 
             if self.consume("->") is None:
-                self.fail_full(self.peek(), "関数型には戻り型が必要です",
-                               "ここに '->' と戻り型を書いてください",
-                               "書き方は fn(int, str) -> bool です")
-            fnode.rhs = self.type_ref("戻り型を書いてください")
+                self.fail_full(self.peek(), diag.msg0("parse.184", "関数型には戻り型が必要です"),
+                               diag.msg0("parse.185", "ここに '->' と戻り型を書いてください"),
+                               diag.msg0("parse.186", "書き方は fn(int, str) -> bool です"))
+            fnode.rhs = self.type_ref(diag.msg0("parse.187", "戻り型を書いてください"))
             return fnode
 
         t: rc[token.Token] = self.type_name_token(what)
@@ -1981,7 +1965,7 @@ class Parser:
         # モジュール修飾 lexer.Token（★ 1 段だけ）
         if self.peek().is_punct("."):
             self.advance()
-            m: rc[token.Token] = self.type_name_token("モジュール修飾の後には型名を書きます")
+            m: rc[token.Token] = self.type_name_token(diag.msg0("parse.192", "モジュール修飾の後には型名を書きます"))
             n.mod_name = copy(n.name)
             n.name = copy(m.text)
             n.tok = m
@@ -1991,7 +1975,7 @@ class Parser:
             while self.peek().is_punct("."):
                 self.advance()
                 seg: rc[token.Token] = self.type_name_token(
-                    "モジュール修飾の後には型名を書きます（例: pkg.mod.Token）")
+                    diag.msg0("parse.189", "モジュール修飾の後には型名を書きます（例: pkg.mod.Token）"))
                 n.mod_name = n.mod_name + "." + n.name
                 n.name = copy(seg.text)
                 n.tok = seg
@@ -2002,7 +1986,7 @@ class Parser:
             #   注意: 1 個目は今までどおり lhs にも入れる（list[T] を読む側を変えない）
             ta_tail: rc[ast.Node] | None = None
             while True:
-                a: rc[ast.Node] = self.type_ref("型引数を書いてください（例: list[int]）")
+                a: rc[ast.Node] = self.type_ref(diag.msg0("parse.190", "型引数を書いてください（例: list[int]）"))
                 if n.lhs is None:
                     n.lhs = a
                 slot2: rc[ast.Node] = ast.new_node(ast.ND_TYPEREF, a.tok)
@@ -2021,9 +2005,8 @@ class Parser:
             bar: rc[token.Token] = self.advance()
             if not self.peek().is_kw("None"):
                 self.fail_hint(self.peek(),
-                               "型の '|' の後ろに書けるのは None だけです" +
-                               "（共用体型はありません）",
-                               "'| None' の形で書いてください")
+                               diag.msg0("parse.055", "型の '|' の後ろに書けるのは None だけです（共用体型はありません）"),
+                               diag.msg0("parse.054", "'| None' の形で書いてください"))
             self.advance()
             n.nullable = True
             n.tok = bar
@@ -2068,8 +2051,8 @@ class Parser:
             while self.consume(".") is not None:
                 seg: rc[token.Token] = self.peek()
                 if seg.kind != token.TK_IDENT:
-                    self.fail_hint(seg, "ここには名前が必要です",
-                                   "'.' の後には名前を書きます")
+                    self.fail_hint(seg, diag.msg0("parse.056", "ここには名前が必要です"),
+                                   diag.msg0("parse.057", "'.' の後には名前を書きます"))
                 self.advance()
                 fld: rc[ast.Node] = ast.new_node(ast.ND_FIELD, seg)
                 fld.lhs = e
@@ -2079,18 +2062,14 @@ class Parser:
             #   見えるので、黙って読み飛ばすと「名前だけ」を受け取ったことに
             #   なります）。
             if self.peek().is_punct("(") or self.peek().is_punct("["):
-                what: str = "既定値に添字は書けません"
+                what: str = diag.msg0("parse.194", "既定値に添字は書けません")
                 if self.peek().is_punct("("):
-                    what = "既定値に呼び出しは書けません"
-                self.fail_full(self.peek(), what, "ここは実行しないと決まりません",
-                               "数 / 文字列 / True / False / None / 列挙の枝 " +
-                               "だけが書けます（既定値は呼び出し側に置き換わるので、" +
-                               "実行して決まる値は書けません）")
+                    what = diag.msg0("parse.193", "既定値に呼び出しは書けません")
+                self.fail_full(self.peek(), what, diag.msg0("parse.195", "ここは実行しないと決まりません"),
+                               diag.msg0("parse.196", "数 / 文字列 / True / False / None / 列挙の枝 だけが書けます（既定値は呼び出し側に置き換わるので、実行して決まる値は書けません）"))
             if e.kind != ast.ND_FIELD:
-                self.fail_full(t, "既定値に変数は書けません", "ここには値を書きます",
-                               "数 / 文字列 / True / False / None / 列挙の枝 " +
-                               "だけが書けます（変えられる値を既定値にすると、" +
-                               "呼ぶたびに答えが変わります）")
+                self.fail_full(t, diag.msg0("parse.197", "既定値に変数は書けません"), diag.msg0("parse.198", "ここには値を書きます"),
+                               diag.msg0("parse.199", "数 / 文字列 / True / False / None / 列挙の枝 だけが書けます（変えられる値を既定値にすると、呼ぶたびに答えが変わります）"))
             return e
 
         if (t.kind == token.TK_INT or t.kind == token.TK_FLOAT or
@@ -2098,11 +2077,9 @@ class Parser:
                 t.is_kw("None")):
             return self.primary()
 
-        self.fail_full(t, "引数 '" + pname.text + "' の既定値に書けるのはリテラルだけです",
-                       "ここは実行しないと決まりません",
-                       "数 / 文字列 / True / False / None / 列挙の枝 だけが書けます。" +
-                       "list が要るときは 'xs: list[int] | None = None' と書きます" +
-                       "（既定値の list は呼び出しをまたいで共有されるため、書けません）")
+        self.fail_full(t, diag.msg("parse.058", "引数 '{0}' の既定値に書けるのはリテラルだけです", [copy(pname.text)]),
+                       diag.msg0("parse.195", "ここは実行しないと決まりません"),
+                       diag.msg0("parse.200", "数 / 文字列 / True / False / None / 列挙の枝 だけが書けます。list が要るときは 'xs: list[int] | None = None' と書きます（既定値の list は呼び出しをまたいで共有されるため、書けません）"))
         return self.primary()
 
     def param(mut self, allow_self: bool) -> rc[ast.Node]:
@@ -2113,8 +2090,8 @@ class Parser:
 
         name_tok: rc[token.Token] = self.peek()
         if name_tok.kind != token.TK_IDENT:
-            self.fail_hint(name_tok, "引数は「名前: 型」の形で書きます（例: n: int）",
-                           "引数名が必要です")
+            self.fail_hint(name_tok, diag.msg0("parse.060", "引数は「名前: 型」の形で書きます（例: n: int）"),
+                           diag.msg0("parse.059", "引数名が必要です"))
         self.advance()
 
         if (allow_self and name_tok.text == "self" and
@@ -2124,20 +2101,19 @@ class Parser:
             if lead is not None:
                 if lead.is_kw("own"):
                     self.fail_hint(lead,
-                                   "self の所有権は奪えません（'mut self' なら書けます）",
-                                   "self に 'own' は書けません")
+                                   diag.msg0("parse.062", "self の所有権は奪えません（'mut self' なら書けます）"),
+                                   diag.msg0("parse.061", "self に 'own' は書けません"))
                 n0.mode = ast.PM_MUT
             return n0   # type_ref は None のまま（sema がクラスの型を入れる）
 
         if lead is not None:
             self.fail_hint(lead,
-                           "'" + lead.text + "' は型の前に書きます（例: " +
-                           name_tok.text + ": " + lead.text + " list[int]）",
-                           "ここには書けません")
+                           diag.msg("parse.064", "'{0}' は型の前に書きます（例: {1}: {2} list[int]）", [copy(lead.text), copy(name_tok.text), copy(lead.text)]),
+                           diag.msg0("parse.063", "ここには書けません"))
 
         if self.consume(":") is None:
-            self.fail_hint(self.peek(), "引数には型注釈が必須です（例: n: int）",
-                           "引数名の後に ':' が必要です")
+            self.fail_hint(self.peek(), diag.msg0("parse.066", "引数には型注釈が必須です（例: n: int）"),
+                           diag.msg0("parse.065", "引数名の後に ':' が必要です"))
 
         # ★ 型の前の own / mut
         mode: int = ast.PM_BORROW
@@ -2146,7 +2122,7 @@ class Parser:
         elif self.consume_kw("mut") is not None:
             mode = ast.PM_MUT
 
-        tr: rc[ast.Node] = self.type_ref("引数には型注釈が必須です（例: n: int）")
+        tr: rc[ast.Node] = self.type_ref(diag.msg0("parse.066", "引数には型注釈が必須です（例: n: int）"))
 
         n: rc[ast.Node] = ast.new_node(ast.ND_PARAM, name_tok)
         n.name = copy(name_tok.text)
@@ -2194,8 +2170,8 @@ class Parser:
         name_tok: rc[token.Token] = self.peek()
         if name_tok.kind != token.TK_IDENT:
             self.fail_hint(name_tok,
-                           "def の後には関数名を書きます（例: def f() -> int:）",
-                           "関数名が必要です")
+                           diag.msg0("parse.068", "def の後には関数名を書きます（例: def f() -> int:）"),
+                           diag.msg0("parse.067", "関数名が必要です"))
         self.advance()
 
         n: rc[ast.Node] = ast.new_node(ast.ND_FUNC, kw)
@@ -2211,8 +2187,8 @@ class Parser:
                 ftp: rc[token.Token] = self.peek()
                 if ftp.kind != token.TK_IDENT:
                     self.fail_hint(ftp,
-                                   "型引数は名前で書きます（例: def f[T](x: T) -> T:）",
-                                   "型引数の名前が必要です")
+                                   diag.msg0("parse.070", "型引数は名前で書きます（例: def f[T](x: T) -> T:）"),
+                                   diag.msg0("parse.069", "型引数の名前が必要です"))
                 self.advance()
                 fslot: rc[ast.Node] = ast.new_node(ast.ND_TYPEREF, ftp)
                 fslot.name = copy(ftp.text)
@@ -2228,32 +2204,29 @@ class Parser:
         open_tok: rc[token.Token] = self.peek()
         if self.consume("(") is None:
             self.fail_hint(open_tok,
-                           "関数名の後には引数リストが必要です" +
-                           "（例: f() や f(n: int)）",
-                           "'(' が必要です")
+                           diag.msg0("parse.072", "関数名の後には引数リストが必要です（例: f() や f(n: int)）"),
+                           diag.msg0("parse.071", "'(' が必要です"))
 
         n.params = self.param_list(open_tok, in_class)
 
         # メソッドの第 1 引数は self でなければならない（言語仕様 5.10）
         if in_class:
             p0: rc[ast.Node] | None = n.params
-            msg: str = ("メソッド '" + n.name +
-                        "' の第 1 引数は self でなければなりません")
-            hint: str = ("本言語は self を明示的に書きます" +
-                         "（例: def show(self) -> None:）")
+            msg: str = (diag.msg("parse.073", "メソッド '{0}' の第 1 引数は self でなければなりません", [copy(n.name)]))
+            hint: str = (diag.msg0("parse.202", "本言語は self を明示的に書きます（例: def show(self) -> None:）"))
             if p0 is None:
-                self.fail_full(name_tok, msg, "ここに self が必要です", hint)
+                self.fail_full(name_tok, msg, diag.msg0("parse.201", "ここに self が必要です"), hint)
             elif p0.name != "self":
                 # 注意: 位置は「第 1 引数」（C 版と揃える）
-                self.fail_full(self.tok_of(p0), msg, "ここに self が必要です", hint)
+                self.fail_full(self.tok_of(p0), msg, diag.msg0("parse.201", "ここに self が必要です"), hint)
 
         # 戻り型は必須（言語仕様 3.3）
         if self.consume("->") is None:
             self.fail_hint(self.peek(),
-                           "戻り型は省略できません。値を返さないなら -> None と書きます",
-                           "'->' と戻り型が必要です")
+                           diag.msg0("parse.075", "戻り型は省略できません。値を返さないなら -> None と書きます"),
+                           diag.msg0("parse.074", "'->' と戻り型が必要です"))
 
-        n.type_ref = self.type_ref("戻り型には型名を書きます（例: -> int / -> None）")
+        n.type_ref = self.type_ref(diag.msg0("parse.203", "戻り型には型名を書きます（例: -> int / -> None）"))
 
         # ── raises 節（戻り型の後ろ）──
         if self.peek().is_kw("raises"):
@@ -2276,14 +2249,13 @@ class Parser:
         if in_iface:
             if self.peek().is_punct(":"):
                 self.fail_full(self.peek(),
-                               "インタフェースのメソッドに本体は書けません",
-                               "ここに ':' は書けません",
-                               "インタフェースは「何ができるか」だけを並べます" +
-                               "（実装はクラス側に書きます）")
+                               diag.msg0("parse.204", "インタフェースのメソッドに本体は書けません"),
+                               diag.msg0("parse.205", "ここに ':' は書けません"),
+                               diag.msg0("parse.206", "インタフェースは「何ができるか」だけを並べます（実装はクラス側に書きます）"))
             self.expect_newline()
             return n
 
-        self.expect_colon("def の宣言")
+        self.expect_colon(diag.msg0("parse.207", "def の宣言"))
         n.body = self.block()
         return n
 
@@ -2308,18 +2280,18 @@ class Parser:
         ne: rc[token.Token] = self.peek()
         if ne.kind != token.TK_IDENT:
             self.fail_hint(ne,
-                           "enum の後には名前を書きます（例: enum Color:）",
-                           "列挙の名前が必要です")
+                           diag.msg0("parse.081", "enum の後には名前を書きます（例: enum Color:）"),
+                           diag.msg0("parse.080", "列挙の名前が必要です"))
         self.advance()
 
         n3: rc[ast.Node] = ast.new_node(ast.ND_ENUM, kwe)
         n3.name = copy(ne.text)
 
-        self.expect_colon("enum の宣言")
-        self.expect(token.TK_NEWLINE, "改行",
-                    "':' の後は改行して本体を字下げしてください")
-        self.expect(token.TK_INDENT, "字下げされた本体",
-                    "列挙の枝は字下げして書きます（スペース 4 個を推奨）")
+        self.expect_colon(diag.msg0("parse.216", "enum の宣言"))
+        self.expect(token.TK_NEWLINE, diag.msg0("parse.118", "改行"),
+                    diag.msg0("parse.209", "':' の後は改行して本体を字下げしてください"))
+        self.expect(token.TK_INDENT, diag.msg0("parse.210", "字下げされた本体"),
+                    diag.msg0("parse.217", "列挙の枝は字下げして書きます（スペース 4 個を推奨）"))
 
         head3: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, kwe)
         cur3: rc[ast.Node] = head3
@@ -2329,9 +2301,9 @@ class Parser:
             v3: rc[token.Token] = self.peek()
             if v3.kind != token.TK_IDENT:
                 self.fail_full(v3,
-                               "列挙に書けるのは枝の名前だけです",
-                               "ここには名前を書きます",
-                               "1 行に 1 つ、名前だけを書きます（中身を持つ枝はまだありません）")
+                               diag.msg0("parse.218", "列挙に書けるのは枝の名前だけです"),
+                               diag.msg0("parse.219", "ここには名前を書きます"),
+                               diag.msg0("parse.220", "1 行に 1 つ、名前だけを書きます（中身を持つ枝はまだありません）"))
             self.advance()
 
             # ★ 中身を持つ枝（A-41）。`Circle(r: float)` の形で書きます。
@@ -2341,9 +2313,9 @@ class Parser:
             if fopen.is_punct("("):
                 self.advance()
                 if self.peek().is_punct(")"):
-                    self.fail_full(fopen, "中身のない枝に '()' は付けません",
-                                   "ここは空です",
-                                   "中身が無いなら '" + v3.text + "' とだけ書きます")
+                    self.fail_full(fopen, diag.msg0("parse.221", "中身のない枝に '()' は付けません"),
+                                   diag.msg0("parse.222", "ここは空です"),
+                                   diag.msg("parse.082", "中身が無いなら '{0}' とだけ書きます", [copy(v3.text)]))
                 fh: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, fopen)
                 fc: rc[ast.Node] = fh
                 while True:
@@ -2360,9 +2332,9 @@ class Parser:
             q3: rc[ast.Node] | None = head3.next
             while q3 is not None:
                 if q3.name == v3.text:
-                    diag.error_full(v3, "枝 '" + v3.text + "' が 2 回あります",
-                                    "2 つめの定義です", q3.tok,
-                                    "最初の定義はここです", "")
+                    diag.error_full(v3, diag.msg("parse.083", "枝 '{0}' が 2 回あります", [copy(v3.text)]),
+                                    diag.msg0("parse.223", "2 つめの定義です"), q3.tok,
+                                    diag.msg0("parse.224", "最初の定義はここです"), "")
                 q3 = q3.next
 
             ev3: rc[ast.Node] = ast.new_node(ast.ND_ENUMVAL, v3)
@@ -2372,13 +2344,13 @@ class Parser:
             nextval = nextval + 1
             cur3.next = ev3
             cur3 = ev3
-            self.expect(token.TK_NEWLINE, "改行", "枝は 1 行に 1 つ書きます")
-        self.expect(token.TK_DEDENT, "字下げの終わり",
-                    "列挙の本体が閉じていません")
+            self.expect(token.TK_NEWLINE, diag.msg0("parse.118", "改行"), diag.msg0("parse.225", "枝は 1 行に 1 つ書きます"))
+        self.expect(token.TK_DEDENT, diag.msg0("parse.120", "字下げの終わり"),
+                    diag.msg0("parse.226", "列挙の本体が閉じていません"))
 
         if head3.next is None:
-            self.fail_hint(kwe, "枝を 1 つ以上書いてください",
-                           "空の列挙は書けません")
+            self.fail_hint(kwe, diag.msg0("parse.085", "枝を 1 つ以上書いてください"),
+                           diag.msg0("parse.084", "空の列挙は書けません"))
         n3.body = head3.next
 
         # ★ 中身を持つ枝が 1 つでもあれば、**全部の枝**を隠しクラスにします（A-41）。
@@ -2414,10 +2386,10 @@ class Parser:
         nm.lhs = self.expr()
 
         self.expect_colon("match")
-        self.expect(token.TK_NEWLINE, "改行",
-                    "':' の後は改行して case を字下げしてください")
-        self.expect(token.TK_INDENT, "字下げされた case",
-                    "case は字下げして書きます（スペース 4 個を推奨）")
+        self.expect(token.TK_NEWLINE, diag.msg0("parse.118", "改行"),
+                    diag.msg0("parse.164", "':' の後は改行して case を字下げしてください"))
+        self.expect(token.TK_INDENT, diag.msg0("parse.165", "字下げされた case"),
+                    diag.msg0("parse.166", "case は字下げして書きます（スペース 4 個を推奨）"))
 
         headm: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, kwm)
         curm: rc[ast.Node] = headm
@@ -2426,9 +2398,9 @@ class Parser:
             cm: rc[token.Token] = self.peek()
             if not (cm.kind == token.TK_IDENT and cm.text == "case"):
                 self.fail_full(cm,
-                               "match の中に書けるのは case だけです",
-                               "ここには case を書きます",
-                               "書き方は case <値>: です（どれにも当たらないときは case _:）")
+                               diag.msg0("parse.167", "match の中に書けるのは case だけです"),
+                               diag.msg0("parse.168", "ここには case を書きます"),
+                               diag.msg0("parse.169", "書き方は case <値>: です（どれにも当たらないときは case _:）"))
             self.advance()      # "case"
 
             cn: rc[ast.Node] = ast.new_node(ast.ND_CASE, cm)
@@ -2446,12 +2418,12 @@ class Parser:
             cn.body = self.block()
             curm.next = cn
             curm = cn
-        self.expect(token.TK_DEDENT, "字下げの終わり",
-                    "match の本体が閉じていません")
+        self.expect(token.TK_DEDENT, diag.msg0("parse.120", "字下げの終わり"),
+                    diag.msg0("parse.170", "match の本体が閉じていません"))
 
         if headm.next is None:
-            self.fail_hint(kwm, "case を 1 つ以上書いてください",
-                           "空の match は書けません")
+            self.fail_hint(kwm, diag.msg0("parse.038", "case を 1 つ以上書いてください"),
+                           diag.msg0("parse.037", "空の match は書けません"))
         nm.body = headm.next
         return nm
 
@@ -2461,18 +2433,18 @@ class Parser:
         nt: rc[token.Token] = self.peek()
         if nt.kind != token.TK_IDENT:
             self.fail_hint(nt,
-                           "interface の後には名前を書きます（例: interface Show:）",
-                           "インタフェース名が必要です")
+                           diag.msg0("parse.077", "interface の後には名前を書きます（例: interface Show:）"),
+                           diag.msg0("parse.076", "インタフェース名が必要です"))
         self.advance()
 
         n2: rc[ast.Node] = ast.new_node(ast.ND_IFACE, kw2)
         n2.name = copy(nt.text)
 
-        self.expect_colon("interface の宣言")
-        self.expect(token.TK_NEWLINE, "改行",
-                    "':' の後は改行して本体を字下げしてください")
-        self.expect(token.TK_INDENT, "字下げされた本体",
-                    "インタフェースの中身は字下げして書きます（スペース 4 個を推奨）")
+        self.expect_colon(diag.msg0("parse.208", "interface の宣言"))
+        self.expect(token.TK_NEWLINE, diag.msg0("parse.118", "改行"),
+                    diag.msg0("parse.209", "':' の後は改行して本体を字下げしてください"))
+        self.expect(token.TK_INDENT, diag.msg0("parse.210", "字下げされた本体"),
+                    diag.msg0("parse.211", "インタフェースの中身は字下げして書きます（スペース 4 個を推奨）"))
 
         head2: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, kw2)
         cur2: rc[ast.Node] = head2
@@ -2480,18 +2452,18 @@ class Parser:
                self.peek().kind != token.TK_EOF):
             if not self.peek().is_kw("def"):
                 self.fail_full(self.peek(),
-                               "インタフェースに書けるのはメソッドの宣言だけです",
-                               "ここには def を書きます",
-                               "フィールドは持てません（持てるようにすると継承になります）")
+                               diag.msg0("parse.212", "インタフェースに書けるのはメソッドの宣言だけです"),
+                               diag.msg0("parse.213", "ここには def を書きます"),
+                               diag.msg0("parse.214", "フィールドは持てません（持てるようにすると継承になります）"))
             m2: rc[ast.Node] = self.func_def_x(True, True)
             cur2.next = m2
             cur2 = m2
-        self.expect(token.TK_DEDENT, "字下げの終わり",
-                    "インタフェースの本体が閉じていません")
+        self.expect(token.TK_DEDENT, diag.msg0("parse.120", "字下げの終わり"),
+                    diag.msg0("parse.215", "インタフェースの本体が閉じていません"))
 
         if head2.next is None:
-            self.fail_hint(kw2, "メソッドを 1 つ以上書いてください",
-                           "空のインタフェースは書けません")
+            self.fail_hint(kw2, diag.msg0("parse.079", "メソッドを 1 つ以上書いてください"),
+                           diag.msg0("parse.078", "空のインタフェースは書けません"))
         n2.body = head2.next
         return n2
 
@@ -2501,12 +2473,12 @@ class Parser:
     #    「T | None」の '|' と読んでしまうからです。
     def raises_type(mut self) -> rc[ast.Node]:
         t: rc[token.Token] = self.type_name_token(
-            "raises にはエラーの型名を書きます（例: raises IOError）")
+            diag.msg0("parse.191", "raises にはエラーの型名を書きます（例: raises IOError）"))
         n: rc[ast.Node] = ast.new_node(ast.ND_TYPEREF, t)
         n.name = copy(t.text)
         if self.peek().is_punct("."):
             self.advance()
-            m: rc[token.Token] = self.type_name_token("モジュール修飾の後には型名を書きます")
+            m: rc[token.Token] = self.type_name_token(diag.msg0("parse.192", "モジュール修飾の後には型名を書きます"))
             n.mod_name = copy(n.name)
             n.name = copy(m.text)
             n.tok = m
@@ -2529,14 +2501,14 @@ class Parser:
             ek: rc[token.Token] = self.advance()
             ex: rc[ast.Node] = ast.new_node(ast.ND_EXCEPT, ek)
             ex.type_ref = self.type_ref(
-                "except には捕まえるエラーの型名を書きます（例: except IOError:）")
+                diag.msg0("parse.179", "except には捕まえるエラーの型名を書きます（例: except IOError:）"))
             if self.peek().is_kw("as"):
                 self.advance()
                 nm: rc[token.Token] = self.peek()
                 if nm.kind != token.TK_IDENT:
                     self.fail_hint(nm,
-                                   "as の後には変数名を書きます（例: except IOError as e:）",
-                                   "変数名が必要です")
+                                   diag.msg0("parse.045", "as の後には変数名を書きます（例: except IOError as e:）"),
+                                   diag.msg0("parse.044", "変数名が必要です"))
                 self.advance()
                 ex.name = copy(nm.text)
             self.expect_colon("except")
@@ -2546,8 +2518,8 @@ class Parser:
 
         if head.next is None:
             self.fail_hint(self.peek(),
-                           "try には except を 1 つ以上書きます（例: except IOError as e:）",
-                           "この try には except がありません")
+                           diag.msg0("parse.047", "try には except を 1 つ以上書きます（例: except IOError as e:）"),
+                           diag.msg0("parse.046", "この try には except がありません"))
         n.els = head.next
         return n
 
@@ -2558,13 +2530,12 @@ class Parser:
 
         n: rc[ast.Node] = ast.new_node(ast.ND_FIELDDECL, name_tok)
         n.name = copy(name_tok.text)
-        n.type_ref = self.type_ref("フィールドには型注釈が必須です（例: kind: int）")
+        n.type_ref = self.type_ref(diag.msg0("parse.227", "フィールドには型注釈が必須です（例: kind: int）"))
 
         if self.peek().is_punct("="):
-            self.fail_full(self.peek(), "フィールドに初期値は書けません",
-                           "ここに '=' は書けません",
-                           "初期値は init メソッドで代入してください" +
-                           "（例: def init(self) -> None: / self.kind = 0）")
+            self.fail_full(self.peek(), diag.msg0("parse.228", "フィールドに初期値は書けません"),
+                           diag.msg0("parse.229", "ここに '=' は書けません"),
+                           diag.msg0("parse.230", "初期値は init メソッドで代入してください（例: def init(self) -> None: / self.kind = 0）"))
         self.expect_newline()
         return n
 
@@ -2575,8 +2546,8 @@ class Parser:
         name_tok: rc[token.Token] = self.peek()
         if name_tok.kind != token.TK_IDENT:
             self.fail_hint(name_tok,
-                           "class の後にはクラス名を書きます（例: class Token:）",
-                           "クラス名が必要です")
+                           diag.msg0("parse.087", "class の後にはクラス名を書きます（例: class Token:）"),
+                           diag.msg0("parse.086", "クラス名が必要です"))
         self.advance()
 
         n: rc[ast.Node] = ast.new_node(ast.ND_CLASS, kw)
@@ -2591,8 +2562,8 @@ class Parser:
                 tp: rc[token.Token] = self.peek()
                 if tp.kind != token.TK_IDENT:
                     self.fail_hint(tp,
-                                   "型引数は名前で書きます（例: class Dict[K, V]:）",
-                                   "型引数の名前が必要です")
+                                   diag.msg0("parse.088", "型引数は名前で書きます（例: class Dict[K, V]:）"),
+                                   diag.msg0("parse.069", "型引数の名前が必要です"))
                 self.advance()
                 slot: rc[ast.Node] = ast.new_node(ast.ND_TYPEREF, tp)
                 slot.name = copy(tp.text)
@@ -2615,9 +2586,8 @@ class Parser:
                 it2: rc[token.Token] = self.peek()
                 if it2.kind != token.TK_IDENT:
                     self.fail_hint(it2,
-                                   "class の '(' に書けるのはインタフェース名です" +
-                                   "（継承はありません）",
-                                   "インタフェース名が必要です")
+                                   diag.msg0("parse.089", "class の '(' に書けるのはインタフェース名です（継承はありません）"),
+                                   diag.msg0("parse.076", "インタフェース名が必要です"))
                 self.advance()
                 islot: rc[ast.Node] = ast.new_node(ast.ND_TYPEREF, it2)
                 islot.name = copy(it2.text)
@@ -2625,8 +2595,8 @@ class Parser:
                     self.advance()
                     m3: rc[token.Token] = self.peek()
                     if m3.kind != token.TK_IDENT:
-                        self.fail_hint(m3, "モジュール修飾の後には名前を書きます",
-                                       "インタフェース名が必要です")
+                        self.fail_hint(m3, diag.msg0("parse.090", "モジュール修飾の後には名前を書きます"),
+                                       diag.msg0("parse.076", "インタフェース名が必要です"))
                     self.advance()
                     islot.mod_name = copy(islot.name)
                     islot.name = copy(m3.text)
@@ -2640,11 +2610,11 @@ class Parser:
                     break
             self.expect_close(")", iopen)
 
-        self.expect_colon("class の宣言")
-        self.expect(token.TK_NEWLINE, "改行",
-                    "':' の後は改行してクラス本体を字下げしてください")
-        self.expect(token.TK_INDENT, "字下げされたクラス本体",
-                    "クラスの中身は字下げして書きます（スペース 4 個を推奨）")
+        self.expect_colon(diag.msg0("parse.231", "class の宣言"))
+        self.expect(token.TK_NEWLINE, diag.msg0("parse.118", "改行"),
+                    diag.msg0("parse.232", "':' の後は改行してクラス本体を字下げしてください"))
+        self.expect(token.TK_INDENT, diag.msg0("parse.233", "字下げされたクラス本体"),
+                    diag.msg0("parse.234", "クラスの中身は字下げして書きます（スペース 4 個を推奨）"))
 
         head: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, kw)
         cur: rc[ast.Node] = head
@@ -2665,12 +2635,11 @@ class Parser:
             if t.kind == token.TK_IDENT and self.peek_at(1).is_punct(":"):
                 # 注意: フィールドはメソッドより先（文法がそう決めている）
                 if first_method is not None:
-                    diag.error_full(t, "フィールドはメソッドより前に書いてください",
-                                    "このフィールド宣言がメソッドより後ろにあります",
+                    diag.error_full(t, diag.msg0("parse.235", "フィールドはメソッドより前に書いてください"),
+                                    diag.msg0("parse.236", "このフィールド宣言がメソッドより後ろにあります"),
                                     self.tok_of(first_method),
-                                    "最初のメソッドはここです",
-                                    "クラス本体は「フィールドを全部 → メソッドを全部」" +
-                                    "の順です（文法定義 3 節）")
+                                    diag.msg0("parse.237", "最初のメソッドはここです"),
+                                    diag.msg0("parse.238", "クラス本体は「フィールドを全部 → メソッドを全部」の順です（文法定義 3 節）"))
                 f: rc[ast.Node] = self.field_decl()
                 cur.next = f
                 cur = f
@@ -2678,21 +2647,16 @@ class Parser:
 
             # ★ メソッドは外へ出せません（設計 ffi.md §7。クラスは段階 3）
             if t.is_kw("extern"):
-                d: diag.Diag = diag.Diag("メソッドは外へ出せません")
+                d: diag.Diag = diag.Diag(diag.msg0("parse.239", "メソッドは外へ出せません"))
                 d.code = "E-EXPORT-6"
-                d.primary = diag.Label(t, "extern はモジュールの一番外側にだけ書けます")
-                d.hint = "モジュールの一番外側に extern def を書き、その中からクラスを使ってください"
+                d.primary = diag.Label(t, diag.msg0("parse.240", "extern はモジュールの一番外側にだけ書けます"))
+                d.hint = diag.msg0("parse.241", "モジュールの一番外側に extern def を書き、その中からクラスを使ってください")
                 diag.fail(d)
 
-            self.fail_full(t, "クラスの中に書けるのはフィールドとメソッドだけです",
-                           "ここには書けません",
-                           "フィールドは「名前: 型」、メソッドは 'def' で始めます:\n" +
-                           "             class Token:\n" +
-                           "                 kind: int\n" +
-                           "\n" +
-                           "                 def show(self) -> None:\n" +
-                           "                     print(self.kind)")
-        self.expect(token.TK_DEDENT, "クラス本体の終わり", "")
+            self.fail_full(t, diag.msg0("parse.242", "クラスの中に書けるのはフィールドとメソッドだけです"),
+                           diag.msg0("parse.063", "ここには書けません"),
+                           diag.msg0("parse.243", "フィールドは「名前: 型」、メソッドは 'def' で始めます:\n             class Token:\n                 kind: int\n\n                 def show(self) -> None:\n                     print(self.kind)"))
+        self.expect(token.TK_DEDENT, diag.msg0("parse.244", "クラス本体の終わり"), "")
 
         n.body = head.next
         return n
@@ -2734,40 +2698,38 @@ class Parser:
 
         if not self.peek().is_kw("def"):
             self.fail_hint(self.peek(),
-                           "extern の後には def を書きます" +
-                           "（例: extern def pl_system(cmd: str) -> int）",
-                           "extern の後に def が必要です")
+                           diag.msg0("parse.092", "extern の後には def を書きます（例: extern def pl_system(cmd: str) -> int）"),
+                           diag.msg0("parse.091", "extern の後に def が必要です"))
         self.advance()   # "def"
 
         name_tok: rc[token.Token] = self.peek()
         if name_tok.kind != token.TK_IDENT:
-            self.fail_hint(name_tok, "extern def の後には C の関数名を書きます",
-                           "関数名が必要です")
+            self.fail_hint(name_tok, diag.msg0("parse.093", "extern def の後には C の関数名を書きます"),
+                           diag.msg0("parse.067", "関数名が必要です"))
         self.advance()
 
         open_tok: rc[token.Token] = self.peek()
         if self.consume("(") is None:
-            self.fail_hint(self.peek(), "引数リストを書いてください（例: (path: str)）",
-                           "'(' が必要です")
+            self.fail_hint(self.peek(), diag.msg0("parse.094", "引数リストを書いてください（例: (path: str)）"),
+                           diag.msg0("parse.071", "'(' が必要です"))
 
         params: rc[ast.Node] | None = self.param_list(open_tok, False)
 
         if self.consume("->") is None:
-            self.fail_hint(self.peek(), "戻り型を書いてください（例: -> int）",
-                           "'->' が必要です")
+            self.fail_hint(self.peek(), diag.msg0("parse.096", "戻り型を書いてください（例: -> int）"),
+                           diag.msg0("parse.095", "'->' が必要です"))
 
         n: rc[ast.Node] = ast.new_node(ast.ND_FUNC, name_tok)
         n.name = copy(name_tok.text)
         n.params = params
-        n.type_ref = self.type_ref("戻り型を書いてください（例: -> int）")
+        n.type_ref = self.type_ref(diag.msg0("parse.096", "戻り型を書いてください（例: -> int）"))
 
         # 注意: 本体は読まない。ここに来る ':' は「1 行に本体を書いた」形
         #   （本体つきの extern def は行末が ':' なので、extern_has_body が先に拾う）
         if self.peek().is_punct(":"):
             self.fail_hint(self.peek(),
-                           "本体を書くなら ':' の後で改行して字下げしてください" +
-                           "（外へ出す関数になります）。宣言だけなら ':' は要りません",
-                           "extern def の本体は ':' の次の行から書きます")
+                           diag.msg0("parse.098", "本体を書くなら ':' の後で改行して字下げしてください（外へ出す関数になります）。宣言だけなら ':' は要りません"),
+                           diag.msg0("parse.097", "extern def の本体は ':' の次の行から書きます"))
         self.expect_newline()
 
         return n   # body は None のまま（★ extern の印）
@@ -2779,8 +2741,8 @@ class Parser:
         name_tok: rc[token.Token] = self.peek()
         if name_tok.kind != token.TK_IDENT:
             self.fail_hint(name_tok,
-                           "import の後にはモジュール名を書きます（例: import lexer）",
-                           "モジュール名が必要です")
+                           diag.msg0("parse.100", "import の後にはモジュール名を書きます（例: import lexer）"),
+                           diag.msg0("parse.099", "モジュール名が必要です"))
         self.advance()
 
         # ★ パッケージ（A-32）：`import pkg.mod` と書ける。
@@ -2795,9 +2757,8 @@ class Parser:
             seg: rc[token.Token] = self.peek()
             if seg.kind != token.TK_IDENT:
                 self.fail_hint(seg,
-                               "ドットの後にはモジュール名を書きます" +
-                               "（例: import pkg.mod）",
-                               "モジュール名が必要です")
+                               diag.msg0("parse.101", "ドットの後にはモジュール名を書きます（例: import pkg.mod）"),
+                               diag.msg0("parse.099", "モジュール名が必要です"))
             self.advance()
             full.append(".")
             full.append(copy(seg.text))
@@ -2817,10 +2778,9 @@ class Parser:
             t: rc[token.Token] = self.peek()
 
             if t.kind == token.TK_INDENT:
-                self.fail_full(t, "予期しないインデントです",
-                               "この行が余分に字下げされています",
-                               "トップレベルに書けるのは def / class / import / " +
-                               "extern とグローバル変数だけです（言語仕様 6.3）")
+                self.fail_full(t, diag.msg0("parse.253", "予期しないインデントです"),
+                               diag.msg0("parse.254", "この行が余分に字下げされています"),
+                               diag.msg0("parse.255", "トップレベルに書けるのは def / class / import / extern とグローバル変数だけです（言語仕様 6.3）"))
             if t.kind == token.TK_DEDENT:
                 panic("parser: unexpected DEDENT")
 
@@ -2887,13 +2847,9 @@ class Parser:
                 self.expect_newline()
                 continue
 
-            self.fail_full(t, "トップレベルに実行文は書けません",
-                           "ここに書けるのは def / class / import / extern と" +
-                           "グローバル変数だけです",
-                           "処理は main の中に書いてください:\n" +
-                           "             def main() -> int:\n" +
-                           "                 ...\n" +
-                           "                 return 0")
+            self.fail_full(t, diag.msg0("parse.256", "トップレベルに実行文は書けません"),
+                           diag.msg0("parse.257", "ここに書けるのは def / class / import / extern とグローバル変数だけです"),
+                           diag.msg0("parse.258", "処理は main の中に書いてください:\n             def main() -> int:\n                 ...\n                 return 0"))
 
         # ★ 持ち上げた lambda をトップレベルの並びに足します（A-42）。
         #   **最後に足すのは、前方参照が効くからです**（定義の順は問いません）。
@@ -2909,7 +2865,7 @@ class Parser:
 # None を剥がす（この言語に「絶対に None ではない」を書く手立てが無いため）
 def unwrap_node(n: rc[ast.Node] | None) -> rc[ast.Node]:
     if n is None:
-        panic("parser: ノードがありません")
+        panic(diag.msg0("sparser.001", "parser: ノードがありません"))
         return ast.new_node(ast.ND_PASS, None)
     else:
         return n

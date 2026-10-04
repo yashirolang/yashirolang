@@ -165,12 +165,20 @@ for f in "${FILES[@]}"; do
         # ★ diag を移植したので、**メッセージ全体**を比べます
         "$STAGE1" "$f" > /dev/null 2>"$TMP/m.err"
 
-        if diff -q "$TMP/c.err" "$TMP/m.err" > /dev/null; then
-            errpass=$((errpass + 1))
-        else
+        # ★ 英語でも突き合わせます（型エラーと同じ。docs/design/i18n-diagnostics.md §9.1）
+        PLC_MSG_LANG=en "$PLC_CC" --dump-tokens "$f" > /dev/null 2>"$TMP/c.en.err"
+        PLC_MSG_LANG=en "$STAGE1" "$f" > /dev/null 2>"$TMP/m.en.err"
+
+        if ! diff -q "$TMP/c.err" "$TMP/m.err" > /dev/null; then
             fail=$((fail + 1)); failed_names+=("$name")
             printf "  %sFAIL%s  %s（字句エラーの内容が違う）\n" "$C_NG" "$C_END" "$name"
             diff "$TMP/c.err" "$TMP/m.err" | head -12 | sed 's/^/          /'
+        elif ! diff -q "$TMP/c.en.err" "$TMP/m.en.err" > /dev/null; then
+            fail=$((fail + 1)); failed_names+=("$name")
+            printf "  %sFAIL%s  %s（英語の字句エラーの内容が違う）\n" "$C_NG" "$C_END" "$name"
+            diff "$TMP/c.en.err" "$TMP/m.en.err" | head -12 | sed 's/^/          /'
+        else
+            errpass=$((errpass + 1))
         fi
         continue
     fi
@@ -198,12 +206,19 @@ for f in "${FILES[@]}"; do
         # ★ 構文エラーもメッセージ全体で比べます
         "$STAGE1_AST" "$f" > /dev/null 2>"$TMP/m.err"
 
-        if diff -q "$TMP/c.err" "$TMP/m.err" > /dev/null; then
-            asterrpass=$((asterrpass + 1))
-        else
+        PLC_MSG_LANG=en "$PLC_CC" --dump-ast "$f" > /dev/null 2>"$TMP/c.en.err"
+        PLC_MSG_LANG=en "$STAGE1_AST" "$f" > /dev/null 2>"$TMP/m.en.err"
+
+        if ! diff -q "$TMP/c.err" "$TMP/m.err" > /dev/null; then
             fail=$((fail + 1)); failed_names+=("$name")
             printf "  %sFAIL%s  %s（構文エラーの内容が違う）\n" "$C_NG" "$C_END" "$name"
             diff "$TMP/c.err" "$TMP/m.err" | head -14 | sed 's/^/          /'
+        elif ! diff -q "$TMP/c.en.err" "$TMP/m.en.err" > /dev/null; then
+            fail=$((fail + 1)); failed_names+=("$name")
+            printf "  %sFAIL%s  %s（英語の構文エラーの内容が違う）\n" "$C_NG" "$C_END" "$name"
+            diff "$TMP/c.en.err" "$TMP/m.en.err" | head -14 | sed 's/^/          /'
+        else
+            asterrpass=$((asterrpass + 1))
         fi
         continue
     fi

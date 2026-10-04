@@ -96,43 +96,43 @@ def print_version() -> None:
 
 
 def usage(status: int) -> None:
-    print(langinfo.name() + " コンパイラ (stage1)")
+    print(diag.msg("smain.001", "{0} コンパイラ (stage1)", [copy(langinfo.name())]))
     print("")
-    print("使い方: " + langinfo.cc() + " [オプション] <入力" + langinfo.ext() + ">")
+    print(diag.msg("smain.002", "使い方: {0} [オプション] <入力{1}>", [copy(langinfo.cc()), copy(langinfo.ext())]))
     print("")
-    print("オプション:")
-    print("  -o <file>       出力する実行ファイル名（既定: a.out）")
-    print("  -S              LLVM IR を標準出力に書いて終了")
-    print("  --dump-tokens   トークン列を表示して終了（字句解析のデバッグ用）")
-    print("  --dump-ast      AST を S 式で表示して終了（構文解析のデバッグ用）")
-    print("  --keep-ll       実行ファイル生成後も .ll を残す")
-    print("  --check         型検査までで止める（エラーが無ければ何も出さない）")
-    print("  --warn-own      所有権の指摘を警告に落とす（既定はエラー）")
+    print(diag.msg0("smain.003", "オプション:"))
+    print(diag.msg0("smain.004", "  -o <file>       出力する実行ファイル名（既定: a.out）"))
+    print(diag.msg0("smain.005", "  -S              LLVM IR を標準出力に書いて終了"))
+    print(diag.msg0("smain.006", "  --dump-tokens   トークン列を表示して終了（字句解析のデバッグ用）"))
+    print(diag.msg0("smain.007", "  --dump-ast      AST を S 式で表示して終了（構文解析のデバッグ用）"))
+    print(diag.msg0("smain.008", "  --keep-ll       実行ファイル生成後も .ll を残す"))
+    print(diag.msg0("smain.009", "  --check         型検査までで止める（エラーが無ければ何も出さない）"))
+    print(diag.msg0("smain.010", "  --warn-own      所有権の指摘を警告に落とす（既定はエラー）"))
     print("  --deny-move / --deny-borrow / --deny-mut / --deny-store-borrow")
-    print("                  検査ごとにエラーへ戻す（既定。--warn-own の後に書く）")
-    print("  --drop          スコープの出口に解放（drop）を挿入する（既定）")
-    print("  --no-drop       解放を挿入しない（--drop を打ち消す。後勝ち）")
-    print("  -g              デバッグ情報を出す（デバッガ・perf が行を出せます）")
-    print("  --no-prove      証明で実行時検査を消さない（A-34）")
-    print("  --verify-prove  消せると判断した検査を残す（解析の誤りを捕まえる）")
-    print("  --prove-report  消えた検査の数を出す")
-    print("  -l<名前> / -L<dir> / -framework <名前>")
-    print("                  リンクのときに clang へそのまま渡す")
+    print(diag.msg0("smain.011", "                  検査ごとにエラーへ戻す（既定。--warn-own の後に書く）"))
+    print(diag.msg0("smain.012", "  --drop          スコープの出口に解放（drop）を挿入する（既定）"))
+    print(diag.msg0("smain.013", "  --no-drop       解放を挿入しない（--drop を打ち消す。後勝ち）"))
+    print(diag.msg0("smain.014", "  -g              デバッグ情報を出す（デバッガ・perf が行を出せます）"))
+    print(diag.msg0("smain.015", "  --no-prove      証明で実行時検査を消さない（A-34）"))
+    print(diag.msg0("smain.016", "  --verify-prove  消せると判断した検査を残す（解析の誤りを捕まえる）"))
+    print(diag.msg0("smain.017", "  --prove-report  消えた検査の数を出す"))
+    print(diag.msg0("smain.018", "  -l<名前> / -L<dir> / -framework <名前>"))
+    print(diag.msg0("smain.019", "                  リンクのときに clang へそのまま渡す"))
     print("  --no-overflow-check")
-    print("                  数の実行時検査を外す（既定は検査する）:")
-    print("                  整数の + - * の桁あふれ／float の 0 除算")
-    print("  --shared        共有ライブラリを作る（extern def を C から呼べる形で出す）")
-    print("                  -o を省くと lib<モジュール名>.<拡張子>")
-    print("  --python        Python のライブラリを作る（-o はディレクトリ。既定は .）")
-    print("                  _<モジュール名>.<拡張子> と <モジュール名>.py を置きます")
-    print("  -I <dir>        import を探す場所を足す（何度でも書ける）")
-    print("                  パッケージマネージャ " + langinfo.pm() + " が使います")
-    print("  -j <N>          clang を同時に何本走らせるか（既定: コア数）")
-    print("                  出来上がる実行ファイルは並列度で変わりません")
-    print("  -O0|-O1|-O2|-O3 clang に渡す最適化レベル（既定: -O0）")
-    print("  -h, --help      この使い方を表示")
-    print("  --version       版番号と target triple を表示")
-    print("  --print-lib-dir 標準ライブラリの場所を表示（" + langinfo.pm() + " が使います）")
+    print(diag.msg0("smain.020", "                  数の実行時検査を外す（既定は検査する）:"))
+    print(diag.msg0("smain.021", "                  整数の + - * の桁あふれ／float の 0 除算"))
+    print(diag.msg0("smain.022", "  --shared        共有ライブラリを作る（extern def を C から呼べる形で出す）"))
+    print(diag.msg0("smain.023", "                  -o を省くと lib<モジュール名>.<拡張子>"))
+    print(diag.msg0("smain.024", "  --python        Python のライブラリを作る（-o はディレクトリ。既定は .）"))
+    print(diag.msg0("smain.025", "                  _<モジュール名>.<拡張子> と <モジュール名>.py を置きます"))
+    print(diag.msg0("smain.026", "  -I <dir>        import を探す場所を足す（何度でも書ける）"))
+    print(diag.msg("smain.027", "                  パッケージマネージャ {0} が使います", [copy(langinfo.pm())]))
+    print(diag.msg0("smain.028", "  -j <N>          clang を同時に何本走らせるか（既定: コア数）"))
+    print(diag.msg0("smain.029", "                  出来上がる実行ファイルは並列度で変わりません"))
+    print(diag.msg0("smain.030", "  -O0|-O1|-O2|-O3 clang に渡す最適化レベル（既定: -O0）"))
+    print(diag.msg0("smain.031", "  -h, --help      この使い方を表示"))
+    print(diag.msg0("smain.032", "  --version       版番号と target triple を表示"))
+    print(diag.msg("smain.033", "  --print-lib-dir 標準ライブラリの場所を表示（{0} が使います）", [copy(langinfo.pm())]))
     exit(status)
 
 
@@ -158,11 +158,11 @@ def parse_args(args: list[str]) -> Options:
 
         if a == "-o":
             if i + 1 >= len(args):
-                panic("-o の後に出力ファイル名が必要です")
+                panic(diag.msg0("cli.002", "-o の後に出力ファイル名が必要です"))
             i = i + 1
             # clang へはシェル経由で渡ります。中間の .ll の名前も
             #   ここから作るので、**入口で 1 回**確かめれば足ります。
-            check_shell_safe(args[i], "出力ファイル名")
+            check_shell_safe(args[i], diag.msg0("cli.027", "出力ファイル名"))
             o.output = copy(args[i])
             o.output_set = True
         elif a == "--shared":
@@ -173,10 +173,10 @@ def parse_args(args: list[str]) -> Options:
         # ★ import を探す場所を足す（-I deps / -Ideps のどちらでも）
         elif a == "-I":
             if i + 1 >= len(args):
-                panic("-I の後にディレクトリ名が必要です")
+                panic(diag.msg0("cli.007", "-I の後にディレクトリ名が必要です"))
             i = i + 1
             if len(args[i]) == 0:
-                panic("-I に空のディレクトリは指定できません")
+                panic(diag.msg0("cli.008", "-I に空のディレクトリは指定できません"))
             o.inc.append(copy(args[i]))
         elif len(a) > 2 and strings.startswith(a, "-I"):
             o.inc.append(strings.substr(a, 2, len(a) - 2))
@@ -203,7 +203,7 @@ def parse_args(args: list[str]) -> Options:
         elif strings.startswith(a, "--lang="):
             spec: str = a[7:len(a)]
             if not diag.set_lang(spec):
-                io.eprint("error: --lang に書けるのは ja / en / auto です（'" + spec + "'）\n")
+                io.eprint(diag.msg("smain.034", "error: --lang に書けるのは ja / en / auto です（'{0}'）\n", [copy(spec)]))
                 exit(1)
         elif a == "--warn-own":
             o.deny_move = False
@@ -240,31 +240,31 @@ def parse_args(args: list[str]) -> Options:
         #   対になる定義: src/main.c の parse_args
         elif len(a) > 2 and (strings.startswith(a, "-l") or
                              strings.startswith(a, "-L")):
-            check_shell_safe(a, "リンクの指定")
+            check_shell_safe(a, diag.msg0("cli.028", "リンクの指定"))
             o.link.append(copy(a))
         elif a == "-framework":
             if i + 1 >= len(args):
-                panic("-framework の後に名前が必要です")
+                panic(diag.msg0("cli.004", "-framework の後に名前が必要です"))
             i = i + 1
-            check_shell_safe(args[i], "framework の名前")
+            check_shell_safe(args[i], diag.msg0("cli.029", "framework の名前"))
             o.link.append("-framework")
             o.link.append(copy(args[i]))
         # ★ -j2 のように数をくっつけて書く（C 版 src/main.c と対）
         elif len(a) > 2 and strings.startswith(a, "-j"):
             o.jobs = int(strings.substr(a, 2, len(a) - 2))
             if o.jobs < 0:
-                panic("-j には 0 以上を指定してください: " + a)
+                panic(diag.msg("cli.005", "-j には 0 以上を指定してください: {0}", [copy(a)]))
         elif strings.startswith(a, "--jobs="):
             o.jobs = int(strings.substr(a, 7, len(a) - 7))
             if o.jobs < 0:
-                panic("--jobs には 0 以上を指定してください: " + a)
+                panic(diag.msg("cli.006", "--jobs には 0 以上を指定してください: {0}", [copy(a)]))
         elif a == "-O0" or a == "-O1" or a == "-O2" or a == "-O3":
             o.opt_level = copy(a)
         elif len(a) > 1 and strings.startswith(a, "-"):
-            panic("不明なオプション: " + a)
+            panic(diag.msg("cli.009", "不明なオプション: {0}", [copy(a)]))
         else:
             if len(o.input_) > 0:
-                panic("入力ファイルが複数指定されています: " + o.input_ + " と " + a)
+                panic(diag.msg("cli.010", "入力ファイルが複数指定されています: {0} と {1}", [copy(o.input_), copy(a)]))
             o.input_ = copy(a)
         i = i + 1
 
@@ -327,8 +327,7 @@ def check_shell_safe(path: str, what: str) -> None:
             if b == 92:
                 bad = True
         if bad:
-            panic(what + " に使えない字 '" + strings.substr(path, i, 1) +
-                  "' が入っています（シェルが解釈してしまうため断ります）")
+            panic(diag.msg("cli.001", "{0} に使えない字 '{1}' が入っています（シェルが解釈してしまうため断ります）", [copy(what), copy(strings.substr(path, i, 1))]))
         i = i + 1
 
 
@@ -427,7 +426,7 @@ def main() -> int:
     mods: rc[module.Module] | None = module.load_modules(opt.input_)
     entry: rc[module.Module] | None = module.entry_of(mods, opt.input_)
     if entry is None:
-        panic("main: 入口モジュールがありません")
+        panic(diag.msg0("smain.035", "main: 入口モジュールがありません"))
         return 1
 
     # ── ③ 意味解析・型検査（全モジュールまとめて）──
@@ -458,17 +457,12 @@ def main() -> int:
     if not opt.no_prove:
         ps: prove.Stats = prove.prove_program(mods, opt.no_ovf)
         if opt.prove_report:
-            io.eprint("証明で消した実行時検査:\n")
-            io.eprint("  桁あふれ  " + pad6(ps.ovf) + " 消 / " +
-                      pad6(ps.ovf_left) + " 残\n")
-            io.eprint("  添字      " + pad6(ps.bounds) + " 消 / " +
-                      pad6(ps.bounds_left) + " 残\n")
-            io.eprint("  範囲型    " + pad6(ps.range_) + " 消 / " +
-                      pad6(ps.range_left) + " 残\n")
-            io.eprint("  契約      " + pad6(ps.contract) + " 消 / " +
-                      pad6(ps.contract_left) + " 残\n")
-            io.eprint("  0 除算    " + pad6(ps.div) + " 消 / " +
-                      pad6(ps.div_left) + " 残\n")
+            io.eprint(diag.msg0("cli.011", "証明で消した実行時検査:\n"))
+            io.eprint(diag.msg("cli.012", "  桁あふれ  {0} 消 / {1} 残\n", [copy(pad6(ps.ovf)), copy(pad6(ps.ovf_left))]))
+            io.eprint(diag.msg("cli.013", "  添字      {0} 消 / {1} 残\n", [copy(pad6(ps.bounds)), copy(pad6(ps.bounds_left))]))
+            io.eprint(diag.msg("cli.014", "  範囲型    {0} 消 / {1} 残\n", [copy(pad6(ps.range_)), copy(pad6(ps.range_left))]))
+            io.eprint(diag.msg("cli.015", "  契約      {0} 消 / {1} 残\n", [copy(pad6(ps.contract)), copy(pad6(ps.contract_left))]))
+            io.eprint(diag.msg("cli.016", "  0 除算    {0} 消 / {1} 残\n", [copy(pad6(ps.div)), copy(pad6(ps.div_left))]))
 
     # 入口モジュールの main の IR 名（@main のラッパが呼ぶ相手）
     main_ir: str = entry.name + ".main"
@@ -477,11 +471,9 @@ def main() -> int:
     has_main: bool = codegen.entry_has_main(entry)
     has_export: bool = codegen.any_export(mods)
     if opt.shared and not has_export:
-        panic("--shared / --python には、外へ出す関数（本体つきの extern def）が" +
-              "少なくとも 1 つ要ります")
+        panic(diag.msg0("cli.017", "--shared / --python には、外へ出す関数（本体つきの extern def）が少なくとも 1 つ要ります"))
     if not has_main and not opt.shared and opt.stage == STAGE_ALL:
-        panic("main がありません。ライブラリにするなら --shared か --python を" +
-              "付けてください（実行ファイルには main が要ります）")
+        panic(diag.msg0("cli.018", "main がありません。ライブラリにするなら --shared か --python を付けてください（実行ファイルには main が要ります）"))
 
     # ── 共有ライブラリの名前（ffi.md §6）──
     triple0: str = target_triple()
@@ -623,9 +615,8 @@ def main() -> int:
     if rc != 0:
         # ここに来たら、生成した IR に問題があるということ。
         # .ll を残して調査できるようにする。
-        io.eprint("error: clang の実行に失敗しました" +
-                  "（生成した IR に問題があります）\n")
-        io.eprint("  生成された IR を残しました:\n")
+        io.eprint(diag.msg0("smain.036", "error: clang の実行に失敗しました（生成した IR に問題があります）\n"))
+        io.eprint(diag.msg0("smain.037", "  生成された IR を残しました:\n"))
         m3: rc[module.Module] | None = mods
         while m3 is not None:
             mm3: rc[module.Module] = m3

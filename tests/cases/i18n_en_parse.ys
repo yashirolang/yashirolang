@@ -1,0 +1,6 @@
+# FLAGS: --lang=en
+# ERROR: error: expected ':' after the def declaration
+# 構文エラーも英語になる（段階 1〜3）。日本語の文面が残っていないことは
+#   tests/selfhost.sh が 2 つの実装の英語を突き合わせて確かめます。
+def main() -> int
+    return 0

@@ -203,17 +203,17 @@ static char *path_for(Loader *ld, const char *name, Token *from) {
     if (nhits > 1) {
         StrBuf sb;
         sb_init(&sb);
-        sb_printf(&sb, "見つかった場所:");
+        sb_printf(&sb, "%s", MSG0("mod.001", "見つかった場所:"));
         for (int i = 0; i < nhits; i++) sb_printf(&sb, "\n             %s", hits[i]);
         sb_printf(&sb, "\n             %s",
-                  nhits == 2 ? "どちらかの名前を変えてください"
-                             : "名前が重ならないようにしてください");
+                  nhits == 2 ? MSG0("mod.009", "どちらかの名前を変えてください")
+                             : MSG0("mod.010", "名前が重ならないようにしてください"));
         Diag d = {0};
         d.message = lib_hit
-                        ? diag_fmt("モジュール '%s' が標準ライブラリと衝突しています", name)
-                        : diag_fmt("モジュール '%s' が複数の探索場所にあります", name);
+                        ? MSG1("mod.002", "モジュール '{0}' が標準ライブラリと衝突しています", name)
+                        : MSG1("mod.003", "モジュール '{0}' が複数の探索場所にあります", name);
         d.primary.tok = from;
-        d.primary.label = "どちらを指しているか決められません";
+        d.primary.label = MSG0("mod.011", "どちらを指しているか決められません");
         d.hint = sb_str(&sb);
         diag_fail(&d);
     }
@@ -273,11 +273,10 @@ static Module *load(Loader *ld, const char *name, const char *path, Token *from)
     if (m) {
         if (m->state == 1) {  // 訪問中に再訪 → 循環
             Diag d = {0};
-            d.message = diag_fmt("循環 import です: %s", cycle_path(ld, name));
+            d.message = MSG1("mod.004", "循環 import です: {0}", cycle_path(ld, name));
             d.primary.tok = from;
-            d.primary.label = "この import が循環を作っています";
-            d.hint = "モジュールの依存関係は一方通行（DAG）にしてください。"
-                     "共通部分を 3 つ目のモジュールに切り出すと解けます";
+            d.primary.label = MSG0("mod.012", "この import が循環を作っています");
+            d.hint = MSG0("mod.013", "モジュールの依存関係は一方通行（DAG）にしてください。共通部分を 3 つ目のモジュールに切り出すと解けます");
             diag_fail(&d);
         }
         return m;  // 読み込み済み
@@ -285,13 +284,11 @@ static Module *load(Loader *ld, const char *name, const char *path, Token *from)
 
     if (from && !file_exists(path)) {
         Diag d = {0};
-        d.message = diag_fmt("モジュール '%s' が見つかりません", name);
+        d.message = MSG1("mod.005", "モジュール '{0}' が見つかりません", name);
         d.primary.tok = from;
-        d.primary.label = "この import を解決できません";
-        d.hint = diag_fmt("次のパスを探しました:\n             %s\n"
-                          "             モジュール名はファイル名（" PLC_LANG_EXT " を除いたもの）です"
-                          "\n             （'pkg.mod' は 'pkg/mod" PLC_LANG_EXT "' を指します）",
-                          searched_list(ld, name));
+        d.primary.label = MSG0("mod.014", "この import を解決できません");
+        d.hint = MSG3("mod.015", "次のパスを探しました:\n             {0}\n             モジュール名はファイル名（{1} を除いたもの）です\n             （'pkg.mod' は 'pkg/mod{2}' を指します）",
+                      searched_list(ld, name), PLC_LANG_EXT, PLC_LANG_EXT);
         diag_fail(&d);
     }
 
@@ -312,16 +309,15 @@ static Module *load(Loader *ld, const char *name, const char *path, Token *from)
         if (d->kind != ND_IMPORT) continue;
 
         if (strcmp(d->name, m->name) == 0)
-            error_at_hint(d->tok, "モジュールは自分自身を import できません",
-                          "'%s' は自分自身です", d->name);
+            error_at_hint_m(d->tok, MSG0("mod.007", "モジュールは自分自身を import できません"), MSG1("mod.006", "'{0}' は自分自身です", d->name));
 
         for (int i = 0; i < m->ndeps; i++) {
             if (strcmp(m->deps[i]->name, d->name) != 0) continue;
             Diag e = {0};
-            e.message = diag_fmt("'%s' は既に import されています", d->name);
+            e.message = MSG1("mod.008", "'{0}' は既に import されています", d->name);
             e.primary.tok = d->tok;
-            e.primary.label = "重複した import です";
-            e.hint = "同じモジュールを 2 回書く必要はありません";
+            e.primary.label = MSG0("mod.017", "重複した import です");
+            e.hint = MSG0("mod.018", "同じモジュールを 2 回書く必要はありません");
             diag_fail(&e);
         }
 

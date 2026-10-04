@@ -37,7 +37,9 @@ B_UPPER_E: int = 69
 
 # エスケープのヒント（C 版とまったく同じ文字列）。
 # 注意: バックスラッシュだらけなので、定数にして 1 か所に閉じ込めます。
-ESCAPE_HINT: str = "使えるのは \\n \\t \\r \\0 \\\\ \\\" \\' です。バックスラッシュそのものを書くには \\\\ とします"
+# 注意: 診断の言語で変わるので、グローバルではなく関数で返します
+def escape_hint() -> str:
+    return diag.msg0("lex.015", "使えるのは \\n \\t \\r \\0 \\\\ \\\" \\' です。バックスラッシュそのものを書くには \\\\ とします")
 
 # 16 進 2 桁（大文字）。C 版の "%02X" にあたる
 def hex2(v: int) -> str:
@@ -243,9 +245,8 @@ class Lexer:
 
     # タブは 2 か所から報告するので関数にする（C 版と同じ文言）
     def fail_tab(self) -> None:
-        self.fail_span(self.pos, self.pos + 1, "タブ文字は使えません",
-                       "タブ幅の解釈によってインデントの意味が変わるのを防ぐため、" +
-                       "本言語ではタブを禁止しています（半角スペース 4 個を推奨）")
+        self.fail_span(self.pos, self.pos + 1, diag.msg0("lex.007", "タブ文字は使えません"),
+                       diag.msg0("lex.008", "タブ幅の解釈によってインデントの意味が変わるのを防ぐため、本言語ではタブを禁止しています（半角スペース 4 個を推奨）"))
 
     # '\n' を 1 つ読み進め、行番号と行頭を更新する
     def advance_newline(mut self) -> None:
@@ -303,8 +304,8 @@ class Lexer:
             elif base == 8:
                 valid = "0-7"
             self.fail_span(start, self.pos,
-                           "数値リテラルに数字がありません",
-                           "基数 " + str(base) + " で使える数字は " + valid + " です")
+                           diag.msg0("lex.001", "数値リテラルに数字がありません"),
+                           diag.msg("lex.002", "基数 {0} で使える数字は {1} です", [copy(str(base)), copy(valid)]))
         # ── 浮動小数点リテラルか？（10 進のときだけ）──
         #
         # 注意: **'.' の後に数字があるときだけ** float にします（C 版と同じ）。
@@ -344,8 +345,8 @@ class Lexer:
             if is_float:
                 if is_alpha(self.at()) or self.at() == B_UNDERSCORE:
                     self.fail_span(start, self.pos + 1,
-                                   "数値リテラルの直後に文字が続いています",
-                                   "数値と識別子の間に空白が必要かもしれません")
+                                   diag.msg0("lex.003", "数値リテラルの直後に文字が続いています"),
+                                   diag.msg0("lex.004", "数値と識別子の間に空白が必要かもしれません"))
                 ft: rc[token.Token] = self.push(token.TK_FLOAT, start,
                                             strings.substr(self.source.text, start,
                                                            self.pos - start))
@@ -354,13 +355,12 @@ class Lexer:
 
         if is_alpha(self.at()) or self.at() == B_UNDERSCORE:
             self.fail_span(start, self.pos + 1,
-                           "数値リテラルの直後に文字が続いています",
-                           "数値と識別子の間に空白が必要かもしれません")
+                           diag.msg0("lex.003", "数値リテラルの直後に文字が続いています"),
+                           diag.msg0("lex.004", "数値と識別子の間に空白が必要かもしれません"))
         if overflow:
             self.fail_span(start, self.pos,
-                           "整数リテラルが int の範囲 (64bit) を超えています",
-                           "int が表せるのは -9223372036854775808 〜 " +
-                           "9223372036854775807 です")
+                           diag.msg0("lex.005", "整数リテラルが int の範囲 (64bit) を超えています"),
+                           diag.msg0("lex.006", "int が表せるのは -9223372036854775808 〜 9223372036854775807 です"))
 
         t: rc[token.Token] = self.push(token.TK_INT, start,
                                    strings.substr(self.source.text, start,
@@ -417,8 +417,7 @@ class Lexer:
         if width > top:
             # 注意: 「4 段深くなったから INDENT 4 個」ではない。1 段 = 1 個。
             if self.indent_len >= MAX_INDENT_DEPTH:
-                self.fail(self.pos, "インデントが深すぎます（最大 " +
-                          str(MAX_INDENT_DEPTH - 1) + " 段）")
+                self.fail(self.pos, diag.msg("lex.009", "インデントが深すぎます（最大 {0} 段）", [copy(str(MAX_INDENT_DEPTH - 1))]))
             self.indent_push(width)
             # 注意: self.push は self を可変借用します。同じ呼び出しの中で
             #   self.pos を読むと「可変と共有を同時」になるので、先に読みます。
@@ -435,10 +434,8 @@ class Lexer:
 
             if self.indent_top() != width:
                 self.fail_span(self.line_start, self.pos,
-                               "インデントが揃っていません" +
-                               "（どのブロックにも対応しません）",
-                               "外側のブロックのインデント幅と" +
-                               "正確に一致させてください")
+                               diag.msg0("lex.010", "インデントが揃っていません（どのブロックにも対応しません）"),
+                               diag.msg0("lex.011", "外側のブロックのインデント幅と正確に一致させてください"))
 
     # ── 識別子・キーワード ──────────────────────────────────
 
@@ -478,8 +475,8 @@ class Lexer:
 
             # 注意: 行をまたがない（エラー位置が遠くなるため）
             if c == B_NUL or c == B_LF:
-                self.fail_span(start, start + 1, "文字列が閉じられていません",
-                               "文字列は同じ行の中で閉じてください")
+                self.fail_span(start, start + 1, diag.msg0("lex.012", "文字列が閉じられていません"),
+                               diag.msg0("lex.013", "文字列は同じ行の中で閉じてください"))
 
             if c == quote:
                 self.pos = self.pos + 1
@@ -490,8 +487,8 @@ class Lexer:
                 to: int = escape_of(e)
                 if to < 0:
                     self.fail_span(self.pos, self.pos + 2,
-                                   "未知のエスケープシーケンス '\\" + chr(e) + "' です",
-                                   ESCAPE_HINT)
+                                   diag.msg("lex.014", "未知のエスケープシーケンス '\\{0}' です", [copy(chr(e))]),
+                                   escape_hint())
                 parts.append(chr(to))
                 n = n + 1
                 self.pos = self.pos + 2
@@ -604,8 +601,8 @@ class Lexer:
 
             c2: int = self.at()
             if c2 < 32 or c2 >= 127:
-                self.fail(self.pos, "解釈できない文字です (0x" + hex2(c2) + ")")
-            self.fail(self.pos, "解釈できない文字です: '" + chr(c2) + "'")
+                self.fail(self.pos, diag.msg("slexer.001", "解釈できない文字です (0x{0})", [copy(hex2(c2))]))
+            self.fail(self.pos, diag.msg("lex.016", "解釈できない文字です: '{0}'", [copy(chr(c2))]))
 
         # ★ EOF の位置に一手間かける。
         #   現在行が空なら、直前の行の末尾を指す。

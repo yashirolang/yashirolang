@@ -1,10 +1,1148 @@
 # 診断の英語の表（docs/design/i18n-diagnostics.md）
 #
-# 1 行 1 項目。タブで区切って「鍵」と「英語」。日本語の正本はソースの中（MSG0 などの第 2 引数）。
+# 1 行 1 項目。タブで区切って「鍵」「英語」「日本語（控え）」の 3 列。
+# 日本語の正本はソースの中（MSG0 などの第 2 引数）。3 列目は訳す人のための写しで、
+# コンパイラは読みません。ソースと食い違えば make check-msgs が止めます。
 # 文面の {0} {1} … は差し込む値。改行は \n、タブは \t、逆スラッシュは \\ と書く。
 # 文体は rustc に近く、小文字で始めて句点を付けない。
-# 訳の抜け・差し込みの食い違いは make check-msgs が止める。
+# 鍵の頭に s が付くもの（ssema など）は stage1 にだけある文面です。
 
-# ── 枠の言葉（src/diag.c / selfhost/diag）──
-diag.help	help
-diag.related	related location
+# ── 枠の言葉（診断の表示） ──
+diag.help	help	ヒント
+diag.related	related location	関連する位置
+diag.001	diag_fmt: formatting failed	diag_fmt: 書式化に失敗しました
+
+# ── コマンドライン・ファイル入出力 ──
+cli.usage	{0} compiler (stage0)\n\nusage: {1} [options] <input{2}>\n\noptions:\n  -o <file>       output executable name (default: a.out)\n  -S              write LLVM IR to stdout and exit\n  --dump-tokens   print the token stream and exit (for debugging the lexer)\n  --dump-ast      print the AST as S-expressions and exit (for debugging the parser)\n  --keep-ll       keep the .ll files after building the executable\n  --check         stop after type checking (prints nothing if there are no errors)\n  --warn-own      downgrade ownership findings to warnings (default: errors)\n                  note: this was the default before 0.17; it is an escape hatch,\n                  and code built with it is not guaranteed to be safe\n  --deny-move     make use of moved values an error (default)\n  --deny-borrow   make storing/returning borrowed values an error (default)\n  --deny-mut      make writes through read-only borrows an error (default)\n  --deny-store-borrow\n                  make putting borrowed values into owning slots an error (default)\n                  ★ written after --warn-own, a --deny-* turns just that check\n                  back into an error (last one wins)\n  --explain-mut   list the arguments each call modifies, then exit\n  --drop          insert frees (drop) at scope exits (default)\n  --no-drop       do not insert frees (cancels --drop; last one wins)\n  --no-overflow-check\n                  remove runtime number checks (default: checked):\n                  integer + - * overflow / float division by zero\n  -g              emit debug info (debuggers and perf can show lines)\n  --no-prove      do not remove runtime checks with the prover (A-34)\n  --verify-prove  **keep** the checks the prover would remove (catches prover bugs)\n  --prove-report  print how many checks were removed\n  -l<name> / -L<dir> / -framework <name>\n                  passed to clang as-is when linking\n                  (used when calling C libraries through extern)\n  -I <dir>        add a place to search for imports (repeatable)\n                  used by the package manager {3}\n  -c              emit an object file (.o) without linking\n  --shared        build a shared library (exports extern defs callable from C)\n                  without -o: lib<module>.<ext>\n  --python        build a Python library (-o is a directory; default .)\n                  writes _<module>.<ext> and <module>.py\n  -j <N>          how many clang jobs to run at once (default: number of cores)\n                  note: the resulting executable does not depend on this\n  --target=<t>    set the target triple of the generated IR\n                  (e.g. --target=riscv64-unknown-elf)\n  -O0|-O1|-O2|-O3 optimization level passed to clang (default: -O0)\n  -h, --help      show this help\n  --version       show the version and target triple\n  --print-lib-dir show where the standard library is (used by {3})\n	{0} コンパイラ (stage0)\n\n使い方: {1} [オプション] <入力{2}>\n\nオプション:\n  -o <file>       出力する実行ファイル名（既定: a.out）\n  -S              LLVM IR を標準出力に書いて終了\n  --dump-tokens   トークン列を表示して終了（字句解析のデバッグ用）\n  --dump-ast      AST を S 式で表示して終了（構文解析のデバッグ用）\n  --keep-ll       実行ファイル生成後も .ll を残す\n  --check         型検査までで止める（エラーが無ければ何も出さない）\n  --warn-own      所有権の指摘を警告に落とす（既定はエラー）\n                  注意: 0.17 以前の既定です。逃げ道であって、\n                  これを付けたコードは安全性を保証しません\n  --deny-move     移動済みの値の使用をエラーにする（既定）\n  --deny-borrow   借用した値の保存・返却をエラーにする（既定）\n  --deny-mut      読み取り専用の借用への書き換えをエラーにする（既定）\n  --deny-store-borrow\n                  借りものを所有スロットへ入れる箇所をエラーにする（既定）\n                  ★ --deny-* は --warn-own の後に書くと、\n                  その検査だけエラーに戻せます（後勝ち）\n  --explain-mut   呼び出しで変更される実引数を一覧表示して終了\n  --drop          スコープの出口に解放（drop）を挿入する（既定）\n  --no-drop       解放を挿入しない（--drop を打ち消す。後勝ち）\n  --no-overflow-check\n                  数の実行時検査を外す（既定は検査する）:\n                  整数の + - * の桁あふれ／float の 0 除算\n  -g              デバッグ情報を出す（デバッガ・perf が行を出せます）\n  --no-prove      証明で実行時検査を消さない（A-34）\n  --verify-prove  消せると判断した検査を**残す**（解析の誤りを捕まえる）\n  --prove-report  消えた検査の数を出す\n  -l<名前> / -L<dir> / -framework <名前>\n                  リンクのときに clang へそのまま渡す\n                  （C のライブラリを extern で呼ぶときに使います）\n  -I <dir>        import を探す場所を足す（何度でも書ける）\n                  パッケージマネージャ {3} が使います\n  -c              リンクせずオブジェクト（.o）を出す\n  --shared        共有ライブラリを作る（extern def を C から呼べる形で出す）\n                  -o を省くと lib<モジュール名>.<拡張子>\n  --python        Python のライブラリを作る（-o はディレクトリ。既定は .）\n                  _<モジュール名>.<拡張子> と <モジュール名>.py を置きます\n  -j <N>          clang を同時に何本走らせるか（既定: コア数）\n                  注意: 出来上がる実行ファイルは並列度で変わりません\n  --target=<t>    生成する IR の target triple を指定する\n                  （例: --target=riscv64-unknown-elf）\n  -O0|-O1|-O2|-O3 clang に渡す最適化レベル（既定: -O0）\n  -h, --help      この使い方を表示\n  --version       版番号と target triple を表示\n  --print-lib-dir 標準ライブラリの場所を表示（{3} が使います）\n
+cli.001	{0} contains '{1}', which the shell would interpret; refusing	{0} に使えない字 '{1}' が入っています（シェルが解釈してしまうため断ります）
+cli.002	-o needs an output file name	-o の後に出力ファイル名が必要です
+cli.003	--lang accepts ja / en / auto ('{0}')	--lang に書けるのは ja / en / auto です（'{0}'）
+cli.004	-framework needs a name	-framework の後に名前が必要です
+cli.005	-j must be 0 or more: {0}	-j には 0 以上を指定してください: {0}
+cli.006	--jobs must be 0 or more: {0}	--jobs には 0 以上を指定してください: {0}
+cli.007	-I needs a directory name	-I の後にディレクトリ名が必要です
+cli.008	-I cannot be an empty directory	-I に空のディレクトリは指定できません
+cli.009	unknown option: {0}	不明なオプション: {0}
+cli.010	more than one input file: {0} and {1}	入力ファイルが複数指定されています: {0} と {1}
+cli.011	runtime checks removed by the prover:\n	証明で消した実行時検査:\n
+cli.012	  overflow     {0} removed / {1} kept\n	  桁あふれ  {0} 消 / {1} 残\n
+cli.013	  index        {0} removed / {1} kept\n	  添字      {0} 消 / {1} 残\n
+cli.014	  range type   {0} removed / {1} kept\n	  範囲型    {0} 消 / {1} 残\n
+cli.015	  contract     {0} removed / {1} kept\n	  契約      {0} 消 / {1} 残\n
+cli.016	  div by zero  {0} removed / {1} kept\n	  0 除算    {0} 消 / {1} 残\n
+cli.017	--shared / --python need at least one exported function (an extern def with a body)	--shared / --python には、外へ出す関数（本体つきの extern def）が少なくとも 1 つ要ります
+cli.018	there is no main; to build a library, pass --shared or --python (an executable needs main)	main がありません。ライブラリにするなら --shared か --python を付けてください（実行ファイルには main が要ります）
+cli.019	-c works only on a single-module file (split modules that import others)	-c は 1 モジュールのファイルにだけ使えます（import があるときは、モジュールごとに分けてください）
+cli.020	error: failed to produce the object file\n  {0}\n	error: オブジェクトの生成に失敗しました\n  {0}\n
+cli.021	error: clang failed (the generated IR has a problem)\n  the generated IR was kept:\n	error: clang の実行に失敗しました（生成した IR に問題があります）\n  生成された IR を残しました:\n
+cli.027	output file name	出力ファイル名
+cli.028	link option	リンクの指定
+cli.029	framework name	framework の名前
+cli.030	out of memory ({0} bytes)	メモリ確保に失敗しました ({0} バイト)
+cli.031	sb_printf: formatting failed	sb_printf: 書式化に失敗しました
+cli.032	cannot open file: {0}	ファイルを開けません: {0}
+cli.033	cannot write file: {0}	ファイルを書き込めません: {0}
+cli.034	  this is a bug in the compiler itself; please report it\n	  これはコンパイラ自身のバグです。報告してください。\n
+
+# ── 字句解析 ──
+lex.001	numeric literal has no digits	数値リテラルに数字がありません
+lex.002	digits allowed in base {0} are {1}	基数 {0} で使える数字は {1} です
+lex.003	a letter follows the numeric literal directly	数値リテラルの直後に文字が続いています
+lex.004	you may need a space between the number and the identifier	数値と識別子の間に空白が必要かもしれません
+lex.005	integer literal is out of int range (64-bit)	整数リテラルが int の範囲 (64bit) を超えています
+lex.006	int can hold -9223372036854775808 to 9223372036854775807	int が表せるのは -9223372036854775808 〜 9223372036854775807 です
+lex.007	tab characters are not allowed	タブ文字は使えません
+lex.008	tabs are forbidden so that the meaning of indentation does not depend on tab width (4 spaces recommended)	タブ幅の解釈によってインデントの意味が変わるのを防ぐため、本言語ではタブを禁止しています（半角スペース 4 個を推奨）
+lex.009	indentation is too deep (at most {0} levels)	インデントが深すぎます（最大 {0} 段）
+lex.010	indentation does not line up with any enclosing block	インデントが揃っていません（どのブロックにも対応しません）
+lex.011	match the indentation of an outer block exactly	外側のブロックのインデント幅と正確に一致させてください
+lex.012	unterminated string	文字列が閉じられていません
+lex.013	close the string on the same line	文字列は同じ行の中で閉じてください
+lex.014	unknown escape sequence '\\{0}'	未知のエスケープシーケンス '\\{0}' です
+lex.015	allowed escapes are \\n \\t \\r \\0 \\\\ \\" \\'; write \\\\ for a backslash itself	使えるのは \\n \\t \\r \\0 \\\\ \\" \\' です。バックスラッシュそのものを書くには \\\\ とします
+lex.016	unrecognized character: '{0}'	解釈できない文字です: '{0}'
+lex.017	unrecognized character (0x%02X)	解釈できない文字です (0x%02X)
+
+# ── 構文解析 ──
+parse.001	missing closing '{0}'	閉じ括弧 '{0}' がありません
+parse.002	expected '{0}' here	ここに '{0}' が必要です
+parse.003	the matching '{0}' is here	対応する '{0}' はここです
+parse.004	expected {0}	{0}が必要です
+parse.005	found {0} here	ここは{0}です
+parse.006	cannot parse the expression inside the f-string: '{0}'	f-string の中の式を解釈できません: '{0}'
+parse.007	cannot parse the format spec: '{0}'	書式指定を解釈できません: '{0}'
+parse.008	'{0}' is a reserved word	'{0}' は予約語です
+parse.009	reserved words cannot be used as variable names (language spec 2.5)	予約語は変数名として使えません（言語仕様 2.5）
+parse.010	expected a loop variable name	ループ変数の名前が必要です
+parse.011	write a comprehension as [expr for var in iterable]	内包表記は [式 for 変数 in 対象] の形で書きます
+parse.012	expected 'in'	'in' が必要です
+parse.013	wrong number of arguments to range	range の引数の個数が違います
+parse.014	range takes 1 to 3 arguments	range は 1〜3 個の引数を取ります
+parse.015	the step of range is not a constant	range の増分が定数ではありません
+parse.016	write the step as an integer literal (e.g. range(0, 10, 2)); use a for statement if you need a variable	増分は整数リテラルで書いてください（例: range(0, 10, 2)）。変数を使いたい場合は for 文で書けます
+parse.017	the step of range cannot be 0	range の増分に 0 は使えません
+parse.018	a step of 0 would loop forever	増分が 0 だと無限ループになります
+parse.019	the comprehension has two 'for's	内包表記の 'for' が 2 つあります
+parse.020	only one for is allowed (to nest, put the inner result in a variable first)	for は 1 つだけです（入れ子にしたいときは、いったん変数に入れてください）
+parse.021	expected a field or method name	フィールド名かメソッド名が必要です
+parse.022	write a field or method name after '.' (e.g. t.kind / xs.append(1))	'.' の後にはフィールド名かメソッド名を書きます（例: t.kind / xs.append(1)）
+parse.023	expected a parameter name	引数の名前が必要です
+parse.024	lambda parameters are written as names (e.g. lambda x, y: x + y)	lambda の引数は名前で書きます（例: lambda x, y: x + y）
+parse.025	expected ':'	':' が必要です
+parse.026	write a lambda as 'lambda params: expr'	lambda は「lambda 引数: 式」の形で書きます
+parse.027	too many subscripts (at most 8)	添字が多すぎます（8 個までです）
+parse.028	expected a name	名前が必要です
+parse.029	write the names that receive the values (e.g. q, r = f())	受け取る名前を書いてください（例: q, r = f()）
+parse.030	expected '='	'=' が必要です
+parse.031	write destructuring assignment as 'q, r = f()'	分解代入は 'q, r = f()' の形で書きます
+parse.032	the number of names and values differ	受け取る名前と値の数が違います
+parse.033	{0} on the left, {1} on the right	左辺は {0} 個、右辺は {1} 個です
+parse.034	too many values	値が多すぎます
+parse.035	at most 8 can be listed	並べられるのは 8 個までです
+parse.036	expected ':' after {0}	{0}の後に ':' が必要です
+parse.037	match cannot be empty	空の match は書けません
+parse.038	write at least one case	case を 1 つ以上書いてください
+parse.039	the loop variable of for is a name (e.g. for x in xs:)	for のループ変数は名前で書きます（例: for x in xs:）
+parse.040	expected the name of the second loop variable	2 つ目のループ変数の名前が必要です
+parse.041	write it as 'for i, x in enumerate(xs):'	書き方は 'for i, x in enumerate(xs):' です
+parse.042	write for as 'for var in iterable:'	for は「for 変数 in 対象:」の形で書きます
+parse.043	write the step as an integer literal (e.g. range(0, 10, 2)); use while if you need a variable	増分は整数リテラルで書いてください（例: range(0, 10, 2)）。変数を使いたい場合は while で書けます
+parse.044	expected a variable name	変数名が必要です
+parse.045	write a variable name after as (e.g. except IOError as e:)	as の後には変数名を書きます（例: except IOError as e:）
+parse.046	this try has no except	この try には except がありません
+parse.047	a try needs at least one except (e.g. except IOError as e:)	try には except を 1 つ以上書きます（例: except IOError as e:）
+parse.048	expected a setting name	設定名が必要です
+parse.049	write a setting name after pragma (e.g. pragma target "...")	pragma の後には設定名を書きます（例: pragma target "..."）
+parse.050	'{0}' without a matching if	対応する if がない '{0}' です
+parse.051	expected a type name	型名が必要です
+parse.052	the tuple has {0} element(s)	タプルの要素が {0} 個です
+parse.053	write two or more types (there are no 1-element tuples)	2 つ以上の型を書いてください（1 要素のタプルはありません）
+parse.054	write it as '| None'	'| None' の形で書いてください
+parse.055	only None may follow '|' in a type (there are no union types)	型の '|' の後ろに書けるのは None だけです（共用体型はありません）
+parse.056	expected a name here	ここには名前が必要です
+parse.057	write a name after '.'	'.' の後には名前を書きます
+parse.058	the default value of parameter '{0}' must be a literal	引数 '{0}' の既定値に書けるのはリテラルだけです
+parse.059	expected a parameter name	引数名が必要です
+parse.060	write a parameter as 'name: type' (e.g. n: int)	引数は「名前: 型」の形で書きます（例: n: int）
+parse.061	'own' cannot be applied to self	self に 'own' は書けません
+parse.062	self cannot be taken by ownership ('mut self' is allowed)	self の所有権は奪えません（'mut self' なら書けます）
+parse.063	not allowed here	ここには書けません
+parse.064	'{0}' goes before the type (e.g. {1}: {2} list[int])	'{0}' は型の前に書きます（例: {1}: {2} list[int]）
+parse.065	expected ':' after the parameter name	引数名の後に ':' が必要です
+parse.066	parameters need a type annotation (e.g. n: int)	引数には型注釈が必須です（例: n: int）
+parse.067	expected a function name	関数名が必要です
+parse.068	write a function name after def (e.g. def f() -> int:)	def の後には関数名を書きます（例: def f() -> int:）
+parse.069	expected a type parameter name	型引数の名前が必要です
+parse.070	type parameters are written as names (e.g. def f[T](x: T) -> T:)	型引数は名前で書きます（例: def f[T](x: T) -> T:）
+parse.071	expected '('	'(' が必要です
+parse.072	a function name must be followed by a parameter list (e.g. f() or f(n: int))	関数名の後には引数リストが必要です（例: f() や f(n: int)）
+parse.073	the first parameter of method '{0}' must be self	メソッド '{0}' の第 1 引数は self でなければなりません
+parse.074	expected '->' and a return type	'->' と戻り型が必要です
+parse.075	the return type cannot be omitted; write -> None if nothing is returned	戻り型は省略できません。値を返さないなら -> None と書きます
+parse.076	expected an interface name	インタフェース名が必要です
+parse.077	write a name after interface (e.g. interface Show:)	interface の後には名前を書きます（例: interface Show:）
+parse.078	an interface cannot be empty	空のインタフェースは書けません
+parse.079	write at least one method	メソッドを 1 つ以上書いてください
+parse.080	expected an enum name	列挙の名前が必要です
+parse.081	write a name after enum (e.g. enum Color:)	enum の後には名前を書きます（例: enum Color:）
+parse.082	if it has no payload, write just '{0}'	中身が無いなら '{0}' とだけ書きます
+parse.083	variant '{0}' appears twice	枝 '{0}' が 2 回あります
+parse.084	an enum cannot be empty	空の列挙は書けません
+parse.085	write at least one variant	枝を 1 つ以上書いてください
+parse.086	expected a class name	クラス名が必要です
+parse.087	write a class name after class (e.g. class Token:)	class の後にはクラス名を書きます（例: class Token:）
+parse.088	type parameters are written as names (e.g. class Dict[K, V]:)	型引数は名前で書きます（例: class Dict[K, V]:）
+parse.089	only interface names can go inside the '(' of a class (there is no inheritance)	class の '(' に書けるのはインタフェース名です（継承はありません）
+parse.090	write a name after the module qualifier	モジュール修飾の後には名前を書きます
+parse.091	expected def after extern	extern の後に def が必要です
+parse.092	write def after extern (e.g. extern def pl_system(cmd: str) -> int)	extern の後には def を書きます（例: extern def pl_system(cmd: str) -> int）
+parse.093	write the C function name after extern def	extern def の後には C の関数名を書きます
+parse.094	write a parameter list (e.g. (path: str))	引数リストを書いてください（例: (path: str)）
+parse.095	expected '->'	'->' が必要です
+parse.096	write a return type (e.g. -> int)	戻り型を書いてください（例: -> int）
+parse.097	the body of an extern def starts on the line after ':'	extern def の本体は ':' の次の行から書きます
+parse.098	to give it a body, break the line after ':' and indent (it becomes an exported function); a declaration needs no ':'	本体を書くなら ':' の後で改行して字下げしてください（外へ出す関数になります）。宣言だけなら ':' は要りません
+parse.099	expected a module name	モジュール名が必要です
+parse.100	write a module name after import (e.g. import lexer)	import の後にはモジュール名を書きます（例: import lexer）
+parse.101	write a module name after the dot (e.g. import pkg.mod)	ドットの後にはモジュール名を書きます（例: import pkg.mod）
+parse.102	'{0}' cannot take a range	'{0}' には範囲を付けられません
+parse.103	only int can take a range for now	いま範囲を付けられるのは int だけです
+parse.104	write '(' here	ここに '(' を書いてください
+parse.105	range must be followed by '('	range の後には '(' が必要です
+parse.106	expected ',' here	ここに ',' が必要です
+parse.107	separate the lower and upper bounds with a comma (e.g. range(0, 100))	下端と上端はカンマで区切ります（例: range(0, 100)）
+parse.108	range({0}, {1}) is empty	range({0}, {1}) は空の範囲です
+parse.109	the lower bound must not exceed the upper bound	下端は上端以下でなければなりません
+parse.110	check that the brackets match	括弧の対応を確認してください
+parse.111	end of file	ファイルの終わり
+parse.112	an integer	整数
+parse.113	a float	浮動小数点数
+parse.114	a symbol	記号
+parse.115	a name	名前
+parse.116	a reserved word	予約語
+parse.117	a string	文字列
+parse.118	a newline	改行
+parse.119	an indent	字下げ
+parse.120	the end of an indent	字下げの終わり
+parse.121	unmatched '}}' in the f-string	f-string に対応しない '}}' があります
+parse.122	here	ここです
+parse.123	write '}}}}' for a literal '}}'	'}}' そのものを書くには '}}}}' と重ねてください
+parse.124	unclosed '{{' in the f-string	f-string の '{{' が閉じられていません
+parse.125	empty '{{}}' in the f-string	f-string の '{{}}' が空です
+parse.126	expected an expression here	ここに式が必要です
+parse.127	check the expression (a format spec goes after ':', as in f"{{x:>8}}")	式の書き方を確かめてください（書式を付けるなら f"{{x:>8}}" のように ':' の後ろに書きます）
+parse.128	allowed: [fill][< > ^][width][.precision][f] (e.g. {{x:>8}} / {{v:.2f}} / {{s:*^10}})	書けるのは [埋め文字][< > ^][幅][.桁数][f] です（例: {{x:>8}} / {{v:.2f}} / {{s:*^10}}）
+parse.129	a precision needs 'f'	小数の桁数には 'f' が要ります
+parse.130	e.g. {{v:.2f}} (2 digits after the decimal point)	例: {{v:.2f}}（小数点以下 2 桁）
+parse.131	expected an expression	式が必要です
+parse.132	the file ends here	ここでファイルが終わっています
+parse.133	an expression should come here	ここには式が来るはずです
+parse.134	an expression is an integer literal, a variable name, or an expression in '('	式とは整数リテラル、変数名、または '(' で囲んだ式のことです
+parse.135	this expression cannot be called	この式は呼び出せません
+parse.136	only function names can be called	呼び出せるのは関数の名前だけです
+parse.137	using functions as values is not supported in v1	関数を値として扱うことは v1 では対応していません
+parse.138	comparison operators cannot be chained	比較演算子を連鎖させることはできません
+parse.139	the second comparison operator	2 つ目の比較演算子です
+parse.140	the first comparison operator is here	1 つ目の比較演算子はここです
+parse.141	unlike Python, chained comparisons are not allowed; join them with 'and' (e.g. a < b and b < c)	Python と違い連鎖比較は使えません。'and' で繋いでください（例: a < b and b < c）
+parse.142	the conditional expression has no 'else'	三項演算子に 'else' がありません
+parse.143	expected 'else' here	ここに 'else' が必要です
+parse.144	write it as 'a if cond else b' (it is an expression, so the value for a false condition is required)	書き方は 'a if 条件 else b' です（値を返す式なので、条件が偽のときの値も必ず要ります）
+parse.145	unexpected tokens after the statement	文の後に余分なトークンがあります
+parse.146	cannot parse from here on	ここから先が解釈できません
+parse.147	only one statement per line (separate them with newlines)	1 行に書けるのは 1 つの文です（改行で区切ってください）
+parse.148	write a type name in the annotation (e.g. x: int = 0)	型注釈には型名を書きます（例: x: int = 0）
+parse.149	a variable declaration needs an initializer	変数宣言には初期化式が必要です
+parse.150	expected '= initial value' here	ここに '= 初期値' が必要です
+parse.151	uninitialized variables cannot be created (e.g. x: int = 0)	本言語では未初期化の変数を作れません（例: x: int = 0）
+parse.152	this expression cannot be used as a statement	この式は文として書けません
+parse.153	the computed value is never used	計算した値がどこにも使われていません
+parse.154	assign the result to a variable, or write a function call	結果を変数に代入するか、関数の呼び出しを書いてください
+parse.155	cannot assign to this expression	この式には代入できません
+parse.156	only variables, subscripts xs[i] and fields t.f can be assigned to	代入先にできるのは変数・添字 xs[i]・フィールド t.f だけです
+parse.157	to store a computed value, put a variable on the left-hand side	計算結果を代入したい場合は、左辺に変数を書いてください
+parse.158	expected ':' here	ここに ':' が必要です
+parse.159	a line that opens a block ends with ':' and the next line is indented	ブロックを開く行は ':' で終わり、次の行を字下げします
+parse.160	break the line after ':' and indent the block	':' の後は改行してブロックを字下げしてください
+parse.161	an indented block	字下げされたブロック
+parse.162	indent the line after ':' (4 spaces recommended)	':' の次の行は字下げしてください（スペース 4 個を推奨）
+parse.163	the end of the block	ブロックの終わり
+parse.164	break the line after ':' and indent the cases	':' の後は改行して case を字下げしてください
+parse.165	an indented case	字下げされた case
+parse.166	cases are indented (4 spaces recommended)	case は字下げして書きます（スペース 4 個を推奨）
+parse.167	only case can appear inside match	match の中に書けるのは case だけです
+parse.168	write case here	ここには case を書きます
+parse.169	write it as case <value>: (use case _: for anything else)	書き方は case <値>: です（どれにも当たらないときは case _:）
+parse.170	the body of match is not closed	match の本体が閉じていません
+parse.171	the condition of if	if の条件
+parse.172	enumerate needs two loop variables	enumerate には 2 つのループ変数が必要です
+parse.173	it receives both the index and the element	添字と要素の 2 つを受け取ります
+parse.174	the target of for	for の対象
+parse.175	only enumerate allows two loop variables	ループ変数を 2 つ書けるのは enumerate だけです
+parse.176	expected enumerate(...) here	ここには enumerate(...) が必要です
+parse.177	there are no tuples; only 'for i, x in enumerate(xs):' is allowed	タプルはありません。'for i, x in enumerate(xs):' の形だけです
+parse.178	the condition of while	while の条件
+parse.179	write the error type to catch after except (e.g. except IOError:)	except には捕まえるエラーの型名を書きます（例: except IOError:）
+parse.180	no matching 'if' for this line	この行に対応する 'if' が見つかりません
+parse.181	write 'elif' / 'else' at the same indentation as 'if'	'elif' / 'else' は 'if' と同じ字下げの位置に書いてください
+parse.182	write the types of the tuple elements	タプルの要素の型を書いてください
+parse.183	write the parameter types	引数の型を書いてください
+parse.184	a function type needs a return type	関数型には戻り型が必要です
+parse.185	write '->' and a return type here	ここに '->' と戻り型を書いてください
+parse.186	write it as fn(int, str) -> bool	書き方は fn(int, str) -> bool です
+parse.187	write a return type	戻り型を書いてください
+parse.188	write a type name after the module qualifier (e.g. lexer.Token)	モジュール修飾の後には型名を書きます（例: lexer.Token）
+parse.189	write a type name after the module qualifier (e.g. pkg.mod.Token)	モジュール修飾の後には型名を書きます（例: pkg.mod.Token）
+parse.190	write type arguments (e.g. list[int])	型引数を書いてください（例: list[int]）
+parse.191	write an error type name after raises (e.g. raises IOError)	raises にはエラーの型名を書きます（例: raises IOError）
+parse.192	write a type name after the module qualifier	モジュール修飾の後には型名を書きます
+parse.193	a default value cannot be a call	既定値に呼び出しは書けません
+parse.194	a default value cannot be a subscript	既定値に添字は書けません
+parse.195	this is only known at run time	ここは実行しないと決まりません
+parse.196	only numbers / strings / True / False / None / enum variants are allowed (defaults are substituted at the call site, so values computed at run time cannot be used)	数 / 文字列 / True / False / None / 列挙の枝 だけが書けます（既定値は呼び出し側に置き換わるので、実行して決まる値は書けません）
+parse.197	a default value cannot be a variable	既定値に変数は書けません
+parse.198	write a value here	ここには値を書きます
+parse.199	only numbers / strings / True / False / None / enum variants are allowed (a mutable default would give different answers on each call)	数 / 文字列 / True / False / None / 列挙の枝 だけが書けます（変えられる値を既定値にすると、呼ぶたびに答えが変わります）
+parse.200	only numbers / strings / True / False / None / enum variants are allowed; if you need a list, write 'xs: list[int] | None = None' (a default list would be shared across calls, so it is not allowed)	数 / 文字列 / True / False / None / 列挙の枝 だけが書けます。list が要るときは 'xs: list[int] | None = None' と書きます（既定値の list は呼び出しをまたいで共有されるため、書けません）
+parse.201	expected self here	ここに self が必要です
+parse.202	self is written explicitly (e.g. def show(self) -> None:)	本言語は self を明示的に書きます（例: def show(self) -> None:）
+parse.203	write a type name as the return type (e.g. -> int / -> None)	戻り型には型名を書きます（例: -> int / -> None）
+parse.204	interface methods cannot have a body	インタフェースのメソッドに本体は書けません
+parse.205	':' is not allowed here	ここに ':' は書けません
+parse.206	an interface only lists what can be done (the implementation goes in the class)	インタフェースは「何ができるか」だけを並べます（実装はクラス側に書きます）
+parse.207	the def declaration	def の宣言
+parse.208	the interface declaration	interface の宣言
+parse.209	break the line after ':' and indent the body	':' の後は改行して本体を字下げしてください
+parse.210	an indented body	字下げされた本体
+parse.211	the contents of an interface are indented (4 spaces recommended)	インタフェースの中身は字下げして書きます（スペース 4 個を推奨）
+parse.212	an interface can only contain method declarations	インタフェースに書けるのはメソッドの宣言だけです
+parse.213	write def here	ここには def を書きます
+parse.214	interfaces cannot have fields (that would be inheritance)	フィールドは持てません（持てるようにすると継承になります）
+parse.215	the body of the interface is not closed	インタフェースの本体が閉じていません
+parse.216	the enum declaration	enum の宣言
+parse.217	enum variants are indented (4 spaces recommended)	列挙の枝は字下げして書きます（スペース 4 個を推奨）
+parse.218	an enum can only contain variant names	列挙に書けるのは枝の名前だけです
+parse.219	write a name here	ここには名前を書きます
+parse.220	one name per line (variants with payloads are not available yet)	1 行に 1 つ、名前だけを書きます（中身を持つ枝はまだありません）
+parse.221	a variant without a payload takes no '()'	中身のない枝に '()' は付けません
+parse.222	this is empty	ここは空です
+parse.223	the second definition	2 つめの定義です
+parse.224	the first definition is here	最初の定義はここです
+parse.225	write one variant per line	枝は 1 行に 1 つ書きます
+parse.226	the body of the enum is not closed	列挙の本体が閉じていません
+parse.227	fields need a type annotation (e.g. kind: int)	フィールドには型注釈が必須です（例: kind: int）
+parse.228	fields cannot have an initial value	フィールドに初期値は書けません
+parse.229	'=' is not allowed here	ここに '=' は書けません
+parse.230	assign initial values in the init method (e.g. def init(self) -> None: / self.kind = 0)	初期値は init メソッドで代入してください（例: def init(self) -> None: / self.kind = 0）
+parse.231	the class declaration	class の宣言
+parse.232	break the line after ':' and indent the class body	':' の後は改行してクラス本体を字下げしてください
+parse.233	an indented class body	字下げされたクラス本体
+parse.234	the contents of a class are indented (4 spaces recommended)	クラスの中身は字下げして書きます（スペース 4 個を推奨）
+parse.235	write fields before methods	フィールドはメソッドより前に書いてください
+parse.236	this field declaration comes after a method	このフィールド宣言がメソッドより後ろにあります
+parse.237	the first method is here	最初のメソッドはここです
+parse.238	a class body is "all fields, then all methods" (grammar section 3)	クラス本体は「フィールドを全部 → メソッドを全部」の順です（文法定義 3 節）
+parse.239	methods cannot be exported	メソッドは外へ出せません
+parse.240	extern can only appear at the top level of a module	extern はモジュールの一番外側にだけ書けます
+parse.241	write an extern def at the top level of the module and use the class from inside it	モジュールの一番外側に extern def を書き、その中からクラスを使ってください
+parse.242	a class can only contain fields and methods	クラスの中に書けるのはフィールドとメソッドだけです
+parse.243	a field is 'name: type' and a method starts with 'def':\n             class Token:\n                 kind: int\n\n                 def show(self) -> None:\n                     print(self.kind)	フィールドは「名前: 型」、メソッドは 'def' で始めます:\n             class Token:\n                 kind: int\n\n                 def show(self) -> None:\n                     print(self.kind)
+parse.244	the end of the class body	クラス本体の終わり
+parse.245	expected an integer literal here	ここには整数のリテラルが必要です
+parse.246	the bounds of a range must be known at compile time (e.g. type Percent = int range(0, 100))	範囲の端はコンパイル時に決まっている必要があります（例: type Percent = int range(0, 100)）
+parse.247	the base of a range type is int (e.g. int range(0, 100))	範囲型の基底は int です（例: int range(0, 100)）
+parse.248	a range type needs range(low, high)	範囲型には range(下端, 上端) が必要です
+parse.249	write range(...) here	ここに range(...) を書いてください
+parse.250	write it as type Percent = int range(0, 100) (both ends included)	書き方は type Percent = int range(0, 100) です（両端を含みます）
+parse.251	write an integer literal as the lower bound	下端には整数のリテラルを書いてください
+parse.252	write an integer literal as the upper bound	上端には整数のリテラルを書いてください
+parse.253	unexpected indent	予期しないインデントです
+parse.254	this line is indented too far	この行が余分に字下げされています
+parse.255	only def / class / import / extern and global variables are allowed at the top level (language spec 6.3)	トップレベルに書けるのは def / class / import / extern とグローバル変数だけです（言語仕様 6.3）
+parse.256	statements cannot be written at the top level	トップレベルに実行文は書けません
+parse.257	only def / class / import / extern and global variables are allowed here	ここに書けるのは def / class / import / extern とグローバル変数だけです
+parse.258	put the code inside main:\n             def main() -> int:\n                 ...\n                 return 0	処理は main の中に書いてください:\n             def main() -> int:\n                 ...\n                 return 0
+
+# ── モジュールの読み込み ──
+mod.001	found in:	見つかった場所:
+mod.002	module '{0}' clashes with the standard library	モジュール '{0}' が標準ライブラリと衝突しています
+mod.003	module '{0}' exists in more than one search location	モジュール '{0}' が複数の探索場所にあります
+mod.004	circular import: {0}	循環 import です: {0}
+mod.005	module '{0}' not found	モジュール '{0}' が見つかりません
+mod.006	'{0}' is this module itself	'{0}' は自分自身です
+mod.007	a module cannot import itself	モジュールは自分自身を import できません
+mod.008	'{0}' is already imported	'{0}' は既に import されています
+mod.009	rename one of them	どちらかの名前を変えてください
+mod.010	make the names distinct	名前が重ならないようにしてください
+mod.011	cannot tell which one is meant	どちらを指しているか決められません
+mod.012	this import closes a cycle	この import が循環を作っています
+mod.013	module dependencies must go one way (a DAG); moving the shared part into a third module resolves this	モジュールの依存関係は一方通行（DAG）にしてください。共通部分を 3 つ目のモジュールに切り出すと解けます
+mod.014	cannot resolve this import	この import を解決できません
+mod.015	searched these paths:\n             {0}\n             the module name is the file name without {1}\n             ('pkg.mod' means 'pkg/mod{2}')	次のパスを探しました:\n             {0}\n             モジュール名はファイル名（{1} を除いたもの）です\n             （'pkg.mod' は 'pkg/mod{2}' を指します）
+mod.017	duplicate import	重複した import です
+mod.018	there is no need to import the same module twice	同じモジュールを 2 回書く必要はありません
+
+# ── 型検査 ──
+sema.001	'{0}' is the name of an imported module	'{0}' は import したモジュールの名前です
+sema.002	a {0} with this name cannot be declared	この名前の{0}は宣言できません
+sema.003	using the same name as a module makes '{0}.x' ambiguous	モジュール名と同じ名前を使うと '{0}.x' が曖昧になります
+sema.004	{0} is outside the range of '{1}' ({2}..{3})	{0} は '{1}' の範囲（{2}..{3}）の外です
+sema.005	'{0}' only accepts values from {1} to {2}	'{0}' に入れられるのは {1} から {2} までです
+sema.006	'{0} | None' is not allowed	'{0} | None' は書けません
+sema.007	'{0}' takes {1} type arguments, but {2} were given	'{0}' は型引数を {1} 個取りますが、{2} 個書かれました
+sema.008	too many type arguments (at most {0})	型引数が多すぎます（最大 {0} 個です）
+sema.009	module '{0}' is not imported	モジュール '{0}' を import していません
+sema.010	add 'import {0}' at the top of the file	ファイルの先頭に 'import {0}' を書いてください
+sema.011	type '{0}.{1}' does not take an element type	型 '{0}.{1}' は要素型を取りません
+sema.012	range types do not take an element type	範囲型は要素型を取りません
+sema.013	enums do not take an element type	列挙は要素型を取りません
+sema.014	module '{0}' has no class '{1}'	モジュール '{0}' にクラス '{1}' はありません
+sema.015	only list / rc / mutex / Thread take an element type	要素型を取るのは list / rc / mutex / Thread だけです
+sema.016	list needs an element type	list には要素型が必要です
+sema.017	write the element type (e.g. list[int])	要素型を書いてください（例: list[int]）
+sema.018	None cannot be the element type of a list	list の要素型に None は使えません
+sema.019	there are no values of type None, so it cannot be an element	None 型の値は存在しないので要素にできません
+sema.020	ptr needs a pointee type	ptr には中身の型が必要です
+sema.021	write the pointee type (e.g. ptr[int])	中身の型を書いてください（例: ptr[int]）
+sema.022	'{0}' cannot be put in a ptr	'{0}' は ptr に入れられません
+sema.023	currently only int can be put in a ptr (e.g. ptr[int])	いま ptr に書けるのは int だけです（例: ptr[int]）
+sema.024	rc needs a content type	rc には中身の型が必要です
+sema.025	write the content type (e.g. rc[Node])	中身の型を書いてください（例: rc[Node]）
+sema.026	'{0}' cannot be put in an rc	'{0}' は rc に入れられません
+sema.027	only classes can be put in an rc (e.g. rc[Node])	rc に入れられるのはクラスだけです（例: rc[Node]）
+sema.028	Thread needs a return type	Thread には戻り型が必要です
+sema.029	write the return type (e.g. Thread[int])	戻り型を書いてください（例: Thread[int]）
+sema.030	mutex needs a content type	mutex には中身の型が必要です
+sema.031	write the content type (e.g. mutex[Counter])	中身の型を書いてください（例: mutex[Counter]）
+sema.032	'{0}' cannot be put in a mutex	'{0}' は mutex に入れられません
+sema.033	only classes and lists can be put in a mutex (e.g. mutex[Counter] / mutex[list[float]])	mutex に入れられるのはクラスかリストだけです（例: mutex[Counter] / mutex[list[float]]）
+sema.034	type '{0}' does not take type arguments	型 '{0}' は型引数を取りません
+sema.035	a type parameter itself does not take type arguments	型引数そのものは型引数を取りません
+sema.036	type '{0}' does not take an element type	型 '{0}' は要素型を取りません
+sema.037	only list and rc take an element type	要素型を取るのは list と rc だけです
+sema.038	None cannot be a tuple element	タプルの要素に None は使えません
+sema.039	interfaces do not take type arguments	インタフェースは型引数を取りません
+sema.040	unknown type name '{0}'	未知の型名 '{0}' です
+sema.041	available types: {0}, and the classes you define	現在使える型: {0}、および定義したクラス名
+sema.042	'{0}' and '{1}' are different classes that only share a name (types are identified by their definition, not by their name)	'{0}' と '{1}' は名前が同じだけの別のクラスです（同じ型かどうかは名前ではなく定義で決まります）
+sema.043	different number of parameters ({0} and {1})	引数の数が違います（{0} 個と {1} 個）
+sema.044	parameter {0} has a different type ('{1}' and '{2}')	{0} 番目の引数の型が違います（'{1}' と '{2}'）
+sema.045	different return type ('{0}' and '{1}')	戻り型が違います（'{0}' と '{1}'）
+sema.046	'{0}' is not declared to implement '{1}' (write 'class {2}({3}):')	'{0}' が '{1}' を実装すると宣言していません（'class {2}({3}):' と書きます）
+sema.047	{0} can only be used to compare with None	{0} は None との比較にだけ使えます
+sema.048	write None here (the expression has type '{0}')	ここには None を書いてください（型 '{0}' の式です）
+sema.049	a value of type '{0}' can never be None	型 '{0}' の値が None になることはありません
+sema.050	to allow None, annotate the type as '{0} | None'	None を入れたいなら、型注釈を '{0} | None' にしてください
+sema.051	this has type '{0}'	これは '{0}' 型です
+sema.052	__eq__ must return bool to be used with '!=' (it currently returns '{0}')	'!=' に使うには __eq__ が bool を返す必要があります（いまは '{0}' を返しています）
+sema.053	operator '{2}' cannot be applied to types '{0}' and '{1}'	型 '{0}' と '{1}' に演算子 '{2}' は適用できません
+sema.054	'/' cannot be used for integer division	整数の除算に '/' は使えません
+sema.055	use floor division '//' (there are no implicit conversions, so '/' is for float only)	切り捨て除算の '//' を使ってください（本言語には暗黙の型変換がないため、'/' は float 専用です）
+sema.056	operator '{1}' cannot be applied to type '{0}'	型 '{0}' に演算子 '{1}' は適用できません
+sema.057	define '{1}(self, other) -> …' on class '{0}' to use this operator	クラス '{0}' に '{1}(self, other) -> …' を定義すると、この演算子が使えます
+sema.058	operator '{0}' is here	演算子 '{0}' はここです
+sema.059	operator '{0}' requires bool	演算子 '{0}' には bool が必要です
+sema.060	tuples have different numbers of elements ({0} and {1})	タプルの要素の数が違います（{0} 個と {1} 個）
+sema.061	this one has {0}	ここは {0} 個です
+sema.062	expected '{0}'	'{0}' が必要です
+sema.063	element {0} of the tuple has a mismatched type	タプルの {0} 番目の型が合いません
+sema.064	expected '{0}' here	ここには '{0}' が必要です
+sema.065	type '{0}' cannot be sliced	'{0}' 型はスライスできません
+sema.066	the start of a slice must be int (got '{0}')	スライスの開始は int です（'{0}' 型でした）
+sema.067	the end of a slice must be int (got '{0}')	スライスの終端は int です（'{0}' 型でした）
+sema.068	__contains__ must return bool to be used with 'in' (it currently returns '{0}')	'in' に使うには __contains__ が bool を返す必要があります（いまは '{0}' を返しています）
+sema.069	__contains__ must return bool to be used with 'not in' (it currently returns '{0}')	'not in' に使うには __contains__ が bool を返す必要があります（いまは '{0}' を返しています）
+sema.070	'in' on str requires a str (the left side has type '{0}')	str の 'in' には str が必要です（左辺は '{0}' 型です）
+sema.071	the elements here have type '{0}'	こちらの要素は '{0}' 型です
+sema.072	'in' cannot be used with type '{0}'	'{0}' 型に 'in' は使えません
+sema.073	define '__contains__(self, x) -> bool' on class '{0}' to use 'in'	クラス '{0}' に '__contains__(self, x) -> bool' を定義すると、'in' が使えます
+sema.074	this has type '{0}'	こちらは '{0}' 型です
+sema.075	unary operator '{1}' cannot be applied to type '{0}'	型 '{0}' に単項演算子 '{1}' は適用できません
+sema.076	'{0}' takes type arguments, so it cannot be used as a value	'{0}' は型引数を取る関数なので、値にできません
+sema.077	'{0}' raises, so it cannot be used as a value	'{0}' は raises する関数なので値にできません
+sema.078	module '{0}' cannot be used as a value	モジュール '{0}' は値として使えません
+sema.079	use the module's contents as '{0}.name'	モジュールの中身は '{0}.名前' の形で使います
+sema.080	a lambda cannot use the outer variable '{0}'	lambda の中から外の変数 '{0}' は使えません
+sema.081	undefined name '{0}'	未定義の名前 '{0}' です
+sema.082	declare it before use (e.g. {0}: int = 0)	使う前に宣言してください（例: {0}: int = 0）
+sema.083	None cannot be the type of a variable	変数の型に None は使えません
+sema.084	there are no values of type None, so it cannot be a variable	None 型の値は存在しないので変数にできません
+sema.085	variable '{0}' is already declared	変数 '{0}' は既に宣言されています
+sema.086	variable '{0}' shadows a variable in an outer scope	変数 '{0}' は外側のスコープの変数を隠しています
+sema.087	a value of type None cannot be stored in a variable	None 型の値は変数にできません
+sema.088	an expression that returns no value cannot be stored in a variable	値を返さない式は変数に入れられません
+sema.089	expression of type '{0}'	型 '{0}' の式
+sema.090	variable '{0}' is declared as type '{1}'	変数 '{0}' は '{1}' 型として宣言されています
+sema.091	cannot assign to an index of type '{0}'	型 '{0}' の添字には代入できません
+sema.092	define '__setitem__(self, …, value) -> None' on class '{0}' to assign to an index	クラス '{0}' に '__setitem__(self, …, 値) -> None' を定義すると、添字への代入が使えます
+sema.093	cannot assign to a tuple element	タプルの要素には代入できません
+sema.094	tuples cannot change once created (create a new tuple)	タプルは作ったら変わりません（新しいタプルを作ってください）
+sema.095	cannot assign to a character of a string	文字列の要素には代入できません
+sema.096	str is immutable; create a new string	str は不変（immutable）です。新しい文字列を作ってください
+sema.097	this element has type '{0}'	この要素は '{0}' 型です
+sema.098	field '{0}' is declared as type '{1}'	フィールド '{0}' は '{1}' 型として宣言されています
+sema.099	assigning to undefined name '{0}'	未定義の名前 '{0}' に代入しています
+sema.100	a type annotation is required on first use (e.g. {0}: int = 0)	初めて使うときは型注釈が必要です（例: {0}: int = 0）
+sema.101	{0} must be bool	{0}には bool が必要です
+sema.102	{0} is here	{0}はここです
+sema.103	{0} takes 1 argument, but {1} were given	{0} は 1 個の引数を取りますが、{1} 個渡されました
+sema.104	use it as {0}(value)	{0}(値) の形で使ってください
+sema.105	'{0}' cannot be passed to {1} directly	'{0}' はそのまま {1} できません
+sema.106	the elements have type '{0}'	要素が '{0}' 型です
+sema.107	move_out cannot take out a value of type '{0}'	move_out は '{0}' 型を取り出せません
+sema.108	{0} cannot take type '{1}'	{0} は '{1}' 型を受け取れません
+sema.109	used in this instantiation ({0})	この実体化（{0}）で使われました
+sema.110	{0} accepts {1}	{0} が受け取れるのは {1} です
+sema.111	the list elements do not have the same type (element {0})	リストの要素の型がそろっていません（第 {0} 要素）
+sema.112	the first element has type '{0}'	最初の要素は '{0}' 型です
+sema.113	nested old	old の入れ子です
+sema.114	old cannot be written inside old(...)	old(...) の中に old は書けません
+sema.115	wrong number of arguments to old	old の引数の数が違います
+sema.116	old takes exactly one expression (e.g. old(len(xs)))	old には式を 1 つだけ渡します（例: old(len(xs))）
+sema.117	too many old	old が多すぎます
+sema.118	at most 256 old per function	old は 1 つの関数に 256 個までです
+sema.119	old(...) only accepts int / bool / float expressions	old(...) に書けるのは int / bool / float の式です
+sema.120	the arguments of range must be int	range の引数は int です
+sema.121	type '{0}' cannot be used in a comprehension	'{0}' 型は内包表記の対象にできません
+sema.122	the 'if' of a comprehension must be bool	内包表記の 'if' には bool が必要です
+sema.123	the expression inside {0}(...) must be bool	{0}(...) の中の式は bool でなければなりません
+sema.124	e.g. {0}(xs[i] >= 0 for i in range(len(xs)))	例: {0}(xs[i] >= 0 for i in range(len(xs)))
+sema.125	type '{0}' cannot be indexed	型 '{0}' は添字を取れません
+sema.126	define '__getitem__(self, …) -> …' on class '{0}' to use indexing	クラス '{0}' に '__getitem__(self, …) -> …' を定義すると、添字が使えます
+sema.127	more than one index	添字が 2 つ以上あります
+sema.128	a tuple takes exactly one index	タプルの添字は 1 つだけです
+sema.129	tuple index out of range ({0})	タプルの添字が範囲外です（{0}）
+sema.130	it has {0} elements (0 to {1})	要素は {0} 個です（0 〜 {1}）
+sema.131	type '{0}' cannot take two or more indices	型 '{0}' に添字を 2 つ以上は書けません
+sema.132	module '{0}' has no '{1}'	モジュール '{0}' に '{1}' はありません
+sema.133	'{0}' is a function; call it as '{1}.{2}(...)'	'{0}' は関数です。'{1}.{2}(...)' と呼んでください
+sema.134	'{0}' is a class; write '{1}.{2}(...)' to construct it	'{0}' はクラスです。生成するには '{1}.{2}(...)' と書いてください
+sema.135	values of type '{0}' have no {1}	型 '{0}' の値には{1}がありません
+sema.136	this expression has type '{0}'	この式は '{0}' 型です
+sema.137	rule out None first:\n             if {0} is not None:\n                 ...	先に None を除いてください:\n             if {0} is not None:\n                 ...
+sema.138	variant '{0}.{1}' takes {2} values, but {3} were given	枝 '{0}.{1}' は {2} 個の中身を取りますが、{3} 個渡されました
+sema.139	write just '{0}.{1}'	'{0}.{1}' とだけ書きます
+sema.140	write {2} values in '{0}.{1}(…)'	'{0}.{1}(…)' に {2} 個書きます
+sema.141	enum '{0}' has no variant '{1}'	列挙 '{0}' に枝 '{1}' はありません
+sema.142	the allowed variants are 	書ける枝は 
+sema.143		 です
+sema.144	type '{0}' has no fields	型 '{0}' にフィールドはありません
+sema.145	class '{0}' has no field '{1}'	クラス '{0}' にフィールド '{1}' はありません
+sema.146	class '{0}' has no method '{1}'	クラス '{0}' にメソッド '{1}' はありません
+sema.147	'{0}' is a field; remove the '()'	'{0}' はフィールドです。'()' を外してください
+sema.148	method '{0}'	メソッド '{0}'
+sema.149	method '{0}' takes {1} arguments, but {2} were given	メソッド '{0}' は {1} 個の引数を取りますが、{2} 個渡されました
+sema.150	argument {1} of method '{0}': cannot pass type '{2}' as '{3}'	メソッド '{0}' の第 {1} 引数: 型 '{2}' を '{3}' に渡せません
+sema.151	parameter '{0}' has type '{1}'	引数 '{0}' は '{1}' 型です
+sema.152	module '{0}' has no function '{1}'	モジュール '{0}' に関数 '{1}' はありません
+sema.153	'{0}' is a global variable; remove the '()'	'{0}' はグローバル変数です。'()' を外してください
+sema.154	cannot leave a scope: block with '{0}'	scope: の中から '{0}' で抜けることはできません
+sema.155	class '{0}' cannot be copied	クラス '{0}' は copy できません
+sema.156	it has type '{0}'	'{0}' 型です
+sema.157	write '__copy__' as 'def __copy__(self) -> {0}:'	'__copy__' は 'def __copy__(self) -> {0}:' の形で書きます
+sema.158	to make it copyable, write __copy__:\n             def __copy__(self) -> {0}:\n                 return {1}(…)	複製できるようにするには __copy__ を書きます:\n             def __copy__(self) -> {0}:\n                 return {1}(…)
+sema.159	type '{0}' cannot be copied	'{0}' 型は copy できません
+sema.160	written as '{0} = …'	'{0} = …' と書いています
+sema.161	variant '{0}.{1}' has no values	枝 '{0}.{1}' は中身を持ちません
+sema.162	'{0}' does not take keyword arguments	'{0}' は名前で引数を受け取りません
+sema.163	interface '{0}' has no '{1}'	インタフェース '{0}' に '{1}' はありません
+sema.164	wrong number of arguments ({0} given)	引数の個数が違います（{0} 個渡されました）
+sema.165	'{0}.{1}' takes {2} arguments	'{0}.{1}' は {2} 個の引数を取ります
+sema.166	argument {0} has type '{1}'	{0} 番目の引数が '{1}' 型です
+sema.167	'Thread' has no '{0}'	'Thread' に '{0}' はありません
+sema.168	Thread only has join()	Thread にあるのは join() だけです
+sema.169	join takes no arguments	join は引数を取りません
+sema.170	use it as t.join()	t.join() の形で使ってください
+sema.171	'mutex' has no '{0}'	'mutex' に '{0}' はありません
+sema.172	mutex only has lock(function)	mutex にあるのは lock(関数) だけです
+sema.173	lock takes 1 argument (a function) ({0} given)	lock は 1 個の引数（関数）を取ります（{0} 個渡されました）
+sema.174	use it as m.lock(function)	m.lock(関数) の形で使ってください
+sema.175	'{0}' is not a function of that shape	'{0}' はその形の関数ではありません
+sema.176	pass a function 'fn({0}) -> R' to lock	lock には 'fn({0}) -> R' の関数を渡してください
+sema.177	this function takes '{0}'	この関数は '{0}' を受け取ります
+sema.178	the content is '{0}'	中身は '{0}' です
+sema.179	{0} takes {1} arguments, but {2} were given	{0} は {1} 個の引数を取りますが、{2} 個渡されました
+sema.180	use it as {0}	{0} の形で使ってください
+sema.181	the position of insert must be int (got '{0}')	insert の位置は int です（'{0}' 型でした）
+sema.182	cannot put '{1}' in a list of '{0}'	'{0}' のリストに '{1}' は入れられません
+sema.183	the argument of {0} must be int (got '{1}')	{0} の引数は int です（'{1}' 型でした）
+sema.184	cannot search for '{1}' in a list of '{0}'	'{0}' のリストから '{1}' は探せません
+sema.185	extend requires a list of the same type (got '{0}')	extend には同じ型のリストが必要です（'{0}' でした）
+sema.186	append takes 1 argument, but {0} were given	append は 1 個の引数を取りますが、{0} 個渡されました
+sema.187	cannot append '{1}' to a list of '{0}'	'{0}' のリストに '{1}' を追加できません
+sema.188	type '{0}' has no method '{1}'	型 '{0}' にメソッド '{1}' はありません
+sema.189	cannot determine which instance of '{0}' to create	'{0}' のどの実体を作るのか決められません
+sema.190	it is determined from the variable's type; write 'x: {0}[type, ...] = {1}(...)'	変数の型から決めます。'x: {0}[型, ...] = {1}(...)' の形で書いてください
+sema.191	class '{0}' has no init, so it takes no arguments	クラス '{0}' には init が無いので引数を渡せません
+sema.192	{0} arguments were given	{0} 個の引数が渡されています
+sema.193	class '{0}'	クラス '{0}'
+sema.194	constructing '{0}' takes {1} arguments, but {2} were given	'{0}' の生成には {1} 個の引数が必要ですが、{2} 個渡されました
+sema.195	argument {1} of constructing '{0}': cannot pass type '{2}' as '{3}'	'{0}' の生成の第 {1} 引数: 型 '{2}' を '{3}' に渡せません
+sema.196	'{0}' can only be used inside unsafe:	'{0}' は unsafe: の中でしか使えません
+sema.197	wrong number of arguments	引数の個数が違います
+sema.198	{0} takes {1} arguments	{0} は {1} 個の引数を取ります
+sema.199	the first argument of asm must be a string literal	asm の第 1 引数は文字列リテラルです
+sema.200	write the instruction as a literal (e.g. asm("wfi"))	命令はリテラルで書いてください（例: asm("wfi")）
+sema.201	'{0}' is not a pointer	'{0}' はポインタではありません
+sema.202	pass a ptr[int] as the first argument	第 1 引数には ptr[int] を渡してください
+sema.203	'{0}' cannot be passed here	'{0}' はここに渡せません
+sema.204	low-level operations only handle int	低レベルの操作が扱うのは int だけです
+sema.205	function value '{0}' does not take keyword arguments	関数の値 '{0}' は名前で引数を受け取りません
+sema.206	this variable has type '{0}'. Function types carry no parameter names, so pass arguments by position	この変数の型は '{0}' です。関数の型には引数の名前が入らないので、位置で渡してください
+sema.207	'{0}' takes {1} arguments, but {2} were given	'{0}' は {1} 個の引数を取りますが、{2} 個渡されました
+sema.208	this variable has type '{0}'	この変数の型は '{0}' です
+sema.209	argument {0} has a mismatched type	{0} 番目の引数の型が合いません
+sema.210	use it as {0}(a, b)	{0}(a, b) の形で使ってください
+sema.211	{0} takes 2 arguments	{0} は 2 個の引数を取ります
+sema.212	the two arguments of {0} must have the same type ('{1}' and '{2}')	{0} の 2 つの引数は同じ型である必要があります（'{1}' と '{2}'）
+sema.213	cannot be used with type '{0}'	'{0}' 型には使えません
+sema.214	min / max can be used with int and float	min / max が使えるのは int と float です
+sema.215	wrapping arithmetic can only be used with int	折り返す算術が使えるのは int だけです
+sema.216	rc takes 1 argument	rc は 1 個の引数を取ります
+sema.217	use it as rc(value)	rc(値) の形で使ってください
+sema.218	only class instances can be put in an rc	rc に入れられるのはクラスのインスタンスだけです
+sema.219	spawn needs at least a function	spawn には少なくとも関数が要ります
+sema.220	use it as spawn(function, args…)	spawn(関数, 引数…) の形で使ってください
+sema.221	'{0}' is not a function	'{0}' は関数ではありません
+sema.222	the first argument of spawn is a function (e.g. spawn(work, job))	spawn の 1 つ目は関数です（例: spawn(work, job)）
+sema.223	{0} arguments were passed to spawn	spawn に渡した引数が {0} 個です
+sema.224	'{0}' takes {1} arguments	'{0}' は {1} 個の引数を取ります
+sema.225	mutex takes 1 argument	mutex は 1 個の引数を取ります
+sema.226	use it as mutex(value)	mutex(値) の形で使ってください
+sema.227	only classes and lists can be put in a mutex	mutex に入れられるのはクラスかリストだけです
+sema.228	width formatting cannot be used with type '{0}'	書式（桁揃え）は '{0}' 型には使えません
+sema.229	decimal formatting cannot be used with type '{0}'	小数の書式は '{0}' 型には使えません
+sema.230	copy takes 1 argument, but {0} were given	copy は 1 個の引数を取りますが、{0} 個渡されました
+sema.231	use it as copy(value)	copy(値) の形で使ってください
+sema.232	undefined function '{0}'	未定義の関数 '{0}' です
+sema.233	'{0}' is declared here	'{0}' はここで宣言されています
+sema.234	unhandled fallible call '{0}'	失敗しうる呼び出し '{0}' を処理していません
+sema.235	this call may return '{0}'	この呼び出しは '{0}' を返すことがあります
+sema.236	catch it with try, or add 'raises {0}' to this function	try で捕まえるか、この関数に 'raises {0}' を足してください
+sema.237	error '{0}' is not declared	エラー '{0}' が宣言されていません
+sema.238	'{0}' may return '{1}'	'{0}' は '{1}' を返すことがあります
+sema.239	add '{0}' to this function's raises, or catch it with try	この関数の raises に '{0}' を足すか、try で捕まえてください
+sema.240	{0} takes at most {1} arguments ({2} given)	{0} に渡せる引数は多くとも {1} 個です（{2} 個渡されました）
+sema.241	the allowed names are 	書ける名前は 
+sema.242	{0} has no parameter '{1}'	{0} に引数 '{1}' はありません
+sema.243	parameter '{0}' is given twice	引数 '{0}' に 2 回渡しています
+sema.244	parameter '{1}' of {0} is not given	{0} の引数 '{1}' が渡されていません
+sema.245	nothing matches parameter '{0}'	引数 '{0}' に当たるものがありません
+sema.246	{0} '{1}' takes {2} arguments, but {3} were given	{0} '{1}' は {2} 個の引数を取りますが、{3} 個渡されました
+sema.247	cannot pass a capturing lambda to '{0}'	捕獲した lambda を '{0}' に渡せません
+sema.248	'{0}' stores the function it receives	'{0}' は受け取った関数をしまいます
+sema.249	argument {2} of {0} '{1}': cannot pass type '{3}' as '{4}'	{0} '{1}' の第 {2} 引数: 型 '{3}' を '{4}' に渡せません
+sema.250	a capturing lambda cannot be {0}	捕獲した lambda は{0}できません
+sema.251	captures '{0}'	'{0}' を捕まえています
+sema.252	function '{0}' must return '{1}'	関数 '{0}' は '{1}' を返さなければなりません
+sema.253	function '{0}' returns None, so it cannot return a value	戻り型が None の関数 '{0}' は値を返せません
+sema.254	the return type of function '{0}' is '{1}'	関数 '{0}' の戻り型は '{1}' です
+sema.255	the number of targets does not match ({0} and {1})	受け取る数が合いません（{0} 個と {1} 個）
+sema.256	the right side is '{0}'	右辺は '{0}' です
+sema.257	write '{0}.variant' or '{1}.variant(values…)'	'{0}.枝名' か '{1}.枝名(中身…)' の形で書きます
+sema.258	a match on '{0}' cannot contain variants of another enum	'{0}' の match に、別の列挙の枝は書けません
+sema.259	variant '{0}.{1}' has {2} values ({3} written)	枝 '{0}.{1}' の中身は {2} 個です（{3} 個書かれています）
+sema.260	write 'case {0}.{1}:'	'case {0}.{1}:' と書きます
+sema.261	write {2} names in 'case {0}.{1}(…)'	'case {0}.{1}(…)' に {2} 個の名前を書きます
+sema.262	binding name '{0}' appears twice	束縛する名前 '{0}' が 2 回あります
+sema.263	the shape of '{0}.{1}' does not follow the for protocol	'{0}.{1}' の形が for の規約と違います
+sema.264	write it as def {0}({1}) -> int	def {0}({1}) -> int の形で書いてください
+sema.265	class '{0}' cannot be iterated with for	クラス '{0}' は for で回せません
+sema.266	type '{0}' cannot be iterated with for	'{0}' 型は for で回せません
+sema.267	'{0}' cannot be examined with match	'{0}' は match で調べられません
+sema.268	this case is unreachable	この case は届きません
+sema.269	cases after case _ are never selected	case _ より後ろの case は決して選ばれません
+sema.270	the case value has a different type (matching on '{0}', but this is '{1}')	case の値の型が違います（'{0}' を調べているのに '{1}' です）
+sema.271	this is '{0}'	ここは '{0}' です
+sema.272	match does not cover these variants: {0}	match に書いていない枝があります: {0}
+sema.273	this case is never selected	この case は選ばれません
+sema.274	all variants are covered, so case _ is unreachable	枝を全部書いてあるので case _ は届きません
+sema.275	a match on '{0}' needs case _	'{0}' の match には case _ が要ります
+sema.276	unknown pragma '{0}'	未知の pragma '{0}' です
+sema.277	the available pragmas are target and no_runtime	いま使える pragma は target と no_runtime です
+sema.278	pragma target requires a string	pragma target には文字列が必要です
+sema.279	write it as pragma target "riscv64-unknown-elf"	pragma target "riscv64-unknown-elf" の形で書きます
+sema.280	{0} takes a bool expression	{0} には bool の式を書きます
+sema.281	'{0}' cannot be used as an error type	'{0}' はエラー型として使えません
+sema.282	'{0}' cannot be raised	'{0}' は raise できません
+sema.283	'{0}' is raised but not declared	'{0}' を raise していますが、宣言がありません
+sema.284	add 'raises {0}' to the function declaration	関数の宣言に 'raises {0}' を足してください
+sema.285	add '{0}' to this function's raises	この関数の raises に '{0}' を足してください
+sema.286	'{0}' cannot be used outside a loop	'{0}' はループの外では使えません
+sema.287	there is no enclosing while for this '{0}'	この '{0}' を囲む while がありません
+sema.288	'{0}' can only be used inside while	'{0}' は while の中でだけ使えます
+sema.289	'{0}' cannot be used as a class name	クラス名 '{0}' は使えません
+sema.290	'{0}' is a built-in type name	'{0}' は組み込みの型名です
+sema.291	'{0}' is the name of a built-in function	'{0}' は組み込み関数の名前です
+sema.292	class '{0}' is already defined	クラス '{0}' は既に定義されています
+sema.293	method '{0}' is already defined	メソッド '{0}' は既に定義されています
+sema.294	'{0}' has the same name as a field	'{0}' はフィールドと同じ名前です
+sema.295	None cannot be the type of a parameter	引数の型に None は使えません
+sema.296	there are no values of type None, so it cannot be a parameter	None 型の値は存在しないので引数にできません
+sema.297	the return type of init must be None	init の戻り型は None でなければなりません
+sema.298	init cannot return a value (write -> None)	init は戻り値を持てません（-> None と書いてください）
+sema.299	init cannot have raises	init に raises は書けません
+sema.300	init cannot fail (nobody could receive a value whose construction failed)	init は失敗できません（生成に失敗した値は誰も受け取れません）
+sema.301	field '{0}' is not assigned in init	フィールド '{0}' は init で代入されていません
+sema.302	do one of the following:\n             - make the type '{0} | None'\n             - assign self.{1} = ... in init	次のどちらかにしてください:\n             ・型を '{0} | None' にする\n             ・init の中で self.{1} = ... と代入する
+sema.303	'{0}' is already defined	'{0}' は既に定義されています
+sema.304	duplicate method '{0}'	メソッド '{0}' が重複しています
+sema.305	the same method name cannot be written twice	同じ名前のメソッドを 2 度書くことはできません
+sema.306	module '{0}' has no interface '{1}'	モジュール '{0}' にインタフェース '{1}' はありません
+sema.307	check the interface name	インタフェース名を確認してください
+sema.308	interface '{0}' not found	インタフェース '{0}' が見つかりません
+sema.309	'{0}' is a class; there is no inheritance	'{0}' はクラスです。継承はありません
+sema.310	class '{0}' has no '{1}'	クラス '{0}' に '{1}' がありません
+sema.311	declared to implement '{0}'	'{0}' を実装すると宣言しています
+sema.312	the number of parameters of '{0}.{1}' differs from the declaration	'{0}.{1}' の引数の数が宣言と違います
+sema.313	{0} here	{0} 個です
+sema.314	{0} in the declaration	宣言では {0} 個です
+sema.315	the name of parameter {2} of '{0}.{1}' differs from the declaration	'{0}.{1}' の {2} 番目の引数の名前が宣言と違います
+sema.316	'{0}' in the implementation	実装では '{0}' です
+sema.317	'{0}' in the declaration	宣言では '{0}' です
+sema.318	the type of parameter {2} of '{0}.{1}' differs from the declaration	'{0}.{1}' の {2} 番目の引数の型が宣言と違います
+sema.319	type '{0}' in the declaration	宣言では '{0}' 型です
+sema.320	the return type of '{0}.{1}' differs from the declaration	'{0}.{1}' の戻り型が宣言と違います
+sema.321	returns '{0}'	'{0}' を返します
+sema.322	the raises of '{0}.{1}' differ from the declaration	'{0}.{1}' の raises が宣言と違います
+sema.323	the implementation declares {0} errors	実装は {0} 個のエラーを宣言しています
+sema.324	'{0}.{1}' does not declare '{2}'	'{0}.{1}' が '{2}' を宣言していません
+sema.325	the declaration raises '{0}'	宣言では '{0}' を投げます
+sema.326	'{0}' is already listed	'{0}' は既に書かれています
+sema.327	the same interface cannot be listed twice	同じインタフェースを 2 度書けません
+sema.328	field '{0}' is already declared	フィールド '{0}' は既に宣言されています
+sema.329	None cannot be the type of a field	フィールドの型に None は使えません
+sema.330	there are no values of type None, so it cannot be a field	None 型の値は存在しないのでフィールドにできません
+sema.331	bool cannot be used as an extern {0}	extern の{0}に bool は使えません
+sema.332	'{0}' cannot be used as the {1} of an exported function	'{0}' は外へ出す関数の{1}に使えません
+sema.333	parameter '{0}' of an exported function cannot be mut	外へ出す関数の引数 '{0}' は mut にできません
+sema.334	'{0}' is used as a class name	'{0}' はクラス名として使われています
+sema.335	'{0}' cannot be redefined	'{0}' は再定義できません
+sema.336	{0} is a built-in function; use another name	{0} は組み込み関数です。別の名前を使ってください
+sema.337	function '{0}' is already defined	関数 '{0}' は既に定義されています
+sema.338	extern cannot have raises	extern に raises は書けません
+sema.339	extern functions follow C's conventions, so they cannot have raises	extern の関数は C 側の約束に従うので raises は書けません
+sema.340	this lambda takes {0} arguments, but '{1}' is expected	この lambda は {0} 個の引数を取りますが、'{1}' が要ります
+sema.341	it has {0} parameters	引数が {0} 個です
+sema.342	a lambda with {0} parameters is expected here	ここに置けるのは {0} 引数の lambda です
+sema.343	'{0}' cannot be captured (type '{1}')	'{0}' は捕まえられません（'{1}' 型）
+sema.344	too many lambda parameters	lambda の引数が多すぎます
+sema.345	function '{0}'	関数 '{0}'
+sema.346	too many parameters	引数が多すぎます
+sema.347	cannot determine type argument '{0}'	型引数 '{0}' を決められません
+sema.348	{0} must be written at the top of the function body	{0} は関数の本体の先頭に書きます
+sema.349	function '{0}' has a path that ends without returning a value	関数 '{0}' は値を返さずに終わる経路があります
+sema.350	the return type is '{0}'	戻り型は '{0}' です
+sema.351	exported name '{0}' collides	外へ出す名前 '{0}' が重なっています
+sema.352	there are two exported functions named '{0}'	外へ出す関数 '{0}' が 2 つあります
+sema.353	main cannot take parameters	main は引数を取れません
+sema.354	define main without parameters (def main() -> int:)	main は引数なしで定義してください（def main() -> int:）
+sema.355	the return type of main must be int	main の戻り型は int でなければなりません
+sema.356	main's return value becomes the process exit code	main の戻り値がプロセスの終了コードになります
+sema.357	parameter '{0}' without a default comes after a parameter with a default	既定値のある引数より後ろに、既定値の無い引数 '{0}' があります
+sema.358	'{0}' has a default value	'{0}' に既定値が付いています
+sema.359	the default value of parameter '{0}' has the wrong type ('{2}' does not fit in '{1}')	引数 '{0}' の既定値の型が違います（'{1}' に '{2}' は入りません）
+sema.360	this name cannot be used	この名前は使えません
+sema.361	type '{0}' is already defined	型 '{0}' はすでに定義されています
+sema.362	an enum cannot have the same name as a class	クラスと同じ名前の列挙は作れません
+sema.363	'{0}' is used as a range type	'{0}' は範囲型として使われています
+sema.364	an enum cannot have the same name as a range type	範囲型と同じ名前の列挙は作れません
+sema.365	a range type cannot have the same name as a class	クラスと同じ名前の範囲型は作れません
+sema.366	variable	変数
+sema.367	this value does not fit in this type	この値はこの型に入りません
+sema.368	this type cannot be None	この型は None になれません
+sema.369	None is represented as a null pointer, so it cannot be added to int or bool (only str / list[T] / class can be nullable)	None はヌルポインタとして表すので、int や bool には付けられません（nullable にできるのは str / list[T] / class です）
+sema.370	wrong number of type arguments	型引数の個数が違います
+sema.371	this class is defined here	このクラスの定義です
+sema.372	this qualifier cannot be resolved	この修飾を解決できません
+sema.373	this class is not defined	このクラスは定義されていません
+sema.374	only classes can be used from other modules (int, list, etc. are written without a module qualifier)	他のモジュールから使えるのはクラスだけです（int や list はモジュール修飾なしで書きます）
+sema.375	this type does not exist	この型は存在しません
+sema.376	there are no implicit type conversions (language spec 3.5)	本言語には暗黙の型変換がありません（言語仕様 3.5）
+sema.377	use == to check whether values are equal	値が等しいかを調べるには == を使ってください
+sema.378	this expression always has a value	この式は必ず値を持ちます
+sema.379	only str / list[T] / class can be None	None になれるのは str / list[T] / class だけです
+sema.380	int is not treated as a truth value (language spec 4.4). Write a comparison (e.g. x != 0)	本言語は int を真偽値として扱いません（言語仕様 4.4）。比較を書いてください（例: x != 0）
+sema.381	the two sides of this operator have different types	この演算子の両辺の型が違います
+sema.382	division by zero	0 で除算しています
+sema.383	dividing by this 0	この 0 で割ろうとしています
+sema.384	a str or list[T] is required here	ここには str か list[T] が必要です
+sema.385	the left side of 'in' does not match the element type	'in' の左辺が要素の型と合いません
+sema.386	a list[T] or str is required here	ここには list[T] か str が必要です
+sema.387	use d.has(k) to check for a dict key	dict の鍵を調べるには d.has(k) を使ってください
+sema.388	the condition of a ternary operator must be bool	三項演算子の条件には bool が必要です
+sema.389	this is the condition of the 'if'	この 'if' の条件です
+sema.390	the two sides of the ternary operator have different types	三項演算子の両側で型が違います
+sema.391	an expression must have exactly one type (make one side match the other)	式の型は 1 つに決まらなければなりません（どちらかを合わせてください）
+sema.392	'result' cannot be used in a function that returns no value	戻り値の無い関数では 'result' を書けません
+sema.393	this function returns no value	この関数は値を返しません
+sema.394	make it an ensures that does not look at the return value (e.g. a condition on globals), or give the function a return type	戻り値を見ない ensures（グローバルの条件など）にするか、戻り型を付けてください
+sema.395	cannot be used as a value here	ここでは値として使えません
+sema.396	to be used as a value, its type must be uniquely determined (in a call it is determined from the arguments)	値にするには型が 1 つに決まっている必要があります（呼び出しなら実引数から決まります）
+sema.397	function types cannot carry errors (wrap it in a function that does not raise)	関数型はエラーの受け渡しを表せません（raises しない関数で包んでください）
+sema.398	a module name cannot be written here	ここにはモジュール名を書けません
+sema.399	this module is not visible from here	このモジュールはここからは見えません
+sema.400	this name is from outside the lambda	この名前は lambda の外のものです
+sema.401	captures (closures) are not available yet. Take the value as a parameter, or write a def function (globals can be used)	捕獲（クロージャ）はまだありません。使う値は引数で受け取るか、def で書いた関数にしてください（グローバルなら使えます）
+sema.402	this name is not declared	この名前は宣言されていません
+sema.403	redeclared here	ここで再宣言されています
+sema.404	first declared here	最初の宣言はここです
+sema.405	to assign to the existing variable, remove the type annotation (e.g. x = 1)	既存の変数に代入するなら型注釈を外してください（例: x = 1）
+sema.406	shadowing is not allowed (language spec 5.1)	シャドーイングは禁止されています（言語仕様 5.1）
+sema.407	the outer declaration is here	外側の宣言はここです
+sema.408	use another name, or remove the type annotation to assign to the existing variable (e.g. x = 1)	別の名前にするか、型注釈を外して既存の変数に代入してください（例: x = 1）
+sema.409	mismatched types	型が一致しません
+sema.410	stored	しまうことが
+sema.411	only list[int] / list[float] / list[str] / list[bool] can be printed directly; iterate over the others with for	そのまま出せるのは list[int] / list[float] / list[str] / list[bool] だけです。ほかは for でまわしてください
+sema.412	move_out can only take from a "place"	move_out は「場所」からしか取り出せません
+sema.413	this is not a place that can be written back	ここは書き戻せる場所ではありません
+sema.414	use it as move_out(self.xs) / move_out(obj.f) / move_out(xs[i]) (a local variable moves with its ownership if you simply return it)	move_out(self.xs) / move_out(obj.f) / move_out(xs[i]) の形で使ってください（局所変数は、そのまま返せば所有権ごと動きます）
+sema.415	move_out accepts str and list[T] (an "empty value" is needed to write back after taking it)	move_out が受け取れるのは str と list[T] です（取り出したあとに書き戻す「空の値」が要るためです）
+sema.416	cannot determine the element type of the empty list	空のリストの要素型が決まりません
+sema.417	cannot tell what kind of list this [] is	この [] がどんなリストなのか分かりません
+sema.418	write a type annotation (e.g. xs: list[int] = []). To pass it directly as an argument, put it in a variable first	型注釈を書いてください（例: xs: list[int] = []）。関数の引数に直接渡す場合は、いったん変数に入れてください
+sema.419	all list elements must have the same type	リストの要素はすべて同じ型でなければなりません
+sema.420	for a list, write it as a number to compare, like old(len(xs))	list なら old(len(xs)) のように、比べたい数にして書いてください
+sema.421	only list[T] and range(...) can be used	対象にできるのは list[T] と range(...) です
+sema.422	the element of the comprehension has no value	内包表記の要素が値を持ちません
+sema.423	this expression has type None	この式は None 型です
+sema.424	write an expression that returns a value	値を返す式を書いてください
+sema.425	a tuple index must be an integer literal	タプルの添字は整数リテラルでなければなりません
+sema.426	this must be a constant	ここは定数である必要があります
+sema.427	each element has its own type, so the type of the expression cannot be determined if the index is decided at run time (destructuring a, b = t also works)	要素ごとに型が違うので、添字が実行時に決まると式の型が決められません（分解代入 a, b = t も使えます）
+sema.428	the second index is here	2 つめの添字はここです
+sema.429	two-dimensional indexing (m[i, j]) is only available for classes that define __getitem__	2 次元の添字（m[i, j]）が使えるのは __getitem__ を定義したクラスだけです
+sema.430	the index must be int	添字は int でなければなりません
+sema.431	only list[T] and str can be indexed	添字が使えるのは list[T] と str です
+sema.432	this name is not defined	この名前は定義されていません
+sema.433	a module exposes the top-level functions, classes and global variables of its file	モジュールから使えるのは、そのファイルのトップレベルの関数・クラス・グローバル変数です
+sema.434	this value may be None	None かもしれない値です
+sema.435	put it in a local variable first, then narrow it:\n             x: T | None = ...\n             if x is not None:\n                 ...	一度ローカル変数に入れてから絞り込んでください:\n             x: T | None = ...\n             if x is not None:\n                 ...
+sema.436	this variant has no values	この枝は中身を持ちません
+sema.437	wrong number of values	中身の数が違います
+sema.438	the variant is defined here	枝の定義はここです
+sema.439	this variant is not defined	この枝は定義されていません
+sema.440	the enum is defined here	列挙の定義はここです
+sema.441	fields	フィールド
+sema.442	only class instances have fields that can be read with '.'	'.' でフィールドを読めるのは class のインスタンスだけです
+sema.443	this field is not declared	このフィールドは宣言されていません
+sema.444	the class is defined here	クラスの定義はここです
+sema.445	declare it at the top of the class body as "name: type"	クラス本体の先頭に「名前: 型」の形で宣言してください
+sema.446	this method is not defined	このメソッドは定義されていません
+sema.447	drop cannot be called directly (it is called automatically when the value is freed)	drop は自分で呼べません（解放のときに自動で呼ばれます）
+sema.448	calling it here means it would be called again when the value is freed	ここで呼ぶと、解放のときにもう一度呼ばれます
+sema.449	to clean up early, put that in a method with another name (such as close) (spec §6.2)	早く後始末をしたいときは、別の名前のメソッド（close など）に分けてください（仕様 §6.2）
+sema.450	wrong number of arguments in the call	呼び出しの引数の個数が違います
+sema.451	the method is defined here	このメソッドはここで定義されています
+sema.452	self is passed automatically; you do not need to write it	self は自動的に渡されるので、書く必要はありません
+sema.453	this function is not defined	この関数は定義されていません
+sema.454	check that the module has a top-level def with this name	そのモジュールのトップレベルに def があるか確認してください
+sema.455	function	関数
+sema.456	a fallible call	失敗しうる呼び出し
+sema.457	trying to leave scope: here	ここで scope: の外へ出ようとしています
+sema.458	at the exit of scope:, all started threads are joined. Leaving early would skip that, so store the result in a variable and then leave the block	scope: の出口では、始めたスレッドを全部 join します。途中で抜けるとそれが飛ぶので、結果を変数に受けてからブロックを出てください
+sema.459	this type cannot be copied	ここは複製できる型ではありません
+sema.460	rc[T] is for "holding one value from two places" (it is not a copy). To copy the content, pass the content, as in copy(r.get())	rc[T] は「1 つの値を 2 か所から持つ」ための型です（複製ではありません）。中身を複製するなら copy(r.get()) のように中身を渡してください
+sema.461	value types / str / list / classes with __copy__ / enums, and their T | None, can be copied	複製できるのは 値型 / str / list / __copy__ を持つクラス / 列挙 と、それらの T | None です
+sema.462	'(' cannot be written here	ここに '(' は書けません
+sema.463	methods	メソッド
+sema.464	calls through an interface cannot pass keyword arguments	インタフェース越しの呼び出しでは、名前で引数を渡せません
+sema.465	which implementation is called is decided at run time. Names and defaults can only be used when the class type is known	どの実装が呼ばれるかは実行時に決まります。名前と既定値が使えるのは、クラスの型が分かっているときだけです
+sema.466	only functions, methods and constructors defined in this language accept keyword arguments	名前で渡せるのは、この言語で定義した関数・メソッド・生成だけです
+sema.467	this method is not declared	このメソッドは宣言されていません
+sema.468	the interface is defined here	インタフェースの定義はここです
+sema.469	only what is declared in the interface can be called through it	インタフェース越しに呼べるのは、そこに宣言したものだけです
+sema.470	xs.insert(position, value)	xs.insert(位置, 値)
+sema.471	xs.remove(position)	xs.remove(位置)
+sema.472	xs.index(value)	xs.index(値)
+sema.473	xs.extend(other_list)	xs.extend(別のリスト)
+sema.474	use it as xs.append(value)	xs.append(値) の形で使ってください
+sema.475	this method does not exist	このメソッドは存在しません
+sema.476	list[T] supports append / pop / insert / remove / index / reverse / clear / copy / extend (classes can define their own methods)	list[T] で使えるのは append / pop / insert / remove / index / reverse / clear / copy / extend です（class のメソッドは自分で定義できます）
+sema.477	cannot determine the type arguments	型引数が決まりません
+sema.478	this class takes type arguments	このクラスは型引数を取ります
+sema.479	define an init method to take arguments:\n             def init(self, ...) -> None:	引数を受け取るには init メソッドを定義してください:\n             def init(self, ...) -> None:
+sema.480	init is defined here	init はここで定義されています
+sema.481	touching a raw pointer	生ポインタを触っています
+sema.482	wrap it in an unsafe: block:\n             unsafe:\n                 poke8(p, 0, 65)	unsafe: ブロックで囲んでください:\n             unsafe:\n                 poke8(p, 0, 65)
+sema.483	passed to another thread	別のスレッドへ渡すことが
+sema.484	alignment is applied after converting to a string	桁揃えは文字列にしてから行います
+sema.485	formats like '.2f' can only be used with float (for an int, use float(x))	'.2f' のような書式は float にだけ使えます（int なら float(x) にしてください）
+sema.486	check the spelling of the function name (definition order does not matter; functions defined later can be called)	関数名の綴りを確認してください（定義の順序は問いません。後ろで定義した関数も呼べます）
+sema.487	positional arguments must come before keyword arguments	位置で渡す引数は、名前で渡す引数より前に書きます
+sema.488	this comes after a keyword argument	ここは名前つきの引数より後ろです
+sema.489	keyword arguments start here	名前で渡し始めたのはここです
+sema.490	give it a name, or move this argument forward	名前を付けるか、この引数を前へ動かしてください
+sema.491	nothing matches this argument	この引数に当たるものがありません
+sema.492	the function is defined here	この関数はここで定義されています
+sema.493	no parameter with this name is defined	この名前の引数は定義されていません
+sema.494	second time	2 回目です
+sema.495	first time here	1 回目はここです
+sema.496	given again by name after being given by position	位置で渡したものに、名前でもう一度渡しています
+sema.497	the same name is written twice	同じ名前を 2 回書いています
+sema.498	this parameter has no default value, so it must always be given	この引数には既定値がないので、呼ぶときに必ず書きます
+sema.499	this lambda captures outer variables	この lambda は外の変数を捕まえています
+sema.500	captured values live on the frame of the function that created the lambda, so they become unreadable once it is stored. Pass a non-capturing lambda or a def function	捕まえた値は作った関数の枠の上にあるので、しまわれると読めなくなります。捕獲しない lambda か、def で書いた関数を渡してください
+sema.501	captured values live **on the frame of the function that created the lambda**, so it cannot outlive that function. Passing it as an argument (to be called) is fine	捕まえた値は**作った関数の枠の上**にあるので、その関数より長生きできません。引数として渡す（呼んでもらう）のは できます
+sema.502	this return has no value	この return には値がありません
+sema.503	the return type is declared here	戻り型はここで宣言されています
+sema.504	returned	返すことが
+sema.505	the type of return does not match the return type	return の型が戻り型と一致しません
+sema.506	the right side of the destructuring assignment is not a tuple	分解代入の右辺がタプルではありません
+sema.507	only things that return (A, B) can be destructured (write a function that returns multiple values)	分解できるのは (A, B) を返すものだけです（複数の値を返す関数を書いてください）
+sema.508	case takes a variant	case には枝を書きます
+sema.509	this is not a variant	ここは枝ではありません
+sema.510	this is a different enum	ここは違う列挙です
+sema.511	this is the enum being matched	調べている列挙はこれです
+sema.512	the number of values does not match	中身の数が合っていません
+sema.513	write names for the values of a case	case の中身には名前を書きます
+sema.514	this is not a name	ここは名前ではありません
+sema.515	write names to bind (e.g. case Shape.Circle(r):). To filter by value, use if in the body	束縛する名前を書きます（例: case Shape.Circle(r):）。値で絞りたいときは本体で if を使ってください
+sema.516	second one	2 つめです
+sema.517	first one here	最初はここです
+sema.518	this for uses that protocol	この for がその規約を使います
+sema.519	this method	このメソッドです
+sema.520	write it as def __get__(self, cur: int) -> T	def __get__(self, cur: int) -> T の形で書いてください
+sema.521	iterating with for requires three methods:\n             def __first__(self) -> int          the first cursor (-1 if none)\n             def __next__(self, cur: int) -> int the next cursor (-1 if none)\n             def __get__(self, cur: int) -> T    the element at that cursor	for で回すには 3 つのメソッドが要ります:\n             def __first__(self) -> int          最初のカーソル（無ければ -1）\n             def __next__(self, cur: int) -> int 次のカーソル（無ければ -1）\n             def __get__(self, cur: int) -> T    そのカーソルの要素
+sema.522	this cannot be iterated	ここは回せる形ではありません
+sema.523	list / str / range(...) and classes with __first__ / __next__ / __get__ can be iterated	回せるのは list / str / range(...) と、__first__ / __next__ / __get__ を持つクラスです
+sema.524	only enum / int / str can be written here	ここに書けるのは 列挙 / int / str です
+sema.525	case analysis on classes is written with interfaces (the type carries which variant it is)	クラスの場合分けはインタフェースで書きます（どの枝かを型が持ちます）
+sema.526	there are two case _	case _ が 2 つあります
+sema.527	the first case _ is here	最初の case _ はここです
+sema.528	match does no implicit conversion (like the rest of the language)	match は暗黙の変換をしません（言語全体と同じです）
+sema.529	case takes a fixed value	case には決まった値を書きます
+sema.530	this is not known at compile time	ここはコンパイル時に決まりません
+sema.531	write an enum variant (e.g. Color.Red)	列挙の枝（例: Color.Red）を書いてください
+sema.532	write a literal (compare changing values with if)	リテラルを書いてください（変えられる値は if で比べます）
+sema.533	two cases have the same value	同じ値の case が 2 つあります
+sema.534	the second one is never selected	2 つめは決して選ばれません
+sema.535	the first case is here	最初の case はここです
+sema.536	handle all variants here	ここで全部の枝を扱ってください
+sema.537	write case _: if you need behavior for when nothing matches	どれにも当たらないときの動きが要るなら case _: を書いてください
+sema.538	no behavior for when nothing matches	どれにも当たらないときの動きがありません
+sema.539	write case _: at the end (there are infinitely many values, so they cannot all be listed)	最後に case _: を書いてください（値が無限にあるので、全部を書き尽くせません）
+sema.540	write a comparison (e.g. requires b != 0)	比べる式を書いてください（例: requires b != 0）
+sema.541	only classes can be written in except	except に書けるのはクラスだけです
+sema.542	define the error as an ordinary class	エラーはふつうのクラスとして定義してください
+sema.543	this try contains no fallible call	この try の中に、失敗しうる呼び出しがありません
+sema.544	the except is never executed	except は決して実行されません
+sema.545	check that you are calling a function that declares raises	raises を宣言した関数を呼んでいるか確かめてください
+sema.546	raise takes an error object	raise にはエラーオブジェクトを渡します
+sema.547	errors are ordinary classes (e.g. raise IOError("not found"))	エラーはふつうのクラスです（例: raise IOError("見つかりません")）
+sema.548	this function is declared not to fail	この関数は失敗しないと宣言されています
+sema.549	not included in raises	raises に含まれていません
+sema.550	the function is declared here	関数の宣言はここです
+sema.551	class	クラス
+sema.552	redefined here	ここで再定義されています
+sema.553	method name collides with a field name	メソッド名がフィールド名と衝突しています
+sema.554	the field with the same name is here	同名のフィールドはここです
+sema.555	this is not allowed because t.f could not be decided as a "field" or a "method"	t.f が「フィールド」か「メソッド」か決められなくなるため禁止です
+sema.556	drop is the destructor. Its only allowed forms are 'def drop(self) -> None' and 'def drop(mut self) -> None'	drop はデストラクタです。形は 'def drop(self) -> None' か 'def drop(mut self) -> None' だけです
+sema.557	it cannot take parameters (it is called with only self when the value is freed)	引数を取れません（解放のときは self だけで呼ばれます）
+sema.558	it cannot return a value (nobody receives it when the value is freed)	値を返せません（解放のときに受け取る相手がいません）
+sema.559	it cannot fail (nobody could receive a failure in the middle of freeing)	失敗できません（解放の途中の失敗は誰も受け取れません）
+sema.560	if it does something other than freeing, give it another name (spec §6.2)	解放とは別の処理なら、別の名前にしてください（仕様 §6.2）
+sema.561	this field would start as None	このフィールドは None から始まってしまいます
+sema.562	init is here	init はここです
+sema.563	this class has no init	このクラスには init がありません
+sema.564	interface declarations cannot have default values	インタフェースの宣言に既定値は書けません
+sema.565	a default value cannot be written here	ここには既定値を書けません
+sema.566	which implementation is called is decided at run time, so nobody is responsible for filling in the default. Write defaults on the class methods (they cannot be used through the interface)	どの実装が呼ばれるかは実行時に決まるので、既定値を埋める人が決まりません。既定値はクラス側のメソッドに書いてください（インタフェース越しには使えません）
+sema.567	drop cannot be declared in an interface (drop is the name of the destructor)	インタフェースに drop は宣言できません（drop はデストラクタの名前です）
+sema.568	if it could be called through the interface, it would be called again when the value is freed	インタフェース越しに呼べると、解放のときにもう一度呼ばれます
+sema.569	only interface names can be written here	ここに書けるのはインタフェース名だけです
+sema.570	declare it with interface before using it	interface で宣言してから使ってください
+sema.571	this method is required	このメソッドが必要です
+sema.572	parameter names are a promise visible to callers (used when passing by name). Match the declaration	引数の名前は呼び出し側から見える約束です（名前で渡すときに使います）。宣言に合わせてください
+sema.573	callers through the interface only see the declaration. Write the same raises	インタフェース越しに呼ぶ側は宣言しか見ません。同じ raises を書いてください
+sema.574	this error is not in raises	このエラーが raises にありません
+sema.575	this type cannot cross the boundary with C	この型は C との境界を越えられません
+sema.576	take it as an int and write 'n == 1' on this language's side	int で受け取り、本言語側で 'n == 1' と書いてください
+sema.577	this type cannot cross the boundary	この型は境界を越えられません
+sema.578	int / float / bool / str and lists of them can be used (keep classes and the like inside this function instead of exporting them)	使えるのは int / float / bool / str と、その list です（クラスなどは外へ出さず、この関数の中で使ってください）
+sema.579	return value	戻り値
+sema.580	parameter	引数
+sema.581	values from outside are copies, so modifying them does not affect the caller	外から来た値は写しなので、書き換えても呼んだ側には戻りません
+sema.582	return the modified result as the return value	書き換えた結果は戻り値で返してください
+sema.583	only classes can be written in raises	raises に書けるのはクラスだけです
+sema.584	define the error as an ordinary class (e.g. class IOError:\n                 message: str)	エラーはふつうのクラスとして定義してください（例: class IOError:\n                 message: str）
+sema.585	a function with this name cannot be defined	この名前の関数は定義できません
+sema.586	class names are used for "constructing an instance" calls (e.g. Token(1, "x"))	クラス名は「インスタンス生成」の呼び出しに使われます（例: Token(1, "x")）
+sema.587	functions with type parameters cannot be exported	型引数を持つ関数は外へ出せません
+sema.588	from the outside, the types cannot be determined	外から見ると、型が決まりません
+sema.589	write an extern def with fixed types and call this function from inside it	型を決めた関数を extern def で書き、その中からこの関数を呼んでください
+sema.590	cannot determine what kind of function this lambda is	この lambda がどんな関数になるのか決められません
+sema.591	the parameter and return types cannot be determined here	ここでは引数と戻り値の型が決まりません
+sema.592	put it in a variable with a type annotation, or pass it to a parameter of function type:\n             p: fn(int) -> bool = lambda x: x > 0\n             count_if(xs, lambda x: x > 0)	型注釈のある変数に入れるか、関数型の引数に渡してください:\n             p: fn(int) -> bool = lambda x: x > 0\n             count_if(xs, lambda x: x > 0)
+sema.593	this lambda uses an outer variable	この lambda が外の変数を使っています
+sema.594	only value types can be captured (int / float / bool / enum / range types). Take anything else as a parameter, or write a def function	捕まえられるのは値型だけです（int / float / bool / 列挙 / 範囲型）。それ以外は引数で受け取るか、def で書いた関数にしてください
+sema.595	cannot be determined from the arguments	実引数から決まりません
+sema.596	the function is defined here	この関数の定義です
+sema.597	type arguments are determined **from the parameter types** (a type parameter that appears only in the return type is not allowed)	型引数は **引数の型から**決まります（戻り型にしか現れない型引数は書けません）
+sema.598	global variable	グローバル変数
+sema.599	the initializer of a global variable must be a constant	グローバル変数の初期化式は定数でなければなりません
+sema.600	only integer, floating-point, True / False and string literals can be written here	ここには整数・浮動小数点数・True / False・文字列リテラルだけが書けます
+sema.601	if it needs computing, make it a local variable in main	計算が必要なら main の中でローカル変数にしてください
+sema.602	put requires / ensures right after def (they are checked at entry and exit)	requires / ensures は def の直後に並べてください（入口と出口で確かめるものだからです）
+sema.603	return on every path (an if without else falls through when the condition is false)	すべての経路で return してください（if に else が無いと、条件が偽のとき素通りします）
+sema.604	this one and	こちらと
+sema.605	this one get the same name	こちらが同じ名前になります
+sema.606	rename one of them (Python calls them by function name, C by "module_function")	どちらかの名前を変えてください（Python からは関数名で、C からは「モジュール名_関数名」で呼びます）
+sema.607	no main function	main 関数がありません
+sema.608	this file has no entry point	このファイルには入口がありません
+sema.609	define the program's entry point:\n             def main() -> int:\n                 return 0	プログラムの入口として次を定義してください:\n             def main() -> int:\n                 return 0
+sema.610	main cannot declare raises	main は raises を宣言できません
+sema.611	nobody can receive this failure	この失敗を受け取る相手がいません
+sema.612	catch it with try in main, or end with panic	main の中で try で捕まえるか、panic で終わらせてください
+sema.613	this parameter also needs a default value	この引数にも既定値が要ります
+sema.614	put parameters with default values at the end (otherwise arguments cannot be matched from the front)	既定値のある引数は後ろにまとめてください（そうしないと、前から順に当てられません）
+sema.615	there are two enums with the same name	同じ名前の列挙が 2 つあります
+sema.616	there are two range types with the same name	同じ名前の範囲型が 2 つあります
+
+# ── 所有権・借用の検査 ──
+own.001	use of possibly moved value '{0}'	移動済みかもしれない値 '{0}' を使っています
+own.002	use of moved value '{0}'	移動済みの値 '{0}' を使っています
+own.003	'{0}' was moved here in a previous iteration	'{0}' は前の繰り返しで、ここで移動しています
+own.004	on some branches, '{0}' is moved here	分岐によっては、'{0}' はここで移動しています
+own.005	'{0}' was moved here	'{0}' はここで移動しました
+own.006	cannot move borrowed value '{0}'	借用した値 '{0}' は移動できません
+own.007	cannot store borrowed value '{0}' in a field	借用した値 '{0}' をフィールドに保存できません
+own.008	cannot store borrowed value '{0}' in a list	借用した値 '{0}' をリストに保存できません
+own.009	cannot return borrowed value '{0}'	借用した値 '{0}' は返せません
+own.010	parameter '{0}' is a borrow (the default)	引数 '{0}' は借用です（既定）
+own.011	owned by '{0}' (this is only a borrow)	'{0}' が所有しています（借りているだけです）
+own.012	usable only while '{0}' is alive. To transfer ownership, pass the newly created value directly	'{0}' が生きている間しか使えません。所有権ごと渡すなら、作った値を直接渡してください
+own.013	use it directly without giving it another name (if you need ownership, write '{0}: own {1}')	別の名前を付けずに、そのまま使ってください（所有権ごと要るなら '{0}: own {1}' にします）
+own.014	declare the parameter as '{0}: own {1}' to take ownership	引数を '{0}: own {1}' にすると、所有権を受け取れます
+own.015	returning borrowed value '{0}'	借用した値 '{0}' を返しています
+own.016	owned by '{0}' and freed when this function returns	'{0}' が所有していて、この関数の出口で解放されます
+own.017	storing borrowed value '{0}' in a list	借用した値 '{0}' をリストに保存しています
+own.018	passing borrowed value '{0}' to an own parameter	借用した値 '{0}' を own 引数へ渡しています
+own.019	storing borrowed value '{0}' in a field	借用した値 '{0}' をフィールドに保存しています
+own.020	owned by '{0}' (reading it only borrows it)	'{0}' が所有しています（読んだだけでは借りものです）
+own.021	modifying read-only borrow '{0}'	読み取り専用の借用 '{0}' を書き換えています
+own.022	parameter '{0}' is a read-only borrow (the default)	引数 '{0}' は読み取り専用の借用です（既定）
+own.023	declare the method as 'def {0}(mut self, ...)'	メソッドの宣言を 'def {0}(mut self, ...)' にしてください
+own.024	declare the parameter as '{0}: mut {1}'	引数を '{0}: mut {1}' にしてください
+own.025	'{0}' is passed as two mutable borrows at the same time	'{0}' を 2 つの可変借用として同時に渡しています
+own.026	'{0}' is passed as a mutable and a shared borrow at the same time	'{0}' を可変借用と共有借用で同時に渡しています
+own.027	{0}:{1}:{2}: '{3}' is modified (parameter '{5}: mut {6}' of {4})\n	{0}:{1}:{2}: '{3}' が変更されます（{4} の引数 '{5}: mut {6}'）\n
+own.028	{0}:{1}:{2}: '{3}' is modified ({4})\n	{0}:{1}:{2}: '{3}' が変更されます（{4}）\n
+own.029	{0}:{1}:{2}: '{3}' is modified ('mut self' of {4})\n	{0}:{1}:{2}: '{3}' が変更されます（{4} の 'mut self'）\n
+own.030	'{0}' is replaced while it is being iterated by for	for で回している '{0}' を、回している途中で入れ替えています
+own.031	'{0}' is replaced here	ここで '{0}' を入れ替えています
+own.032	'{1}', borrowed by '{0}', may have been freed{2}	'{0}' が借りている '{1}' は、{2}解放されているかもしれません
+own.033	{0}inside this '{1}', it can be modified through an rc that may point to the same object	{0}この '{1}' の中で、同じ物体を指しうる rc 越しに書き換えられます
+own.034	{0}'{1}' is modified here (through an rc that may point to the same object)	{0}ここで '{1}' を書き換えています（同じ物体を指しうる rc 越し）
+own.035	an rc can be pointed to from any number of places, so a write through another name can still free the old value of '{0}'. Re-read it if you use it after the write, or keep a copy(...) if you need the value from before the write	rc は同じ物体を何か所からでも指せるので、別の名前からの書き換えでも '{0}' の古い値は解放されえます。書き換えた後で使うなら読み直し、書き換える前の値が要るなら copy(...) で手元に写してください
+own.036	on some branches, '{0}' is {1} here	分岐によっては、ここで '{0}' を{1}
+own.037	'{0}' is {1} here (the old value may be freed)	ここで '{0}' を{1}（古い値は解放されえます）
+own.038	finish using '{0}' before giving it up, or keep a copy(...) of it	'{0}' を手放す前に使い終えるか、copy(...) で手元に写してください
+own.039	re-read it if you use it after the write (e.g. {0} = {1}). If you need the value from before the write, keep a copy(...) of it	書き換えた後で使うなら、読み直してください（例: {0} = {1}）。書き換える前の値が要るなら copy(...) で手元に写してください
+own.040	{0} cannot be passed to a thread	{0} はスレッドに渡せません
+own.041	'{0}' cannot be passed to a thread because it contains {1}	'{0}' は中に {1} を持つので、スレッドに渡せません
+own.042	mutable borrow '{0}' cannot be passed to a thread	可変借用 '{0}' はスレッドに渡せません
+own.043	borrowed value '{0}' cannot be passed to a thread	借りている値 '{0}' はスレッドに渡せません
+own.044	'{0}' modifies a global variable, so it cannot be started on a thread	'{0}' はグローバル変数を書き換えるので、スレッドで始められません
+own.045	a borrow (part of '{0}') cannot outlive '{1}'	借りたもの（'{0}' の一部）は、'{1}' より長く持てません
+own.046	'{0}' goes away when this scope ends	'{0}' はこのスコープが終わると消えます
+own.047	exported function '{0}' modifies a global variable	外へ出す関数 '{0}' はグローバル変数を書き換えます
+own.048	exported function '{0}' starts a thread	外へ出す関数 '{0}' からスレッドを始めています
+own.049	warning: {0} more ownership findings (only the first {1} are shown)\n	warning: 所有権の指摘が他に {0} 件あります（表示したのは先頭 {1} 件です）\n
+own.050	used here	ここで使われています
+own.051	it is moved on every iteration, so the value is gone on the second one (create it again inside the loop, or check whether a borrow is enough)	繰り返しのたびに移動するので、2 周目には値がありません（ループの中で作り直すか、借用で足りないか確かめてください）
+own.052	assign it again after the branches so that it is valid on every path	どの経路を通っても有効になるように、分岐の後で代入し直してください
+own.053	to keep using it after the move, create a new value and assign it (e.g. xs = [...])	移動した後も使うなら、値を作り直して代入してください（例: xs = [...]）
+own.054	trying to move it here	ここで移動しようとしています
+own.055	storing it would let it outlive the owner that lent it	保存すると、貸してくれた相手より長生きしてしまいます
+own.056	returning it would let it live on after the call has ended	返すと、呼び出しが終わった後も生き続けてしまいます
+own.057	'self' is a borrow (a method only borrows its instance)	'self' は借用です（メソッドはインスタンスを借りているだけです）
+own.058	only borrows of fields of self may be returned (spec §4.5). If you need the value itself, use copy(...)	返してよいのは self のフィールドの借用だけです（仕様 §4.5）。値そのものが要るなら copy(...) を使ってください
+own.059	it becomes owned where it is returned to, but here it is only borrowed	返した先では所有になりますが、ここでは借りものです
+own.060	use move_out(...) to take it from its owner, or copy(...) to duplicate it	持ち主から取り上げるなら move_out(...)、複製するなら copy(...) を使ってください
+own.061	passing it would give it two owners	渡すと、所有者が 2 つになります
+own.062	storing it would give it two owners	保存すると、所有者が 2 つになります
+own.063	create the value in place, or duplicate it with copy(...) (to keep it shared, use rc[T])	入れる値をその場で作るか、copy(...) で複製してください（共有したままにするなら rc[T] です）
+own.064	modified by this assignment	この代入で書き換えています
+own.065	this method modifies self	このメソッドは self を書き換えます
+own.066	append modifies the list	append はリストを書き換えます
+own.067	this argument is taken as 'mut'	この引数は 'mut' で受け取られます
+own.068	'self' is borrowed read-only	'self' は読み取り専用で借りています
+own.069	this is the mutable borrow (the side that writes)	こちらは可変借用（書き換える側）です
+own.070	this is also a mutable borrow	こちらも可変借用です
+own.071	this is a shared borrow	こちらは共有借用です
+own.072	a value can be lent either as "any number of shared borrows" or as "exactly one mutable borrow" at a time (spec §4.3)	同じ値を同時に貸せるのは「共有借用を何個でも」か「可変借用を 1 つだけ」のどちらかです（仕様 §4.3）
+own.073	a temporary value	一時的な値
+own.074	this call	この呼び出し
+own.075	the next iteration reads the (already freed) list from before the replacement	次の周で、入れ替える前の（解放済みの）リストを読みます
+own.076	to iterate over the replaced list, leave the loop and iterate again (to build while iterating, append to a separate list)	入れ替えた後のリストを回したいなら、ループを抜けてから回し直してください（回しながら作るなら、別のリストに append します）
+own.077	given up	手放しました
+own.078	modified	書き換えました
+own.079	the reference count updates race (the value is freed too early)	参照数の増減が競合します（早すぎる解放になります）
+own.080	put it in a mutex[…], or pass ownership with own	mutex[…] に入れるか、own で所有ごと渡してください
+own.081	remove the rc[…] from the value you pass (copy what the thread needs into it)	渡す値から rc[…] を外してください（必要なぶんを写して持たせる形にします）
+own.082	two threads may modify it at the same time, so it cannot be statically shown that they do not overlap	2 本のスレッドが同時に書き換えうるので、重なっていないことを静的に言えません
+own.083	pass ownership with own (and receive the result with join), or put it in a mutex[…]	own で所有ごと渡す（結果は join で受け取る）か、mutex[…] に入れてください
+own.084	the thread may outlive this call	スレッドは、この呼び出しより長生きしえます
+own.085	wrap it in a scope: block (which always joins at its exit), pass ownership (take the parameter as 'own'), or put it in a mutex[…]	scope: ブロックで囲む（出口で必ず join されます）か、所有ごと渡す（引数を 'own' で受ける）か、mutex[…] に入れてください
+own.086	this function is being started on a thread	この関数をスレッドで始めようとしています
+own.087	writing to a global here	ここでグローバルに書いています
+own.088	put the value to be modified in a mutex[…] and pass it as an argument	書き換える値を mutex[…] に入れて、引数で渡してください
+own.089	this one lives longer	こちらのほうが長生きします
+own.090	use values created on the inside up on the inside (to hand one out, transfer its ownership)	内側で作った値は、内側で使い切ってください（外へ渡すなら所有権ごと渡します）
+own.091	ownership analysis of while does not converge (the lattice is broken)	while の所有権解析が収束しません（格子が壊れています）
+own.092	this function can be called from outside, from any thread	外から、どのスレッドからでも呼ばれる関数です
+own.093	pass state through parameters and return values (concurrent calls would race, and a panic would leave it half-written)	状態は引数と戻り値で受け渡してください（同時に呼ばれると競合し、panic したときに書きかけで残ります）
+own.094	spawn (or scope:) is used here	ここで spawn（または scope:）を使っています
+own.095	threads cannot currently be used from exported functions (a panic could not safely stop the running threads)	いまは外へ出す関数からスレッドを使えません（panic したときに、動いているスレッドを安全に止められないためです）
+own.096	 on some branches	分岐によっては
+own.097	on some branches, 	分岐によっては、
+own.098	method_name	メソッド名
+own.099	this value	この値
+
+# ── 字句解析（stage1 だけ） ──
+slexer.001	unrecognized character (0x{0})	解釈できない文字です (0x{0})
+
+# ── 構文解析（stage1 だけ） ──
+sparser.001	parser: missing node	parser: ノードがありません
+
+# ── モジュール（stage1 だけ） ──
+smodule.001	found in:\n             {0}\n             {1}	見つかった場所:\n             {0}\n             {1}
+smodule.002	circular import	循環 import です
+
+# ── 型検査（stage1 だけ） ──
+ssema.001	the allowed names are {0}	書ける名前は {0} です
+ssema.002	sema: prims is not initialized	sema: prims が初期化されていません
+ssema.003	sema: unknown primitive type	sema: 未知のプリミティブ型
+ssema.004	sema: no current module	sema: 現在のモジュールがありません
+ssema.005	sema: missing module	sema: モジュールがありません
+ssema.006	sema: missing scope	sema: スコープがありません
+ssema.007	'result' cannot be used outside a function	関数の外では 'result' を書けません
+ssema.008	result cannot be used here	ここでは result を使えません
+ssema.009	sema.check_expr: node is not an expression	sema.check_expr: 式ではないノードです
+ssema.010	sema: assignment target is not a variable	sema: 代入先が変数ではありません
+ssema.011	write it as def {0}(self) -> int	def {0}(self) -> int の形で書いてください
+ssema.012	write it as def {0}(self, cur: int) -> int	def {0}(self, cur: int) -> int の形で書いてください
+ssema.013	sema: missing class of the variant	sema: 枝のクラスがありません
+ssema.014	the allowed variants are {0}	書ける枝は {0} です
+ssema.015	sema: instantiated lambda not found	sema: 実体化した lambda が見つかりません
+ssema.016	sema: instantiated function not found	sema: 実体化した関数が見つかりません
+ssema.017	sema: symbol table of module '{0}' is missing	sema: モジュール '{0}' のシンボル表がありません
+ssema.018	sema: missing interface	sema: インタフェースがありません
+ssema.019	sema: missing class	sema: クラスがありません
+ssema.020	sema: missing node	sema: ノードがありません
+ssema.021	sema: missing type	sema: 型がありません
+ssema.022	sema: missing module table	sema: モジュールの表がありません
+ssema.023	sema: missing enum definition	sema: 列挙の定義がありません
+ssema.024	sema: missing field	sema: フィールドがありません
+ssema.025	sema: missing enum variant	sema: 列挙の枝がありません
+ssema.026	sema: missing function signature	sema: 関数のシグネチャがありません
+ssema.027	sema: missing token	sema: トークンがありません
+
+# ── 所有権の検査（stage1 だけ） ──
+sownck.001	ownck: missing enum definition	ownck: 列挙の定義がありません
+sownck.005	ownck: missing place (the caller's precondition is wrong)	ownck: 場所がありません（呼び出し側の条件が誤っています）
+sownck.006	ownck: missing record	ownck: 記録がありません
+sownck.007	ownck: missing lender declaration (the caller's precondition is wrong)	ownck: 貸し手の宣言がありません（呼び出し側の条件が誤っています）
+sownck.008	ownck: ownership analysis of while does not converge (the lattice is broken)	ownck: while の所有権解析が収束しません（格子が壊れています）
+sownck.010	ownck: tried to report a node without location information	ownck: 位置情報の無いノードを報告しようとしました
+
+# ── コマンドライン（stage1 だけ） ──
+smain.001	{0} compiler (stage1)	{0} コンパイラ (stage1)
+smain.002	usage: {0} [options] <input{1}>	使い方: {0} [オプション] <入力{1}>
+smain.003	options:	オプション:
+smain.004	  -o <file>       output executable name (default: a.out)	  -o <file>       出力する実行ファイル名（既定: a.out）
+smain.005	  -S              write LLVM IR to stdout and exit	  -S              LLVM IR を標準出力に書いて終了
+smain.006	  --dump-tokens   print the token stream and exit (for debugging the lexer)	  --dump-tokens   トークン列を表示して終了（字句解析のデバッグ用）
+smain.007	  --dump-ast      print the AST as S-expressions and exit (for debugging the parser)	  --dump-ast      AST を S 式で表示して終了（構文解析のデバッグ用）
+smain.008	  --keep-ll       keep the .ll files after building the executable	  --keep-ll       実行ファイル生成後も .ll を残す
+smain.009	  --check         stop after type checking (prints nothing if there are no errors)	  --check         型検査までで止める（エラーが無ければ何も出さない）
+smain.010	  --warn-own      downgrade ownership findings to warnings (errors by default)	  --warn-own      所有権の指摘を警告に落とす（既定はエラー）
+smain.011	                  turn each check back into an error (the default; write after --warn-own)	                  検査ごとにエラーへ戻す（既定。--warn-own の後に書く）
+smain.012	  --drop          insert frees (drop) at scope exits (the default)	  --drop          スコープの出口に解放（drop）を挿入する（既定）
+smain.013	  --no-drop       do not insert frees (cancels --drop; the last one wins)	  --no-drop       解放を挿入しない（--drop を打ち消す。後勝ち）
+smain.014	  -g              emit debug info (lets debuggers and perf show lines)	  -g              デバッグ情報を出す（デバッガ・perf が行を出せます）
+smain.015	  --no-prove      do not remove runtime checks by proof (A-34)	  --no-prove      証明で実行時検査を消さない（A-34）
+smain.016	  --verify-prove  keep the checks judged removable (catches analysis mistakes)	  --verify-prove  消せると判断した検査を残す（解析の誤りを捕まえる）
+smain.017	  --prove-report  print the number of removed checks	  --prove-report  消えた検査の数を出す
+smain.018	  -l<name> / -L<dir> / -framework <name>	  -l<名前> / -L<dir> / -framework <名前>
+smain.019	                  passed through to clang when linking	                  リンクのときに clang へそのまま渡す
+smain.020	                  remove numeric runtime checks (checked by default):	                  数の実行時検査を外す（既定は検査する）:
+smain.021	                  integer + - * overflow / float division by zero	                  整数の + - * の桁あふれ／float の 0 除算
+smain.022	  --shared        build a shared library (exports extern def callable from C)	  --shared        共有ライブラリを作る（extern def を C から呼べる形で出す）
+smain.023	                  without -o: lib<module>.<ext>	                  -o を省くと lib<モジュール名>.<拡張子>
+smain.024	  --python        build a Python library (-o is a directory; default: .)	  --python        Python のライブラリを作る（-o はディレクトリ。既定は .）
+smain.025	                  places _<module>.<ext> and <module>.py	                  _<モジュール名>.<拡張子> と <モジュール名>.py を置きます
+smain.026	  -I <dir>        add a directory to search for imports (may be repeated)	  -I <dir>        import を探す場所を足す（何度でも書ける）
+smain.027	                  used by the package manager {0}	                  パッケージマネージャ {0} が使います
+smain.028	  -j <N>          how many clang processes to run at once (default: number of cores)	  -j <N>          clang を同時に何本走らせるか（既定: コア数）
+smain.029	                  the resulting executable does not depend on the parallelism	                  出来上がる実行ファイルは並列度で変わりません
+smain.030	  -O0|-O1|-O2|-O3 optimization level passed to clang (default: -O0)	  -O0|-O1|-O2|-O3 clang に渡す最適化レベル（既定: -O0）
+smain.031	  -h, --help      show this usage	  -h, --help      この使い方を表示
+smain.032	  --version       show the version and target triple	  --version       版番号と target triple を表示
+smain.033	  --print-lib-dir show where the standard library is (used by {0})	  --print-lib-dir 標準ライブラリの場所を表示（{0} が使います）
+smain.034	error: --lang accepts ja / en / auto ('{0}')\n	error: --lang に書けるのは ja / en / auto です（'{0}'）\n
+smain.035	main: no entry module	main: 入口モジュールがありません
+smain.036	error: running clang failed (the generated IR has a problem)\n	error: clang の実行に失敗しました（生成した IR に問題があります）\n
+smain.037	  kept the generated IR:\n	  生成された IR を残しました:\n

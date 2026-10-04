@@ -480,27 +480,24 @@ static void report_use(Own *o, Place *p, Ent *moved, Node *at) {
 
     Diag d = {0};
     d.code = "E-MOVE-1";
-    d.message = maybe ? diag_fmt("移動済みかもしれない値 '%s' を使っています", p->disp)
-                      : diag_fmt("移動済みの値 '%s' を使っています", p->disp);
+    d.message = maybe ? MSG1("own.001", "移動済みかもしれない値 '{0}' を使っています", p->disp)
+                      : MSG1("own.002", "移動済みの値 '{0}' を使っています", p->disp);
     d.primary.tok = at->tok;
-    d.primary.label = "ここで使われています";
+    d.primary.label = MSG0("own.050", "ここで使われています");
     d.related.tok = moved->at;
     if (prev_round)
-        d.related.label = diag_fmt("'%s' は前の繰り返しで、ここで移動しています",
-                                   moved->pl->disp);
+        d.related.label = MSG1("own.003", "'{0}' は前の繰り返しで、ここで移動しています", moved->pl->disp);
     else if (maybe)
-        d.related.label = diag_fmt("分岐によっては、'%s' はここで移動しています",
-                                   moved->pl->disp);
+        d.related.label = MSG1("own.004", "分岐によっては、'{0}' はここで移動しています", moved->pl->disp);
     else
-        d.related.label = diag_fmt("'%s' はここで移動しました", moved->pl->disp);
+        d.related.label = MSG1("own.005", "'{0}' はここで移動しました", moved->pl->disp);
 
     if (prev_round)
-        d.hint = "繰り返しのたびに移動するので、2 周目には値がありません"
-                 "（ループの中で作り直すか、借用で足りないか確かめてください）";
+        d.hint = MSG0("own.051", "繰り返しのたびに移動するので、2 周目には値がありません（ループの中で作り直すか、借用で足りないか確かめてください）");
     else if (maybe)
-        d.hint = "どの経路を通っても有効になるように、分岐の後で代入し直してください";
+        d.hint = MSG0("own.052", "どの経路を通っても有効になるように、分岐の後で代入し直してください");
     else
-        d.hint = "移動した後も使うなら、値を作り直して代入してください（例: xs = [...]）";
+        d.hint = MSG0("own.053", "移動した後も使うなら、値を作り直して代入してください（例: xs = [...]）");
 
     emit_ownck(o, &d, o->opt.deny_move);
 }
@@ -522,21 +519,21 @@ static void report_borrow(Own *o, BorrowRoot *br, Place *p, Node *at, MoveCtx ct
     if (o->quiet) return;
 
     const char *code = "E-BORROW-1";
-    const char *msg = diag_fmt("借用した値 '%s' は移動できません", p->disp);
-    const char *label = "ここで移動しようとしています";
+    const char *msg = MSG1("own.006", "借用した値 '{0}' は移動できません", p->disp);
+    const char *label = MSG0("own.054", "ここで移動しようとしています");
 
     if (ctx == MV_FIELD) {
         code = "E-BORROW-3";
-        msg = diag_fmt("借用した値 '%s' をフィールドに保存できません", p->disp);
-        label = "保存すると、貸してくれた相手より長生きしてしまいます";
+        msg = MSG1("own.007", "借用した値 '{0}' をフィールドに保存できません", p->disp);
+        label = MSG0("own.055", "保存すると、貸してくれた相手より長生きしてしまいます");
     } else if (ctx == MV_APPEND) {
         code = "E-BORROW-3";
-        msg = diag_fmt("借用した値 '%s' をリストに保存できません", p->disp);
-        label = "保存すると、貸してくれた相手より長生きしてしまいます";
+        msg = MSG1("own.008", "借用した値 '{0}' をリストに保存できません", p->disp);
+        label = MSG0("own.055", "保存すると、貸してくれた相手より長生きしてしまいます");
     } else if (ctx == MV_RETURN) {
         code = "E-BORROW-4";
-        msg = diag_fmt("借用した値 '%s' は返せません", p->disp);
-        label = "返すと、呼び出しが終わった後も生き続けてしまいます";
+        msg = MSG1("own.009", "借用した値 '{0}' は返せません", p->disp);
+        label = MSG0("own.056", "返すと、呼び出しが終わった後も生き続けてしまいます");
     }
 
     Diag d = {0};
@@ -546,27 +543,18 @@ static void report_borrow(Own *o, BorrowRoot *br, Place *p, Node *at, MoveCtx ct
     d.primary.label = label;
     d.related.tok = br->origin->tok;
     d.related.label =
-        br->is_self ? "'self' は借用です（メソッドはインスタンスを借りているだけです）"
-        : br->is_param ? diag_fmt("引数 '%s' は借用です（既定）", br->origin->name)
-                       : diag_fmt("'%s' が所有しています（借りているだけです）",
-                                  br->origin->name);
+        br->is_self ? MSG0("own.057", "'self' は借用です（メソッドはインスタンスを借りているだけです）")
+        : br->is_param ? MSG1("own.010", "引数 '{0}' は借用です（既定）", br->origin->name)
+                       : MSG1("own.011", "'{0}' が所有しています（借りているだけです）", br->origin->name);
 
     if (br->is_self)
-        d.hint = "返してよいのは self のフィールドの借用だけです（仕様 §4.5）。"
-                 "値そのものが要るなら copy(...) を使ってください";
+        d.hint = MSG0("own.058", "返してよいのは self のフィールドの借用だけです（仕様 §4.5）。値そのものが要るなら copy(...) を使ってください");
     else if (!br->is_param)
-        d.hint = diag_fmt("'%s' が生きている間しか使えません。"
-                          "所有権ごと渡すなら、作った値を直接渡してください",
-                          br->origin->name);
+        d.hint = MSG1("own.012", "'{0}' が生きている間しか使えません。所有権ごと渡すなら、作った値を直接渡してください", br->origin->name);
     else if (ctx == MV_ASSIGN)
-        d.hint = diag_fmt("別の名前を付けずに、そのまま使ってください"
-                          "（所有権ごと要るなら '%s: own %s' にします）",
-                          br->origin->name,
-                          br->origin->type ? type_name(br->origin->type) : "T");
+        d.hint = MSG2("own.013", "別の名前を付けずに、そのまま使ってください（所有権ごと要るなら '{0}: own {1}' にします）", br->origin->name, br->origin->type ? type_name(br->origin->type) : "T");
     else
-        d.hint = diag_fmt("引数を '%s: own %s' にすると、所有権を受け取れます",
-                          br->origin->name,
-                          br->origin->type ? type_name(br->origin->type) : "T");
+        d.hint = MSG2("own.014", "引数を '{0}: own {1}' にすると、所有権を受け取れます", br->origin->name, br->origin->type ? type_name(br->origin->type) : "T");
 
     emit_ownck(o, &d, o->opt.deny_borrow);
 }
@@ -596,16 +584,14 @@ static void report_return_borrow(Own *o, Place *p, Node *at) {
 
     Diag d = {0};
     d.code = "E-BORROW-8";
-    d.message = diag_fmt("借用した値 '%s' を返しています", p->disp);
+    d.message = MSG1("own.015", "借用した値 '{0}' を返しています", p->disp);
     d.primary.tok = at->tok;
-    d.primary.label = "返した先では所有になりますが、ここでは借りものです";
+    d.primary.label = MSG0("own.059", "返した先では所有になりますが、ここでは借りものです");
     if (lender) {
         d.related.tok = lender->tok;
-        d.related.label = diag_fmt("'%s' が所有していて、この関数の出口で解放されます",
-                                   lender->name);
+        d.related.label = MSG1("own.016", "'{0}' が所有していて、この関数の出口で解放されます", lender->name);
     }
-    d.hint = "持ち主から取り上げるなら move_out(...)、複製するなら copy(...) を"
-             "使ってください";
+    d.hint = MSG0("own.060", "持ち主から取り上げるなら move_out(...)、複製するなら copy(...) を使ってください");
     emit_ownck(o, &d, o->opt.deny_store_borrow);
 }
 
@@ -635,21 +621,19 @@ static void report_store_borrow(Own *o, Place *p, Node *at, MoveCtx ctx) {
     Diag d = {0};
     d.code = "E-BORROW-7";
     d.message = ctx == MV_APPEND
-        ? diag_fmt("借用した値 '%s' をリストに保存しています", p->disp)
+        ? MSG1("own.017", "借用した値 '{0}' をリストに保存しています", p->disp)
         : ctx == MV_OWN_ARG
-        ? diag_fmt("借用した値 '%s' を own 引数へ渡しています", p->disp)
-        : diag_fmt("借用した値 '%s' をフィールドに保存しています", p->disp);
+        ? MSG1("own.018", "借用した値 '{0}' を own 引数へ渡しています", p->disp)
+        : MSG1("own.019", "借用した値 '{0}' をフィールドに保存しています", p->disp);
     d.primary.tok = at->tok;
     d.primary.label = ctx == MV_OWN_ARG
-        ? "渡すと、所有者が 2 つになります"
-        : "保存すると、所有者が 2 つになります";
+        ? MSG0("own.061", "渡すと、所有者が 2 つになります")
+        : MSG0("own.062", "保存すると、所有者が 2 つになります");
     if (lender) {
         d.related.tok = lender->tok;
-        d.related.label = diag_fmt("'%s' が所有しています（読んだだけでは借りものです）",
-                                   lender->name);
+        d.related.label = MSG1("own.020", "'{0}' が所有しています（読んだだけでは借りものです）", lender->name);
     }
-    d.hint = "入れる値をその場で作るか、copy(...) で複製してください"
-             "（共有したままにするなら rc[T] です）";
+    d.hint = MSG0("own.063", "入れる値をその場で作るか、copy(...) で複製してください（共有したままにするなら rc[T] です）");
     emit_ownck(o, &d, o->opt.deny_store_borrow);
 }
 
@@ -687,23 +671,21 @@ static void check_mut(Own *o, Node *at, Node *target, WriteKind kind) {
 
     Diag d = {0};
     d.code = "E-MUT-1";
-    d.message = diag_fmt("読み取り専用の借用 '%s' を書き換えています", p->disp);
+    d.message = MSG1("own.021", "読み取り専用の借用 '{0}' を書き換えています", p->disp);
     d.primary.tok = at->tok;
     switch (kind) {
-        case WR_ASSIGN: d.primary.label = "この代入で書き換えています"; break;
-        case WR_METHOD: d.primary.label = "このメソッドは self を書き換えます"; break;
-        case WR_APPEND: d.primary.label = "append はリストを書き換えます"; break;
-        case WR_ARG:    d.primary.label = "この引数は 'mut' で受け取られます"; break;
+        case WR_ASSIGN: d.primary.label = MSG0("own.064", "この代入で書き換えています"); break;
+        case WR_METHOD: d.primary.label = MSG0("own.065", "このメソッドは self を書き換えます"); break;
+        case WR_APPEND: d.primary.label = MSG0("own.066", "append はリストを書き換えます"); break;
+        case WR_ARG:    d.primary.label = MSG0("own.067", "この引数は 'mut' で受け取られます"); break;
     }
     d.related.tok = br->origin->tok;
     d.related.label = br->is_self
-        ? "'self' は読み取り専用で借りています"
-        : diag_fmt("引数 '%s' は読み取り専用の借用です（既定）", br->origin->name);
+        ? MSG0("own.068", "'self' は読み取り専用で借りています")
+        : MSG1("own.022", "引数 '{0}' は読み取り専用の借用です（既定）", br->origin->name);
     d.hint = br->is_self
-        ? diag_fmt("メソッドの宣言を 'def %s(mut self, ...)' にしてください",
-                   o->cur_fn ? o->cur_fn->name : "メソッド名")
-        : diag_fmt("引数を '%s: mut %s' にしてください", br->origin->name,
-                   br->origin->type ? type_name(br->origin->type) : "T");
+        ? MSG1("own.023", "メソッドの宣言を 'def {0}(mut self, ...)' にしてください", o->cur_fn ? o->cur_fn->name : MSG0("own.098", "メソッド名"))
+        : MSG2("own.024", "引数を '{0}: mut {1}' にしてください", br->origin->name, br->origin->type ? type_name(br->origin->type) : "T");
 
     emit_ownck(o, &d, o->opt.deny_mut);
 }
@@ -715,14 +697,13 @@ static void report_alias(Own *o, ArgRef *m, ArgRef *other, Place *p) {
     Diag d = {0};
     d.code = "E-BORROW-5";
     d.message = other->is_mut
-        ? diag_fmt("'%s' を 2 つの可変借用として同時に渡しています", p->disp)
-        : diag_fmt("'%s' を可変借用と共有借用で同時に渡しています", p->disp);
+        ? MSG1("own.025", "'{0}' を 2 つの可変借用として同時に渡しています", p->disp)
+        : MSG1("own.026", "'{0}' を可変借用と共有借用で同時に渡しています", p->disp);
     d.primary.tok = m->expr->tok;
-    d.primary.label = "こちらは可変借用（書き換える側）です";
+    d.primary.label = MSG0("own.069", "こちらは可変借用（書き換える側）です");
     d.related.tok = other->expr->tok;
-    d.related.label = other->is_mut ? "こちらも可変借用です" : "こちらは共有借用です";
-    d.hint = "同じ値を同時に貸せるのは「共有借用を何個でも」か"
-             "「可変借用を 1 つだけ」のどちらかです（仕様 §4.3）";
+    d.related.label = other->is_mut ? MSG0("own.070", "こちらも可変借用です") : MSG0("own.071", "こちらは共有借用です");
+    d.hint = MSG0("own.072", "同じ値を同時に貸せるのは「共有借用を何個でも」か「可変借用を 1 つだけ」のどちらかです（仕様 §4.3）");
 
     emit_ownck(o, &d, o->opt.deny_borrow);
 }
@@ -735,19 +716,17 @@ static void explain_one(Own *o, ArgRef *a, const char *callee) {
     if (o->quiet || !o->opt.explain_mut) return;
 
     Place *p = place_of(a->expr);
-    const char *what = p ? p->disp : "一時的な値";
+    const char *what = p ? p->disp : MSG0("own.073", "一時的な値");
     Token *t = a->expr->tok;
 
     if (a->param)
-        printf("%s:%d:%d: '%s' が変更されます（%s の引数 '%s: mut %s'）\n", t->file,
-               t->line, t->col, what, callee, a->param->name,
-               a->param->type ? type_name(a->param->type) : "T");
+        printf("%s", MSG7("own.027", "{0}:{1}:{2}: '{3}' が変更されます（{4} の引数 '{5}: mut {6}'）\n",
+                          t->file, diag_fmt("%d", t->line), diag_fmt("%d", t->col), what, callee,
+                          a->param->name, a->param->type ? type_name(a->param->type) : "T"));
     else if (a->kind == WR_APPEND)
-        printf("%s:%d:%d: '%s' が変更されます（%s）\n", t->file, t->line, t->col, what,
-               callee);
+        printf("%s", MSG5("own.028", "{0}:{1}:{2}: '{3}' が変更されます（{4}）\n", t->file, diag_fmt("%d", t->line), diag_fmt("%d", t->col), what, callee));
     else
-        printf("%s:%d:%d: '%s' が変更されます（%s の 'mut self'）\n", t->file, t->line,
-               t->col, what, callee);
+        printf("%s", MSG5("own.029", "{0}:{1}:{2}: '{3}' が変更されます（{4} の 'mut self'）\n", t->file, diag_fmt("%d", t->line), diag_fmt("%d", t->col), what, callee));
 }
 
 // 呼び出しの見た目（--explain-mut と診断に出す名前）
@@ -758,7 +737,7 @@ static const char *callee_label(Node *n) {
             return diag_fmt("%s.%s", type_name(n->lhs->type), n->name);
         return diag_fmt("list.%s", n->name);
     }
-    return n->name ? n->name : "この呼び出し";
+    return n->name ? n->name : MSG0("own.074", "この呼び出し");
 }
 
 static void check_call_borrows(Own *o, Flow *f, Node *n, ArgRef *args) {
@@ -834,14 +813,12 @@ static void report_stale(Own *o, Place *p, Ent *who, Node *at) {
     // ★ for の隠し変数（for.it.N）なら、回している最中に対象を入れ替えた形です。
     //   隠し変数の名前は利用者に見せても意味が通らないので、言い換えます。
     if (strncmp(who->pl->disp, "for.", 4) == 0) {
-        d.message = diag_fmt("for で回している '%s' を、回している途中で入れ替えています",
-                             who->by->disp);
+        d.message = MSG1("own.030", "for で回している '{0}' を、回している途中で入れ替えています", who->by->disp);
         d.primary.tok = at->tok;
-        d.primary.label = "次の周で、入れ替える前の（解放済みの）リストを読みます";
+        d.primary.label = MSG0("own.075", "次の周で、入れ替える前の（解放済みの）リストを読みます");
         d.related.tok = who->at;
-        d.related.label = diag_fmt("ここで '%s' を入れ替えています", who->by->disp);
-        d.hint = "入れ替えた後のリストを回したいなら、ループを抜けてから回し直してください"
-                 "（回しながら作るなら、別のリストに append します）";
+        d.related.label = MSG1("own.031", "ここで '{0}' を入れ替えています", who->by->disp);
+        d.hint = MSG0("own.076", "入れ替えた後のリストを回したいなら、ループを抜けてから回し直してください（回しながら作るなら、別のリストに append します）");
         emit_ownck(o, &d, o->opt.deny_borrow);
         return;
     }
@@ -849,44 +826,29 @@ static void report_stale(Own *o, Place *p, Ent *who, Node *at) {
     //   名前の経路では別物に見えるので、「なぜそれで壊れるのか」を言います。
     if (who->by_rc) {
         d.code = "E-BORROW-10";
-        d.message = diag_fmt("'%s' が借りている '%s' は、%s解放されているかもしれません",
-                             who->pl->disp, who->src->disp,
-                             maybe ? "分岐によっては" : "");
+        d.message = MSG3("own.032", "'{0}' が借りている '{1}' は、{2}解放されているかもしれません", who->pl->disp, who->src->disp, maybe ? MSG0("own.096", "分岐によっては") : "");
         d.primary.tok = at->tok;
-        d.primary.label = "ここで使われています";
+        d.primary.label = MSG0("own.050", "ここで使われています");
         d.related.tok = who->at;
         d.related.label =
             strcmp(who->by->key, "<call>") == 0
-                ? diag_fmt("%sこの '%s' の中で、同じ物体を指しうる rc 越しに"
-                           "書き換えられます",
-                           maybe ? "分岐によっては、" : "", who->by->disp)
-                : diag_fmt("%sここで '%s' を書き換えています（同じ物体を指しうる rc 越し）",
-                           maybe ? "分岐によっては、" : "", who->by->disp);
-        d.hint = diag_fmt("rc は同じ物体を何か所からでも指せるので、別の名前からの"
-                          "書き換えでも '%s' の古い値は解放されえます。"
-                          "書き換えた後で使うなら読み直し、書き換える前の値が要るなら"
-                          " copy(...) で手元に写してください",
-                          who->src->disp);
+                ? MSG2("own.033", "{0}この '{1}' の中で、同じ物体を指しうる rc 越しに書き換えられます", maybe ? MSG0("own.097", "分岐によっては、") : "", who->by->disp)
+                : MSG2("own.034", "{0}ここで '{1}' を書き換えています（同じ物体を指しうる rc 越し）", maybe ? MSG0("own.097", "分岐によっては、") : "", who->by->disp);
+        d.hint = MSG1("own.035", "rc は同じ物体を何か所からでも指せるので、別の名前からの書き換えでも '{0}' の古い値は解放されえます。書き換えた後で使うなら読み直し、書き換える前の値が要るなら copy(...) で手元に写してください", who->src->disp);
         emit_ownck(o, &d, o->opt.deny_borrow);
         return;
     }
-    const char *verb = who->by_move ? "手放しました" : "書き換えました";
-    d.message = diag_fmt("'%s' が借りている '%s' は、%s解放されているかもしれません",
-                         who->pl->disp, who->src->disp,
-                         maybe ? "分岐によっては" : "");
+    const char *verb = who->by_move ? MSG0("own.077", "手放しました") : MSG0("own.078", "書き換えました");
+    d.message = MSG3("own.032", "'{0}' が借りている '{1}' は、{2}解放されているかもしれません", who->pl->disp, who->src->disp, maybe ? MSG0("own.096", "分岐によっては") : "");
     d.primary.tok = at->tok;
-    d.primary.label = "ここで使われています";
+    d.primary.label = MSG0("own.050", "ここで使われています");
     d.related.tok = who->at;
     d.related.label = maybe
-        ? diag_fmt("分岐によっては、ここで '%s' を%s", who->by->disp, verb)
-        : diag_fmt("ここで '%s' を%s（古い値は解放されえます）", who->by->disp, verb);
+        ? MSG2("own.036", "分岐によっては、ここで '{0}' を{1}", who->by->disp, verb)
+        : MSG2("own.037", "ここで '{0}' を{1}（古い値は解放されえます）", who->by->disp, verb);
     d.hint = who->by_move
-        ? diag_fmt("'%s' を手放す前に使い終えるか、copy(...) で手元に写してください",
-                   who->by->disp)
-        : diag_fmt("書き換えた後で使うなら、読み直してください"
-                   "（例: %s = %s）。書き換える前の値が要るなら copy(...) で"
-                   "手元に写してください",
-                   who->pl->disp, who->src->disp);
+        ? MSG1("own.038", "'{0}' を手放す前に使い終えるか、copy(...) で手元に写してください", who->by->disp)
+        : MSG2("own.039", "書き換えた後で使うなら、読み直してください（例: {0} = {1}）。書き換える前の値が要るなら copy(...) で手元に写してください", who->pl->disp, who->src->disp);
     emit_ownck(o, &d, o->opt.deny_borrow);
 }
 
@@ -1333,14 +1295,12 @@ static void check_spawn(Own *o, Flow *f, Node *n) {
                 Diag d = {0};
                 d.code = "E-SEND-2";
                 d.message =
-                    direct ? diag_fmt("%s はスレッドに渡せません", rcname)
-                           : diag_fmt("'%s' は中に %s を持つので、スレッドに渡せません",
-                                      type_name(aexpr->type), rcname);
+                    direct ? MSG1("own.040", "{0} はスレッドに渡せません", rcname)
+                           : MSG2("own.041", "'{0}' は中に {1} を持つので、スレッドに渡せません", type_name(aexpr->type), rcname);
                 d.primary.tok = aexpr->tok;
-                d.primary.label = "参照数の増減が競合します（早すぎる解放になります）";
-                d.hint = direct ? "mutex[…] に入れるか、own で所有ごと渡してください"
-                                : "渡す値から rc[…] を外してください"
-                                  "（必要なぶんを写して持たせる形にします）";
+                d.primary.label = MSG0("own.079", "参照数の増減が競合します（早すぎる解放になります）");
+                d.hint = direct ? MSG0("own.080", "mutex[…] に入れるか、own で所有ごと渡してください")
+                                : MSG0("own.081", "渡す値から rc[…] を外してください（必要なぶんを写して持たせる形にします）");
                 emit_ownck(o, &d, true);
             }
         }
@@ -1360,13 +1320,10 @@ static void check_spawn(Own *o, Flow *f, Node *n) {
         if (is_mut) {
             Diag d = {0};
             d.code = "E-SEND-4";
-            d.message = diag_fmt("可変借用 '%s' はスレッドに渡せません",
-                                 p ? p->disp : "この値");
+            d.message = MSG1("own.042", "可変借用 '{0}' はスレッドに渡せません", p ? p->disp : MSG0("own.099", "この値"));
             d.primary.tok = aexpr->tok;
-            d.primary.label = "2 本のスレッドが同時に書き換えうるので、"
-                              "重なっていないことを静的に言えません";
-            d.hint = "own で所有ごと渡す（結果は join で受け取る）か、"
-                     "mutex[…] に入れてください";
+            d.primary.label = MSG0("own.082", "2 本のスレッドが同時に書き換えうるので、重なっていないことを静的に言えません");
+            d.hint = MSG0("own.083", "own で所有ごと渡す（結果は join で受け取る）か、mutex[…] に入れてください");
             emit_ownck(o, &d, true);
         }
 
@@ -1385,13 +1342,10 @@ static void check_spawn(Own *o, Flow *f, Node *n) {
             if (br) {
                 Diag d = {0};
                 d.code = "E-SEND-1";
-                d.message = diag_fmt("借りている値 '%s' はスレッドに渡せません",
-                                     p->disp);
+                d.message = MSG1("own.043", "借りている値 '{0}' はスレッドに渡せません", p->disp);
                 d.primary.tok = aexpr->tok;
-                d.primary.label = "スレッドは、この呼び出しより長生きしえます";
-                d.hint = "scope: ブロックで囲む（出口で必ず join されます）か、"
-                         "所有ごと渡す（引数を 'own' で受ける）か、"
-                         "mutex[…] に入れてください";
+                d.primary.label = MSG0("own.084", "スレッドは、この呼び出しより長生きしえます");
+                d.hint = MSG0("own.085", "scope: ブロックで囲む（出口で必ず join されます）か、所有ごと渡す（引数を 'own' で受ける）か、mutex[…] に入れてください");
                 emit_ownck(o, &d, true);
             }
         }
@@ -1411,13 +1365,12 @@ static void check_spawn(Own *o, Flow *f, Node *n) {
         if (hit) {
             Diag d = {0};
             d.code = "E-SEND-3";
-            d.message = diag_fmt("'%s' はグローバル変数を書き換えるので、"
-                                 "スレッドで始められません", spawned->name);
+            d.message = MSG1("own.044", "'{0}' はグローバル変数を書き換えるので、スレッドで始められません", spawned->name);
             d.primary.tok = fexpr->tok;
-            d.primary.label = "この関数をスレッドで始めようとしています";
+            d.primary.label = MSG0("own.086", "この関数をスレッドで始めようとしています");
             d.related.tok = hit->tok;
-            d.related.label = "ここでグローバルに書いています";
-            d.hint = "書き換える値を mutex[…] に入れて、引数で渡してください";
+            d.related.label = MSG0("own.087", "ここでグローバルに書いています");
+            d.hint = MSG0("own.088", "書き換える値を mutex[…] に入れて、引数で渡してください");
             emit_ownck(o, &d, true);
         }
     }
@@ -2117,15 +2070,12 @@ static void bind_alias(Own *o, Node *target, Node *rhs) {
     if (!o->quiet && tgt && !proto.is_param && tgt->depth < proto.depth) {
         Diag d = {0};
         d.code = "E-BORROW-6";
-        d.message = diag_fmt("借りたもの（'%s' の一部）は、'%s' より長く持てません",
-                             proto.origin->name, proto.origin->name);
+        d.message = MSG2("own.045", "借りたもの（'{0}' の一部）は、'{1}' より長く持てません", proto.origin->name, proto.origin->name);
         d.primary.tok = target->tok;
-        d.primary.label = "こちらのほうが長生きします";
+        d.primary.label = MSG0("own.089", "こちらのほうが長生きします");
         d.related.tok = proto.origin->tok;
-        d.related.label = diag_fmt("'%s' はこのスコープが終わると消えます",
-                                   proto.origin->name);
-        d.hint = "内側で作った値は、内側で使い切ってください"
-                 "（外へ渡すなら所有権ごと渡します）";
+        d.related.label = MSG1("own.046", "'{0}' はこのスコープが終わると消えます", proto.origin->name);
+        d.hint = MSG0("own.090", "内側で作った値は、内側で使い切ってください（外へ渡すなら所有権ごと渡します）");
         emit_ownck(o, &d, o->opt.deny_borrow);
     }
 
@@ -2249,7 +2199,7 @@ static void check_while(Own *o, Flow *f, Node *n) {
         entry = next;
         if (round >= 3)
             internal_error(__FILE__, __LINE__,
-                           "while の所有権解析が収束しません（格子が壊れています）");
+                           MSG0("own.091", "while の所有権解析が収束しません（格子が壊れています）"));
     }
     o->quiet--;
 
@@ -2632,21 +2582,18 @@ static void check_export(Own *o, Node *fn) {
         if (!hit) continue;
         Diag d = {0};
         d.primary.tok = fn->tok;
-        d.primary.label = "外から、どのスレッドからでも呼ばれる関数です";
+        d.primary.label = MSG0("own.092", "外から、どのスレッドからでも呼ばれる関数です");
         d.related.tok = hit->tok;
         if (kinds[k] == HZ_GLOBAL_WRITE) {
             d.code = "E-EXPORT-3";
-            d.message = diag_fmt("外へ出す関数 '%s' はグローバル変数を書き換えます",
-                                 fn->name);
-            d.related.label = "ここでグローバルに書いています";
-            d.hint = "状態は引数と戻り値で受け渡してください"
-                     "（同時に呼ばれると競合し、panic したときに書きかけで残ります）";
+            d.message = MSG1("own.047", "外へ出す関数 '{0}' はグローバル変数を書き換えます", fn->name);
+            d.related.label = MSG0("own.087", "ここでグローバルに書いています");
+            d.hint = MSG0("own.093", "状態は引数と戻り値で受け渡してください（同時に呼ばれると競合し、panic したときに書きかけで残ります）");
         } else {
             d.code = "E-EXPORT-4";
-            d.message = diag_fmt("外へ出す関数 '%s' からスレッドを始めています", fn->name);
-            d.related.label = "ここで spawn（または scope:）を使っています";
-            d.hint = "いまは外へ出す関数からスレッドを使えません"
-                     "（panic したときに、動いているスレッドを安全に止められないためです）";
+            d.message = MSG1("own.048", "外へ出す関数 '{0}' からスレッドを始めています", fn->name);
+            d.related.label = MSG0("own.094", "ここで spawn（または scope:）を使っています");
+            d.hint = MSG0("own.095", "いまは外へ出す関数からスレッドを使えません（panic したときに、動いているスレッドを安全に止められないためです）");
         }
         emit_ownck(o, &d, true);
     }
@@ -2706,8 +2653,5 @@ void ownck_program(Module *mods, const OwnckOptions *opt) {
     // 注意: 上限を超えたぶんは件数だけ知らせます。selfhost/ を
     //    書き換えるまで、ここは何百件も出うるためです。
     if (o.nmore > 0)
-        fprintf(stderr,
-                "warning: 所有権の指摘が他に %d 件あります"
-                "（表示したのは先頭 %d 件です）\n",
-                o.nmore, OWNCK_MAX_REPORT);
+        fprintf(stderr, "%s", MSG2("own.049", "warning: 所有権の指摘が他に {0} 件あります（表示したのは先頭 {1} 件です）\n", diag_fmt("%d", o.nmore), diag_fmt("%d", OWNCK_MAX_REPORT)));
 }

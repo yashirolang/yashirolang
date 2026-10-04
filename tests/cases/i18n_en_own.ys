@@ -1,0 +1,11 @@
+# FLAGS: --lang=en
+# ERROR: error[E-MOVE-1]: use of moved value 'xs'
+# ERROR: = help: to keep using it after the move, create a new value and assign it
+# 所有権の検査の英語（段階 1〜3）。
+def take(xs: own list[int]) -> int:
+    return len(xs)
+
+def main() -> int:
+    xs: list[int] = [1, 2]
+    n: int = take(xs)
+    return n + len(xs)

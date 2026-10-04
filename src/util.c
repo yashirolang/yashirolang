@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "diag.h"
 #include "langinfo.h"
 
 // ── メモリ確保 ──────────────────────────────────────────────
@@ -27,7 +28,7 @@ void *xmalloc(size_t size) {
     // calloc でゼロ初期化する。Node のような大きな構造体で
     // 「フィールドの初期化忘れ」が不定値バグにならないようにするため。
     void *p = calloc(1, size);
-    if (!p) error("メモリ確保に失敗しました (%zu バイト)", size);
+    if (!p) error("%s", MSG1("cli.030", "メモリ確保に失敗しました ({0} バイト)", diag_fmt("%zu", size)));
     return p;
 }
 
@@ -55,7 +56,7 @@ void sb_printf(StrBuf *sb, const char *fmt, ...) {
     va_start(ap, fmt);
     int need = vsnprintf(NULL, 0, fmt, ap);
     va_end(ap);
-    if (need < 0) error("sb_printf: 書式化に失敗しました");
+    if (need < 0) error("%s", MSG0("cli.031", "sb_printf: 書式化に失敗しました"));
 
     // 足りなければ、必要量を満たすまで容量を 2 倍にしていく
     size_t required = sb->len + (size_t)need + 1;  // +1 は NUL の分
@@ -90,7 +91,7 @@ char *read_file(const char *path) {
         fp = stdin;
     } else {
         fp = fopen(path, "rb");
-        if (!fp) error("ファイルを開けません: %s", path);
+        if (!fp) error("%s", MSG1("cli.032", "ファイルを開けません: {0}", path));
     }
 
     // 一気に読む（サイズが分からない stdin でも動くようにチャンク読み）
@@ -135,7 +136,7 @@ char *read_file(const char *path) {
 
 void write_file(const char *path, const char *text) {
     FILE *fp = fopen(path, "wb");
-    if (!fp) error("ファイルを書き込めません: %s", path);
+    if (!fp) error("%s", MSG1("cli.033", "ファイルを書き込めません: {0}", path));
     fputs(text, fp);
     fclose(fp);
 }
@@ -158,7 +159,7 @@ _Noreturn void internal_error(const char *file, int line, const char *fmt, ...) 
     fprintf(stderr, PLC_LANG_CC " internal error: %s:%d: ", file, line);
     vfprintf(stderr, fmt, ap);
     fprintf(stderr, "\n");
-    fprintf(stderr, "  これはコンパイラ自身のバグです。報告してください。\n");
+    fprintf(stderr, "%s", MSG0("cli.034", "  これはコンパイラ自身のバグです。報告してください。\n"));
     va_end(ap);
     exit(2);  // ユーザーのミス(1)と区別するため 2 で終了する
 }

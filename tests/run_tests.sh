@@ -79,6 +79,13 @@ else
     is_stage0=0
 fi
 
+# ★ 走らせている OS。`# NOT-ON: windows 理由` のケースを飛ばすかを決めます。
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) host_os=windows ;;
+    Darwin*)              host_os=macos ;;
+    *)                    host_os=linux ;;
+esac
+
 if [ ! -x "$PLC_CC" ]; then
     echo "コンパイラが見つかりません: $PLC_CC"
     echo "先に 'make' を実行してください。"
@@ -143,7 +150,7 @@ for case_file in "${CASES[@]}"; do
     #   ここで入る変数: want_exit / want_error / want_output / want_tokens
     #                   want_ir / want_ir_not / want_warn / want_explain
     #                   want_stderr / run_lang
-    #                   extra_flags / has_exact_ir / stage0_only
+    #                   extra_flags / has_exact_ir / stage0_only / not_on
     #
     # 注意: \r は awk の中で落とします（Windows のチェックアウトで混ざることが
     #    あります。.gitattributes で変換は止めていますが、既存の作業コピー
@@ -184,6 +191,15 @@ for case_file in "${CASES[@]}"; do
     if [ -n "$stage0_only" ] && [ "$is_stage0" -eq 0 ]; then
         printf "  %sskip%s  %s %s(%s)%s\n" "$C_DIM" "$C_END" "$name" \
                "$C_DIM" "$stage0_only" "$C_END"
+        skip=$((skip + 1))
+        continue
+    fi
+
+    # ★ `# NOT-ON: windows 理由` … その OS では対象外と決めた機能のケースを飛ばす
+    #   注意: 先頭の 1 語が OS の名前（windows / macos / linux）、残りが理由です。
+    if [ -n "$not_on" ] && [ "${not_on%% *}" = "$host_os" ]; then
+        printf "  %sskip%s  %s %s(%s)%s\n" "$C_DIM" "$C_END" "$name" \
+               "$C_DIM" "$not_on" "$C_END"
         skip=$((skip + 1))
         continue
     fi

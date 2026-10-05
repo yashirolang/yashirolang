@@ -49,7 +49,8 @@ function add(key, line) {
     else acc[key] = acc[key] "\n" line
 }
 
-BEGIN { first_exit = ""; got_exit = 0; first_stage0 = ""; got_stage0 = 0 }
+BEGIN { first_exit = ""; got_exit = 0; first_stage0 = ""; got_stage0 = 0
+        first_noton = ""; got_noton = 0 }
 
 {
     line = $0
@@ -74,6 +75,8 @@ BEGIN { first_exit = ""; got_exit = 0; first_stage0 = ""; got_stage0 = 0 }
     if (match(line, /^# *EXACT-IR:/))        { exact  = 1                                     ; next }
     if (match(line, /^# *STAGE0-ONLY: */))   { v = substr(line, RLENGTH + 1)
         if (!got_stage0) { first_stage0 = v; got_stage0 = 1 }                ; next }
+    if (match(line, /^# *NOT-ON: */))        { v = substr(line, RLENGTH + 1)
+        if (!got_noton) { first_noton = v; got_noton = 1 }                   ; next }
 }
 
 END {
@@ -90,6 +93,7 @@ END {
     emit("extra_flags",  joined(acc["flags"]))
     emit("has_exact_ir", exact ? "1" : "")
     emit("stage0_only",  first_stage0)
+    emit("not_on",       first_noton)
     # ★ STDIN はファイルに落とします（無ければ空のファイル）。
     #   注意: 与えないケースでも必ず繋ぐので、端末や CI の標準入力を
     #     読んでしまうことがありません。

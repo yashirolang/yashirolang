@@ -10,6 +10,7 @@
 # 注意: 単位は **SI** に統一します。混ざると事故になるので、換算は明示的に
 #   celsius_to_kelvin のような関数を通してください。
 
+import i18n
 import math
 
 # ══════════════════════════════════════════════════════════
@@ -160,7 +161,8 @@ def parsec() -> float:
 def lorentz_factor(v: float) -> float:
     b: float = v / c()
     if math.fabs(b) >= 1.0:
-        panic("physics.lorentz_factor: 速さが光速以上です")
+        panic(i18n.pick("physics.lorentz_factor: 速さが光速以上です",
+                        "physics.lorentz_factor: the speed is at least the speed of light"))
     return 1.0 / math.sqrt(1.0 - b * b)
 
 # 相対論的な運動エネルギー [J]
@@ -170,7 +172,8 @@ def relativistic_ke(m: float, v: float) -> float:
 # ド・ブロイ波長 λ = h / p [m]
 def de_broglie(p: float) -> float:
     if p == 0.0:
-        panic("physics.de_broglie: 運動量が 0 です")
+        panic(i18n.pick("physics.de_broglie: 運動量が 0 です",
+                        "physics.de_broglie: the momentum is 0"))
     return h() / p
 
 # 黒体の放射発散度 j = σT⁴ [W/m²]
@@ -181,25 +184,29 @@ def blackbody_flux(t_kelvin: float) -> float:
 # 光子のエネルギー E = hc/λ [J]
 def photon_energy(wavelength: float) -> float:
     if wavelength <= 0.0:
-        panic("physics.photon_energy: 波長は正の数です")
+        panic(i18n.pick("physics.photon_energy: 波長は正の数です",
+                        "physics.photon_energy: the wavelength must be positive"))
     return h() * c() / wavelength
 
 # 2 体の万有引力 [N]
 def gravity(m1: float, m2: float, r: float) -> float:
     if r <= 0.0:
-        panic("physics.gravity: 距離は正の数です")
+        panic(i18n.pick("physics.gravity: 距離は正の数です",
+                        "physics.gravity: the distance must be positive"))
     return G() * m1 * m2 / (r * r)
 
 # 円軌道の速さ [m/s]（質量 m の天体のまわり、半径 r）
 def orbital_velocity(m: float, r: float) -> float:
     if r <= 0.0:
-        panic("physics.orbital_velocity: 半径は正の数です")
+        panic(i18n.pick("physics.orbital_velocity: 半径は正の数です",
+                        "physics.orbital_velocity: the radius must be positive"))
     return math.sqrt(G() * m / r)
 
 # 脱出速度 [m/s]
 def escape_velocity(m: float, r: float) -> float:
     if r <= 0.0:
-        panic("physics.escape_velocity: 半径は正の数です")
+        panic(i18n.pick("physics.escape_velocity: 半径は正の数です",
+                        "physics.escape_velocity: the radius must be positive"))
     return math.sqrt(2.0 * G() * m / r)
 
 # シュワルツシルト半径 [m]

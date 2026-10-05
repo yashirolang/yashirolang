@@ -34,6 +34,7 @@
 #
 # 注意: Python の `re.match` に当たる名前はありません（`match` は予約語です）。
 #   先頭からの一致は `^` を付けて `search` してください。
+import i18n
 import strings
 
 # 命令が増えすぎるパターンを断る上限（{m,n} の展開で増えます）
@@ -626,7 +627,8 @@ class Match:
     # 組 i の中身。その組が一致に加わっていなければ None。
     def group(self, i: int) -> str | None:
         if i < 0 or i >= len(self.groups):
-            panic(f"Match.group: 組 {i} はありません（0〜{len(self.groups) - 1}）")
+            panic(i18n.pick(f"Match.group: 組 {i} はありません（0〜{len(self.groups) - 1}）",
+                            f"Match.group: no group {i} (0 to {len(self.groups) - 1})"))
         if self.spans[2 * i] < 0 or self.spans[2 * i + 1] < 0:
             return None
         return copy(self.groups[i])
@@ -638,7 +640,8 @@ class Match:
             if self.names[k] == name:
                 return self.group(self.name_caps[k])
             k = k + 1
-        panic("Match.named: 組 '" + name + "' はありません")
+        panic(i18n.pick("Match.named: 組 '" + name + "' はありません",
+                        "Match.named: no group '" + name + "'"))
         return None
 
     # 組 i の始まりと終わり（加わらなかった組は -1）

@@ -10,6 +10,7 @@
 # 注意: **スカラー倍は `scale(z, k)`** です。`z * 2.0` とは書けません
 #   （多重定義は左辺の型だけで決まり、引数の型では選び分けないため）。
 
+import i18n
 import math
 
 class Complex:
@@ -37,7 +38,8 @@ class Complex:
     def __truediv__(self, o: Complex) -> Complex:
         d: float = o.re * o.re + o.im * o.im
         if d == 0.0:
-            panic("complex: 0 で割ろうとしました")
+            panic(i18n.pick("complex: 0 で割ろうとしました",
+                            "complex: division by zero"))
         return Complex((self.re * o.re + self.im * o.im) / d,
                        (self.im * o.re - self.re * o.im) / d)
 

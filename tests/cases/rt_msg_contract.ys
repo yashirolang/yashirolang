@@ -1,0 +1,14 @@
+# EXIT: 1
+# STDERR: runtime error: 契約違反です: half の requires（8 行目）
+# 契約違反の文面（段階 4）。コンパイラは "requires of half (line 8)" を IR に置き、
+#   ランタイムが日本語の語順に並べ替えます（IR は言語によらず同じです）。
+#   英語は rt_msg_contract_en。
+
+def half(n: int) -> int:
+    requires n >= 0
+    return n // 2
+
+def main() -> int:
+    k: int = 0 - len("ab")
+    print(str(half(k)))
+    return 0

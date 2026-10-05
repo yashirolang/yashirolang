@@ -1,0 +1,13 @@
+# EXIT: 1
+# RUN-LANG: en
+# STDERR: runtime error: contract violated: requires of half (line 7)
+# 契約違反の英語（段階 4）。rt_msg_contract の英語版です。
+
+def half(n: int) -> int:
+    requires n >= 0
+    return n // 2
+
+def main() -> int:
+    k: int = 0 - len("ab")
+    print(str(half(k)))
+    return 0

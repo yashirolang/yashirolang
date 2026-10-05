@@ -24,6 +24,7 @@
 #   g: frame.Frame = frame.agg(df, ["shop"], ["price", "price"], ["sum", "mean"])
 #   j: frame.Frame = frame.join(df, shops, ["shop"], "left")
 import dict
+import i18n
 import io
 import math
 import stats
@@ -158,8 +159,9 @@ class Frame:
     def col(self, name: str) -> Column:
         i: int = self.index_of(name)
         if i < 0:
-            panic("frame: 列 '" + name + "' がありません（ある列: " +
-                  strings.join(self.names(), ", ") + "）")
+            panic(i18n.pick("frame: 列 '" + name + "' がありません（ある列: " +
+                            strings.join(self.names(), ", ") + "）",
+                            "frame: no column '" + name + "' (columns: " + strings.join(self.names(), ", ") + ")"))
         return self.cols[i]
 
     def is_num(self, name: str) -> bool:
@@ -174,7 +176,8 @@ class Frame:
     def num(self, name: str) -> list[float]:
         c: Column = self.col(name)
         if c.kind != COL_NUM:
-            panic("frame: 列 '" + name + "' は文字列の列です（num では取れません）")
+            panic(i18n.pick("frame: 列 '" + name + "' は文字列の列です（num では取れません）",
+                            "frame: column '" + name + "' is a text column (num cannot read it)"))
         check_no_missing(c)
         out: list[float] = []
         for x in c.nums:
@@ -184,7 +187,8 @@ class Frame:
     def text(self, name: str) -> list[str]:
         c: Column = self.col(name)
         if c.kind != COL_TEXT:
-            panic("frame: 列 '" + name + "' は数値の列です（text では取れません）")
+            panic(i18n.pick("frame: 列 '" + name + "' は数値の列です（text では取れません）",
+                            "frame: column '" + name + "' is a numeric column (text cannot read it)"))
         check_no_missing(c)
         out: list[str] = []
         for s in c.texts:
@@ -210,12 +214,14 @@ class Frame:
     # 欠損を v で埋めた新しい表
     def fill_num(self, name: str, v: float) -> Frame:
         if not self.is_num(name):
-            panic("frame.fill_num: 列 '" + name + "' は文字列の列です（fill_text を使ってください）")
+            panic(i18n.pick("frame.fill_num: 列 '" + name + "' は文字列の列です（fill_text を使ってください）",
+                            "frame.fill_num: column '" + name + "' is a text column (use fill_text)"))
         return self.fill_with(name, v, "")
 
     def fill_text(self, name: str, s: str) -> Frame:
         if self.is_num(name):
-            panic("frame.fill_text: 列 '" + name + "' は数値の列です（fill_num を使ってください）")
+            panic(i18n.pick("frame.fill_text: 列 '" + name + "' は数値の列です（fill_num を使ってください）",
+                            "frame.fill_text: column '" + name + "' is a numeric column (use fill_num)"))
         return self.fill_with(name, 0.0, s)
 
     def fill_with(self, name: str, v: float, s: str) -> Frame:
@@ -268,7 +274,8 @@ class Frame:
     def add_num_opt(mut self, name: str, xs: list[float], miss: list[bool]) -> None:
         self.check_new(name, len(xs))
         if len(miss) != len(xs):
-            panic("frame.add_num_opt: 値と欠損の印の数が違います")
+            panic(i18n.pick("frame.add_num_opt: 値と欠損の印の数が違います",
+                            "frame.add_num_opt: the numbers of values and missing marks differ"))
         c: Column = Column(name, COL_NUM)
         for i in range(len(xs)):
             c.push_num(xs[i], miss[i])
@@ -277,7 +284,8 @@ class Frame:
     def add_text_opt(mut self, name: str, xs: list[str], miss: list[bool]) -> None:
         self.check_new(name, len(xs))
         if len(miss) != len(xs):
-            panic("frame.add_text_opt: 値と欠損の印の数が違います")
+            panic(i18n.pick("frame.add_text_opt: 値と欠損の印の数が違います",
+                            "frame.add_text_opt: the numbers of values and missing marks differ"))
         c: Column = Column(name, COL_TEXT)
         for i in range(len(xs)):
             c.push_text(xs[i], miss[i])
@@ -285,10 +293,12 @@ class Frame:
 
     def check_new(self, name: str, n: int) -> None:
         if self.has(name):
-            panic("frame: 列 '" + name + "' は既にあります")
+            panic(i18n.pick("frame: 列 '" + name + "' は既にあります",
+                            "frame: column '" + name + "' already exists"))
         if len(self.cols) > 0 and n != self.rows():
-            panic("frame: 行数が合いません（表は " + str(self.rows()) +
-                  " 行、足そうとした列は " + str(n) + " 行）")
+            panic(i18n.pick("frame: 行数が合いません（表は " + str(self.rows()) +
+                            " 行、足そうとした列は " + str(n) + " 行）",
+                            "frame: row counts do not match (the frame has " + str(self.rows()) + " rows, the new column has " + str(n) + ")"))
 
     # ── 列を選ぶ ────────────────────────────────────────
 
@@ -297,7 +307,8 @@ class Frame:
         out: Frame = Frame()
         for nm in names:
             if out.has(nm):
-                panic("frame.select: 列 '" + nm + "' を 2 回選んでいます")
+                panic(i18n.pick("frame.select: 列 '" + nm + "' を 2 回選んでいます",
+                                "frame.select: column '" + nm + "' is selected twice"))
             out.cols.append(copy_column(self.col(nm), nm))
         return out
 
@@ -320,7 +331,8 @@ class Frame:
     def rename(self, old: str, new: str) -> Frame:
         self.col(old)
         if old != new and self.has(new):
-            panic("frame.rename: 列 '" + new + "' は既にあります")
+            panic(i18n.pick("frame.rename: 列 '" + new + "' は既にあります",
+                            "frame.rename: column '" + new + "' already exists"))
         out: Frame = Frame()
         for c in self.cols:
             if c.name == old:
@@ -334,8 +346,9 @@ class Frame:
     # keep[i] が True の行だけを集めた新しい表を返します
     def where(self, keep: list[bool]) -> Frame:
         if len(keep) != self.rows():
-            panic("frame.where: 印の数が行数と違います（" + str(len(keep)) +
-                  " と " + str(self.rows()) + "）")
+            panic(i18n.pick("frame.where: 印の数が行数と違います（" + str(len(keep)) +
+                            " と " + str(self.rows()) + "）",
+                            "frame.where: the number of marks differs from the number of rows (" + str(len(keep)) + " and " + str(self.rows()) + ")"))
         idx: list[int] = []
         i: int = 0
         while i < len(keep):
@@ -349,7 +362,8 @@ class Frame:
         n: int = self.rows()
         for k in idx:
             if k < 0 or k >= n:
-                panic("frame.take: 行番号が範囲外です（" + str(k) + "）")
+                panic(i18n.pick("frame.take: 行番号が範囲外です（" + str(k) + "）",
+                                "frame.take: row index out of range (" + str(k) + ")"))
         return self.take_opt(idx)
 
     # 同じく。ただし -1 の行は「すべて欠損の行」にします（join の left で使います）
@@ -398,7 +412,8 @@ class Frame:
     # 複数の列で並べ替える（names[0] が最優先。asc[i] が False ならその列は降順）
     def sort_by_keys(self, names: list[str], asc: list[bool]) -> Frame:
         if len(names) != len(asc) or len(names) == 0:
-            panic("frame.sort_by_keys: 列と向きの数が合いません（または空です）")
+            panic(i18n.pick("frame.sort_by_keys: 列と向きの数が合いません（または空です）",
+                            "frame.sort_by_keys: the numbers of columns and directions do not match (or are empty)"))
         ki: list[int] = []
         for nm in names:
             self.col(nm)
@@ -549,9 +564,10 @@ class Frame:
 
 def check_no_missing(c: Column) -> None:
     if c.nmiss > 0:
-        panic("frame: 列 '" + c.name + "' に欠損が " + str(c.nmiss) + " 個あります。" +
-              "先に fill_num / fill_text で埋めるか、drop_missing で行を捨ててください" +
-              "（黙って埋めると集計の数字が静かに変わります）")
+        panic(i18n.pick("frame: 列 '" + c.name + "' に欠損が " + str(c.nmiss) + " 個あります。" +
+                        "先に fill_num / fill_text で埋めるか、drop_missing で行を捨ててください" +
+                        "（黙って埋めると集計の数字が静かに変わります）",
+                        "frame: column '" + c.name + "' has " + str(c.nmiss) + " missing values. " + "Fill them with fill_num / fill_text first, or drop the rows with drop_missing " + "(filling them silently would quietly change the aggregated numbers)"))
 
 # 列を名前を付け替えて写す
 def copy_column(c: Column, name: str) -> Column:
@@ -637,8 +653,9 @@ def negate(a: list[bool]) -> list[bool]:
 
 def same_len(a: list[bool], b: list[bool], who: str) -> None:
     if len(a) != len(b):
-        panic("frame." + who + ": 印の数が違います（" + str(len(a)) + " と " +
-              str(len(b)) + "）")
+        panic(i18n.pick("frame." + who + ": 印の数が違います（" + str(len(a)) + " と " +
+                        str(len(b)) + "）",
+                        "frame." + who + ": the numbers of marks differ (" + str(len(a)) + " and " + str(len(b)) + ")"))
 
 
 # ── 並べ替えの順番を作る ───────────────────────────────────
@@ -711,13 +728,15 @@ def row_key(df: Frame, ki: list[int], i: int) -> str:
 
 def key_indices(df: Frame, keys: list[str], who: str) -> list[int]:
     if len(keys) == 0:
-        panic("frame." + who + ": 鍵の列がありません")
+        panic(i18n.pick("frame." + who + ": 鍵の列がありません",
+                        "frame." + who + ": no key columns"))
     ki: list[int] = []
     for k in keys:
         c: Column = df.col(k)
         if c.nmiss > 0:
-            panic("frame." + who + ": 鍵の列 '" + k + "' に欠損があります。" +
-                  "先に fill_num / fill_text で埋めるか、drop_missing_in で行を捨ててください")
+            panic(i18n.pick("frame." + who + ": 鍵の列 '" + k + "' に欠損があります。" +
+                            "先に fill_num / fill_text で埋めるか、drop_missing_in で行を捨ててください",
+                            "frame." + who + ": key column '" + k + "' has missing values. " + "Fill them with fill_num / fill_text first, or drop the rows with drop_missing_in"))
         ki.append(df.index_of(k))
     return ki
 
@@ -734,11 +753,13 @@ def valid_how(how: str) -> bool:
 # 注意: std は値が 1 つしかない組では決まらないので**欠損**になります（0 にはしません）。
 def agg(df: Frame, keys: list[str], values: list[str], hows: list[str]) -> Frame:
     if len(values) != len(hows):
-        panic("frame.agg: 値の列と集計の数が合いません")
+        panic(i18n.pick("frame.agg: 値の列と集計の数が合いません",
+                        "frame.agg: the numbers of value columns and aggregations do not match"))
     for h in hows:
         if not valid_how(h):
-            panic("frame.agg: 知らない集計です '" + h +
-                  "'（mean / sum / count / min / max / median / std）")
+            panic(i18n.pick("frame.agg: 知らない集計です '" + h +
+                            "'（mean / sum / count / min / max / median / std）",
+                            "frame.agg: unknown aggregation '" + h + "' (mean / sum / count / min / max / median / std)"))
     ki: list[int] = key_indices(df, keys, "agg")
 
     groups: dict.Dict[str, int] = dict.Dict()
@@ -805,8 +826,9 @@ def agg(df: Frame, keys: list[str], values: list[str], hows: list[str]) -> Frame
 # 注意: 鍵も集計も複数にしたいときは agg を使ってください。
 def group_by(df: Frame, key: str, value: str, how: str) -> Frame:
     if not valid_how(how):
-        panic("frame.group_by: 知らない集計です '" + how +
-              "'（mean / sum / count / min / max / median / std）")
+        panic(i18n.pick("frame.group_by: 知らない集計です '" + how +
+                        "'（mean / sum / count / min / max / median / std）",
+                        "frame.group_by: unknown aggregation '" + how + "' (mean / sum / count / min / max / median / std)"))
     r: Frame = agg(df, [copy(key)], [copy(value)], [copy(how)])
     return r.rename(value + "_" + how, value)
 
@@ -830,13 +852,15 @@ def value_counts(df: Frame, name: str) -> Frame:
 #   right の鍵以外の列が left と同じ名前なら、後ろに _right を付けます。
 def join(left: Frame, right: Frame, on: list[str], how: str) -> Frame:
     if how != "inner" and how != "left":
-        panic("frame.join: how は \"inner\" か \"left\" です（'" + how + "'）")
+        panic(i18n.pick("frame.join: how は \"inner\" か \"left\" です（'" + how + "'）",
+                        "frame.join: how must be \"inner\" or \"left\" ('" + how + "')"))
     lk: list[int] = key_indices(left, on, "join")
     rk: list[int] = key_indices(right, on, "join")
     k: int = 0
     while k < len(on):
         if left.cols[lk[k]].kind != right.cols[rk[k]].kind:
-            panic("frame.join: 鍵の列 '" + on[k] + "' の種類が左右で違います（数値と文字列）")
+            panic(i18n.pick("frame.join: 鍵の列 '" + on[k] + "' の種類が左右で違います（数値と文字列）",
+                            "frame.join: key column '" + on[k] + "' has different kinds on the left and right (number and text)"))
         k = k + 1
 
     index: dict.Dict[str, int] = dict.Dict()
@@ -874,7 +898,8 @@ def join(left: Frame, right: Frame, on: list[str], how: str) -> Frame:
         if out.has(name):
             name = name + "_right"
         if out.has(name):
-            panic("frame.join: 列 '" + name + "' が重なります（名前を変えてから結合してください）")
+            panic(i18n.pick("frame.join: 列 '" + name + "' が重なります（名前を変えてから結合してください）",
+                            "frame.join: column '" + name + "' appears on both sides (rename it before joining)"))
         d: Column = Column(name, c.kind)
         for r3 in ri:
             d.push_from(c, r3)
@@ -884,16 +909,18 @@ def join(left: Frame, right: Frame, on: list[str], how: str) -> Frame:
 # 縦につなぐ（列の名前・並び・種類が同じこと）
 def concat(a: Frame, b: Frame) -> Frame:
     if a.width() != b.width():
-        panic("frame.concat: 列の数が違います（" + str(a.width()) + " と " +
-              str(b.width()) + "）")
+        panic(i18n.pick("frame.concat: 列の数が違います（" + str(a.width()) + " と " +
+                        str(b.width()) + "）",
+                        "frame.concat: the numbers of columns differ (" + str(a.width()) + " and " + str(b.width()) + ")"))
     out: Frame = Frame()
     j: int = 0
     while j < a.width():
         ca: Column = a.cols[j]
         cb: Column = b.cols[j]
         if ca.name != cb.name or ca.kind != cb.kind:
-            panic("frame.concat: " + str(j + 1) + " 列目の名前か種類が違います（'" +
-                  ca.name + "' と '" + cb.name + "'）")
+            panic(i18n.pick("frame.concat: " + str(j + 1) + " 列目の名前か種類が違います（'" +
+                            ca.name + "' と '" + cb.name + "'）",
+                            "frame.concat: the name or kind of column " + str(j + 1) + " differs ('" + ca.name + "' and '" + cb.name + "')"))
         d: Column = Column(ca.name, ca.kind)
         for i in range(ca.size()):
             d.push_from(ca, i)

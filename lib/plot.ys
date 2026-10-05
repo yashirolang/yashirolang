@@ -17,6 +17,7 @@
 #
 # 注意: ベアメタルでは `save` が使えません（`io` に依存）。
 #    図の文字列だけ欲しいときは `to_svg()` を使ってください。
+import i18n
 import io
 import math
 import strings
@@ -108,8 +109,9 @@ class Series:
     def init(self, name: str, xs: own list[float], ys: own list[float],
              kind: int, color: str) -> None:
         if len(xs) != len(ys):
-            panic("plot: x と y の長さが違います（" + str(len(xs)) + " と " +
-                  str(len(ys)) + "）")
+            panic(i18n.pick("plot: x と y の長さが違います（" + str(len(xs)) + " と " +
+                            str(len(ys)) + "）",
+                            "plot: x and y have different lengths (" + str(len(xs)) + " and " + str(len(ys)) + ")"))
         self.name = copy(name)
         self.xs = xs
         self.ys = ys
@@ -137,7 +139,8 @@ class Plot:
 
     def init(self, width: int, height: int) -> None:
         if width < 120 or height < 120:
-            panic("plot.Plot: 図は 120x120 以上にしてください")
+            panic(i18n.pick("plot.Plot: 図は 120x120 以上にしてください",
+                            "plot.Plot: the figure must be at least 120x120"))
         self.width = width
         self.height = height
         self.title_ = ""
@@ -163,7 +166,8 @@ class Plot:
     # 軸の範囲を固定します（呼ばなければ中身から自動で決めます）
     def limits(mut self, x0: float, x1: float, y0: float, y1: float) -> None:
         if x1 <= x0 or y1 <= y0:
-            panic("plot.limits: 最小 < 最大 で渡してください")
+            panic(i18n.pick("plot.limits: 最小 < 最大 で渡してください",
+                            "plot.limits: pass them as min < max"))
         self.fixed = True
         self.x0 = x0
         self.x1 = x1
@@ -183,7 +187,8 @@ class Plot:
     # 棒グラフ。ラベルは目盛りに使います（同じ図に 1 つだけ）
     def bar(mut self, name: str, labels: list[str], hs: list[float]) -> None:
         if len(labels) != len(hs):
-            panic("plot.bar: ラベルと高さの数が違います")
+            panic(i18n.pick("plot.bar: ラベルと高さの数が違います",
+                            "plot.bar: the numbers of labels and heights differ"))
         xs: list[float] = []
         for i in range(len(hs)):
             xs.append(float(i))
@@ -194,9 +199,11 @@ class Plot:
     # ヒストグラム（度数を数えて棒グラフにします）
     def hist(mut self, name: str, a: list[float], bins: int) -> None:
         if bins < 1:
-            panic("plot.hist: bins は 1 以上です")
+            panic(i18n.pick("plot.hist: bins は 1 以上です",
+                            "plot.hist: bins must be at least 1"))
         if len(a) == 0:
-            panic("plot.hist: 空のリストです")
+            panic(i18n.pick("plot.hist: 空のリストです",
+                            "plot.hist: empty list"))
         lo: float = a[0]
         hi: float = a[0]
         for x in a:
@@ -229,7 +236,8 @@ class Plot:
 
     def to_svg(self) -> str:
         if len(self.items) == 0:
-            panic("plot: 系列が 1 つもありません")
+            panic(i18n.pick("plot: 系列が 1 つもありません",
+                            "plot: there are no series"))
 
         # 余白（左は目盛りの文字ぶん広く取ります）
         ml: int = 62

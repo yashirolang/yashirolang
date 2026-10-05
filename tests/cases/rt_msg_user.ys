@@ -1,0 +1,13 @@
+# EXIT: 1
+# RUN-LANG: en
+# STDERR: runtime error: 在庫が足りません
+# 利用者が panic に渡した文面は**訳しません**（利用者のものだからです。段階 4）。
+#   英語を選んでも、そのまま出ます。言語で出し分けたいときは lib/i18n の pick を使います。
+import i18n
+
+def main() -> int:
+    n: int = len("")
+    if n == 0:
+        panic("在庫が足りません")
+    print(i18n.pick("ある", "available"))
+    return 0

@@ -1,0 +1,11 @@
+# EXIT: 1
+# RUN-LANG: en
+# STDERR: runtime error: lists.max_of: empty list
+# 標準ライブラリの panic も、動かしたときの言語で出ます（lib/i18n。段階 4）。
+#   日本語は「lists.max_of: 空のリストです」。
+import lists
+
+def main() -> int:
+    xs: list[int] = []
+    print(str(lists.max_of(xs)))
+    return 0

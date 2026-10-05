@@ -7,13 +7,15 @@
 #     pvariance / pstdev … 母集団（n で割る。手元のデータが「全体そのもの」）
 #   どちらを使うべきかはデータの性質で決まります。既定はありません。
 
+import i18n
 import math
 import linalg
 
 def need_data(a: list[float], n: int, who: str) -> None:
     if len(a) < n:
-        panic("stats." + who + ": 要素が " + str(n) + " 個以上必要です（" +
-              str(len(a)) + " 個しかありません）")
+        panic(i18n.pick("stats." + who + ": 要素が " + str(n) + " 個以上必要です（" +
+                        str(len(a)) + " 個しかありません）",
+                        "stats." + who + ": at least " + str(n) + " elements are required (only " + str(len(a)) + ")"))
 
 
 # ── 代表値 ──────────────────────────────────────────────────
@@ -37,7 +39,8 @@ def geometric_mean(a: list[float]) -> float:
     s: float = 0.0
     for x in a:
         if x <= 0.0:
-            panic("stats.geometric_mean: 正の数だけを渡してください")
+            panic(i18n.pick("stats.geometric_mean: 正の数だけを渡してください",
+                            "stats.geometric_mean: pass only positive numbers"))
         s = s + math.log(x)
     return math.exp(s / float(len(a)))
 
@@ -47,7 +50,8 @@ def harmonic_mean(a: list[float]) -> float:
     s: float = 0.0
     for x in a:
         if x <= 0.0:
-            panic("stats.harmonic_mean: 正の数だけを渡してください")
+            panic(i18n.pick("stats.harmonic_mean: 正の数だけを渡してください",
+                            "stats.harmonic_mean: pass only positive numbers"))
         s = s + 1.0 / x
     return float(len(a)) / s
 
@@ -167,7 +171,8 @@ def merge(x: list[float], y: list[float]) -> list[float]:
 def quantile(a: list[float], q: float) -> float:
     need_data(a, 1, "quantile")
     if q < 0.0 or q > 1.0:
-        panic("stats.quantile: q は 0.0 〜 1.0 です")
+        panic(i18n.pick("stats.quantile: q は 0.0 〜 1.0 です",
+                        "stats.quantile: q must be 0.0 to 1.0"))
     s: list[float] = sorted(a)
     if len(s) == 1:
         return s[0]
@@ -219,7 +224,8 @@ def correlation(x: list[float], y: list[float]) -> float:
     sx: float = stdev(x)
     sy: float = stdev(y)
     if sx == 0.0 or sy == 0.0:
-        panic("stats.correlation: ばらつきが 0 の列とは相関を取れません")
+        panic(i18n.pick("stats.correlation: ばらつきが 0 の列とは相関を取れません",
+                        "stats.correlation: cannot correlate with a column whose spread is 0"))
     return covariance(x, y) / (sx * sy)
 
 # 最小二乗法による直線あてはめ。傾きと切片を [a, b] で返す（y ≈ a·x + b）
@@ -237,7 +243,8 @@ def linear_regression(x: list[float], y: list[float]) -> list[float]:
         sxx = sxx + dx * dx
         i = i + 1
     if sxx == 0.0:
-        panic("stats.linear_regression: x がすべて同じ値です")
+        panic(i18n.pick("stats.linear_regression: x がすべて同じ値です",
+                        "stats.linear_regression: all x values are the same"))
     a: float = sxy / sxx
     out: list[float] = []
     out.append(a)

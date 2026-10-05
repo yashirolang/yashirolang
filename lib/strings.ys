@@ -11,6 +11,8 @@
 #      memcpy 1 回）に直して 0.00 秒になりました。
 #    組み立てるときは **list[str] に溜めて最後に join** してください。
 
+import i18n
+
 # i 番目のバイトを int で返す（確保しない）
 #
 # ★ 言語には足していません。extern でランタイムを呼ぶだけです。
@@ -208,7 +210,8 @@ def width(s: str) -> int:
 #   （json の \uXXXX を読むのに要りました）。
 def from_code_point(cp: int) -> str:
     if cp < 0 or cp > 1114111:
-        panic("from_code_point: 範囲外のコードポイントです")
+        panic(i18n.pick("from_code_point: 範囲外のコードポイントです",
+                        "from_code_point: code point out of range"))
     if cp < 128:
         return chr(cp)
     if cp < 2048:

@@ -6,6 +6,9 @@
 #   # EXIT: 42        → コンパイル・実行して終了コードが 42 であること
 #   # OUTPUT: hello   → 標準出力が "hello" であること（複数行は行ごとに書く）
 #   # STDIN: abc      → 標準入力に "abc\n" を与える（複数行は行ごとに書く）
+#   # STDERR: 文字列  → 実行したプログラムの標準エラーにその文字列を含むこと
+#                       （複数行書くと、そのすべてを含むことを要求する。実行時のエラーの文面を見る）
+#   # RUN-LANG: en    → プログラムを動かすときの PLC_MSG_LANG（実行時のエラーの言語。既定は日本語）
 #   # ERROR: メッセージ → コンパイルが失敗し、stderr にその文字列を含むこと
 #                       （複数行書くと、そのすべてを含むことを要求する）
 #   # IR: <文字列>     → -S が出す LLVM IR にその文字列を含むこと
@@ -139,6 +142,7 @@ for case_file in "${CASES[@]}"; do
     #
     #   ここで入る変数: want_exit / want_error / want_output / want_tokens
     #                   want_ir / want_ir_not / want_warn / want_explain
+    #                   want_stderr / run_lang
     #                   extra_flags / has_exact_ir / stage0_only
     #
     # 注意: \r は awk の中で落とします（Windows のチェックアウトで混ざることが
@@ -186,7 +190,7 @@ for case_file in "${CASES[@]}"; do
 
     if [ -z "$want_exit" ] && [ -z "$want_error" ] && [ -z "$want_output" ] \
        && [ -z "$want_tokens" ] && [ -z "$want_warn" ] && [ -z "$want_explain" ] \
-       && [ -z "$want_ir" ] && [ -z "$want_ir_not" ]; then
+       && [ -z "$want_ir" ] && [ -z "$want_ir_not" ] && [ -z "$want_stderr" ]; then
         report_fail "$name" \
             "期待値のコメント（# EXIT: / # OUTPUT: / # ERROR: / # TOKENS: / # IR: / # IR-NOT: / # WARN: / # EXPLAIN-MUT:）がありません"
         continue
@@ -350,7 +354,9 @@ $compile_err"
     # 注意: パイプで受けると $? が最後のコマンド（tr）のものになります。
     #    終了コードは**プログラム自身**のものを見なければ意味がないので、
     #    先に受け取ってから \r を落とします。
-    actual_output="$("$exe" < "$stdin_file" 2>/dev/null)"
+    # ★ 実行時のエラーの言語は、**動かしたときの** PLC_MSG_LANG で決まります。
+    #   既定（日本語）を見るケースのために、外から来た値は外します（上の unset と同じ理由）。
+    actual_output="$(PLC_MSG_LANG="$run_lang" "$exe" < "$stdin_file" 2>"$TMP/run.err")"
     actual_exit=$?
     actual_output="$(printf '%s' "$actual_output" | strip_cr)"
 
@@ -370,6 +376,23 @@ $compile_err"
 $want_output
 --- 実際 ---
 $actual_output"
+    fi
+
+    if [ -n "$want_stderr" ]; then
+        actual_stderr="$(strip_cr < "$TMP/run.err")"
+        while IFS= read -r want; do
+            [ -z "$want" ] && continue
+            case "$actual_stderr" in
+                *"$want"*) ;;
+                *) ok=0
+                   reason="$reason
+標準エラーに含まれていない期待文字列があります: $want
+--- 実際 ---
+$actual_stderr" ;;
+            esac
+        done <<EOF_STDERR
+$want_stderr
+EOF_STDERR
     fi
 
     if [ "$ok" -eq 1 ]; then

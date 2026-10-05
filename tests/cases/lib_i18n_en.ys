@@ -1,0 +1,13 @@
+# RUN-LANG: en
+# OUTPUT: en
+# OUTPUT: English
+# lib/i18n：PLC_MSG_LANG=en で動かしたとき（段階 4）。
+import i18n
+
+def main() -> int:
+    if i18n.is_en():
+        print("en")
+    else:
+        print("ja")
+    print(i18n.pick("日本語", "English"))
+    return 0

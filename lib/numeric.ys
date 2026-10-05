@@ -7,6 +7,7 @@
 # 注意: 渡す関数は `raises` しないものに限ります（関数型はエラーの受け渡しを
 #   表さないため）。失敗しうる計算は、呼ぶ側で包んでください。
 
+import i18n
 import math
 
 # ══════════════════════════════════════════════════════════
@@ -18,7 +19,8 @@ import math
 # ★ 各区間を台形で近似します。誤差は h² に比例します。
 def trapezoid(f: fn(float) -> float, a: float, b: float, n: int) -> float:
     if n < 1:
-        panic("numeric.trapezoid: 分割数は 1 以上です")
+        panic(i18n.pick("numeric.trapezoid: 分割数は 1 以上です",
+                        "numeric.trapezoid: the number of intervals must be at least 1"))
     h: float = (b - a) / float(n)
     s: float = (f(a) + f(b)) / 2.0
     i: int = 1
@@ -33,7 +35,8 @@ def trapezoid(f: fn(float) -> float, a: float, b: float, n: int) -> float:
 #   台形則と同じ分割数でも桁違いに正確です。
 def simpson(f: fn(float) -> float, a: float, b: float, n: int) -> float:
     if n < 2 or n % 2 != 0:
-        panic("numeric.simpson: 分割数は 2 以上の偶数です")
+        panic(i18n.pick("numeric.simpson: 分割数は 2 以上の偶数です",
+                        "numeric.simpson: the number of intervals must be an even number of at least 2"))
     h: float = (b - a) / float(n)
     s: float = f(a) + f(b)
     i: int = 1
@@ -80,7 +83,8 @@ def bisect(f: fn(float) -> float, a: float, b: float) -> float:
     if fb == 0.0:
         return b
     if (fa < 0.0) == (fb < 0.0):
-        panic("numeric.bisect: 区間の両端で符号が同じです（根を挟んでいません）")
+        panic(i18n.pick("numeric.bisect: 区間の両端で符号が同じです（根を挟んでいません）",
+                        "numeric.bisect: the signs at both ends of the interval are the same (it does not bracket a root)"))
 
     lo: float = a
     hi: float = b
@@ -112,13 +116,15 @@ def newton(f: fn(float) -> float, df: fn(float) -> float, x0: float,
         fx: float = f(x)
         d: float = df(x)
         if d == 0.0:
-            panic("numeric.newton: 導関数が 0 になりました")
+            panic(i18n.pick("numeric.newton: 導関数が 0 になりました",
+                            "numeric.newton: the derivative became 0"))
         nx: float = x - fx / d
         if math.fabs(nx - x) <= tol * math.fmax(math.fabs(nx), 1.0):
             return nx
         x = nx
         i = i + 1
-    panic("numeric.newton: 収束しませんでした")
+    panic(i18n.pick("numeric.newton: 収束しませんでした",
+                    "numeric.newton: did not converge"))
     return x
 
 # 導関数を渡さない版（差分で代用する割線法）
@@ -130,7 +136,8 @@ def secant(f: fn(float) -> float, a: float, b: float, tol: float) -> float:
     i: int = 0
     while i < 200:
         if f1 == f0:
-            panic("numeric.secant: 傾きが 0 になりました")
+            panic(i18n.pick("numeric.secant: 傾きが 0 になりました",
+                            "numeric.secant: the slope became 0"))
         x2: float = x1 - f1 * (x1 - x0) / (f1 - f0)
         if math.fabs(x2 - x1) <= tol * math.fmax(math.fabs(x2), 1.0):
             return x2
@@ -139,7 +146,8 @@ def secant(f: fn(float) -> float, a: float, b: float, tol: float) -> float:
         x1 = x2
         f1 = f(x2)
         i = i + 1
-    panic("numeric.secant: 収束しませんでした")
+    panic(i18n.pick("numeric.secant: 収束しませんでした",
+                    "numeric.secant: did not converge"))
     return x1
 
 
@@ -174,7 +182,8 @@ def derivative2(f: fn(float) -> float, x: float) -> float:
 def solve_ode(f: fn(float, float) -> float, t0: float, y0: float, t1: float,
               n: int) -> list[float]:
     if n < 1:
-        panic("numeric.solve_ode: 段数は 1 以上です")
+        panic(i18n.pick("numeric.solve_ode: 段数は 1 以上です",
+                        "numeric.solve_ode: the number of steps must be at least 1"))
     h: float = (t1 - t0) / float(n)
     ys: list[float] = []
     ys.append(y0)

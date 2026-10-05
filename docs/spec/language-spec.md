@@ -331,7 +331,7 @@ def divide(a: int, b: int) -> int:
 - 値を返さない関数では `result` を書けません
 - 式は `bool` でなければなりません（truthiness はありません）
 - 置けるのは**本体の先頭**だけです（順序は自由）
-- 破ると止まります：`contract violated: requires of divide (line 2)`
+- 破ると止まります：`契約違反です: divide の requires（2 行目）`（英語では `contract violated: requires of divide (line 2)`。§8）
 - **検査を外すオプションはありません**
 - 注意: 引数が範囲型なら、**範囲の検査が先**です（まず型、次に契約）
 - 注意: `ensures` は `return` の**直前**に評価されます
@@ -570,13 +570,13 @@ def next_state() -> int:
 
 **`xs[i * cols + j]` のように添字の中で計算した場合**、あふれても
 その演算のところでは止まりません。**添字の計算が終わったところ**で
-`integer overflow in index computation` として止まります。
+`整数があふれました（添字の計算）`（英語では `integer overflow in index computation`）として止まります。
 
 | | 添字の外 | **添字の中** |
 |---|---|---|
 | 止まるか | 止まります | **止まります**（変わりません） |
 | 止まる場所 | あふれた演算のところ | 添字の計算が終わったところ |
-| 診断 | `integer overflow in *` | `integer overflow in index computation` |
+| 診断 | `整数があふれました（*）` | `整数があふれました（添字の計算）` |
 
 ```python
 xs[a * b + f()]      # a * b があふれても、f() は呼ばれてから落ちます
@@ -623,7 +623,7 @@ yashirolang は名前を付けて落とします。
 Python はどちらも `ZeroDivisionError` なので、そちらに揃えました。
 
 ```python
-x: float = 1.0 / 0.0        # ✗ 実行時エラー: float division by zero
+x: float = 1.0 / 0.0        # ✗ 実行時エラー: float を 0 で割りました
 y: float = math.inf()       # ✓ 無限大が欲しいときはこれ
 ```
 
@@ -1413,16 +1413,21 @@ print(1.0e-9)       # 1.0e-9
 
 以下は実行時に検出し、stderr にメッセージを出して終了コード 1 で異常終了します。
 
-| 条件 | メッセージ |
-|---|---|
-| 0 除算 | `runtime error: division by zero` |
-| リスト添字範囲外 | `runtime error: index out of range: i (len=n)` |
-| `None` のフィールドアクセス | `runtime error: None has no field` |
-| メモリ確保失敗 | `runtime error: out of memory` |
-| 範囲型の範囲外（A-28） | `runtime error: value out of range: Percent accepts 0..100 but got 101` |
-| 契約違反（A-29） | `runtime error: contract violated: requires of divide (line 2)` |
-| 整数の桁あふれ（`abs` / `sum` を含む） | `runtime error: integer overflow in +`（`abs` / `sum` なら `in abs` / `in sum`） |
-| シフト量が 0..63 の外 | `runtime error: shift count out of range: 70` |
+メッセージの言語は**プログラムを動かしたときの** `PLC_MSG_LANG`（`ja` / `en` / `auto`）で決まり、
+**既定は日本語**です（コンパイルしたときの設定ではありません。[設計](../design/i18n-diagnostics.md) §10）。
+先頭の `runtime error:` は言語によらず同じです。`panic(...)` に渡した文面は訳しません。
+
+| 条件 | メッセージ（既定） | `PLC_MSG_LANG=en` |
+|---|---|---|
+| 0 除算 | `runtime error: 0 で割りました` | `division by zero` |
+| リスト添字範囲外 | `runtime error: 添字が範囲の外です: 5（長さ 3）` | `index out of range: 5 (3)` |
+| `None` のフィールドアクセス | `runtime error: None のフィールドを読もうとしました（…）` | `field access on None (…)` |
+| メモリ確保失敗 | `runtime error: メモリが足りません` | `out of memory` |
+| 範囲型の範囲外（A-28） | `runtime error: 範囲の外の値です: Percent に入るのは 0..100 ですが、101 でした` | `value out of range: Percent accepts 0..100 but got 101` |
+| 契約違反（A-29） | `runtime error: 契約違反です: divide の requires（2 行目）` | `contract violated: requires of divide (line 2)` |
+| 整数の桁あふれ（`abs` / `sum` を含む） | `runtime error: 整数があふれました（+）`（`abs` / `sum` なら `（abs）` / `（sum）`） | `integer overflow in +` |
+| シフト量が 0..63 の外 | `runtime error: シフト量が 0〜63 の外です: 70` | `shift count out of range: 70` |
+| スタックの使い切り | `runtime error: stack overflow（スタックを使い切りました。…）` | `stack overflow (…)` |
 
 例外機構（`try`/`except`）は v1 では**採用しません**。回復不能エラーは即終了です。
 

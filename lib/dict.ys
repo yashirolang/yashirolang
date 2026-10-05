@@ -25,6 +25,8 @@
 #   衝突を狙われて線形探索に落とされます。
 #
 
+import i18n
+
 class Dict[K, V]:
     keys_: list[K]
     vals_: list[V]
@@ -80,7 +82,8 @@ class Dict[K, V]:
     def get(self, k: K) -> V:
         i: int = self.index_of(k)
         if i < 0:
-            panic("dict: key not found")
+            panic(i18n.pick("dict: 鍵がありません",
+                            "dict: key not found"))
         return self.vals_[i]
 
     # 注意: default は **所有権を受け取ります**（返す可能性があるため）

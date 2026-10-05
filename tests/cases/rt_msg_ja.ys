@@ -1,0 +1,10 @@
+# EXIT: 1
+# STDERR: runtime error: 添字が範囲の外です: 5（長さ 3）
+# 実行時のエラーは既定で日本語です（docs/design/i18n-diagnostics.md §10。段階 4）。
+#   ★ 言語は**プログラムを動かしたときの** PLC_MSG_LANG で決まります（コンパイルしたときではありません）。
+#   注意: `runtime error:` は枠の言葉で、言語によらず同じです（コンパイラの `error:` と同じ考え方）。
+def main() -> int:
+    xs: list[int] = [1, 2, 3]
+    i: int = len(xs) + 2
+    print(str(xs[i]))
+    return 0

@@ -15,6 +15,7 @@
 #
 # 注意: 渡しているあいだ、その list を**変えないでください**。`append` で伸びると
 #   別の場所へ移ることがあり、C 側が見ている番地が古くなります。
+import i18n
 import linalg
 
 # list の中身の先頭（ランタイムが教えてくれます）
@@ -43,7 +44,8 @@ NO_TRANS: int = 111
 # 内積（x・y）
 def dot(x: list[float], y: list[float]) -> float:
     if len(x) != len(y):
-        panic("blas.dot: 長さが違います（" + str(len(x)) + " と " + str(len(y)) + "）")
+        panic(i18n.pick("blas.dot: 長さが違います（" + str(len(x)) + " と " + str(len(y)) + "）",
+                        "blas.dot: lengths differ (" + str(len(x)) + " and " + str(len(y)) + ")"))
     if len(x) == 0:
         return 0.0
     return cblas_ddot(len(x), pl_list_data(x), 1, pl_list_data(y), 1)
@@ -59,7 +61,8 @@ def norm(x: list[float]) -> float:
 # y ← a·x + y（y を書き換えます）
 def axpy(a: float, x: list[float], y: mut list[float]) -> None:
     if len(x) != len(y):
-        panic("blas.axpy: 長さが違います（" + str(len(x)) + " と " + str(len(y)) + "）")
+        panic(i18n.pick("blas.axpy: 長さが違います（" + str(len(x)) + " と " + str(len(y)) + "）",
+                        "blas.axpy: lengths differ (" + str(len(x)) + " and " + str(len(y)) + ")"))
     if len(x) == 0:
         return
     cblas_daxpy(len(x), a, pl_list_data(x), 1, pl_list_data(y), 1)
@@ -79,7 +82,8 @@ def scal(a: float, x: mut list[float]) -> None:
 def matmul(a: list[float], b: list[float], c: mut list[float],
            m: int, n: int, k: int) -> None:
     if len(a) != m * k or len(b) != k * n or len(c) != m * n:
-        panic("blas.matmul: 大きさが合いません")
+        panic(i18n.pick("blas.matmul: 大きさが合いません",
+                        "blas.matmul: sizes do not match"))
     if m * n == 0:
         return
     cblas_dgemm(ROW_MAJOR, NO_TRANS, NO_TRANS, m, n, k, 1.0,

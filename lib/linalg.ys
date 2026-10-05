@@ -13,6 +13,7 @@
 #
 # 注意: 添字は 0 から始まります。行列は **行優先**（row-major）で持ちます。
 
+import i18n
 import math
 import strings
 
@@ -44,7 +45,8 @@ def ones(n: int) -> list[float]:
 # a から b まで n 個（両端を含む）
 def linspace(a: float, b: float, n: int) -> list[float]:
     if n < 1:
-        panic("linalg.linspace: 個数は 1 以上です")
+        panic(i18n.pick("linalg.linspace: 個数は 1 以上です",
+                        "linalg.linspace: the count must be at least 1"))
     if n == 1:
         return full(1, a)
     v: list[float] = []
@@ -57,7 +59,8 @@ def linspace(a: float, b: float, n: int) -> list[float]:
 # a から b の手前まで step 刻み
 def arange(a: float, b: float, step: float) -> list[float]:
     if step == 0.0:
-        panic("linalg.arange: 刻みが 0 です")
+        panic(i18n.pick("linalg.arange: 刻みが 0 です",
+                        "linalg.arange: the step is 0"))
     v: list[float] = []
     x: float = a
     if step > 0.0:
@@ -87,8 +90,9 @@ def vcopy(a: list[float]) -> list[float]:
 #   実際に測ったら、切り出したほうが少し遅くなりました（0.31 → 0.34 秒）。
 def same_len(a: list[float], b: list[float], who: str) -> None:
     if len(a) != len(b):
-        panic("linalg." + who + ": 長さが違います（" +
-              str(len(a)) + " と " + str(len(b)) + "）")
+        panic(i18n.pick("linalg." + who + ": 長さが違います（" +
+                        str(len(a)) + " と " + str(len(b)) + "）",
+                        "linalg." + who + ": lengths differ (" + str(len(a)) + " and " + str(len(b)) + ")"))
 
 def add(a: list[float], b: list[float]) -> list[float]:
     same_len(a, b, "add")
@@ -127,7 +131,8 @@ def div(a: list[float], b: list[float]) -> list[float]:
     i: int = 0
     while i < len(a):
         if b[i] == 0.0:
-            panic("linalg.div: " + str(i) + " 番目の要素が 0 です（0 で割れません）")
+            panic(i18n.pick("linalg.div: " + str(i) + " 番目の要素が 0 です（0 で割れません）",
+                            "linalg.div: element " + str(i) + " is 0 (division by zero)"))
         v.append(a[i] / b[i])
         i = i + 1
     return v
@@ -170,7 +175,8 @@ def vprod(a: list[float]) -> float:
 
 def vmin(a: list[float]) -> float:
     if len(a) == 0:
-        panic("linalg.vmin: 空のベクトルです")
+        panic(i18n.pick("linalg.vmin: 空のベクトルです",
+                        "linalg.vmin: empty vector"))
     m: float = a[0]
     for x in a:
         m = math.fmin(m, x)
@@ -178,7 +184,8 @@ def vmin(a: list[float]) -> float:
 
 def vmax(a: list[float]) -> float:
     if len(a) == 0:
-        panic("linalg.vmax: 空のベクトルです")
+        panic(i18n.pick("linalg.vmax: 空のベクトルです",
+                        "linalg.vmax: empty vector"))
     m: float = a[0]
     for x in a:
         m = math.fmax(m, x)
@@ -187,7 +194,8 @@ def vmax(a: list[float]) -> float:
 # 最小・最大の**位置**
 def argmin(a: list[float]) -> int:
     if len(a) == 0:
-        panic("linalg.argmin: 空のベクトルです")
+        panic(i18n.pick("linalg.argmin: 空のベクトルです",
+                        "linalg.argmin: empty vector"))
     k: int = 0
     i: int = 1
     while i < len(a):
@@ -198,7 +206,8 @@ def argmin(a: list[float]) -> int:
 
 def argmax(a: list[float]) -> int:
     if len(a) == 0:
-        panic("linalg.argmax: 空のベクトルです")
+        panic(i18n.pick("linalg.argmax: 空のベクトルです",
+                        "linalg.argmax: empty vector"))
     k: int = 0
     i: int = 1
     while i < len(a):
@@ -252,13 +261,15 @@ def dist(a: list[float], b: list[float]) -> float:
 def normalize(a: list[float]) -> list[float]:
     n: float = norm(a)
     if n == 0.0:
-        panic("linalg.normalize: 零ベクトルは正規化できません")
+        panic(i18n.pick("linalg.normalize: 零ベクトルは正規化できません",
+                        "linalg.normalize: the zero vector cannot be normalized"))
     return scale(a, 1.0 / n)
 
 # 3 次元の外積
 def cross(a: list[float], b: list[float]) -> list[float]:
     if len(a) != 3 or len(b) != 3:
-        panic("linalg.cross: 3 次元ベクトルにだけ定義されます")
+        panic(i18n.pick("linalg.cross: 3 次元ベクトルにだけ定義されます",
+                        "linalg.cross: only defined for 3-dimensional vectors"))
     v: list[float] = []
     v.append(a[1] * b[2] - a[2] * b[1])
     v.append(a[2] * b[0] - a[0] * b[2])
@@ -269,7 +280,8 @@ def cross(a: list[float], b: list[float]) -> list[float]:
 def angle(a: list[float], b: list[float]) -> float:
     d: float = norm(a) * norm(b)
     if d == 0.0:
-        panic("linalg.angle: 零ベクトルとの角度は定義されません")
+        panic(i18n.pick("linalg.angle: 零ベクトルとの角度は定義されません",
+                        "linalg.angle: the angle with the zero vector is undefined"))
     c: float = dot(a, b) / d
     # 注意: 丸めで |c| がわずかに 1 を超えることがあるので挟みます
     c = math.fmax(-1.0, math.fmin(1.0, c))
@@ -290,7 +302,8 @@ class Matrix:
 
     def init(self, rows: int, cols: int, data: own list[float]) -> None:
         if rows < 0 or cols < 0:
-            panic("linalg.Matrix: 行数・列数は 0 以上です")
+            panic(i18n.pick("linalg.Matrix: 行数・列数は 0 以上です",
+                            "linalg.Matrix: the numbers of rows and columns must be at least 0"))
         self.rows = rows
         self.cols = cols
         self.data = data
@@ -314,8 +327,9 @@ class Matrix:
     #   1 周に 3 回呼ばれるので、これだけで **2.4 倍** 遅くなりました。
     #   注意: 検査そのものは減らしていません。分けただけです。
     def index_fail(self, i: int, j: int) -> None:
-        panic("linalg.Matrix: 添字が範囲外です（" + str(i) + ", " +
-              str(j) + "）")
+        panic(i18n.pick("linalg.Matrix: 添字が範囲外です（" + str(i) + ", " +
+                        str(j) + "）",
+                        "linalg.Matrix: index out of range (" + str(i) + ", " + str(j) + ")"))
 
     # i 行目を取り出す（複製を返します）
     def row(self, i: int) -> list[float]:
@@ -414,7 +428,8 @@ def from_rows(rows: list[list[float]]) -> Matrix:
     data: list[float] = []
     for r in rows:
         if len(r) != c:
-            panic("linalg.from_rows: 行ごとに列数が違います")
+            panic(i18n.pick("linalg.from_rows: 行ごとに列数が違います",
+                            "linalg.from_rows: rows have different numbers of columns"))
         for x in r:
             data.append(x)
     return Matrix(len(rows), c, data)
@@ -437,15 +452,17 @@ def mcopy(a: Matrix) -> Matrix:
 
 def same_shape(a: Matrix, b: Matrix, who: str) -> None:
     if a.rows != b.rows or a.cols != b.cols:
-        panic("linalg." + who + ": 形が違います（" +
-              shape_str(a) + " と " + shape_str(b) + "）")
+        panic(i18n.pick("linalg." + who + ": 形が違います（" +
+                        shape_str(a) + " と " + shape_str(b) + "）",
+                        "linalg." + who + ": shapes differ (" + shape_str(a) + " and " + shape_str(b) + ")"))
 
 def shape_str(a: Matrix) -> str:
     return str(a.rows) + "x" + str(a.cols)
 
 def need_square(a: Matrix, who: str) -> None:
     if not a.is_square():
-        panic("linalg." + who + ": 正方行列が必要です（" + shape_str(a) + "）")
+        panic(i18n.pick("linalg." + who + ": 正方行列が必要です（" + shape_str(a) + "）",
+                        "linalg." + who + ": a square matrix is required (" + shape_str(a) + ")"))
 
 
 # ── 要素ごとの計算 ──────────────────────────────────────────
@@ -475,8 +492,9 @@ def mneg(a: Matrix) -> Matrix:
 # 行列の積（(n×m)·(m×p) → (n×p)）
 def matmul(a: Matrix, b: Matrix) -> Matrix:
     if a.cols != b.rows:
-        panic("linalg.matmul: 形が合いません（" + shape_str(a) + " と " +
-              shape_str(b) + "）")
+        panic(i18n.pick("linalg.matmul: 形が合いません（" + shape_str(a) + " と " +
+                        shape_str(b) + "）",
+                        "linalg.matmul: shapes do not match (" + shape_str(a) + " and " + shape_str(b) + ")"))
     # ★ 平坦な list を直接たどります（get / set を経由しません）。
     #   get / set は呼ぶたびに行と列の範囲を確かめるので、内側のループに
     #   検査が 3 つずつ並び、ベクトル化も効きませんでした（C の 15 倍）。
@@ -510,8 +528,9 @@ def matmul(a: Matrix, b: Matrix) -> Matrix:
 # 行列 × ベクトル
 def matvec(a: Matrix, v: list[float]) -> list[float]:
     if a.cols != len(v):
-        panic("linalg.matvec: 形が合いません（" + shape_str(a) + " と 長さ " +
-              str(len(v)) + "）")
+        panic(i18n.pick("linalg.matvec: 形が合いません（" + shape_str(a) + " と 長さ " +
+                        str(len(v)) + "）",
+                        "linalg.matvec: shapes do not match (" + shape_str(a) + " and length " + str(len(v)) + ")"))
     out: list[float] = []
     i: int = 0
     while i < a.rows:
@@ -549,7 +568,8 @@ def trace(a: Matrix) -> float:
 def mpow(a: Matrix, n: int) -> Matrix:
     need_square(a, "mpow")
     if n < 0:
-        panic("linalg.mpow: 負の冪には inverse を使ってください")
+        panic(i18n.pick("linalg.mpow: 負の冪には inverse を使ってください",
+                        "linalg.mpow: use inverse for negative powers"))
     r: Matrix = identity(a.rows)
     base: Matrix = mcopy(a)
     k: int = n
@@ -631,8 +651,9 @@ def solve(a: Matrix, b: list[float]) -> list[float]:
     need_square(a, "solve")
     n: int = a.rows
     if len(b) != n:
-        panic("linalg.solve: 右辺の長さが合いません（" + str(len(b)) +
-              " ではなく " + str(n) + "）")
+        panic(i18n.pick("linalg.solve: 右辺の長さが合いません（" + str(len(b)) +
+                        " ではなく " + str(n) + "）",
+                        "linalg.solve: the length of the right-hand side does not match (" + str(len(b)) + " instead of " + str(n) + ")"))
 
     # ★ [A | b] の拡大行列を作って前進消去 → 後退代入
     m: Matrix = mzeros(n, n + 1)
@@ -654,7 +675,8 @@ def solve(a: Matrix, b: list[float]) -> list[float]:
                 p = r
             r = r + 1
         if math.fabs(m.get(p, c)) < 1.0e-300:
-            panic("linalg.solve: 特異行列です（解が一意に定まりません）")
+            panic(i18n.pick("linalg.solve: 特異行列です（解が一意に定まりません）",
+                            "linalg.solve: singular matrix (the solution is not unique)"))
         swap_rows(m, p, c)
 
         piv: float = m.get(c, c)
@@ -710,7 +732,8 @@ def inverse(a: Matrix) -> Matrix:
                 p = r
             r = r + 1
         if math.fabs(m.get(p, c)) < 1.0e-300:
-            panic("linalg.inverse: 特異行列です（逆行列がありません）")
+            panic(i18n.pick("linalg.inverse: 特異行列です（逆行列がありません）",
+                            "linalg.inverse: singular matrix (it has no inverse)"))
         swap_rows(m, p, c)
 
         # ピボット行を 1 に正規化

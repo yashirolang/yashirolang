@@ -12,6 +12,9 @@
 #   tests/python.sh                       tests/python/ のソースを全部
 #   PLC_CC=build/stage2 tests/python.sh   別のコンパイラで
 set -u
+# ★ panic の文面は実行時の言語で決まります（既定は日本語）。使う人の設定を外して、
+#   既定の日本語で確かめます（docs/design/i18n-diagnostics.md §10）。
+unset PLC_MSG_LANG
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LANG_CC="$(make -s -C "$ROOT" print-LANG_CC)"

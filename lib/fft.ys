@@ -12,6 +12,7 @@
 #   実部と虚部を `list[float]` 2 本で持つ書き方のほうが速くなります。
 
 import complex
+import i18n
 import math
 
 def is_pow2(n: int) -> bool:
@@ -24,7 +25,8 @@ def is_pow2(n: int) -> bool:
 
 def need_pow2(n: int, who: str) -> None:
     if not is_pow2(n):
-        panic(who + ": 長さは 2 のべき乗でなければなりません（" + str(n) + "）")
+        panic(i18n.pick(who + ": 長さは 2 のべき乗でなければなりません（" + str(n) + "）",
+                        who + ": the length must be a power of 2 (" + str(n) + ")"))
 
 # 0 〜 n-1 を、log2(n) 桁のビット反転で並べ替えた位置
 def bit_reverse(i: int, bits: int) -> int:

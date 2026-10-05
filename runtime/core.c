@@ -84,6 +84,46 @@ static long long pl_itoa(long long v, char *out) {
 
 // ── エラー ─────────────────────────────────────────────────
 
+// ★ 実行時のエラーの言語（core.h）。日本語と英語の両方を、ここに C の文字列で持ちます。
+//   ファイルを読まないのは、ベアメタルにはファイルが無いためです。
+//   注意: panic(...) に利用者が渡した文面は訳しません（利用者のものだからです）。
+int pl_rt_lang;
+
+_Noreturn void pl_panic(const char *msg);
+
+static const char *pl_t(const char *ja, const char *en) {
+    return pl_rt_lang == 1 ? ja : en;
+}
+
+// 標準ライブラリ（lib/i18n）が、自分の panic の文面を選ぶのに使います。
+long long pl_rt_lang_en(void) { return pl_rt_lang == 1 ? 0 : 1; }
+
+// 文字列を buf の k の位置から足す（snprintf は使いません。ベアメタルでも同じコードが動くように）
+static long long pl_cat(char *buf, long long k, long long cap, const char *s) {
+    while (*s && k < cap - 1) buf[k++] = *s++;
+    buf[k] = '\0';
+    return k;
+}
+
+static long long pl_cat_int(char *buf, long long k, long long cap, long long v) {
+    char tmp[32];
+    long long n = pl_itoa(v, tmp);
+    tmp[n] = '\0';
+    return pl_cat(buf, k, cap, tmp);
+}
+
+// 「添字が範囲の外です: 5（長さ 3）」/ "index out of range: 5 (3)"
+static _Noreturn void pl_index_panic(long long i, long long len) {
+    char buf[128];
+    long long cap = sizeof(buf);
+    long long k = pl_cat(buf, 0, cap, pl_t("添字が範囲の外です: ", "index out of range: "));
+    k = pl_cat_int(buf, k, cap, i);
+    k = pl_cat(buf, k, cap, pl_t("（長さ ", " ("));
+    k = pl_cat_int(buf, k, cap, len);
+    pl_cat(buf, k, cap, pl_t("）", ")"));
+    pl_panic(buf);
+}
+
 // 回復不能なエラー。stderr に出して終了コード 1 で死ぬ。
 // 例外機構（try / except）は v1 では採用しません（言語仕様 8 節）。
 _Noreturn void pl_panic(const char *msg) {
@@ -99,7 +139,7 @@ _Noreturn void pl_panic(const char *msg) {
 //   即終了にすることで、生成する IR に NULL チェックを入れずに済みます。
 void *pl_alloc(long long size) {
     void *p = pl_hook_alloc(size);
-    if (!p) pl_panic("out of memory");
+    if (!p) pl_panic(pl_t("メモリが足りません", "out of memory"));
     return p;
 }
 
@@ -120,7 +160,8 @@ void *pl_alloc(long long size) {
 // None だったときだけ呼ばれる出口。
 // 注意: **戻ってきません**。呼び出し側の IR は直後に unreachable を置きます。
 void pl_none_fail(void) {
-    pl_panic("field access on None (uninitialized reference field?)");
+    pl_panic(pl_t("None のフィールドを読もうとしました（参照のフィールドを初期化し忘れていませんか）",
+                   "field access on None (uninitialized reference field?)"));
 }
 
 // ★ 展開後の codegen はもう呼びませんが、ランタイム内から使います。
@@ -691,9 +732,9 @@ double pl_float_from_int(long long v) { return (double)v; }
 //     double でちょうど表せるので、これ以上を弾けば足ります。
 //     最小値のほうは -9223372036854775808.0 が表せるので、そのものは通します。
 long long pl_int_from_float(double v) {
-    if (v != v) pl_panic("int(): not a number (NaN)");
+    if (v != v) pl_panic(pl_t("int(): 数ではありません（NaN）", "int(): not a number (NaN)"));
     if (v >= 9223372036854775808.0 || v < -9223372036854775808.0)
-        pl_panic("int(): out of range");
+        pl_panic(pl_t("int(): int に収まりません", "int(): out of range"));
     return (long long)v;
 }
 
@@ -711,7 +752,7 @@ long long pl_str_to_int(const char *s) {
         neg = *p == '-';
         p++;
     }
-    if (*p < '0' || *p > '9') pl_panic("int(): not a number");
+    if (*p < '0' || *p > '9') pl_panic(pl_t("int(): 数として読めません", "int(): not a number"));
 
     // ★ **桁があふれたら panic します。**
     //   int("99999999999999999999") が黙って 7766279631452241919 に
@@ -725,11 +766,11 @@ long long pl_str_to_int(const char *s) {
     while (*p >= '0' && *p <= '9') {
         unsigned long long d = (unsigned long long)(*p - '0');
         if (v > (limit - d) / 10ULL)
-            pl_panic("int(): out of range");
+            pl_panic(pl_t("int(): int に収まりません", "int(): out of range"));
         v = v * 10ULL + d;
         p++;
     }
-    if (*p != '\0') pl_panic("int(): not a number");
+    if (*p != '\0') pl_panic(pl_t("int(): 数として読めません", "int(): not a number"));
     // 注意: -9223372036854775808 は long long の正の側に無いので、
     //   符号なしのまま否定してから変換します。
     if (neg) return (long long)(0ULL - v);
@@ -902,7 +943,7 @@ double pl_str_to_float(const char *s) {
     if (pl_ci_match(p, "nan")) {
         p += 3;
         while (pl_is_space_ch(*p)) p++;
-        if (*p != '\0') pl_panic("float(): not a number");
+        if (*p != '\0') pl_panic(pl_t("float(): 数として読めません", "float(): not a number"));
         return pl_bits_to_double(0x7ff8000000000000ULL, 0);
     }
 
@@ -942,7 +983,7 @@ double pl_str_to_float(const char *s) {
                 }
             }
         }
-        if (!seen) pl_panic("float(): not a number");
+        if (!seen) pl_panic(pl_t("float(): 数として読めません", "float(): not a number"));
 
         if (*p == 'e' || *p == 'E') {
             p++;
@@ -951,7 +992,7 @@ double pl_str_to_float(const char *s) {
                 eneg = *p == '-';
                 p++;
             }
-            if (*p < '0' || *p > '9') pl_panic("float(): not a number");
+            if (*p < '0' || *p > '9') pl_panic(pl_t("float(): 数として読めません", "float(): not a number"));
             long long ev = 0;
             for (; *p >= '0' && *p <= '9'; p++)
                 if (ev < 1000000) ev = ev * 10 + (*p - '0');
@@ -964,13 +1005,13 @@ double pl_str_to_float(const char *s) {
         }
 
         while (pl_is_space_ch(*p)) p++;
-        if (*p != '\0') pl_panic("float(): not a number");
+        if (*p != '\0') pl_panic(pl_t("float(): 数として読めません", "float(): not a number"));
         return pl_dec_to_double(dig, nd, exp10, sticky, neg);
     }
 
 tail:
     while (pl_is_space_ch(*p)) p++;
-    if (*p != '\0') pl_panic("float(): not a number");
+    if (*p != '\0') pl_panic(pl_t("float(): 数として読めません", "float(): not a number"));
     return pl_inf_of(neg);
 }
 
@@ -978,16 +1019,16 @@ tail:
 //   注意: 「inf を返す」ほうが IEEE754 の既定ですが、それだと
 //     「どこで壊れたか」が分からないまま nan が伝わります。
 _Noreturn void pl_fdiv_zero_fail(void) {
-    pl_panic("float division by zero");
+    pl_panic(pl_t("float を 0 で割りました", "float division by zero"));
 }
 
 long long pl_ord(const char *s) {
-    if (s[0] == '\0') pl_panic("ord(): empty string");
+    if (s[0] == '\0') pl_panic(pl_t("ord(): 空の文字列です", "ord(): empty string"));
     return (long long)(unsigned char)s[0];
 }
 
 char *pl_chr(long long v) {
-    if (v < 0 || v > 255) pl_panic("chr(): out of range");
+    if (v < 0 || v > 255) pl_panic(pl_t("chr(): 0〜255 の外です", "chr(): out of range"));
     char *p = pl_str_alloc(1);
     p[0] = (char)v;
     p[1] = '\0';
@@ -1012,10 +1053,10 @@ char *pl_chr(long long v) {
 //   注意: 検査は 1 つ増えますが、どのみち 0 除算のためにこの関数を通るので
 //     命令数の増分だけです（呼び出しは元から 1 回）。
 long long pl_floordiv(long long a, long long b) {
-    if (b == 0) pl_panic("division by zero");
+    if (b == 0) pl_panic(pl_t("0 で割りました", "division by zero"));
     // ★ PL_LLONG_MIN / -1 は C では未定義動作で、実際には SIGFPE で落ちます。
     //   何が起きたか分からないまま死ぬより、名前を付けて死にます（規約 R10）。
-    if (b == -1 && a == PL_LLONG_MIN) pl_panic("integer overflow in //");
+    if (b == -1 && a == PL_LLONG_MIN) pl_panic(pl_t("整数があふれました（//）", "integer overflow in //"));
     long long q = a / b;
     // 符号が食い違っていて、割り切れていないときだけ 1 つ下げる。
     if ((a % b != 0) && ((a < 0) != (b < 0))) q--;
@@ -1036,23 +1077,20 @@ long long pl_floordiv(long long a, long long b) {
 // シフト量が 0..63 の外だったとき（codegen の gen_shift_check から呼ばれます）。
 // 注意: **戻りません。** 宣言には noreturn と cold が付きます。
 void pl_shift_fail(long long n) {
-    char buf[64];
-    char *w = buf;
-    const char *m = "shift count out of range: ";
-    while (*m) *w++ = *m++;
-    w += pl_itoa(n, w);
-    *w = '\0';
+    char buf[96];
+    long long k = pl_cat(buf, 0, sizeof(buf), pl_t("シフト量が 0〜63 の外です: ", "shift count out of range: "));
+    pl_cat_int(buf, k, sizeof(buf), n);
     pl_panic(buf);
 }
 
 void pl_overflow_fail(long long op) {
-    if (op == 0) pl_panic("integer overflow in +");
-    if (op == 1) pl_panic("integer overflow in -");
-    if (op == 2) pl_panic("integer overflow in *");
+    if (op == 0) pl_panic(pl_t("整数があふれました（+）", "integer overflow in +"));
+    if (op == 1) pl_panic(pl_t("整数があふれました（-）", "integer overflow in -"));
+    if (op == 2) pl_panic(pl_t("整数があふれました（*）", "integer overflow in *"));
     // 4 は添字の計算。演算子の種類は言いません
     //   — 添字の式の中の + - * を 1 つの旗にまとめて見ているためです。
-    if (op == 4) pl_panic("integer overflow in index computation");
-    pl_panic("integer overflow in unary -");
+    if (op == 4) pl_panic(pl_t("整数があふれました（添字の計算）", "integer overflow in index computation"));
+    pl_panic(pl_t("整数があふれました（単項の -）", "integer overflow in unary -"));
 }
 
 // ── 範囲型（部分型。A-28）──
@@ -1066,19 +1104,23 @@ void pl_range_fail(const char *name, long long v, long long lo, long long hi) {
     // ★ snprintf は使いません（ベアメタルでも同じコードが動くように）。
     char buf[256];
     long long k = 0;
-    const char *head = "value out of range: ";
-    for (const char *q = head; *q && k < 200; q++) buf[k++] = *q;
-    for (const char *q = name; *q && k < 200; q++) buf[k++] = *q;
-    const char *mid = " accepts ";
-    for (const char *q = mid; *q && k < 220; q++) buf[k++] = *q;
-    k += pl_itoa(lo, buf + k);
-    buf[k++] = '.';
-    buf[k++] = '.';
-    k += pl_itoa(hi, buf + k);
-    const char *mid2 = " but got ";
-    for (const char *q = mid2; *q && k < 240; q++) buf[k++] = *q;
-    k += pl_itoa(v, buf + k);
-    buf[k] = '\0';
+    long long cap = sizeof(buf);
+    if (pl_rt_lang == 1) {
+        // 範囲の外の値です: Percent に入るのは 0..100 ですが、101 でした
+        k = pl_cat(buf, k, cap, "範囲の外の値です: ");
+        k = pl_cat(buf, k, cap, name);
+        k = pl_cat(buf, k, cap, " に入るのは ");
+    } else {
+        k = pl_cat(buf, k, cap, "value out of range: ");
+        k = pl_cat(buf, k, cap, name);
+        k = pl_cat(buf, k, cap, " accepts ");
+    }
+    k = pl_cat_int(buf, k, cap, lo);
+    k = pl_cat(buf, k, cap, "..");
+    k = pl_cat_int(buf, k, cap, hi);
+    k = pl_cat(buf, k, cap, pl_t(" ですが、", " but got "));
+    k = pl_cat_int(buf, k, cap, v);
+    if (pl_rt_lang == 1) pl_cat(buf, k, cap, " でした");
     pl_panic(buf);
 }
 
@@ -1090,10 +1132,34 @@ void pl_range_fail(const char *name, long long v, long long lo, long long hi) {
 void pl_contract_fail(const char *what) {
     char buf[256];
     long long k = 0;
-    const char *head = "contract violated: ";
-    for (const char *q = head; *q && k < 200; q++) buf[k++] = *q;
-    for (const char *q = what; *q && k < 250; q++) buf[k++] = *q;
+    long long cap = sizeof(buf);
+    if (pl_rt_lang != 1) {
+        k = pl_cat(buf, k, cap, "contract violated: ");
+        pl_cat(buf, k, cap, what);
+        pl_panic(buf);
+    }
+    // ★ what は codegen が決まった形で作ります: "<requires|ensures> of <関数> (line <行>)"。
+    //   日本語では「契約違反です: <関数> の <requires>（<行> 行目）」に並べ替えます。
+    //   形が違えば（将来の変更に追いつけていなければ）そのまま出します。
+    const char *of = 0;
+    const char *ln = 0;
+    for (const char *q = what; *q; q++) {
+        if (!of && q[0] == ' ' && q[1] == 'o' && q[2] == 'f' && q[3] == ' ') of = q;
+        if (q[0] == ' ' && q[1] == '(' && q[2] == 'l' && q[3] == 'i' && q[4] == 'n' &&
+            q[5] == 'e' && q[6] == ' ') ln = q;
+    }
+    k = pl_cat(buf, k, cap, "契約違反です: ");
+    if (!of || !ln || ln < of) {
+        pl_cat(buf, k, cap, what);
+        pl_panic(buf);
+    }
+    for (const char *q = of + 4; q < ln && k < cap - 1; q++) buf[k++] = *q;  // 関数名
+    k = pl_cat(buf, k, cap, " の ");
+    for (const char *q = what; q < of && k < cap - 1; q++) buf[k++] = *q;    // requires / ensures
+    k = pl_cat(buf, k, cap, "（");
+    for (const char *q = ln + 7; *q && *q != ')' && k < cap - 1; q++) buf[k++] = *q;  // 行
     buf[k] = '\0';
+    pl_cat(buf, k, cap, " 行目）");
     pl_panic(buf);
 }
 
@@ -1105,7 +1171,8 @@ void pl_contract_fail(const char *what) {
 void pl_prove_fail(const char *what) {
     char buf[256];
     long long k = 0;
-    const char *head = "prover was wrong (this is a compiler bug): ";
+    const char *head = pl_t("証明器が誤りました（コンパイラのバグです。報告してください）: ",
+                            "prover was wrong (this is a compiler bug): ");
     for (const char *q = head; *q && k < 200; q++) buf[k++] = *q;
     for (const char *q = what; *q && k < 250; q++) buf[k++] = *q;
     buf[k] = '\0';
@@ -1113,7 +1180,7 @@ void pl_prove_fail(const char *what) {
 }
 
 long long pl_mod(long long a, long long b) {
-    if (b == 0) pl_panic("division by zero");
+    if (b == 0) pl_panic(pl_t("0 で割りました", "division by zero"));
     // ★ こちらの答えは 0 で確定していますが、a % b の計算自体が
     //   PL_LLONG_MIN % -1 で落ちるので、割る前に返します。
     if (b == -1) return 0;
@@ -1147,15 +1214,15 @@ static int pl_mul_ovf(long long a, long long b, long long *out) {
 //     元の形だと、答えは正しいのに途中の二乗だけがあふれて
 //     **誤検出**になります（2 ** 62 など）。
 long long pl_ipow(long long base, long long exp) {
-    if (exp < 0) pl_panic("negative exponent");
+    if (exp < 0) pl_panic(pl_t("負の指数です（int の ** は 0 以上の指数だけです）", "negative exponent"));
     long long r = 1;
     while (exp > 0) {
         if (exp & 1) {
-            if (pl_mul_ovf(r, base, &r)) pl_panic("integer overflow in **");
+            if (pl_mul_ovf(r, base, &r)) pl_panic(pl_t("整数があふれました（**）", "integer overflow in **"));
         }
         exp >>= 1;
         if (exp > 0) {
-            if (pl_mul_ovf(base, base, &base)) pl_panic("integer overflow in **");
+            if (pl_mul_ovf(base, base, &base)) pl_panic(pl_t("整数があふれました（**）", "integer overflow in **"));
         }
     }
     return r;
@@ -1327,18 +1394,8 @@ static void pl_list_grow(PlList *l) {
 // 注意: 3 つめの引数は「添字の計算で桁があふれたか」です。
 //   あふれたときは i に意味がない（折り返した値）ので、数を出しません。
 void pl_index_fail(long long i, long long len, long long overflowed) {
-    if (overflowed) pl_panic("integer overflow in index computation");
-    char buf[80];
-    char *w = buf;
-    const char *m = "index out of range: ";
-    while (*m) *w++ = *m++;
-    w += pl_itoa(i, w);
-    *w++ = ' ';
-    *w++ = '(';
-    w += pl_itoa(len, w);
-    *w++ = ')';
-    *w = '\0';
-    pl_panic(buf);
+    if (overflowed) pl_panic(pl_t("整数があふれました（添字の計算）", "integer overflow in index computation"));
+    pl_index_panic(i, len);
 }
 
 // ★ 展開後の codegen はもう呼びませんが、ランタイム内から使います。
@@ -1545,7 +1602,7 @@ long long pl_hash_f64(double v) {
 //   折り返して**負の値を返していました**（C では符号付きの桁あふれで未定義動作）。
 //   単項 `-` と同じく、桁あふれとして止めます。
 long long pl_iabs(long long v) {
-    if (v == PL_LLONG_MIN) pl_panic("integer overflow in abs");
+    if (v == PL_LLONG_MIN) pl_panic(pl_t("整数があふれました（abs）", "integer overflow in abs"));
     return v < 0 ? -v : v;
 }
 double pl_fabs(double v) { return v < 0.0 ? -v : v; }
@@ -1573,7 +1630,7 @@ long long pl_list_sum(PlList *l) {
     for (long long i = 0; i < l->len; i++) {
         long long v = ((long long *)l->data)[i];
         if ((v > 0 && s > PL_LLONG_MAX - v) || (v < 0 && s < PL_LLONG_MIN - v))
-            pl_panic("integer overflow in sum");
+            pl_panic(pl_t("整数があふれました（sum）", "integer overflow in sum"));
         s += v;
     }
     return s;
@@ -1621,19 +1678,16 @@ PlList *pl_list_slice(PlList *l, long long lo, long long hi) {
 
 // 末尾を取り出す（空なら panic）
 long long pl_list_pop(PlList *l) {
-    if (l->len == 0) pl_panic("pop from empty list");
+    if (l->len == 0) pl_panic(pl_t("空のリストから pop しました", "pop from empty list"));
     return ((long long *)l->data)[--l->len];
 }
 
 // i の位置に差し込む（後ろへずらす）。i == len なら末尾に足すのと同じ
 void pl_list_insert(PlList *l, long long i, long long v) {
     if (i < 0 || i > l->len) {
-        char buf[80];
-        char *w = buf;
-        const char *m = "insert index out of range: ";
-        while (*m) *w++ = *m++;
-        w += pl_itoa(i, w);
-        *w = '\0';
+        char buf[96];
+        long long k = pl_cat(buf, 0, sizeof(buf), pl_t("insert の位置が範囲の外です: ", "insert index out of range: "));
+        pl_cat_int(buf, k, sizeof(buf), i);
         pl_panic(buf);
     }
     pl_list_grow(l);
@@ -1761,17 +1815,7 @@ char *pl_str_join(PlList *xs, const char *sep) {
 long long pl_byte_at(const char *s, long long i) {
     long long n = pl_str_len(s);
     if (i < 0 || i >= n) {
-        char buf[80];
-        char *w = buf;
-        const char *m = "index out of range: ";
-        while (*m) *w++ = *m++;
-        w += pl_itoa(i, w);
-        *w++ = ' ';
-        *w++ = '(';
-        w += pl_itoa(n, w);
-        *w++ = ')';
-        *w = '\0';
-        pl_panic(buf);
+        pl_index_panic(i, n);
     }
     return (long long)(unsigned char)s[i];
 }
@@ -1780,17 +1824,7 @@ long long pl_byte_at(const char *s, long long i) {
 char *pl_str_index(const char *s, long long i) {
     long long n = pl_str_len(s);
     if (i < 0 || i >= n) {
-        char buf[80];
-        char *w = buf;
-        const char *m = "index out of range: ";
-        while (*m) *w++ = *m++;
-        w += pl_itoa(i, w);
-        *w++ = ' ';
-        *w++ = '(';
-        w += pl_itoa(n, w);
-        *w++ = ')';
-        *w = '\0';
-        pl_panic(buf);
+        pl_index_panic(i, n);
     }
     char *p = pl_str_alloc(1);
     p[0] = s[i];
@@ -1840,12 +1874,12 @@ void *pl_rc_new(void *value) {
 // ★ codegen は rc の中身読み出しを **IR に展開**します
 //   （オフセット 16 の load）。外れの経路だけがここに来ます。
 _Noreturn void pl_rc_none_fail(void) {
-    pl_panic("rc: None の中身は読めません");
+    pl_panic(pl_t("rc: None の中身は読めません", "rc: cannot read the contents of None"));
 }
 
 // 注意: ランタイムの中からはまだ使います（codegen は呼びません）。
 void *pl_rc_get(void *p) {
-    if (!p) pl_panic("rc: None の中身は読めません");
+    if (!p) pl_panic(pl_t("rc: None の中身は読めません", "rc: cannot read the contents of None"));
     return ((PlRc *)p)->value;
 }
 
@@ -1862,23 +1896,23 @@ void pl_rc_release(void *p, void (*value_drop)(void *)) {
     PlRc *r = p;
     r->strong--;
     if (r->strong > 0) return;
-    if (r->borrow > 0) pl_panic("rc: 借用したまま解放されました");
+    if (r->borrow > 0) pl_panic(pl_t("rc: 借用したまま解放されました", "rc: freed while borrowed"));
     if (value_drop) value_drop(r->value);
     pl_hook_free(r);
 }
 
 // 借用の数え札（仕様 §7.2。検査は**実行時**）
 void *pl_rc_borrow(void *p) {
-    if (!p) pl_panic("rc: None は借用できません");
+    if (!p) pl_panic(pl_t("rc: None は借用できません", "rc: cannot borrow None"));
     ((PlRc *)p)->borrow++;
     return ((PlRc *)p)->value;
 }
 
 void *pl_rc_borrow_mut(void *p) {
-    if (!p) pl_panic("rc: None は借用できません");
+    if (!p) pl_panic(pl_t("rc: None は借用できません", "rc: cannot borrow None"));
     PlRc *r = p;
     if (r->borrow != 0)
-        pl_panic("rc: 既に借用されているので、可変で借りられません");
+        pl_panic(pl_t("rc: 既に借用されているので、可変で借りられません", "rc: already borrowed, so it cannot be borrowed mutably"));
     r->borrow++;
     return r->value;
 }

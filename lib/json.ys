@@ -19,6 +19,7 @@
 # 注意: 数は**すべて float で持ちます**（JSON の数に整数・小数の区別が無いため）。
 #   整数として読むときは as_int() を使ってください。
 # 注意: 対応しているのは RFC 8259 の範囲です。末尾のカンマもコメントも読みません。
+import i18n
 import strings
 
 # 値の種類。注意: **末尾に足すこと**（番号がずれると読み書きが食い違います）
@@ -72,12 +73,14 @@ class Value:
     # 注意: 種類が違うと panic します。分からないときは先に is_* で確かめてください。
     def as_bool(self) -> bool:
         if self.kind != KIND_BOOL:
-            panic("json: bool ではありません（" + kind_name(self.kind) + "）")
+            panic(i18n.pick("json: bool ではありません（" + kind_name(self.kind) + "）",
+                            "json: not a bool (" + kind_name(self.kind) + ")"))
         return self.b
 
     def as_float(self) -> float:
         if self.kind != KIND_NUMBER:
-            panic("json: 数ではありません（" + kind_name(self.kind) + "）")
+            panic(i18n.pick("json: 数ではありません（" + kind_name(self.kind) + "）",
+                            "json: not a number (" + kind_name(self.kind) + ")"))
         return self.num
 
     def as_int(self) -> int:
@@ -85,7 +88,8 @@ class Value:
 
     def as_str(self) -> str:
         if self.kind != KIND_STRING:
-            panic("json: 文字列ではありません（" + kind_name(self.kind) + "）")
+            panic(i18n.pick("json: 文字列ではありません（" + kind_name(self.kind) + "）",
+                            "json: not a string (" + kind_name(self.kind) + ")"))
         return self.text
 
     # 配列 / オブジェクトの要素数
@@ -99,7 +103,8 @@ class Value:
     # 配列の i 番目
     def at(self, i: int) -> rc[Value]:
         if self.kind != KIND_ARRAY:
-            panic("json: 配列ではありません（" + kind_name(self.kind) + "）")
+            panic(i18n.pick("json: 配列ではありません（" + kind_name(self.kind) + "）",
+                            "json: not an array (" + kind_name(self.kind) + ")"))
         return self.items[i]
 
     # オブジェクトの鍵。無ければ None
@@ -117,7 +122,8 @@ class Value:
     def field(self, key: str) -> rc[Value]:
         v: rc[Value] | None = self.get(key)
         if v is None:
-            panic("json: 鍵 '" + key + "' がありません")
+            panic(i18n.pick("json: 鍵 '" + key + "' がありません",
+                            "json: no key '" + key + "'"))
             return rc(Value(KIND_NULL))
         else:
             return v
@@ -131,13 +137,15 @@ class Value:
     #   `rc[Value]` は `mut Value` の引数には渡せませんが、メソッドは呼べます。
     def push(mut self, x: rc[Value]) -> None:
         if self.kind != KIND_ARRAY:
-            panic("json: 配列ではありません（" + kind_name(self.kind) + "）")
+            panic(i18n.pick("json: 配列ではありません（" + kind_name(self.kind) + "）",
+                            "json: not an array (" + kind_name(self.kind) + ")"))
         self.items.append(x)
 
     # 鍵を入れる（同じ鍵が既にあれば置き換えます）
     def put(mut self, key: str, x: rc[Value]) -> None:
         if self.kind != KIND_OBJECT:
-            panic("json: オブジェクトではありません（" + kind_name(self.kind) + "）")
+            panic(i18n.pick("json: オブジェクトではありません（" + kind_name(self.kind) + "）",
+                            "json: not an object (" + kind_name(self.kind) + ")"))
         i: int = 0
         while i < len(self.keys):
             if self.keys[i] == key:
@@ -211,7 +219,8 @@ class Result:
     def get(self) -> rc[Value]:
         v: rc[Value] | None = self.value
         if v is None:
-            panic("json: 読めていません: " + self.error)
+            panic(i18n.pick("json: 読めていません: " + self.error,
+                            "json: not parsed: " + self.error))
             return rc(Value(KIND_NULL))
         else:
             return v

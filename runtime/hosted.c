@@ -83,6 +83,36 @@ typedef struct PlList PlList;
 PlList *pl_list_new(void);
 void pl_list_push_ptr(PlList *l, void *v);
 
+// ── 実行時のエラーの言語（docs/design/i18n-diagnostics.md §10）──
+//
+// ★ **プログラムを動かしたときの** PLC_MSG_LANG で決めます（コンパイルしたときではありません）。
+//   既定は日本語。コンパイラの --lang と同じく ja / en / auto を受け付けます。
+// 注意: 読み込まれたとき（constructor）に決めます。main から入る実行ファイルだけでなく、
+//   Python から読み込まれる共有ライブラリ（--python / --shared）でも同じに動くようにするためです。
+//   stack overflow の知らせはシグナルの中で出すので、そこで getenv を呼ばずに済む意味もあります。
+static int pl_lang_of(const char *v) {
+    if (!v || !v[0]) return 1;
+    if (strcmp(v, "ja") == 0) return 1;
+    if (strcmp(v, "en") == 0) return 0;
+    if (strcmp(v, "auto") == 0) {
+        const char *names[] = {"LC_ALL", "LC_MESSAGES", "LANG"};
+        for (int i = 0; i < 3; i++) {
+            const char *l = getenv(names[i]);
+            if (l && l[0]) return strncmp(l, "ja", 2) == 0 ? 1 : 0;
+        }
+        return 0;
+    }
+    return 1;  // 知らない値は既定（日本語）。実行時に止めるほどのことではないため
+}
+
+__attribute__((constructor)) static void pl_rt_lang_init(void) {
+    pl_rt_lang = pl_lang_of(getenv("PLC_MSG_LANG"));
+}
+
+static const char *pl_th(const char *ja, const char *en) {
+    return pl_rt_lang == 1 ? ja : en;
+}
+
 #if defined(_WIN32)
 #define PL_TLS __declspec(thread)
 #else
@@ -163,7 +193,7 @@ _Noreturn void pl_exit(long long code) {
     //   入口にいる間は panic と同じく入口へ戻します（ffi.md §5.4）。
     if (g_pl_ffi_guard) {
         char buf[64];
-        snprintf(buf, sizeof(buf), "exit(%lld) が呼ばれました", code);
+        snprintf(buf, sizeof(buf), pl_th("exit(%lld) が呼ばれました", "exit(%lld) was called"), code);
         pl_ffi_set("", buf);
         longjmp(*g_pl_ffi_guard, 1);
     }
@@ -174,7 +204,7 @@ char *pl_read_file(const char *path) {
     FILE *fp = fopen(path, "rb");
     if (!fp) {
         char buf[512];
-        snprintf(buf, sizeof(buf), "cannot open file: %s", path);
+        snprintf(buf, sizeof(buf), pl_th("ファイルを開けません: %s", "cannot open file: %s"), path);
         pl_panic(buf);
     }
     fseek(fp, 0, SEEK_END);
@@ -204,7 +234,7 @@ char *pl_read_line(void) {
     long long cap = 128;
     long long n = 0;
     char *buf = (char *)malloc((size_t)cap);
-    if (!buf) pl_panic("out of memory");
+    if (!buf) pl_panic(pl_th("メモリが足りません", "out of memory"));
 
     int c = fgetc(stdin);
     if (c == EOF) {
@@ -217,7 +247,7 @@ char *pl_read_line(void) {
         if (n + 1 >= cap) {
             cap *= 2;
             char *g = (char *)realloc(buf, (size_t)cap);
-            if (!g) pl_panic("out of memory");
+            if (!g) pl_panic(pl_th("メモリが足りません", "out of memory"));
             buf = g;
         }
         buf[n++] = (char)c;
@@ -244,7 +274,7 @@ char *pl_input(const char *prompt) {
         fflush(stdout);
     }
     char *line = pl_read_line();
-    if (!line) pl_panic("input: 入力がありません（EOF）");
+    if (!line) pl_panic(pl_th("input: 入力がありません（EOF）", "input: no more input (EOF)"));
     return line;
 }
 
@@ -253,13 +283,13 @@ char *pl_read_all(void) {
     long long cap = 4096;
     long long n = 0;
     char *buf = (char *)malloc((size_t)cap);
-    if (!buf) pl_panic("out of memory");
+    if (!buf) pl_panic(pl_th("メモリが足りません", "out of memory"));
 
     while (1) {
         if (n == cap) {
             cap *= 2;
             char *g = (char *)realloc(buf, (size_t)cap);
-            if (!g) pl_panic("out of memory");
+            if (!g) pl_panic(pl_th("メモリが足りません", "out of memory"));
             buf = g;
         }
         size_t got = fread(buf + n, 1, (size_t)(cap - n), stdin);
@@ -278,7 +308,7 @@ void pl_write_file(const char *path, const char *text) {
     FILE *fp = fopen(path, "wb");
     if (!fp) {
         char buf[512];
-        snprintf(buf, sizeof(buf), "cannot write file: %s", path);
+        snprintf(buf, sizeof(buf), pl_th("ファイルに書き込めません: %s", "cannot write file: %s"), path);
         pl_panic(buf);
     }
     fputs(text, fp);
@@ -480,10 +510,14 @@ static void pl_on_segv(int sig, siginfo_t *si, void *uc) {
     // 上端から「スタックの大きさ + 番兵のぶん（1 MiB）」の範囲で落ちたなら、
     // スタックを使い切ったものと見ます。
     if (g_stack_hi && a < g_stack_hi && (size_t)(g_stack_hi - a) <= g_stack_size + (1u << 20)) {
-        static const char msg[] =
+        // 注意: シグナルの中なので、言語は読み込みのときに決めた pl_rt_lang を見るだけにします。
+        static const char ja[] =
             "runtime error: stack overflow（スタックを使い切りました。"
             "再帰が深すぎるか、終わる条件が無いのかもしれません）\n";
-        ssize_t w = write(2, msg, sizeof(msg) - 1);
+        static const char en[] =
+            "runtime error: stack overflow (the recursion may be too deep, "
+            "or it may have no terminating condition)\n";
+        ssize_t w = pl_rt_lang == 1 ? write(2, ja, sizeof(ja) - 1) : write(2, en, sizeof(en) - 1);
         (void)w;
         _exit(1);
     }
@@ -566,14 +600,14 @@ static void *pl_thread_trampoline(void *p) {
 void *pl_thread_spawn(pl_thread_body thunk, long long fn, const long long *args,
                       long long nargs) {
     PlThread *t = (PlThread *)pl_hook_alloc((long long)sizeof(PlThread));
-    if (!t) pl_hook_panic("spawn: メモリが足りません");
+    if (!t) pl_hook_panic(pl_th("spawn: メモリが足りません", "spawn: out of memory"));
     t->thunk = thunk;
     t->fn = fn;
     t->nargs = nargs;
     t->args = NULL;
     if (nargs > 0) {
         t->args = (long long *)pl_hook_alloc(nargs * (long long)sizeof(long long));
-        if (!t->args) pl_hook_panic("spawn: メモリが足りません");
+        if (!t->args) pl_hook_panic(pl_th("spawn: メモリが足りません", "spawn: out of memory"));
         for (long long i = 0; i < nargs; i++) t->args[i] = args[i];
     }
     t->ret = 0;
@@ -581,7 +615,7 @@ void *pl_thread_spawn(pl_thread_body thunk, long long fn, const long long *args,
     t->scoped = 0;
     pl_scope_register(t);   // scope: の中なら枠に記録する
     if (pthread_create(&t->id, NULL, pl_thread_trampoline, t) != 0)
-        pl_hook_panic("spawn: スレッドを作れませんでした");
+        pl_hook_panic(pl_th("spawn: スレッドを作れませんでした", "spawn: could not create a thread"));
     return t;
 }
 
@@ -592,7 +626,7 @@ long long pl_thread_join(void *h) {
     PlThread *t = (PlThread *)h;
     if (!t->joined) {
         if (pthread_join(t->id, NULL) != 0)
-            pl_hook_panic("join: スレッドの終了を待てませんでした");
+            pl_hook_panic(pl_th("join: スレッドの終了を待てませんでした", "join: could not wait for the thread to finish"));
         t->joined = 1;
     }
     long long r = t->ret;
@@ -616,9 +650,9 @@ typedef struct {
 
 void *pl_mutex_new(long long value) {
     PlMutex *m = (PlMutex *)pl_hook_alloc((long long)sizeof(PlMutex));
-    if (!m) pl_hook_panic("mutex: メモリが足りません");
+    if (!m) pl_hook_panic(pl_th("mutex: メモリが足りません", "mutex: out of memory"));
     if (pthread_mutex_init(&m->m, NULL) != 0)
-        pl_hook_panic("mutex: 初期化に失敗しました");
+        pl_hook_panic(pl_th("mutex: 初期化に失敗しました", "mutex: initialization failed"));
     m->value = value;
     return m;
 }
@@ -656,14 +690,14 @@ static DWORD WINAPI pl_thread_trampoline(LPVOID p) {
 void *pl_thread_spawn(pl_thread_body thunk, long long fn, const long long *args,
                       long long nargs) {
     PlThread *t = (PlThread *)pl_hook_alloc((long long)sizeof(PlThread));
-    if (!t) pl_hook_panic("spawn: メモリが足りません");
+    if (!t) pl_hook_panic(pl_th("spawn: メモリが足りません", "spawn: out of memory"));
     t->thunk = thunk;
     t->fn = fn;
     t->nargs = nargs;
     t->args = NULL;
     if (nargs > 0) {
         t->args = (long long *)pl_hook_alloc(nargs * (long long)sizeof(long long));
-        if (!t->args) pl_hook_panic("spawn: メモリが足りません");
+        if (!t->args) pl_hook_panic(pl_th("spawn: メモリが足りません", "spawn: out of memory"));
         for (long long i = 0; i < nargs; i++) t->args[i] = args[i];
     }
     t->ret = 0;
@@ -671,7 +705,7 @@ void *pl_thread_spawn(pl_thread_body thunk, long long fn, const long long *args,
     t->scoped = 0;
     pl_scope_register(t);
     t->id = CreateThread(NULL, 0, pl_thread_trampoline, t, 0, NULL);
-    if (!t->id) pl_hook_panic("spawn: スレッドを作れませんでした");
+    if (!t->id) pl_hook_panic(pl_th("spawn: スレッドを作れませんでした", "spawn: could not create a thread"));
     return t;
 }
 
@@ -679,7 +713,7 @@ long long pl_thread_join(void *h) {
     PlThread *t = (PlThread *)h;
     if (!t->joined) {
         if (WaitForSingleObject(t->id, INFINITE) != WAIT_OBJECT_0)
-            pl_hook_panic("join: スレッドの終了を待てませんでした");
+            pl_hook_panic(pl_th("join: スレッドの終了を待てませんでした", "join: could not wait for the thread to finish"));
         CloseHandle(t->id);
         t->joined = 1;
     }
@@ -698,7 +732,7 @@ typedef struct {
 
 void *pl_mutex_new(long long value) {
     PlMutex *m = (PlMutex *)pl_hook_alloc((long long)sizeof(PlMutex));
-    if (!m) pl_hook_panic("mutex: メモリが足りません");
+    if (!m) pl_hook_panic(pl_th("mutex: メモリが足りません", "mutex: out of memory"));
     InitializeCriticalSection(&m->m);
     m->value = value;
     return m;
@@ -790,7 +824,7 @@ static void pl_scope_register(void *h) {
     if (sc->n == sc->cap) {
         long long ncap = sc->cap ? sc->cap * 2 : 8;
         void **ni = (void **)pl_hook_alloc(ncap * (long long)sizeof(void *));
-        if (!ni) pl_hook_panic("scope: メモリが足りません");
+        if (!ni) pl_hook_panic(pl_th("scope: メモリが足りません", "scope: out of memory"));
         for (long long i = 0; i < sc->n; i++) ni[i] = sc->items[i];
         pl_hook_free(sc->items);
         sc->items = ni;
@@ -802,7 +836,7 @@ static void pl_scope_register(void *h) {
 
 void pl_scope_begin(void) {
     PlScope *sc = (PlScope *)pl_hook_alloc((long long)sizeof(PlScope));
-    if (!sc) pl_hook_panic("scope: メモリが足りません");
+    if (!sc) pl_hook_panic(pl_th("scope: メモリが足りません", "scope: out of memory"));
     sc->items = NULL;
     sc->n = 0;
     sc->cap = 0;

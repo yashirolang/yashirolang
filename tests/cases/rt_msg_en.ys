@@ -1,0 +1,9 @@
+# EXIT: 1
+# RUN-LANG: en
+# STDERR: runtime error: index out of range: 5 (3)
+# PLC_MSG_LANG=en で動かすと、実行時のエラーが英語になります（段階 4）。
+def main() -> int:
+    xs: list[int] = [1, 2, 3]
+    i: int = len(xs) + 2
+    print(str(xs[i]))
+    return 0

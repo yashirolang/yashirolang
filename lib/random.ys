@@ -14,6 +14,7 @@
 #
 # 注意: 状態はモジュールのグローバル変数 1 つです。並行実行は考えていません。
 
+import i18n
 import math
 
 # 状態。注意: グローバルの初期化式はリテラルだけ（言語仕様 6.2）
@@ -67,10 +68,12 @@ def uniform(a: float, b: float) -> float:
 #   小さい値が 1 回多く当たる）。当たったら引き直す方式で偏りを消します。
 def randint(a: int, b: int) -> int:
     if a > b:
-        panic("random.randint: a <= b にしてください")
+        panic(i18n.pick("random.randint: a <= b にしてください",
+                        "random.randint: a must be <= b"))
     span: int = b - a + 1
     if span <= 0:
-        panic("random.randint: 範囲が大きすぎます")
+        panic(i18n.pick("random.randint: 範囲が大きすぎます",
+                        "random.randint: the range is too large"))
     limit: int = 9007199254740992 - (9007199254740992 % span)
     v: int = next53()
     while v >= limit:
@@ -100,7 +103,8 @@ def gauss(mu: float, sigma: float) -> float:
 # 指数分布（平均 1/rate）。逆関数法
 def expovariate(rate: float) -> float:
     if rate <= 0.0:
-        panic("random.expovariate: rate は正の数です")
+        panic(i18n.pick("random.expovariate: rate は正の数です",
+                        "random.expovariate: rate must be positive"))
     u: float = random()
     while u == 0.0:
         u = random()
@@ -126,13 +130,15 @@ def shuffle(a: mut list[float]) -> None:
 # 1 つ選ぶ
 def choice(a: list[float]) -> float:
     if len(a) == 0:
-        panic("random.choice: 空の列からは選べません")
+        panic(i18n.pick("random.choice: 空の列からは選べません",
+                        "random.choice: cannot choose from an empty sequence"))
     return a[randint(0, len(a) - 1)]
 
 # n 個を復元ありで選ぶ
 def sample_with_replacement(a: list[float], n: int) -> list[float]:
     if len(a) == 0:
-        panic("random.sample_with_replacement: 空の列からは選べません")
+        panic(i18n.pick("random.sample_with_replacement: 空の列からは選べません",
+                        "random.sample_with_replacement: cannot choose from an empty sequence"))
     out: list[float] = []
     i: int = 0
     while i < n:

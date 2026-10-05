@@ -35,9 +35,11 @@ assert raises(kit.EmptyError, kit.check, 0) == "0 です"
 assert kit.check(5) == 5
 
 # ── panic → kit.Panic（Error の子ではない）。その後も続けて呼べる ──
-assert "index out of range" in raises(kit.Panic, kit.at, [1, 2, 3], 5)
-assert "overflow" in raises(kit.Panic, kit.add, 2**62, 2**62)
-assert "contract" in raises(kit.Panic, kit.half, 3)
+#   注意: panic の文面は実行時の言語で決まり、既定は日本語です（i18n-diagnostics.md §10）。
+#     言語はライブラリを読み込んだときの PLC_MSG_LANG で決まります（tests/python.sh は外して走ります）。
+assert "添字が範囲の外です" in raises(kit.Panic, kit.at, [1, 2, 3], 5)
+assert "あふれました" in raises(kit.Panic, kit.add, 2**62, 2**62)
+assert "契約違反" in raises(kit.Panic, kit.half, 3)
 assert "exit(3)" in raises(kit.Panic, kit.bye, 3)
 assert not issubclass(kit.Panic, kit.Error)
 assert kit.half(8) == 4

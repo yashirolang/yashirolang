@@ -61,6 +61,8 @@ BEGIN { first_exit = ""; got_exit = 0; first_stage0 = ""; got_stage0 = 0 }
     if (match(line, /^# *ERROR: */))         { add("err",   substr(line, RLENGTH + 1)); next }
     if (match(line, /^# *OUTPUT: */))        { add("out",   substr(line, RLENGTH + 1)); next }
     if (match(line, /^# *STDIN: */))         { add("sin",   substr(line, RLENGTH + 1)); next }
+    if (match(line, /^# *STDERR: */))        { add("serr",  substr(line, RLENGTH + 1)); next }
+    if (match(line, /^# *RUN-LANG: */))      { add("rlang", substr(line, RLENGTH + 1)); next }
     if (match(line, /^# *TOKENS: */))        { add("tok",   substr(line, RLENGTH + 1)); next }
     # 注意: IR-NOT を先に見ます（`# IR:` の規則は `IR-NOT:` に当たりませんが、
     #   読む人が取り違えないように順序でも示しておきます）
@@ -83,6 +85,8 @@ END {
     emit("want_ir_not",  chomp(acc["irnot"]))
     emit("want_warn",    chomp(acc["warn"]))
     emit("want_explain", chomp(acc["expl"]))
+    emit("want_stderr",  chomp(acc["serr"]))
+    emit("run_lang",     joined(acc["rlang"]))
     emit("extra_flags",  joined(acc["flags"]))
     emit("has_exact_ir", exact ? "1" : "")
     emit("stage0_only",  first_stage0)

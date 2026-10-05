@@ -11,6 +11,7 @@
 #
 # ★ 幅の合わない値は**入れる時点で止まります**（範囲型が引数を検査します）。
 #   黙って切り詰めません。折り返したいときは wrap_* で自分で丸めてください。
+import i18n
 import strings
 
 # ── 幅ごとの型（範囲は入れるときに確かめられます）──────────
@@ -93,8 +94,9 @@ def put_i32_le(buf: mut list[int], v: I32) -> None:
 
 def need(buf: list[int], off: int, n: int) -> None:
     if off < 0 or off + n > len(buf):
-        panic("bytes: " + str(off) + " から " + str(n) +
-              " バイト読めません（長さ " + str(len(buf)) + "）")
+        panic(i18n.pick("bytes: " + str(off) + " から " + str(n) +
+                        " バイト読めません（長さ " + str(len(buf)) + "）",
+                        "bytes: cannot read " + str(n) + " bytes from " + str(off) + " (length " + str(len(buf)) + ")"))
 
 
 def get_u8(buf: list[int], off: int) -> int:
@@ -177,7 +179,8 @@ def get_i32_be(buf: list[int], off: int) -> int:
 
 def sign_extend(v: int, bits: int) -> int:
     if bits <= 0 or bits >= 64:
-        panic("bytes: 幅は 1 から 63 までです")
+        panic(i18n.pick("bytes: 幅は 1 から 63 までです",
+                        "bytes: the width must be 1 to 63"))
     half: int = 1 << (bits - 1)
     if v < half:
         return v

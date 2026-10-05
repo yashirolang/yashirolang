@@ -26,6 +26,7 @@
 # 注意: 年は **1〜9999** です（Python と同じ）。範囲を出る計算は panic、
 #   入力の誤り（作る・読む・書式）は raises DateError です。
 #   うるう秒は扱いません（23:59:60 は誤りです。Python と同じ）。
+import i18n
 import strings
 import time
 
@@ -96,7 +97,8 @@ def civil_from_days(z0: int) -> Date:
 
 def check_days(days: int, what: str) -> None:
     if days < -DAYS_BEFORE_EPOCH or days > MAX_DAYS:
-        panic("datetime: " + what + " が 1〜9999 年の外に出ました")
+        panic(i18n.pick("datetime: " + what + " が 1〜9999 年の外に出ました",
+                        "datetime: the " + what + " went outside the years 1 to 9999"))
 
 # 数を 0 で詰める（負は来ない前提）
 def pad(n: int, width: int) -> str:
@@ -273,7 +275,7 @@ class Date:
 
     def add_days(self, n: int) -> Date:
         z: int = self.ordinal() + n
-        check_days(z, "日付")
+        check_days(z, i18n.pick("日付", "date"))
         return civil_from_days(z)
 
     # n か月後。月末を越える日は、その月の末日にそろえます（1 月 31 日 + 1 か月 = 2 月 28 日）
@@ -282,7 +284,8 @@ class Date:
         y: int = total // 12
         m: int = total % 12 + 1
         if y < 1 or y > 9999:
-            panic("datetime: 日付 が 1〜9999 年の外に出ました")
+            panic(i18n.pick("datetime: 日付 が 1〜9999 年の外に出ました",
+                            "datetime: the date went outside the years 1 to 9999"))
         d: int = self.day
         last: int = days_in_month(y, m)
         if d > last:
@@ -396,7 +399,7 @@ class DateTime:
         return r
 
     def check_range(self) -> None:
-        check_days(self.local_days(), "日時")
+        check_days(self.local_days(), i18n.pick("日時", "date-time"))
 
     def __add__(self, d: Duration) -> DateTime:
         r: DateTime = DateTime(self.sec + d.secs + (self.ns + d.ns) // NS_PER_SEC,

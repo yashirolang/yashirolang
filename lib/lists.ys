@@ -11,6 +11,8 @@
 # 注意: 要素を返すもの（first / last / max_of）は **借用を返します**。
 #   元のリストが生きているあいだだけ有効です。
 
+import i18n
+
 # ── 作る ────────────────────────────────────────────────────
 
 # 注意: **「n 個の x で埋める」は汎用には書けません。**
@@ -85,7 +87,8 @@ def last_or[T](xs: list[T], default: own T) -> T:
 # 最大・最小。注意: 空のリストは panic します（返す値が決められないため）
 def max_of[T](xs: list[T]) -> T:
     if len(xs) == 0:
-        panic("lists.max_of: 空のリストです")
+        panic(i18n.pick("lists.max_of: 空のリストです",
+                        "lists.max_of: empty list"))
     m: int = 0
     for i, v in enumerate(xs):
         if v > xs[m]:
@@ -94,7 +97,8 @@ def max_of[T](xs: list[T]) -> T:
 
 def min_of[T](xs: list[T]) -> T:
     if len(xs) == 0:
-        panic("lists.min_of: 空のリストです")
+        panic(i18n.pick("lists.min_of: 空のリストです",
+                        "lists.min_of: empty list"))
     m: int = 0
     for i, v in enumerate(xs):
         if v < xs[m]:

@@ -20,4 +20,11 @@ void pl_hook_write(const char *s, long long len);
 // 回復不能なエラー。**戻ってきてはいけない**。
 void pl_hook_panic(const char *msg);
 
+// ── 実行時のエラーの言語（docs/design/i18n-diagnostics.md §10）──
+//
+// 1 なら日本語、0 なら英語。**フックではなく変数です**（ベアメタルの側に
+// 新しい関数を求めないため）。誰も書かなければ 0（英語）のままです。
+// PC の上では hosted.c が、読み込まれたときに PLC_MSG_LANG を見て決めます（既定は日本語）。
+extern int pl_rt_lang;
+
 #endif  // PL_CORE_H

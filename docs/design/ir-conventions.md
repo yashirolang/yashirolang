@@ -937,7 +937,7 @@ idx.bad.4:
 
 `pl_index_fail` の 3 つめの引数が「あふれたか」です（`zext i1`）。
 あふれたときの `%idx` は折り返した値で意味がないので、
-ランタイムは数を出さず `integer overflow in index computation` と言います。
+ランタイムは数を出さず `整数があふれました（添字の計算）`（英語では `integer overflow in index computation`）と言います。
 
 注意: **健全性**：折り返した添字がたまたま範囲内に入っても、`and` で
 潰しているので必ず失敗します（`tests/cases/rt_overflow_index.ys`）。

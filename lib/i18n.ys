@@ -1,0 +1,27 @@
+# i18n — 実行時の文面を日本語と英語から選ぶ
+#
+# ★ 実行時のエラーと同じ言語を選びます（docs/design/i18n-diagnostics.md §10）。
+#   **プログラムを動かしたときの** PLC_MSG_LANG（ja / en / auto）で決まり、既定は日本語です。
+#   標準ライブラリの panic はこれを通して出します。利用者のプログラムからも使えます。
+#
+#   import i18n
+#   panic(i18n.pick("リストが空です", "the list is empty"))
+#
+# 注意: **raise の message には使いません。** message は値なので、利用者のコードが
+#   文面で分岐していると、言語を変えただけで動きが変わってしまいます（同 §10）。
+#   標準ライブラリの raise の message は日本語のままです。
+#
+# 注意: 言語はランタイムが読み込みのときに決めた値を読むだけなので、ベアメタルでも動きます
+#   （誰も決めなければ英語）。
+
+extern def pl_rt_lang_en() -> int
+
+# いまの言語が英語か
+def is_en() -> bool:
+    return pl_rt_lang_en() != 0
+
+# 日本語と英語のどちらかを返す
+def pick(ja: str, en: str) -> str:
+    if pl_rt_lang_en() != 0:
+        return copy(en)
+    return copy(ja)

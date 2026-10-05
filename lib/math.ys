@@ -14,6 +14,8 @@
 # 注意: 引数が定義域の外なら **NaN を返します**（panic はしません）。
 #   sqrt(-1) は NaN、log(0) は -inf、log(-1) は NaN です。
 
+import i18n
+
 # ── 定数 ────────────────────────────────────────────────────
 #
 # 注意: グローバル変数の初期化式はリテラルだけなので、関数で持ちます
@@ -552,9 +554,11 @@ def lcm(a: int, b: int) -> int:
 # 階乗。注意: 21! は 64 ビットに入らないので、20 までしか受け付けません
 def factorial(n: int) -> int:
     if n < 0:
-        panic("math.factorial: 負の数の階乗はありません")
+        panic(i18n.pick("math.factorial: 負の数の階乗はありません",
+                        "math.factorial: negative numbers have no factorial"))
     if n > 20:
-        panic("math.factorial: 21 以上は int (64bit) に収まりません")
+        panic(i18n.pick("math.factorial: 21 以上は int (64bit) に収まりません",
+                        "math.factorial: 21 or more does not fit in an int (64-bit)"))
     r: int = 1
     i: int = 2
     while i <= n:

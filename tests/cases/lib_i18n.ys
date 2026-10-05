@@ -1,0 +1,12 @@
+# OUTPUT: ja
+# OUTPUT: 日本語
+# lib/i18n：実行時の言語を読む（既定は日本語。段階 4）。
+import i18n
+
+def main() -> int:
+    if i18n.is_en():
+        print("en")
+    else:
+        print("ja")
+    print(i18n.pick("日本語", "English"))
+    return 0

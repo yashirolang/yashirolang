@@ -11,6 +11,7 @@
 #
 # 注意: **割り算だけは桁を書かせます**（`/` を多重定義していません）。
 #   1 / 3 に「正しい答え」は無く、どこで丸めるかは呼ぶ側が決めることだからです。
+import i18n
 import strings
 
 # 小数点以下に持てる桁数の上限（10^18 が int に収まる限界）
@@ -29,7 +30,8 @@ UP: int = 3          # 0 から遠い側へ（切り上げ）
 # 10 の n 乗（桁あふれは言語の検査が止めます）
 def pow10(n: int) -> int:
     if n < 0 or n > MAX_SCALE:
-        panic("decimal: 桁数は 0 から " + str(MAX_SCALE) + " までです")
+        panic(i18n.pick("decimal: 桁数は 0 から " + str(MAX_SCALE) + " までです",
+                        "decimal: the scale must be 0 to " + str(MAX_SCALE)))
     p: int = 1
     i: int = 0
     while i < n:
@@ -44,14 +46,16 @@ class Decimal:
 
     def init(self, units: int, scale: int) -> None:
         if scale < 0 or scale > MAX_SCALE:
-            panic("decimal: 桁数は 0 から " + str(MAX_SCALE) + " までです")
+            panic(i18n.pick("decimal: 桁数は 0 から " + str(MAX_SCALE) + " までです",
+                            "decimal: the scale must be 0 to " + str(MAX_SCALE)))
         self.units = units
         self.scale = scale
 
     # 桁数を揃える（増やすのは正確、減らすのは丸めが要る）
     def rescale(self, scale: int, mode: int) -> Decimal:
         if scale < 0 or scale > MAX_SCALE:
-            panic("decimal: 桁数は 0 から " + str(MAX_SCALE) + " までです")
+            panic(i18n.pick("decimal: 桁数は 0 から " + str(MAX_SCALE) + " までです",
+                            "decimal: the scale must be 0 to " + str(MAX_SCALE)))
         if scale == self.scale:
             return Decimal(self.units, self.scale)
         if scale > self.scale:
@@ -96,8 +100,9 @@ class Decimal:
     def __mul__(self, other: Decimal) -> Decimal:
         s: int = self.scale + other.scale
         if s > MAX_SCALE:
-            panic("decimal: 掛け算の桁数が " + str(MAX_SCALE) +
-                  " を超えます（先に rescale してください）")
+            panic(i18n.pick("decimal: 掛け算の桁数が " + str(MAX_SCALE) +
+                            " を超えます（先に rescale してください）",
+                            "decimal: the scale of the product exceeds " + str(MAX_SCALE) + " (rescale first)"))
         return Decimal(self.units * other.units, s)
 
     def __neg__(self) -> Decimal:
@@ -106,7 +111,8 @@ class Decimal:
     # ★ 割り算は**桁と丸め方を書かせます**（`/` は多重定義しません）。
     def div_to(self, other: Decimal, scale: int, mode: int) -> Decimal:
         if other.units == 0:
-            panic("decimal: 0 では割れません")
+            panic(i18n.pick("decimal: 0 では割れません",
+                            "decimal: division by zero"))
         # (self / other) を scale 桁で表す：
         #   units = self.units * 10^(scale + other.scale - self.scale) / other.units
         shift: int = scale + other.scale - self.scale
@@ -183,7 +189,8 @@ class Decimal:
 #   そうしないと、負の数のときに「切り捨て」の向きが変わります。
 def divide_rounded(n: int, d: int, mode: int) -> int:
     if d == 0:
-        panic("decimal: 0 では割れません")
+        panic(i18n.pick("decimal: 0 では割れません",
+                        "decimal: division by zero"))
     neg: bool = (n < 0) != (d < 0)
     a: int = n
     b: int = d

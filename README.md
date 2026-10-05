@@ -1,54 +1,15 @@
 # yashirolang
 
-**Python の書きやすさのまま、Rust の安全性を手に入れる**ことを目指すプログラミング言語です。
+yashirolangはプログラミング言語です。
 GC はありません。所有権と借用の検査でメモリ安全性を保証し、LLVM を通して機械語まで落とします。
 コンパイラは C 版（`src/`）と yashirolang 版（`selfhost/`）の 2 つがあり、**セルフホストに到達しています**
 （両者はバイト単位で同じ IR を出し、`make bootstrap` が stage2 == stage3 を確かめます）。
-
-```python
-# examples/fizzbuzz.ys
-def main() -> int:
-    for i in range(1, 16):
-        if i % 15 == 0:
-            print("FizzBuzz")
-        elif i % 3 == 0:
-            print("Fizz")
-        elif i % 5 == 0:
-            print("Buzz")
-        else:
-            print(str(i))
-    return 0
-```
-
-```bash
-yashirolang fizzbuzz.ys -o fizzbuzz && ./fizzbuzz
-```
-
----
-
-## 特徴
-
-| | |
-|---|---|
-| **見た目は Python** | インデント構文・`for` / `if` / クラス・f-string・内包表記・スライス・既定引数とキーワード引数 |
-| **静的型付け** | 型注釈は必須。暗黙の型変換なし（`int` と `float` すら混ざりません） |
-| **GC なし・所有権あり** | 二重解放・解放後の使用は**コンパイルエラー**。ライフタイム注釈（`'a`）も `&` も `.clone()` もありません |
-| **書く安全語は 3 つだけ** | `own` / `mut` / `raises`。それ以外は既定（借用）で動きます |
-| **数もあふれません** | 整数の桁あふれ・0 除算・範囲外アクセスを常に検査して停止します |
-| **範囲型と契約** | `type Percent = int range(0, 100)`、`requires` / `ensures`（Ada の部分型・Pre/Post） |
-| **データ競合も型で止める** | `spawn` / `join` / `mutex[T]`。**注釈は 1 つも増えません** |
-| **Python のライブラリが書ける** | `extern def` に本体を書いて `--python` で建てると `import` できます。panic も Python の例外になり、Python ごと落ちません（[docs/design/ffi.md](docs/design/ffi.md)） |
-| **必要なのは clang だけ** | LLVM IR のテキストを出力し、アセンブルとリンクは clang に任せます |
-| **ベアメタルでも動く** | RISC-V（QEMU virt）でカーネルが動きます。`unsafe:` と生ポインタあり |
-| 拡張子 / コマンド | `.ys` / `yashirolang`（コンパイラ）・`ysm`（パッケージマネージャ） |
-
-対応環境は Linux / macOS（Intel・Apple Silicon）/ Windows（MSYS2）、それと RISC-V ベアメタルです。
 
 ---
 
 ## インストール
 
-必要なのは **clang だけ**です。
+必要なのは **clang**です。
 
 | OS | 入れるもの |
 |---|---|
@@ -102,33 +63,6 @@ make install PREFIX=$HOME/.local      # 自分の環境だけに入れるなら
 yashirolang --version                 # コンパイラ
 ysm --version                         # パッケージマネージャも一緒に入ります
 ```
-
----
-
-## Rust・Ada と比べたときの立ち位置
-
-**「Rust の安全性を、Python の書き味で。足りないぶんは Ada から借りる」**——それがこの言語です。
-
-| | yashirolang | Rust | Ada / SPARK |
-|---|---|---|---|
-| 書き味 | Python（インデント構文・型注釈のみ） | 独自（`&`・`'a`・`.clone()`） | Pascal 系 |
-| メモリ安全（解放） | 所有権・借用で自動（**既定でエラー**） | 所有権・借用で自動 | 手動で解放する |
-| ライフタイム注釈 | **要らない**（借用は呼び出しより長生きしない、という 1 つの規則で代用） | 要る（`'a`） | — |
-| null 参照 | 型で排除（`T \| None` と絞り込み） | 型で排除（`Option`） | 既定では排除しない |
-| 整数の桁あふれ | **常に検査する** | debug のみ検査（release は折り返す） | 常に検査する |
-| 範囲外アクセス | 常に検査する（外す手段なし） | 常に検査する | 常に検査する |
-| 値の範囲を型で縛る | できる（`int range(0, 100)`） | できない | できる（部分型） |
-| 事前・事後条件 | 書ける（`requires` / `ensures`） | 書けない | 書ける（`Pre` / `Post`） |
-| データ競合 | 検査する（**追加の注釈なし**） | 検査する（`Send` / `Sync`） | 検査する（Ravenscar） |
-| エラー処理 | `raises` / `try` / `except`（アンワインドしない戻り値検査。握りつぶせません） | `Result` / `?` | 例外（握りつぶせる） |
-| 形式検証 | 一部（区間解析で実行時検査を消すところまで） | なし（外部ツール） | あり（SPARK） |
-| 逃げ道 | `unsafe:` | `unsafe` | `Unchecked_*` |
-
-**要するに:**
-
-- **Rust に対して** — 保証はほぼ同じで、**書く量が減ります**。ライフタイム注釈も借用記号もトレイト境界もありません。代わりにジェネリクスの境界・クロージャ・中身を持つ列挙（`match` での分解）はまだありません。
-- **Ada に対して** — 部分型（範囲型）と契約という Ada の良さを取り込みつつ、**メモリは所有権で管理します**（Ada は手動解放）。SPARK のような証明器は入れません（「clang だけで建つ」を壊すため）。
-- **Python に対して** — 同じ処理で**行数はおよそ 1.7 倍**（型注釈のぶん）。代わりにネイティブの速さと、実行前に止まる安全性が付きます。
 
 ---
 
@@ -235,10 +169,9 @@ import json               # 標準ライブラリ。名前はぶつかりませ�
 
 **[Apache License 2.0](LICENSE)** — Copyright 2026 Shota Iwamoto.
 
-著作権表示は [NOTICE](NOTICE) にもあります。**他所のソースを取り込んでいる
-場所はありません。**
+著作権表示は [NOTICE](NOTICE) にもあります。
 
-唯一の例外が **TLS** で、`make TLS=1` で建てたときだけ **OpenSSL 3.x**
+例外が **TLS** で、`make TLS=1` で建てたときだけ **OpenSSL 3.x**
 （Apache-2.0）に**リンクします**（ソースは含みません）。1.1.1 以前は旧
 OpenSSL / SSLeay ライセンスで Apache-2.0 と両立しないため、ビルドの時点で
 断ります。詳しくは [NOTICE](NOTICE) と

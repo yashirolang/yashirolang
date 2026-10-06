@@ -51,6 +51,10 @@ make install PREFIX=$HOME/.local     # 自分の環境だけに入れるなら
 
 コンパイラ `yashirolang` とパッケージマネージャ `ysm` の 2 つが入ります。
 
+**エラーメッセージを英語にするなら**、`export PLC_MSG_LANG=en` をシェルの設定（`~/.bashrc` / `~/.zshrc`）に足します。
+英語の表は配布物にも `make install` にも入っているので、追加で入れるものはありません
+（`auto` でロケールに合わせる、`--lang=en` でその 1 回だけ、も選べます。[reference/cli.md](reference/cli.md#診断の言語)）。
+
 ---
 
 ## 2. 動かす
@@ -139,6 +143,7 @@ import json               # 標準ライブラリ。名前はぶつかりませ�
 
 | 症状 | 見るところ |
 |---|---|
+| エラーメッセージを英語にしたい | `PLC_MSG_LANG=en` を設定します（[§1](#1-入れる)） |
 | `clang が見つかりません` | clang を入れるか、`PLC_CLANG=clang-18` のように使う clang を指定します |
 | 標準ライブラリが見つからない | `yashirolang --print-lib-dir` で探し先を確認します（`PLC_LIB_DIR` で上書きできます） |
 | `error[E-BORROW-…]` / `error[E-MOVE-…]` | 所有権の検査です。[tutorial.md §7](tutorial.md#7-所有権と借用--この言語の中心) を読んでください |

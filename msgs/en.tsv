@@ -1,4 +1,4 @@
-# 診断の英語の表（docs/design/i18n-diagnostics.md）
+# 診断の英語の表（docs/ja/design/i18n-diagnostics.md）
 #
 # 1 行 1 項目。タブで区切って「鍵」「英語」「日本語（控え）」の 3 列。
 # 日本語の正本はソースの中（MSG0 などの第 2 引数）。3 列目は訳す人のための写しで、

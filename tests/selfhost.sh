@@ -10,7 +10,7 @@
 
 set -u
 # ★ 試験は日本語の文面を見ます。使う人が英語を選んでいても、ここでは外します
-#   （docs/design/i18n-diagnostics.md §9.1。英語は # FLAGS: --lang=en で選ぶ）。
+#   （docs/ja/design/i18n-diagnostics.md §9.1。英語は # FLAGS: --lang=en で選ぶ）。
 unset PLC_MSG_LANG
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -165,7 +165,7 @@ for f in "${FILES[@]}"; do
         # ★ diag を移植したので、**メッセージ全体**を比べます
         "$STAGE1" "$f" > /dev/null 2>"$TMP/m.err"
 
-        # ★ 英語でも突き合わせます（型エラーと同じ。docs/design/i18n-diagnostics.md §9.1）
+        # ★ 英語でも突き合わせます（型エラーと同じ。docs/ja/design/i18n-diagnostics.md §9.1）
         PLC_MSG_LANG=en "$PLC_CC" --dump-tokens "$f" > /dev/null 2>"$TMP/c.en.err"
         PLC_MSG_LANG=en "$STAGE1" "$f" > /dev/null 2>"$TMP/m.en.err"
 
@@ -264,7 +264,7 @@ for f in "${FILES[@]}"; do
     fi
 
     # ★ 型の誤りがあるケースは、**英語でも**突き合わせます
-    #   （docs/design/i18n-diagnostics.md §9.1。2 つの実装の英語も 1 文字違わないこと）。
+    #   （docs/ja/design/i18n-diagnostics.md §9.1。2 つの実装の英語も 1 文字違わないこと）。
     if [ "$crc" -ne 0 ]; then
         PLC_MSG_LANG=en "$PLC_CC" --check "$f" > /dev/null 2>"$TMP/c.en.err"
         PLC_MSG_LANG=en "$STAGE1_CHECK" "$f" > /dev/null 2>"$TMP/m.en.err"

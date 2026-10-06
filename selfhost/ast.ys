@@ -3,7 +3,7 @@
 # ★ src/ast.h / src/ast.c の移植です。**機械的に移しています。**
 #   種別の値と順序は C 版に揃えます（C 版を見ながら 1 つずつ確認するため）。
 #
-# 方針は C 版と同じ「全部入り構造体」（docs/design/architecture.md 3.2）。
+# 方針は C 版と同じ「全部入り構造体」（docs/ja/design/architecture.md 3.2）。
 # 注意: 子ノードはほぼ全部 `rc[Node] | None` になります。C 版で NULL だったものを
 #    本言語で表す唯一の方法だからです。
 import strings

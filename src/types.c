@@ -135,7 +135,7 @@ Type *type_class(char *name, struct Class *cls) {
 
 // ── サイズとアラインメント ──────────────────────────────
 //
-// docs/design/memory-model.md 5 節の表のとおり。
+// docs/ja/design/memory-model.md 5 節の表のとおり。
 // ★ 参照型（str / list / class）は「ポインタ 1 個」なので 8 バイトです。
 //   指す先の大きさは関係ありません。
 int type_size(Type *t) {

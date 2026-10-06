@@ -3,7 +3,7 @@
 # ★ src/lexer.c の移植です。**機械的に移しています。**
 #   関数名・判定の順序・表の並びを C 版と揃えてあるので、
 #   出力が食い違ったときに「どちらが違うか」を diff で追えます。
-#   docs/design/self-hosting.md 6 節
+#   docs/ja/design/self-hosting.md 6 節
 #
 # 注意: ポインタが無いので、C 版の `const char *p` は `pos: int`（添字）です。
 #   トークンが指すソースの範囲も、部分文字列として複製して持ちます。
@@ -624,7 +624,7 @@ class Lexer:
         # ★ move_out で「持っていく」（self.out は空のリストになる）。
         #   注意: そのまま return self.out と書くと、呼び出し側は所有として
         #     受け取るのに Lexer 側も解放するので、--drop で二重解放でした
-        #     （docs/roadmap.md A-21d）。
+        #     （docs/ja/roadmap.md A-21d）。
         return move_out(self.out)
 
 

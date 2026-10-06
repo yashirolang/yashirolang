@@ -1418,7 +1418,7 @@ def main() -> int:
 注意: 並べ替え・集計・結合は、Python で書いた素直な参照実装と、でたらめな表
 200 個で突き合わせて一致を確かめています。
 
-**組み合わせた例**は [examples/sales_report.ys](../../examples/sales_report.ys)
+**組み合わせた例**は [examples/sales_report.ys](../../../examples/sales_report.ys)
 にあります（CSV → 集計 → 図）。
 
 ---

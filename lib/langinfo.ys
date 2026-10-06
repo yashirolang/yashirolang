@@ -3,7 +3,7 @@
 # ★ C 版の src/langinfo.h と対になります。名前が変わったら、
 #   このファイルと src/langinfo.h と Makefile の LANG_* だけを直せば済みます。
 #   （手で直さずに tools/rename.sh を使ってください）
-#   詳しくは docs/design/naming.md を参照。
+#   詳しくは docs/ja/design/naming.md を参照。
 #
 # ★ selfhost/ ではなく lib/ に置いてあるのは、**セルフホスト版コンパイラと
 #   パッケージマネージャの両方から import できる**ようにするためです。
@@ -16,7 +16,7 @@ NAME: str = "yashirolang"   # 人が読む言語名
 EXT: str = ".ys"            # ソースファイルの拡張子（ドット込み）
 CC: str = "yashirolang"         # コンパイラのコマンド名
 PM: str = "ysm"             # パッケージマネージャのコマンド名
-VERSION: str = "0.52.0"      # 版番号（--version で出す）
+VERSION: str = "0.52.1"      # 版番号（--version で出す）
 
 def name() -> str:
     return NAME

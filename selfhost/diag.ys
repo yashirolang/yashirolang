@@ -25,7 +25,7 @@ import sys
 import token
 
 
-# ── 言語の切り替え（docs/design/i18n-diagnostics.md）──────────
+# ── 言語の切り替え（docs/ja/design/i18n-diagnostics.md）──────────
 #
 # ★ 日本語が正本で、既定。英語は msgs/en.tsv を鍵で引く。
 #   文面の {0} {1} … は差し込む値（いつも文字列）。{{ と }} は波括弧そのもの。

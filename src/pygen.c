@@ -8,7 +8,7 @@
 //   int と float は境界でも混ぜません（ロードマップ ②。ffi.md §3）。
 //
 // 注意: 生成物に言語名を書くのは先頭の 1 行だけで、それも langinfo から取ります
-//   （docs/design/naming.md）。
+//   （docs/ja/design/naming.md）。
 //
 // ★ 対になる定義: selfhost/pygen（2 つの実装が同じ .py を出します）
 

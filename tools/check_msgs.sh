@@ -1,7 +1,7 @@
 #!/bin/sh
 # tools/check_msgs.sh — 診断の英語の表（msgs/en.tsv）とソースを突き合わせる
 #
-# ★ docs/design/i18n-diagnostics.md §8。sh と awk だけで書きます（「clang だけで建つ」）。
+# ★ docs/ja/design/i18n-diagnostics.md §8。sh と awk だけで書きます（「clang だけで建つ」）。
 #
 #   ① ソースで使っている鍵が、全部 en.tsv にある（訳し忘れ）
 #   ② en.tsv の鍵が、どれかのソースで使われている（消した診断の訳が残っていない）
@@ -94,7 +94,7 @@ awk -F'\t' -v uses="$TMP/uses" '
 
 n=$(cut -f2 "$TMP/uses" | sort -u | wc -l | tr -d ' ')
 if [ "$fail" -ne 0 ]; then
-    echo "check-msgs: 食い違いがあります（docs/design/i18n-diagnostics.md §8）"
+    echo "check-msgs: 食い違いがあります（docs/ja/design/i18n-diagnostics.md §8）"
     exit 1
 fi
 echo "  ok    診断の英語の表はソースと一致しています（鍵 $n 個）"

@@ -13,7 +13,7 @@
 void plc_use_binary_streams(void);
 
 // ── メモリ確保 ──────────────────────────────────────────────
-// free() は一切呼びません（docs/design/memory-model.md 第8節）。
+// free() は一切呼びません（docs/ja/design/memory-model.md 第8節）。
 // calloc を使うので、確保された領域は必ず 0 / NULL で初期化されています。
 void *xmalloc(size_t size);
 

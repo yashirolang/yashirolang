@@ -79,7 +79,7 @@ _Noreturn void error_at_hint(Token *tok, const char *hint, const char *fmt, ...)
 _Noreturn void error_at_m(Token *tok, const char *msg);
 _Noreturn void error_at_hint_m(Token *tok, const char *hint, const char *msg);
 
-// ── 言語の切り替え（docs/design/i18n-diagnostics.md）──────────
+// ── 言語の切り替え（docs/ja/design/i18n-diagnostics.md）──────────
 //
 // ★ 日本語が正本で、既定です。英語は msgs/en.tsv を鍵で引きます。
 //   文面の中の {0} {1} … は、差し込む値（いつも文字列）で埋めます

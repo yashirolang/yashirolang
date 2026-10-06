@@ -1,7 +1,7 @@
 #!/bin/bash
 # bench/run.sh — 速さを測る。
 #
-# ★ 測り方の約束（docs/roadmap.md §3-B1〜B3 で直したこと）
+# ★ 測り方の約束（docs/ja/roadmap.md §3-B1〜B3 で直したこと）
 #   ① **プロセスの起動時間を引き算しません。** どのプログラムも自分の中で
 #      単調時計を読み、測りたいループだけの時間を TIME_MS として出します
 #      （本言語は lib/time$EXT、C は bench_time.h、Python は perf_counter）。

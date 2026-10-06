@@ -1,6 +1,6 @@
 // codegen.h — コード生成（④ AST → LLVM IR テキスト）
 //
-// 生成規約は docs/design/ir-conventions.md にあります。
+// 生成規約は docs/ja/design/ir-conventions.md にあります。
 // 特に重要な規約：
 //   R1  ローカル変数はすべて entry ブロックで alloca する
 //   R4  一時値には英字始まりの名前を付ける（%t0）

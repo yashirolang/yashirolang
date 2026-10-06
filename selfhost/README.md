@@ -58,4 +58,4 @@ make bootstrap-test   # セルフホスト版コンパイラでテストを全�
 **移植は機械的に行ってください。ここで独創性を発揮しないこと。**
 アルゴリズムと評価順序を C 版と揃えることで、出力の完全一致を目指せます。
 
-詳細は [../docs/design/self-hosting.md](../docs/design/self-hosting.md)。
+詳細は [../docs/ja/design/self-hosting.md](../docs/ja/design/self-hosting.md)。

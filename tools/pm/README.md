@@ -7,8 +7,8 @@ make pm         # build/ysm ができます
 make pm-test    # 本物の git リポジトリを作って一通り動かします
 ```
 
-使い方は [docs/reference/pkg.md](../../docs/reference/pkg.md)、
-なぜこの形なのかは [docs/design/package-manager.md](../../docs/design/package-manager.md)。
+使い方は [docs/ja/reference/pkg.md](../../docs/ja/reference/pkg.md)、
+なぜこの形なのかは [docs/ja/design/package-manager.md](../../docs/ja/design/package-manager.md)。
 
 ## ファイルの構成
 

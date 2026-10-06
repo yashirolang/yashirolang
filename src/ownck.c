@@ -1,6 +1,6 @@
 // ownck.c — 所有権検査
 //
-// 仕様は docs/spec/safety-spec.md §3、設計は docs/design/ownership.md §3〜4。
+// 仕様は docs/ja/spec/safety-spec.md §3、設計は docs/ja/design/ownership.md §3〜4。
 //
 // この章でやること：**移動済みの値を使っていないか**（S1: use-after-move）。
 //
@@ -562,7 +562,7 @@ static void report_borrow(Own *o, BorrowRoot *br, Place *p, Node *at, MoveCtx ct
 
 // 自分が所有しているものの「一部」を返した、と報告する（A-21d）。
 //
-// ★ なぜ危ないか（docs/roadmap.md A-21d）
+// ★ なぜ危ないか（docs/ja/roadmap.md A-21d）
 //   `return hits[0]` や `return self.out` は、**その場所の持ち主が
 //   関数の出口で解放される**なら、解放済みを返すことになります。
 //   戻り値の型に「これは借用だ」と書く手段が無いので、呼ぶ側は
@@ -606,7 +606,7 @@ static void report_return_borrow(Own *o, Place *p, Node *at) {
 //   MV_APPEND だけを見ていたので、`Box(xs[0])` のように借りものを own 引数へ
 //   渡す形が**診断なしで二重解放**になっていました。受け取った側は own なので
 //   解放し、貸し手も解放します（実測：--drop 版のコンパイラが自分自身を
-//   通せませんでした。docs/roadmap.md A-21c）。
+//   通せませんでした。docs/ja/roadmap.md A-21c）。
 static void report_store_borrow(Own *o, Place *p, Node *at, MoveCtx ctx) {
     if (o->quiet) return;
 

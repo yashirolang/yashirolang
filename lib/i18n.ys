@@ -1,6 +1,6 @@
 # i18n — 実行時の文面を日本語と英語から選ぶ
 #
-# ★ 実行時のエラーと同じ言語を選びます（docs/design/i18n-diagnostics.md §10）。
+# ★ 実行時のエラーと同じ言語を選びます（docs/ja/design/i18n-diagnostics.md §10）。
 #   **プログラムを動かしたときの** PLC_MSG_LANG（ja / en / auto）で決まり、既定は日本語です。
 #   標準ライブラリの panic はこれを通して出します。利用者のプログラムからも使えます。
 #

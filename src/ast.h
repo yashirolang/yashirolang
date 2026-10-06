@@ -5,7 +5,7 @@
 // 設計方針：全ノード種別を 1 つの構造体 Node で表します。
 // 美しくはありませんが、C で共用体を安全に扱うより読みやすく、
 // chibicc / tcc など実績ある小型 C コンパイラと同じ方式です。
-// 詳細は docs/design/architecture.md 3.2 節。
+// 詳細は docs/ja/design/architecture.md 3.2 節。
 #ifndef PLC_AST_H
 #define PLC_AST_H
 
@@ -319,7 +319,7 @@ struct Class {
 // 仮引数の受け取り方（言語仕様 v2 §4）
 //
 // ★ 当初は構文として読むだけで、意味は与えませんでした。
-//   検査が入るのは所有権検査です（docs/design/ownership.md §2）。
+//   検査が入るのは所有権検査です（docs/ja/design/ownership.md §2）。
 //
 // なぜ Type ではなく引数に持たせるのか
 //   Type はシングルトンで共有しているので、そこに所有の情報を足すと

@@ -25,6 +25,6 @@ v1 のランタイムは `printf` / `calloc` / `fopen` を直接呼んでいま�
 **libc に触る所だけを 4 つのフックに追い出せば、核は 1 本で済みます。**
 
 生成される LLVM IR を単純に保つため、制御フローを含む処理はここに C 関数として置き、
-IR 側は `call` 1 行にします（[../docs/design/ir-conventions.md](../docs/design/ir-conventions.md) 規約 R10）。
+IR 側は `call` 1 行にします（[../docs/ja/design/ir-conventions.md](../docs/ja/design/ir-conventions.md) 規約 R10）。
 
 ビルド：`make`（`build/core.o` と `build/hosted.o` を作り、`ld -r` で `build/runtime.o` にまとめます）

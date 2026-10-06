@@ -81,7 +81,7 @@ LANG_NAME := yashirolang
 LANG_EXT  := .ys
 LANG_CC   := yashirolang
 LANG_PM   := ysm
-LANG_VERSION := 0.52.0
+LANG_VERSION := 0.52.1
 LANG_REPO := https://github.com/yashirolang/yashirolang
 CFLAGS  += -DPLC_LANG_NAME='"$(LANG_NAME)"' \
            -DPLC_LANG_EXT='"$(LANG_EXT)"' \
@@ -396,7 +396,7 @@ test: $(TARGET) $(RUNTIME_OBJ) $(PM)
 	@tests/python.sh
 	@tests/tls.sh
 
-# Python から呼ぶ試験だけ（設計 docs/design/ffi.md。python3 が無ければ飛ばします）
+# Python から呼ぶ試験だけ（設計 docs/ja/design/ffi.md。python3 が無ければ飛ばします）
 .PHONY: python-test
 python-test: $(TARGET) $(RUNTIME_OBJ)
 	@tests/python.sh
@@ -560,7 +560,7 @@ install: all
 	cp $(TARGET) "$(DESTDIR)$(PREFIX)/bin/"
 	cp $(RUNTIME_OBJ) "$(DESTDIR)$(PREFIX)/lib/plc/"
 	cp lib/*$(LANG_EXT) "$(DESTDIR)$(PREFIX)/lib/plc/lib/"
-	@# ★ 診断の英語の表（標準ライブラリの隣。docs/design/i18n-diagnostics.md §5）
+	@# ★ 診断の英語の表（標準ライブラリの隣。docs/ja/design/i18n-diagnostics.md §5）
 	cp msgs/*.tsv "$(DESTDIR)$(PREFIX)/lib/plc/msgs/"
 	@# ★ NOTICE も一緒に（Apache-2.0 §4(d)。make dist と同じ理由）。
 	cp LICENSE NOTICE "$(DESTDIR)$(PREFIX)/lib/plc/"
@@ -619,13 +619,13 @@ clean:
 #
 # ★ 名前の文字列は「定義の場所」と「文書」にしかない、という約束の見張りです。
 #   コードやシェルに名前を書き写すと、改名のときに必ずどれかを忘れます。
-#   CI で毎回回ります（docs/design/naming.md）。
+#   CI で毎回回ります（docs/ja/design/naming.md）。
 .PHONY: check-naming
 
 check-naming:
 	@tools/check_naming.sh
 
-# 診断の英語の表（msgs/en.tsv）とソースを突き合わせる（docs/design/i18n-diagnostics.md §8）
+# 診断の英語の表（msgs/en.tsv）とソースを突き合わせる（docs/ja/design/i18n-diagnostics.md §8）
 check-msgs:
 	@tools/check_msgs.sh
 

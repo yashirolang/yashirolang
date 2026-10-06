@@ -4,7 +4,7 @@
 #   一時値・ラベルの連番、文字列リテラルの割り当て順、declare を出す順序まで
 #   C 版と一致させます。1 つでもずれると diff に出ます。
 #
-# 生成規約は docs/design/ir-conventions.md にあります。
+# 生成規約は docs/ja/design/ir-conventions.md にあります。
 import strings
 import ast
 import ownck
@@ -538,7 +538,7 @@ class Emitter:
                 # ★ copy で返す。StrLit は同じラベルを持ち続けるので take は使えません。
                 #   注意: そのまま return s.label と書くと、呼び出し側が所有として
                 #     解放し、次の intern_str が解放済みを読みます
-                #     （docs/roadmap.md A-21d と同じ形）。
+                #     （docs/ja/roadmap.md A-21d と同じ形）。
                 return copy(s.label)
             sl = s.next
 
@@ -2487,7 +2487,7 @@ class Emitter:
         obj: str = self.gen_expr(obj_node)
         # 注意: 入れ子（xs[ys[i * 2]]）に備えて、貯め場所を退避してから使う
         #
-        # ★ move_out で「持っていく」こと（docs/roadmap.md A-21f）。
+        # ★ move_out で「持っていく」こと（docs/ja/roadmap.md A-21f）。
         #   借用のまま saved に置くと、次の `self.ovf_flag = ...` が
         #   **古い値を解放**するので saved が宙に浮きます（--drop のとき）。
         #   move_out なら持ち主ごと移るので、代入しても消えません。
@@ -4334,7 +4334,7 @@ class Emitter:
 
         # ── move_out(場所) — 所有権を取り出して、その場所は空にする ──────
         #
-        # ★ 出す形は 3 行です（docs/roadmap.md A-21d）:
+        # ★ 出す形は 3 行です（docs/ja/roadmap.md A-21d）:
         #     ① いまの値を読む      … これが戻り値（所有権ごともらう）
         #     ② 空の値を作る        … str なら ""、list なら新しい空リスト
         #     ③ その場所へ書き戻す  … 場所は有効なまま残る

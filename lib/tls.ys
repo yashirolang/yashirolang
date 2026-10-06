@@ -18,7 +18,7 @@
 #   1 行も入っていません。ただし `make TLS=1` で建てた処理系では、この下の
 #   extern が **OpenSSL 3.x（Apache-2.0）** に繋がります。3.0 未満は
 #   旧 OpenSSL/SSLeay ライセンスで両立しないため、ビルドの時点で断ります
-#   （runtime/tls<c>）。詳しくは docs/design/tls<md>。
+#   （runtime/tls<c>）。詳しくは docs/ja/design/tls<md>。
 
 # tls — 暗号化した通信（TLS）
 #

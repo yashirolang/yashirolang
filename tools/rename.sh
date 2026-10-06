@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # rename.sh — 言語の名前を変える（唯一の手順）
 #
-# ★ 名前に依存する値は 6 つだけです（docs/design/naming.md）。
+# ★ 名前に依存する値は 6 つだけです（docs/ja/design/naming.md）。
 #     LANG_NAME … 人が読む言語名
 #     LANG_EXT  … ソースの拡張子（ドット込み）
 #     LANG_CC   … コンパイラのコマンド名
@@ -214,5 +214,5 @@ cat <<MSG
      つまり「揃っているか」はテストが自動で見張ります。
 
   ★ 手で直すのは 1 つだけです:
-    - docs/design/naming.md の「改名の履歴」に 1 行足す
+    - docs/ja/design/naming.md の「改名の履歴」に 1 行足す
 MSG

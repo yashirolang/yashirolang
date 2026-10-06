@@ -1,7 +1,7 @@
 /* bench_time.h — C 側の計測。本言語の lib/time と同じ単調時計を使う。
  *
  * ★ 測るのは「中の処理だけ」です。プロセスの起動時間は入りません
- *   （docs/roadmap.md §3-B1 で、起動時間の引き算が比を歪めていたため）。
+ *   （docs/ja/roadmap.md §3-B1 で、起動時間の引き算が比を歪めていたため）。
  */
 #ifndef BENCH_TIME_H
 #define BENCH_TIME_H

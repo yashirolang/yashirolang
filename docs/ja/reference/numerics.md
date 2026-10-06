@@ -276,7 +276,7 @@ CSV の列の型は中身から決まります（全部数として読めれば�
 
 注意: 引用符（`"…"`、`""` で 1 個の `"`）とカンマ・改行を含む欄に対応しています。
 
-**組み合わせた例**は [examples/sales_report.ys](../../examples/sales_report.ys)
+**組み合わせた例**は [examples/sales_report.ys](../../../examples/sales_report.ys)
 にあります（CSV → 集計 → 図）。
 
 ---
@@ -490,7 +490,7 @@ scope:
         parts.append(th.join())
 ```
 
-**動くもの全体は [examples/parallel_matmul.ys](../../examples/parallel_matmul.ys) にあります。**
+**動くもの全体は [examples/parallel_matmul.ys](../../../examples/parallel_matmul.ys) にあります。**
 
 注意: **書き込み先を共有することはできません**（`E-SEND-4`）。上のように
 「各スレッドが自分のぶんを `own` で作って返す」形にしてください。

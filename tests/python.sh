@@ -1,5 +1,5 @@
 #!/bin/bash
-# Python から呼ぶ試験（設計 docs/design/ffi.md）
+# Python から呼ぶ試験（設計 docs/ja/design/ffi.md）
 #
 # ★ tests/python/<名前> のソースを --python で作り、隣の <名前>_test.py を走らせます。
 #   test.py は最後に "ok" と出せば合格です（途中の assert で落ちれば不合格）。
@@ -13,7 +13,7 @@
 #   PLC_CC=build/stage2 tests/python.sh   別のコンパイラで
 set -u
 # ★ panic の文面は実行時の言語で決まります（既定は日本語）。使う人の設定を外して、
-#   既定の日本語で確かめます（docs/design/i18n-diagnostics.md §10）。
+#   既定の日本語で確かめます（docs/ja/design/i18n-diagnostics.md §10）。
 unset PLC_MSG_LANG
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

@@ -3,7 +3,7 @@
 // 扱う範囲：int / bool / None / str / list[T] / ユーザー定義クラス。
 // float は将来、T | None（nullable）はのちに足します。
 //
-// 型付け規則の全体像は docs/spec/type-system.md にあります。
+// 型付け規則の全体像は docs/ja/spec/type-system.md にあります。
 #ifndef PLC_TYPES_H
 #define PLC_TYPES_H
 
@@ -196,7 +196,7 @@ Type *type_iface(char *name, struct Iface *i);
 extern bool (*class_implements_hook)(struct Class *c, struct Iface *i);
 
 // 値のバイト数とアラインメント（クラスのレイアウト計算に使う）。
-// docs/design/memory-model.md 5 節の表がそのまま実装になっています。
+// docs/ja/design/memory-model.md 5 節の表がそのまま実装になっています。
 int type_size(Type *t);
 int type_align(Type *t);
 

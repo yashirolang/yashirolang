@@ -16,7 +16,7 @@
 // なぜハッシュテーブルではなく線形リストなのか
 //   1 つのスコープに宣言される変数は普通 10 個程度です。
 //   線形探索で十分速く、コードは 5 行で済みます。
-//   「まず動かす、測ってから直す」が原則（docs/spec/type-system.md 7.2）。
+//   「まず動かす、測ってから直す」が原則（docs/ja/spec/type-system.md 7.2）。
 
 typedef struct VarEntry VarEntry;
 struct VarEntry {
@@ -63,7 +63,7 @@ struct FuncSig {
 
     // ── raises 節 ──
     // ★ 失敗しうる関数は、IR 上でエラー出力用の引数を 1 本余分に取ります
-    //   （docs/design/error-handling.md §2）。
+    //   （docs/ja/design/error-handling.md §2）。
     Class **raises;  // 宣言されたエラー型（クラス）
     int nraises;
     Type **params;  // 引数の型
@@ -635,7 +635,7 @@ static Type *resolve_type(Sema *s, Node *tr) {
 
 // ── ジェネリクス（単相化） ─────────────────────────────
 //
-// ★ 方針は docs/design/generics-and-interfaces.md §1 のとおり **単相化**です。
+// ★ 方針は docs/ja/design/generics-and-interfaces.md §1 のとおり **単相化**です。
 //   Dict[str, int] と Dict[str, Symbol] は、**別々のクラスを作ります**。
 //   型消去（1 つの実体で済ませる）を採らないのは、int と str で値の大きさと
 //   解放の要否が違い、箱詰めが要るためです（GC を持たない方針と噛み合わない）。
@@ -1093,7 +1093,7 @@ static Type *check_is(Sema *s, Node *n) {
 static bool op_supports(OpKind op, Type *t) {
     // ★ クラスと list は「参照」なので、比べられるのは
     //   同一性（== / !=）だけです。大小関係には意味がありません
-    //   （言語仕様 4.3 / docs/spec/type-system.md 5.6）。
+    //   （言語仕様 4.3 / docs/ja/spec/type-system.md 5.6）。
     if (t->kind == TY_CLASS)
         return op == OP_EQ || op == OP_NE;
 
@@ -1108,7 +1108,7 @@ static bool op_supports(OpKind op, Type *t) {
 
     // 比較は int どうし・bool どうしのどちらでも使える。
     // （両辺の型が等しいことは呼び出し側で検査済み）
-    // 言語仕様 4.3 / docs/spec/type-system.md 5.5
+    // 言語仕様 4.3 / docs/ja/spec/type-system.md 5.5
     if (is_compare(op)) return true;
 
     if (t->kind == TY_INT) {
@@ -1257,7 +1257,7 @@ static Type *check_binop(Sema *s, Node *n) {
         r->kind == TY_INT)
         return l;
 
-    // ★ 検査は 2 段構え（docs/spec/type-system.md 5.3）
+    // ★ 検査は 2 段構え（docs/ja/spec/type-system.md 5.3）
     //   ① 両辺の型が等しいか
     //   ② その型がその演算子を支持するか
     //   この順にするとコードが短くなり、エラーメッセージも的確になります。
@@ -2183,7 +2183,7 @@ static Type *check_builtin_call(Sema *s, Node *n) {
 
     // ── move_out(場所) — 所有権を取り出し、その場所は空にする ──────
     //
-    // ★ なぜ要るか（docs/roadmap.md A-21d）
+    // ★ なぜ要るか（docs/ja/roadmap.md A-21d）
     //   `return self.out` は仕様 §4.5 が許しますが、**戻り値の型に
     //   「借用だ」と書く手段がありません**。呼ぶ側は所有として受け取り、
     //   自分でも解放するので、--drop すると二重解放になります。
@@ -3421,7 +3421,7 @@ static Type *check_new(Sema *s, Node *n, Class *c) {
     return c->type;
 }
 
-// 関数呼び出しの検査（docs/spec/type-system.md 5.7 の順序に従う）
+// 関数呼び出しの検査（docs/ja/spec/type-system.md 5.7 の順序に従う）
 // ── 低レベルの組み込み ──────────────────────────────────
 //
 // ★ 引数の型が「表」で書けない（ptr[int] を取る／返す）ので、
@@ -3633,7 +3633,7 @@ static Type *check_call(Sema *s, Node *n) {
     // ── spawn(f, a…) — 別スレッドで f(a…) を始める（A-18）──
     //
     // ★ 新しい構文は作りません。**呼び出しの形のまま**です
-    //   （docs/design/concurrency.md 3）。rc(x) と同じ理由でここに置きます:
+    //   （docs/ja/design/concurrency.md 3）。rc(x) と同じ理由でここに置きます:
     //   戻り型が引数の型から決まるので、組み込み関数の表では表せません。
     //
     // ★ 引数は**何個でも**渡せるようになりました。クロージャが無いので
@@ -5045,7 +5045,7 @@ static void declare_class(Sema *s, Node *n) {
 
 // フィールドを並べて、オフセットとサイズを決める。
 //
-// ★ docs/design/memory-model.md 5 節の表がそのまま実装になっています。
+// ★ docs/ja/design/memory-model.md 5 節の表がそのまま実装になっています。
 //   注意: 読み書きに offset は使いません（getelementptr に渡すのは index）。
 //      offset は「自分の計算が合っているか」を確かめるための値です。
 static int align_up(int offset, int align) {

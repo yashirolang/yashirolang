@@ -136,7 +136,7 @@ scope:
 | `runtime/hosted.c` | pthread（POSIX）と CreateThread（Windows）の切り替え |
 
 注意: **`runtime/core.c` には入れません。** ベアメタルには OS のスレッドがありません。
-`time` と同じ扱い（[ベアメタルで使えないモジュール](../../lib/README.md)）にします。
+`time` と同じ扱い（[ベアメタルで使えないモジュール](../../../lib/README.md)）にします。
 
 注意: **2 実装の一致**（`src/` と `selfhost/`）は当然守ります。
 

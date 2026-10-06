@@ -1,7 +1,7 @@
 # sys — プロセス
 #
 # ★ この 2 つが無いと、セルフホスト版コンパイラは「コマンド」になれません
-#   （docs/design/self-hosting.md 3.4）。
+#   （docs/ja/design/self-hosting.md 3.4）。
 #
 # 注意: strings を import しています（Output.lines がここで行に分けるため）。
 import strings

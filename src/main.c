@@ -228,7 +228,7 @@ static Options parse_args(int argc, char **argv) {
         // 注意: **後に書いたほうが勝ちます**（--drop / --no-drop と同じ規則）。
         //   --warn-own --deny-move なら「移動だけエラー」に戻せるので、
         //   古いコードを検査ごとに直していけます（決定 D12 の意図はこちら側へ）。
-        // ★ 診断の言語（docs/design/i18n-diagnostics.md）。既定は日本語。
+        // ★ 診断の言語（docs/ja/design/i18n-diagnostics.md）。既定は日本語。
         if (strncmp(a, "--lang=", 7) == 0) {
             if (!msg_set_lang(a + 7))
                 error("%s", MSG1("cli.003", "--lang に書けるのは ja / en / auto です（'{0}'）", a + 7));

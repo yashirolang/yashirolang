@@ -1322,7 +1322,7 @@ double pl_fpow(double x, double y) {
 // ── コマンドライン引数と外部コマンド ──────────────────
 //
 // ★ この 2 つが無いと、セルフホスト版コンパイラは「コマンド」になれません
-//   （docs/design/self-hosting.md 3.4）。
+//   （docs/ja/design/self-hosting.md 3.4）。
 
 
 
@@ -1923,7 +1923,7 @@ void pl_rc_unborrow(void *p) {
 
 // ── 解放 ───────────────────────────────────────────────
 //
-// ★ v1 は「解放しない」設計でした（docs/design/memory-model.md）。
+// ★ v1 は「解放しない」設計でした（docs/ja/design/memory-model.md）。
 //   所有権で「誰が所有者か」が静的に決まったので、
 //   ここで初めて pl_hook_free() を入れます。
 //

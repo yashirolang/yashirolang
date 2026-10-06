@@ -7,7 +7,7 @@
 #   が出ていました。`worst = e.st` は int を**コピー**しているだけで、
 #   e への参照は残りません。借用として追うのは、解放の対象になりうる型だけです。
 #   ★ ownck をセルフホスト版へ移植している途中に、自分のコードで踏みました
-#     （docs/roadmap.md A-21 ⑩）。
+#     （docs/ja/roadmap.md A-21 ⑩）。
 class Ent:
     st: int
 

@@ -129,7 +129,7 @@ static Token *expect(Parser *p, TokenKind kind, const char *what,
 // 「強い」演算子を下（後から呼ばれる関数）に置くと、
 // それだけで優先順位が実現されます。
 //
-// なぜそうなるのかは docs/spec/grammar.md 第5節に完全なトレースがあります。
+// なぜそうなるのかは docs/ja/spec/grammar.md 第5節に完全なトレースがあります。
 //
 //   expr        ::= or_expr                          弱い ↑
 //   or_expr     ::= and_expr    { "or"  and_expr }
@@ -1253,7 +1253,7 @@ static Node *aug_assign(Parser *p, Token *t, OpKind op, Node *target, Node *rhs)
 
 // simple_stmt ::= var_decl | assign_stmt | expr_stmt
 //
-// ★ 代入文と式文の区別のしかた（docs/spec/grammar.md 第4節）
+// ★ 代入文と式文の区別のしかた（docs/ja/spec/grammar.md 第4節）
 //
 //   左辺を先に「式」として読み、その後に '=' が続いていたら
 //   「今読んだ式は代入先だった」と解釈し直します。
@@ -1446,7 +1446,7 @@ static Node *simple_stmt(Parser *p) {
 
     int aug = aug_op(t);
     if (!tok_is(t, "=") && aug < 0) {
-        // 式文になれるのは呼び出しだけ（docs/spec/type-system.md 6 節）。
+        // 式文になれるのは呼び出しだけ（docs/ja/spec/type-system.md 6 節）。
         //
         // ★ 当初は「プログラムの値＝最後の式」だったので、裸の式を
         //   文として書けました。足場を外したので本来の厳しさに戻します。
@@ -1930,7 +1930,7 @@ static Node *while_stmt(Parser *p) {
 // except_clause ::= "except" type [ "as" IDENT ] ":" block
 //
 // ★ 見た目は Python の例外ですが、実体は戻り値の検査です
-//   （docs/design/error-handling.md）。アンワインドはしません。
+//   （docs/ja/design/error-handling.md）。アンワインドはしません。
 static Node *try_stmt(Parser *p) {
     Token *kw = advance(p);  // "try"
     expect_colon(p, "try");
@@ -2210,7 +2210,7 @@ static Node *type_ref(Parser *p, const char *what) {
     // ★ T | None。'|' の後ろは None だけです。
     //   型の '|' と式の '|'（ビット OR）は同じ記号ですが、
     //   型を読む関数と式を読む関数が別なので、ここでは迷いません
-    //   （docs/spec/grammar.md 6 節）。
+    //   （docs/ja/spec/grammar.md 6 節）。
     if (tok_is(peek(p), "|")) {
         Token *bar = advance(p);
         if (!tok_is_kw(peek(p), "None"))

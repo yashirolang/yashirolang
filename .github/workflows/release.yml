@@ -7,7 +7,7 @@
 #
 # 注意: 名前（言語名・コマンド名・拡張子）を**このファイルに書かないこと**。
 #    すべて `make -s print-LANG_*` で make に訊きます。改名しても
-#    この workflow を直さずに済ませるためです（docs/design/naming.md）。
+#    この workflow を直さずに済ませるためです（docs/ja/design/naming.md）。
 #   コンパイラは実行ファイルからの相対でこの 2 つを探すので、
 #   **展開した場所がどこでも動きます**（src/main.c の runtime_o を参照）。
 #
@@ -149,7 +149,7 @@ jobs:
       #
       # ★ checkout するのは、Release の本文に出すコマンド名を
       #   `make -s print-LANG_*` で**この場で訊く**ためです。
-      #   名前をこのファイルに書き写さないためです（docs/design/naming.md）。
+      #   名前をこのファイルに書き写さないためです（docs/ja/design/naming.md）。
       - uses: actions/checkout@v4
 
       - uses: actions/download-artifact@v4
@@ -161,7 +161,7 @@ jobs:
         run: ls -R dist
 
       # ★ 本文は .github/release-body.md.in（ひな型）から流し込みます。
-      #   CI の YAML に名前を書き写さないための仕組みです（docs/design/naming.md）。
+      #   CI の YAML に名前を書き写さないための仕組みです（docs/ja/design/naming.md）。
       #
       # 注意: 昔はこの中で echo を並べて組み立てていましたが、シェルによっては
       #   echo が "\n" を**本物の改行に変えて**しまい、利用者に見せる

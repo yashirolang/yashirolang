@@ -1,5 +1,5 @@
 yashirolang
-Copyright 2026 Shota Iwamoto
+Copyright (c) 2026 by Contributors
 
 This product is licensed under the Apache License, Version 2.0.
 See the LICENSE file for the full terms.
@@ -29,4 +29,4 @@ Apache-2.0 と両立しないため、`runtime/tls.c` がビルドの時点で�
 Apache-2.0 の条件（NOTICE の同梱など）をご自分の配布物について確かめて
 ください。動的リンクなら配布物には含まれません。
 
-判断の経緯は docs/design/tls.md にあります。
+判断の経緯は docs/ja/design/tls.md にあります。

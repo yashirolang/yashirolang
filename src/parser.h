@@ -2,7 +2,7 @@
 //
 // 手法は「再帰下降構文解析」です。
 // 文法規則 1 つ ＝ static 関数 1 つ に対応させます。
-// 文法は docs/spec/grammar.md にあります。
+// 文法は docs/ja/spec/grammar.md にあります。
 //
 // 当初の文法（暫定）：
 //     program ::= expr EOF

@@ -5,6 +5,9 @@ GC はありません。所有権と借用の検査でメモリ安全性を保�
 コンパイラは C 版（`src/`）と yashirolang 版（`selfhost/`）の 2 つがあり、**セルフホストに到達しています**
 （両者はバイト単位で同じ IR を出し、`make bootstrap` が stage2 == stage3 を確かめます）。
 
+> **English:** Error messages can be shown in English — see [Use English error messages](#英語のエラーメッセージで使う--use-english-error-messages) below.
+> English documentation starts at [docs/en/](docs/en/README.md).
+
 ---
 
 ## インストール
@@ -52,7 +55,7 @@ make TLS=1                            # OpenSSL 3.0 以上（Apache-2.0）を使
 
 既定（`make`）では入りません。入れずに建てた処理系で `https://` に
 繋ごうとすると、**平文に落ちるのではなく**「TLS を組み込んでいません」と
-断られます。詳しくは [docs/design/tls.md](docs/design/tls.md)。
+断られます。詳しくは [docs/ja/design/tls.md](docs/ja/design/tls.md)。
 
 ### PATH に入れる
 
@@ -63,6 +66,56 @@ make install PREFIX=$HOME/.local      # 自分の環境だけに入れるなら
 yashirolang --version                 # コンパイラ
 ysm --version                         # パッケージマネージャも一緒に入ります
 ```
+
+### 英語のエラーメッセージで使う / Use English error messages
+
+エラーメッセージは**既定では日本語**です。英語の表（`msgs/en.tsv`）は配布物にも
+`make install` にも入っているので、追加で入れるものはありません。**環境変数を 1 つ設定するだけ**です。
+
+Error messages are in Japanese by default. The English messages ship with every install
+(release archives and `make install` alike), so nothing extra is needed — just set one environment variable.
+
+```bash
+# 上のどれかの方法で入れたあと / after installing with any method above
+echo 'export PLC_MSG_LANG=en' >> ~/.bashrc     # zsh なら ~/.zshrc / use ~/.zshrc for zsh
+source ~/.bashrc
+
+printf 'def main() -> int:\n    x: int = "a"\n    return 0\n' > bad.ys
+yashirolang --check bad.ys
+```
+
+```
+error: mismatched types
+  --> bad.ys:2:14
+   |
+ 2 |     x: int = "a"
+   |              ^^^ expression of type 'str'
+   |
+note: variable 'x' is declared as type 'int'
+  --> bad.ys:2:5
+   |
+ 2 |     x: int = "a"
+   |     ^
+   |
+   = help: there are no implicit type conversions (language spec 3.5)
+```
+
+| 設定 / Setting | 効果 / Effect |
+|---|---|
+| `PLC_MSG_LANG=en` | 常に英語 / always English |
+| `PLC_MSG_LANG=auto` | ロケール（`LC_ALL` → `LC_MESSAGES` → `LANG`）が `ja` で始まれば日本語、それ以外は英語 / Japanese if your locale starts with `ja`, English otherwise |
+| `yashirolang --lang=en …` | その 1 回だけ英語（環境変数より優先） / English for this run only (overrides the variable) |
+
+- コンパイラの診断だけでなく、**作ったプログラムの実行時エラー**（`runtime error: index out of range: 5 (3)`）も、
+  **動かすときの** `PLC_MSG_LANG` で英語になります。<br>
+  Runtime errors of compiled programs follow `PLC_MSG_LANG` **at run time**, too.
+- `ysm`・VS Code 拡張・IDE は同じ環境変数を受け継ぐので、設定は 1 か所で済みます。<br>
+  `ysm`, the VS Code extension and the IDE inherit the same variable.
+- 診断コード（`E-MOVE-1` など）は言語によらず同じです。<br>
+  Diagnostic codes such as `E-MOVE-1` are the same in both languages.
+
+★ 既定をロケールに合わせないのは、CI や他人の機械で黙って出る言語が変わらないようにするためです
+（[docs/ja/design/i18n-diagnostics.md](docs/ja/design/i18n-diagnostics.md) §6.2）。
 
 ---
 
@@ -115,8 +168,8 @@ h.node = r                            # しまって、
 return r                              # なおかつ返せる
 ```
 
-詳しくは [docs/tutorial.md §7](docs/tutorial.md#7-所有権と借用--この言語の中心) と
-[docs/spec/safety-spec.md](docs/spec/safety-spec.md) にあります。
+詳しくは [docs/ja/tutorial.md §7](docs/ja/tutorial.md#7-所有権と借用--この言語の中心) と
+[docs/ja/spec/safety-spec.md](docs/ja/spec/safety-spec.md) にあります。
 
 ---
 
@@ -146,28 +199,35 @@ import json               # 標準ライブラリ。名前はぶつかりませ�
 `package.lock` が commit と tree の SHA で中身を固定するので、タグを張り替えられても入ってくるものは変わりません。
 **インストール中にパッケージのコードは 1 行も実行されません**（作業ツリーを作らず、`git show` / `git ls-tree` で読むだけです）。
 
-→ [docs/reference/pkg.md](docs/reference/pkg.md)
+→ [docs/ja/reference/pkg.md](docs/ja/reference/pkg.md)
 
 ---
 
 ## ドキュメント
 
-**まずは [docs/getting-started.md](docs/getting-started.md)、次に [docs/tutorial.md](docs/tutorial.md)です。**
+ドキュメントは言語ごとに分けてあります。**日本語が正本**で、英語は入口の文書から順に訳しています。
 
 | | |
 |---|---|
-| [docs/README.md](docs/README.md) | ドキュメントの地図 |
-| [docs/getting-started.md](docs/getting-started.md) | インストールから最初の 1 本まで |
-| [docs/tutorial.md](docs/tutorial.md) | **言語ガイド** — Python との差分・所有権・並行・エラー処理 |
-| [docs/reference/](docs/reference/) | コマンド・標準ライブラリ・パッケージマネージャ・数値計算・ネットワーク |
-| [docs/spec/](docs/spec/) | 言語仕様（構文・型・安全性・文法） |
-| [docs/design/](docs/design/) | 処理系の設計（使うだけなら不要） |
+| [docs/ja/](docs/ja/README.md) | **日本語**（すべての文書） |
+| [docs/en/](docs/en/README.md) | **English** — Getting started, CLI reference (more to come) |
+
+**まずは [docs/ja/getting-started.md](docs/ja/getting-started.md)、次に [docs/ja/tutorial.md](docs/ja/tutorial.md)です。**
+
+| | |
+|---|---|
+| [docs/ja/README.md](docs/ja/README.md) | ドキュメントの地図 |
+| [docs/ja/getting-started.md](docs/ja/getting-started.md) | インストールから最初の 1 本まで |
+| [docs/ja/tutorial.md](docs/ja/tutorial.md) | **言語ガイド** — Python との差分・所有権・並行・エラー処理 |
+| [docs/ja/reference/](docs/ja/reference/) | コマンド・標準ライブラリ・パッケージマネージャ・数値計算・ネットワーク |
+| [docs/ja/spec/](docs/ja/spec/) | 言語仕様（構文・型・安全性・文法） |
+| [docs/ja/design/](docs/ja/design/) | 処理系の設計（使うだけなら不要） |
 
 ---
 
 ## ライセンス
 
-**[Apache License 2.0](LICENSE)** — Copyright 2026 Shota Iwamoto.
+**[Apache License 2.0](LICENSE)** — Copyright (c) 2026 by Contributors.
 
 著作権表示は [NOTICE](NOTICE) にもあります。
 
@@ -175,4 +235,4 @@ import json               # 標準ライブラリ。名前はぶつかりませ�
 （Apache-2.0）に**リンクします**（ソースは含みません）。1.1.1 以前は旧
 OpenSSL / SSLeay ライセンスで Apache-2.0 と両立しないため、ビルドの時点で
 断ります。詳しくは [NOTICE](NOTICE) と
-[docs/design/tls.md](docs/design/tls.md)。
+[docs/ja/design/tls.md](docs/ja/design/tls.md)。

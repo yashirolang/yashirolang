@@ -8,7 +8,7 @@
 #   標準で付いてきます。値の埋め込みは lib/json を使います。
 #
 # 注意: 1 本ずつ順に捌きます。同時に捌きたいときは serve_conn を spawn する
-#   輪を自分で書いてください（docs/reference/net.md §3.4）。
+#   輪を自分で書いてください（docs/ja/reference/net.md §3.4）。
 import http
 import json
 import net

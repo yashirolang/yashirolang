@@ -22,7 +22,7 @@ char *diag_fmt(const char *fmt, ...) {
     return buf;
 }
 
-// ── 言語の切り替え（docs/design/i18n-diagnostics.md）──────────
+// ── 言語の切り替え（docs/ja/design/i18n-diagnostics.md）──────────
 //
 // ★ 対になる定義: selfhost/diag の msg / set_lang（**同じ規則で同じ文字列を返す**）。
 

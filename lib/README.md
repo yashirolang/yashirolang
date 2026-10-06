@@ -29,4 +29,4 @@ C ランタイム（`runtime/`）に置くのは、C の機能が必要なもの
 両方に同じ名前があればエラーです）。
 
 なぜ f-string を言語機能にせずヘルパ関数で済ませるのかは
-[../docs/design/self-hosting.md](../docs/design/self-hosting.md) 3.7 節を参照。
+[../docs/ja/design/self-hosting.md](../docs/ja/design/self-hosting.md) 3.7 節を参照。

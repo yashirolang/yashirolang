@@ -3024,7 +3024,7 @@ static void declare_extern(Emitter *e, const char *ret, const char *ir_name,
 
 // ── エラー処理の生成 ───────────────────────────────────
 //
-// 設計は docs/design/error-handling.md。**アンワインドはしません。**
+// 設計は docs/ja/design/error-handling.md。**アンワインドはしません。**
 // 失敗しうる関数は、末尾に「エラー出力ポインタ」を 1 本余分に取ります。
 //
 //   define ptr @read(ptr %path, ptr %err.out)
@@ -3125,7 +3125,7 @@ static char *load_payload(Emitter *e, const char *slot) {
 
 // ── 解放（drop）の生成 ─────────────────────────────────
 //
-// 設計は docs/design/ownership.md §6。仕様は safety-spec.md §6。
+// 設計は docs/ja/design/ownership.md §6。仕様は safety-spec.md §6。
 //
 // ★ この章のいちばん大きな判断：**drop フラグを持たない。**
 //
@@ -3558,7 +3558,7 @@ static void emit_drop_value(Emitter *e, Type *t, const char *val);
 
 // ── 式の途中に現れる「一時値」の解放（A-21e）────────────────
 //
-// ★ 何が問題だったか（docs/roadmap.md A-21e）
+// ★ 何が問題だったか（docs/ja/roadmap.md A-21e）
 //   `s: str = "x" + str(i)` の **str(i) の結果**は、どこにも束縛されないまま
 //   pl_str_concat に渡され、**誰も解放しません**。束縛すれば解放されるので、
 //   式の途中に現れる一時値だけが漏れていました。
@@ -4573,7 +4573,7 @@ static char *gen_call(Emitter *e, Node *n) {
 
     // ── move_out(場所) — 所有権を取り出して、その場所は空にする ──────
     //
-    // ★ 出す形は 3 行です（docs/roadmap.md A-21d）:
+    // ★ 出す形は 3 行です（docs/ja/roadmap.md A-21d）:
     //     ① いまの値を読む      … これが戻り値（所有権ごともらう）
     //     ② 空の値を作る        … str なら ""、list なら新しい空リスト
     //     ③ その場所へ書き戻す  … 場所は有効なまま残る

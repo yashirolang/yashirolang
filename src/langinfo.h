@@ -6,7 +6,7 @@
 //
 // 注意: 内部の識別子（PLC_ 接頭辞、ランタイムの pl_ 接頭辞）は
 //   **わざと言語名から独立**させてあります。改名しても変える必要はありません。
-//   詳しくは docs/design/naming.md を参照。
+//   詳しくは docs/ja/design/naming.md を参照。
 #ifndef PLC_LANGINFO_H
 #define PLC_LANGINFO_H
 

@@ -1,6 +1,6 @@
 # ownck — 所有権・借用・可変性の検査（C 版 src/ownck.c と対）
 #
-# ★ なぜセルフホスト版にも要るのか（docs/roadmap.md A-21 ⑩）
+# ★ なぜセルフホスト版にも要るのか（docs/ja/roadmap.md A-21 ⑩）
 #   解放の挿入（--drop）は「いつ・何を解放してよいか」の判断が要り、
 #   その判断は**所有権の解析結果そのもの**です。C 版だけが所有権を知って
 #   いる状態では、セルフホスト版は「解放しないコンパイラ」にしかなれません。
@@ -1024,7 +1024,7 @@ def same_tok(a: rc[token.Token], b: rc[token.Token]) -> bool:
 #
 # ★ 対になる定義: src/ownck.c の use_expr / move_expr / check_use。
 #
-# 注意: **移植の優先順位**（docs/roadmap.md A-21 ⑩）
+# 注意: **移植の優先順位**（docs/ja/roadmap.md A-21 ⑩）
 #   メモリ安全性に直結する検査から移しています。
 #     移植済み … E-MOVE-1（移動済みの使用）/ E-BORROW-1,3,4,7,8（借用の扱い）
 #     未移植   … E-BORROW-5（同時の可変借用）/ E-SEND-1〜4（スレッド）
@@ -1792,7 +1792,7 @@ def call_args(o: mut Own, f: mut rc[Flow], n: rc[ast.Node], skip_self: bool) -> 
     #   ふつうの呼び出しとは渡し方が違うので、ここで分けます。
     #
     # 注意: **いまは「移動を記録する」ぶんだけ**移植しています。E-SEND-1〜4
-    #   （スレッドに渡してよいかの検査）は後回しです（docs/roadmap.md A-21 ⑩）。
+    #   （スレッドに渡してよいかの検査）は後回しです（docs/ja/roadmap.md A-21 ⑩）。
     #   移動の記録はメモリ安全性に直結する（spawn に渡した値を後から使うと
     #   E-MOVE-1）ので、そこだけ先に入れます。
     nt0: rc[ast.Type] | None = node_type(n)
@@ -1839,7 +1839,7 @@ def call_args(o: mut Own, f: mut rc[Flow], n: rc[ast.Node], skip_self: bool) -> 
             #
             # 注意: ここは check_call_borrows の①だけです。②（同じ場所を
             #   可変借用と他の借用で同時に渡す＝E-BORROW-5）は未移植
-            #   （docs/roadmap.md A-21 ⑩）。
+            #   （docs/ja/roadmap.md A-21 ⑩）。
             if is_mut_param:
                 check_mut(o, an, an, WR_ARG)
         refs.append(rc(ArgRef(an, is_mut_param, WR_ARG)))

@@ -83,7 +83,7 @@ typedef struct PlList PlList;
 PlList *pl_list_new(void);
 void pl_list_push_ptr(PlList *l, void *v);
 
-// ── 実行時のエラーの言語（docs/design/i18n-diagnostics.md §10）──
+// ── 実行時のエラーの言語（docs/ja/design/i18n-diagnostics.md §10）──
 //
 // ★ **プログラムを動かしたときの** PLC_MSG_LANG で決めます（コンパイルしたときではありません）。
 //   既定は日本語。コンパイラの --lang と同じく ja / en / auto を受け付けます。
@@ -226,7 +226,7 @@ char *pl_read_file(const char *path) {
 // 注意: **core.c ではなく、ここ（hosted.c）に置きます。**
 //    ベアメタルには標準入力がありません。core.c に置くと、カーネル側に
 //    「使わないのに実装しなければならないフック」を強いることになります
-//    （docs/design/os-support.md の 4 フックを増やさない、という判断）。
+//    （docs/ja/design/os-support.md の 4 フックを増やさない、という判断）。
 
 // 1 行読む。改行は**含めません**。EOF で 1 行も読めなければ NULL
 // （本言語側では str | None の None になります）。
@@ -444,7 +444,7 @@ long long pl_time_wall_ns(void) {
 // ── スレッド（A-18） ─────────────────────────────────
 //
 // ★ 置き場所が core.c ではなく hosted.c なのは、**ベアメタルに OS の
-//   スレッドが無い**からです（time と同じ扱い。docs/design/concurrency.md 3）。
+//   スレッドが無い**からです（time と同じ扱い。docs/ja/design/concurrency.md 3）。
 //
 // ★ ABI は「i64 を 2 つ取って i64 を 1 つ返す」に統一してあります。
 //   1 つ目が**呼ぶ相手の関数ポインタ**、2 つ目が**その引数**です。

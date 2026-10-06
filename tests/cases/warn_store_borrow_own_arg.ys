@@ -6,7 +6,7 @@
 # 注意: **誤検出ではありません** — --drop を付けると xs の drop と b の drop が
 #   同じ文字列を 2 回解放します（AddressSanitizer が heap-use-after-free と言う）。
 #
-# ★ この形は長らく**診断が出ていませんでした**（docs/roadmap.md A-21c）。
+# ★ この形は長らく**診断が出ていませんでした**（docs/ja/roadmap.md A-21c）。
 #   ownck が借用の保存を MV_FIELD と MV_APPEND でしか見ておらず、
 #   MV_OWN_ARG が漏れていたためです。
 #   正しい書き方: b: Box = Box(copy(xs[0]))

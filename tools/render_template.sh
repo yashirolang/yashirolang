@@ -4,7 +4,7 @@
 # ★ 文書（README.md と docs/）には**実際の名前が書いてあります**。
 #   ここで流し込むのは、**文書ではないもの**だけです。いまの利用者は
 #   `.github/release-body.md.in`（Release の本文）1 つです。
-#   CI の YAML に名前を書き写さないために使います（docs/design/naming.md）。
+#   CI の YAML に名前を書き写さないために使います（docs/ja/design/naming.md）。
 #
 #       {{name}}     人が読む言語名
 #       {{ext}}      ソースの拡張子（ドット込み）

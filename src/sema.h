@@ -17,7 +17,7 @@
 // 各ノードの `type` フィールドを埋めるのが主な仕事で、
 // コード生成器はそれを見て命令を選びます。
 //
-// 型付け規則の一覧は docs/spec/type-system.md にあります。
+// 型付け規則の一覧は docs/ja/spec/type-system.md にあります。
 #ifndef PLC_SEMA_H
 #define PLC_SEMA_H
 

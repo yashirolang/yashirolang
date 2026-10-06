@@ -84,7 +84,7 @@
 | 事前・事後条件を書ける | `requires` / `ensures` |
 | 場合分けに漏れが無い | `enum` の `match` は**枝が 1 つでも欠けるとエラー**（`int` / `str` は `case _` が必須） |
 
-Rust・Ada と並べた比較表は [README](../README.md#rustada-と比べたときの立ち位置) にあります。
+Rust・Ada と並べた比較表は [README](../../README.md#rustada-と比べたときの立ち位置) にあります。
 
 ### 保証していないこと
 

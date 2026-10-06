@@ -84,7 +84,7 @@ jobs:
 
       # ★ 言語名がコードやシェルに書き写されていないかを、いちばん先に見ます。
       #   改名を tools/rename.sh の 1 回で終わらせる、という約束の見張りです
-      #   （docs/design/naming.md）。★ 文書（README.md と docs/）は対象外です
+      #   （docs/ja/design/naming.md）。★ 文書（README.md と docs/）は対象外です
       #   ——読む人のために実際の名前を書いてあり、rename.sh が置換します。
       #
       #   注意: Linux でだけ回します。3 つの OS で同じ結果になる検査なので、
@@ -120,7 +120,7 @@ jobs:
         run: make bootstrap-test
 
       # ★ 言語名・拡張子・コマンド名は **make に訊きます**（ここに書き写さない）。
-      #   改名しても CI を直さずに済ませるためです（docs/design/naming.md）。
+      #   改名しても CI を直さずに済ませるためです（docs/ja/design/naming.md）。
       - name: 配布物を作って、別の場所から動かす
         run: |
           name=$(make -s print-LANG_NAME)
@@ -136,7 +136,7 @@ jobs:
   # ── TLS を有効にしたビルド ─────────────────────────────────
   #
   # ★ **別のジョブにしてあります。** TLS は任意で、既定のビルドには
-  #   入りません（[docs/design/tls.md]）。3 OS の matrix に混ぜると、
+  #   入りません（[docs/ja/design/tls.md]）。3 OS の matrix に混ぜると、
   #   OpenSSL が無い環境のために分岐を書くことになります。
   #
   # ★ Linux だけで足ります。**この言語側のコードは OS で変わらず**、

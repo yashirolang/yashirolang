@@ -1,0 +1,43 @@
+# OUTPUT: a
+# OUTPUT: root
+# OUTPUT: (root)
+# OUTPUT: False
+# OUTPUT: True
+# A-50: 弱参照 weak[T]。親を指す子を作っても、循環で解放されなくなりません。
+#   upgrade() は中身が生きていれば rc[T]、無ければ None を返します。
+class Node:
+    name: str
+    parent: weak[Node] | None
+    children: list[rc[Node]]
+    def init(self, name: own str) -> None:
+        self.name = name
+        self.parent = None
+        self.children = []
+
+def add_child(p: mut rc[Node], name: own str) -> rc[Node]:
+    c: rc[Node] = rc(Node(name))
+    c.parent = weak(p)
+    p.children.append(c)
+    return c
+
+def parent_name(n: rc[Node]) -> str:
+    pw: weak[Node] | None = n.parent
+    if pw is None:
+        return "(root)"
+    pr: rc[Node] | None = pw.upgrade()
+    if pr is None:
+        return "(gone)"
+    return copy(pr.name)
+
+def main() -> int:
+    root: rc[Node] = rc(Node("root" + ""))
+    a: rc[Node] = add_child(root, "a" + "")
+    b: rc[Node] = add_child(a, "b" + "")
+    print(parent_name(b))
+    print(parent_name(a))
+    print(parent_name(root))
+    w: weak[Node] = weak(b)
+    print(w.upgrade() is None)
+    orphan: weak[Node] = weak(rc(Node("tmp" + "")))
+    print(orphan.upgrade() is None)
+    return 0

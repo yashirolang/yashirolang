@@ -1,0 +1,7 @@
+# ERROR: 入れ子の分解と、カンマで並べた右辺は一緒に使えません
+def main() -> int:
+    a: int = 1
+    b: int = 2
+    c: int = 3
+    a, (b, c) = c, (a, b)
+    return 0

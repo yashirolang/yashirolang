@@ -1,0 +1,28 @@
+# OUTPUT: hello!
+# OUTPUT: short
+# OUTPUT: hi
+# A-48: ガードで束縛した名前は中身を借りているだけです（二重解放にならない）。
+enum Msg:
+    Text(s: str)
+    Empty
+
+def show(m: Msg) -> str:
+    match m:
+        case Msg.Text(s) if len(s) > 3:
+            return s + "!"
+        case Msg.Text(s):
+            return "short"
+        case Msg.Empty:
+            return "empty"
+
+def main() -> int:
+    a: Msg = Msg.Text("hel" + "lo")
+    print(show(a))
+    b: Msg = Msg.Text("h" + "i")
+    print(show(b))
+    match b:
+        case Msg.Text(s):
+            print(s)
+        case Msg.Empty:
+            print("e")
+    return 0

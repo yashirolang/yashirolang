@@ -107,7 +107,7 @@ top_level  ::= func_def
 
 ```ebnf
 (* ── 関数定義 ── *)
-func_def   ::= "def" IDENT "(" [ param_list ] ")" "->" type ":" block
+func_def   ::= "def" IDENT "(" [ param_list ] ")" "->" type [ raises ] ":" block
 
 param_list ::= param { "," param }
 param      ::= IDENT ":" [ "own" | "mut" ] type [ "=" default ]   (* v2。既定値は A-38 *)
@@ -182,10 +182,11 @@ stmt       ::= simple_stmt NEWLINE
    注意: case に書けるのは**決まった値**だけです。中身を持つ枝の
    `case Shape.Circle(r)` の括弧の中は、**束縛する名前**であって式ではありません。 *)
 match_stmt ::= "match" expr ":" NEWLINE INDENT { case_clause } DEDENT
-case_clause ::= "case" pattern ":" block
-pattern    ::= "_"
-             | INT | STRING
-             | IDENT "." IDENT [ "(" IDENT { "," IDENT } ")" ]
+case_clause ::= "case" "_" ":" block
+             | "case" pattern [ "if" expr ] ":" block      (* ガード（A-48） *)
+pattern    ::= INT | STRING
+             | IDENT "." IDENT [ "(" binder { "," binder } ")" ]
+binder     ::= IDENT | pattern                              (* 入れ子のパターン（A-48） *)
 
 (* ── 契約（A-29）──
    注意: "requires" / "ensures" は予約語ではありません。次のトークンが
@@ -195,6 +196,7 @@ pattern    ::= "_"
 contract_stmt ::= ( "requires" | "ensures" ) expr NEWLINE
 
 simple_stmt::= var_decl
+             | unpack_stmt
              | assign_stmt
              | return_stmt
              | "break"
@@ -210,6 +212,14 @@ target     ::= IDENT
              | postfix "[" expr "]"
              | postfix "." IDENT
 
+(* ── 分解代入（5.6.1）──
+   注意: 入れ子にしたとき（括弧を含むとき）は、右辺はタプル 1 つだけです。
+   注意: 括弧の中には 2 つ以上の名前を書きます（A-47）。 *)
+unpack_stmt::= targets "=" expr { "," expr }
+targets    ::= unpack_tgt "," unpack_tgt { "," unpack_tgt }
+             | "(" targets ")" { "," unpack_tgt }
+unpack_tgt ::= IDENT | "(" targets ")"
+
 return_stmt::= "return" [ expr ]
 expr_stmt  ::= expr
 
@@ -222,7 +232,8 @@ if_stmt    ::= "if" expr ":" block
 while_stmt ::= "while" expr ":" block
 
 (* ── for ── *)
-for_stmt   ::= "for" IDENT "in" expr ":" block
+for_stmt   ::= "for" loop_tgt "in" expr ":" block
+loop_tgt   ::= IDENT | targets        (* targets は分解（A-47）。enumerate のときは「添字, 要素」 *)
 ```
 
 ### 曖昧性の解消：`var_decl` と `assign_stmt`
@@ -285,7 +296,7 @@ call_arg   ::= [ IDENT "=" ] expr
 (* ── 量化子（0.39.0）── *)
 (* 注意: 呼び出す名前が all / any で、最初の引数の直後に for が来たときだけこの形です。
    中身は内包表記（comprehension）と同じ規則で読みます。 *)
-quantifier ::= ( "all" | "any" ) "(" expr "for" IDENT "in" or_expr [ "if" or_expr ] ")"
+quantifier ::= ( "all" | "any" ) "(" expr "for" loop_tgt "in" or_expr [ "if" or_expr ] ")"
 
 (* ── f-string の書式指定（A-45）── *)
 (* 注意: 構文解析の時点で「str(式)」と桁揃えの呼び出しに書き換えます。
@@ -384,6 +395,9 @@ Node *power(Parser *p) {
 ```ebnf
 type       ::= [ IDENT "." ] IDENT [ "[" type { "," type } "]" ]   (* 修飾は 1 段 *)
              | type "|" "None"                    (* Nullable *)
+             | "(" type "," type { "," type } ")"  (* タプル *)
+             | "fn" "(" [ type { "," type } ] ")" "->" type [ raises ]   (* 関数型。raises は A-49 *)
+raises     ::= "raises" type { "|" type }
 ```
 
 例：

@@ -1,0 +1,15 @@
+# ERROR: 投げうるエラーが違います
+class E:
+    msg: str
+    def init(self, msg: own str) -> None:
+        self.msg = msg
+
+def p(x: int) -> int raises E:
+    return x
+
+def q(x: int) -> int:
+    return x
+
+def main() -> int:
+    f: fn(int) -> int raises E = q
+    return 0

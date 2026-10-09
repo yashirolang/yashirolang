@@ -1,0 +1,22 @@
+# OUTPUT: a1
+# OUTPUT: b2
+# OUTPUT: a1
+# OUTPUT: a1
+# OUTPUT: a1
+# OUTPUT: a1!
+# A-47 で塞いだ穴：借りたタプルを分解した名前は、中身を借りているだけです。
+#   以前は名前のほうも解放していたので、ループを抜けた後の ps[0][1] が
+#   解放後の使用になっていました（ASan で検出）。
+def main() -> int:
+    ps: list[(int, str)] = [(1, "a" + str(1)), (2, "b" + str(2))]
+    for i, p in enumerate(ps):
+        n, s = p
+        print(s)
+    print(ps[0][1])
+    for n, s in ps:
+        if n == 1:
+            print(s)
+    xs: list[str] = [s + "!" for n, s in ps]
+    print(ps[0][1])
+    print(xs[0])
+    return 0

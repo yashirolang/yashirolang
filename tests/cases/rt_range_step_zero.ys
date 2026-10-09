@@ -1,0 +1,8 @@
+# EXIT: 1
+# STDERR: runtime error: range の増分が 0 です
+# A-46: 増分が変数で、実行時に 0 だったら止めます（無限ループにしません）。
+def main() -> int:
+    z: int = 0
+    for i in range(0, 3, z):
+        print(i)
+    return 0

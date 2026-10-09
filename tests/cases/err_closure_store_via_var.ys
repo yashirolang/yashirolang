@@ -1,0 +1,12 @@
+# ERROR: 捕獲した lambda はしまうことができません
+# A-51 で塞いだ穴：変数に入れてから、しまう関数へ渡すと、検査をすり抜けていました。
+class Box:
+    g: fn(int) -> int
+    def init(self, g: fn(int) -> int) -> None:
+        self.g = g
+
+def main() -> int:
+    k: int = 5
+    f2: fn(int) -> int = lambda x: x * k
+    b: Box = Box(f2)
+    return 0

@@ -149,11 +149,18 @@ static Token *expect(Parser *p, TokenKind kind, const char *what,
 static Node *expr(Parser *p);
 static Node *call_arg(Parser *p);   // 実引数 1 つ（キーワード引数を含む。A-38）
 static Node *list_comp(Parser *p, Token *open, Node *elem, const char *close);
+// 受け取る名前の並び（A-47）。続ける分解を溜めておく所です
+typedef struct {
+    Node *head;
+    Node *tail;
+} Pend;
+static Node *unpack_targets(Parser *p, Pend *pd);
 static char *hidden_name(Parser *p, const char *tag);
 static Node *or_expr(Parser *p);
 static Node *unary(Parser *p);
 static Token *type_name_token(Parser *p, const char *what);
 static Node *type_ref(Parser *p, const char *what);
+static Node *raises_type(Parser *p);
 
 // primary ::= INT | "(" expr ")"
 // f"..." を連結式に脱糖する
@@ -527,10 +534,25 @@ static Node *list_comp(Parser *p, Token *open, Node *elem, const char *close) {
     Token *ft = peek(p);
     advance(p);  // 'for'
 
+    // ★ 受け取る名前が 2 つ以上なら分解します（A-47）。`[s for n, s in pairs]`
+    //   隠しのループ変数（comp.tp.N）で回し、分解の文を n->incr に持ちます
+    //   （sema と codegen が、ループ変数を束縛した直後にそれを通します）。
     Token *var = peek(p);
-    if (var->kind != TK_IDENT)
-        error_at_hint_m(var, MSG0("parse.011", "内包表記は [式 for 変数 in 対象] の形で書きます"), MSG0("parse.010", "ループ変数の名前が必要です"));
-    advance(p);
+    char *var_name = var->text;
+    Node *unpack = NULL;
+    if (tok_is(var, "(") || (var->kind == TK_IDENT && tok_is(peek_at(p, 1), ","))) {
+        Pend cpd = {0};
+        Node *targets = unpack_targets(p, &cpd);
+        var_name = hidden_name(p, "comp.tp");
+        unpack = new_node(ND_UNPACK, var);
+        unpack->params = targets;
+        unpack->rhs = new_var_node(var, var_name);
+        unpack->next = cpd.head;
+    } else {
+        if (var->kind != TK_IDENT)
+            error_at_hint_m(var, MSG0("parse.011", "内包表記は [式 for 変数 in 対象] の形で書きます"), MSG0("parse.010", "ループ変数の名前が必要です"));
+        advance(p);
+    }
 
     if (!tok_is_kw(peek(p), "in"))
         error_at_hint_m(peek(p), MSG0("parse.011", "内包表記は [式 for 変数 in 対象] の形で書きます"), MSG0("parse.012", "'in' が必要です"));
@@ -539,12 +561,12 @@ static Node *list_comp(Parser *p, Token *open, Node *elem, const char *close) {
     Node *n = new_node(ND_LISTCOMP, open);
     n->lhs = elem;
     n->lhs->next = NULL;
+    n->incr = unpack;
 
     // 対象。range(...) だけは「並び」ではなく数え上げなので、別に持ちます。
     //
     // 注意: **for 文とまったく同じ規則**にします（言語仕様 5.5）。
-    //   増分は整数リテラルだけです。符号が実行時に決まると、条件式が
-    //   `(step>0 and i<end) or (step<0 and i>end)` になってしまうためです。
+    //   増分が変数のときは、向きを実行時に決めます（A-46。codegen の gen_listcomp）。
     //
     // 注意: **対象は or_expr で読みます**（expr ではありません）。expr は三項演算子
     //   まで読むので、`[x for x in xs if c]` の `if` を三項演算子の if と
@@ -574,14 +596,20 @@ static Node *list_comp(Parser *p, Token *open, Node *elem, const char *close) {
                 sign = -1;
                 lit = lit->lhs;
             }
-            if (lit->kind != ND_INT)
-                error_at_hint_m(a3->tok, MSG0("parse.016", "増分は整数リテラルで書いてください（例: range(0, 10, 2)）。変数を使いたい場合は for 文で書けます"), MSG0("parse.015", "range の増分が定数ではありません"));
-            step = sign * lit->ival;
-            if (step == 0)
-                error_at_hint_m(a3->tok, MSG0("parse.018", "増分が 0 だと無限ループになります"), MSG0("parse.017", "range の増分に 0 は使えません"));
+            if (lit->kind != ND_INT) {
+                // ★ 増分が変数（A-46）。3 つ目の引数として持ち、ival = 0 を印にします
+                //   （リテラルの 0 は上で断るので、0 が「変数」の印として使えます）。
+                step = 0;
+            } else {
+                step = sign * lit->ival;
+                if (step == 0)
+                    error_at_hint_m(a3->tok, MSG0("parse.018", "増分が 0 だと無限ループになります"), MSG0("parse.017", "range の増分に 0 は使えません"));
+                a3 = NULL;
+            }
         }
         start->next = stop;
-        stop->next = NULL;
+        stop->next = a3;
+        if (a3) a3->next = NULL;
         n->args = start;
         n->ival = step;
     } else {
@@ -601,7 +629,7 @@ static Node *list_comp(Parser *p, Token *open, Node *elem, const char *close) {
 
     // 隠し宣言 3 つ：ループ変数 / 結果の list / 添字
     Node *lv = new_node(ND_VARDECL, var);
-    lv->name = var->text;
+    lv->name = var_name;
     Node *res = new_node(ND_VARDECL, ft);
     res->name = hidden_name(p, "comp.res");
     Node *ix = new_node(ND_VARDECL, ft);
@@ -1260,6 +1288,82 @@ static Node *aug_assign(Parser *p, Token *t, OpKind op, Node *target, Node *rhs)
 //
 //   こうすると xs[0] = 1 や p.f = 1にも
 //   そのまま対応できます。左辺を読み切るまで代入かどうか判らないからです。
+// ── 受け取る名前の並び（A-47）────────────────────────────
+//
+//   targets ::= target { "," target }
+//   target  ::= IDENT | "(" targets ")"
+//
+// ★ 入れ子の並びは**隠し変数に置き換え**、その分解を後ろに続けます。
+//
+//     a, (b, c) = t     →   a, unp.0 = t
+//                           b, c = unp.0
+//
+//   分解の中身は今までの ND_UNPACK のままなので、sema も codegen も
+//   入れ子を知らずに済みます（複合代入や elif と同じ脱糖の手）。
+//
+// 注意: 続ける分解（pend）は**外側から順に**並べます。外側の分解が
+//   隠し変数を宣言してから、内側がそれを読むためです。
+//   注意: 隠し変数の番号は**名前を読んだ順**に振ります（2 実装で同じ IR）。
+static void pend_add(Pend *pd, Node *n) {
+    if (pd->tail) pd->tail->next = n;
+    else pd->head = n;
+    pd->tail = n;
+}
+
+static Node *unpack_target(Parser *p, Pend *pd) {
+    Token *nm = peek(p);
+    if (tok_is(nm, "(")) {
+        Token *open = advance(p);
+        Node *sub = new_node(ND_UNPACK, open);
+        char *h = hidden_name(p, "unp");
+        sub->rhs = new_var_node(open, h);
+        pend_add(pd, sub);
+        sub->params = unpack_targets(p, pd);
+        if (!sub->params->next)
+            error_at_hint_m(open, MSG0("parse.260", "括弧の中には 2 つ以上の名前を書きます（例: a, (b, c) = t）"), MSG0("parse.259", "括弧の中の名前が 1 つです"));
+        expect_close(p, ")", open);
+        Node *v = new_node(ND_VARDECL, open);
+        v->name = h;
+        return v;
+    }
+    if (nm->kind != TK_IDENT)
+        error_at_hint_m(nm, MSG0("parse.029", "受け取る名前を書いてください（例: q, r = f()）"), MSG0("parse.028", "名前が必要です"));
+    advance(p);
+    Node *v = new_node(ND_VARDECL, nm);
+    v->name = nm->text;
+    return v;
+}
+
+static Node *unpack_targets(Parser *p, Pend *pd) {
+    Node head = {0};
+    Node *tail = &head;
+    for (;;) {
+        tail->next = unpack_target(p, pd);
+        tail = tail->next;
+        if (!consume(p, ",")) break;
+    }
+    return head.next;
+}
+
+// 文の頭が「( で始まる受け取りの並び」か（`(a, b), c = t`）。
+//   注意: '=' まで名前・カンマ・括弧しか出てこないことを確かめます。
+//     `(f)(x)` のような式文や、`(a, b) == t` の比較は、ここで外れます。
+static bool paren_targets_ahead(Parser *p) {
+    if (!tok_is(peek(p), "(")) return false;
+    int depth = 0;
+    bool comma = false;
+    for (int i = 0;; i++) {
+        Token *t = peek_at(p, i);
+        if (t->kind == TK_EOF) return false;
+        if (tok_is(t, "(")) depth++;
+        else if (tok_is(t, ")")) {
+            if (--depth < 0) return false;
+        } else if (tok_is(t, ",")) comma = true;
+        else if (tok_is(t, "=")) return depth == 0 && comma;
+        else if (t->kind != TK_IDENT) return false;
+    }
+}
+
 static Node *simple_stmt(Parser *p) {
     Token *t0 = peek(p);
 
@@ -1356,21 +1460,13 @@ static Node *simple_stmt(Parser *p) {
     //     q: int, r: int = ...
     //   となって Python から離れすぎます。**右辺から決まるものは書かせない**、
     //   という判断です（roadmap.md §0 の ③）。
-    if (peek(p)->kind == TK_IDENT && tok_is(peek_at(p, 1), ",")) {
+    //
+    // ★ 入れ子も書けます（`a, (b, c) = t`。A-47）。上の unpack_targets を見てください。
+    if ((peek(p)->kind == TK_IDENT && tok_is(peek_at(p, 1), ",")) || paren_targets_ahead(p)) {
         Token *ut = peek(p);
         Node *n = new_node(ND_UNPACK, ut);
-        Node *tail = NULL;
-        for (;;) {
-            Token *nm = peek(p);
-            if (nm->kind != TK_IDENT)
-                error_at_hint_m(nm, MSG0("parse.029", "受け取る名前を書いてください（例: q, r = f()）"), MSG0("parse.028", "名前が必要です"));
-            advance(p);
-            Node *v = new_node(ND_VARDECL, nm);
-            v->name = nm->text;
-            if (tail) tail->next = v; else n->params = v;
-            tail = v;
-            if (!consume(p, ",")) break;
-        }
+        Pend pd = {0};
+        n->params = unpack_targets(p, &pd);
         if (!consume(p, "="))
             error_at_hint_m(peek(p), MSG0("parse.031", "分解代入は 'q, r = f()' の形で書きます"), MSG0("parse.030", "'=' が必要です"));
         n->rhs = expr(p);
@@ -1388,6 +1484,9 @@ static Node *simple_stmt(Parser *p) {
         //
         //   ★ 右辺を全部読んでから書くので、入れ替えが正しく動きます。
         if (tok_is(peek(p), ",")) {
+            // 注意: 入れ子は「タプル 1 つを分解する」形でだけ書けます
+            if (pd.head)
+                error_at_hint_m(ut, MSG0("parse.262", "入れ子の分解は 'a, (b, c) = t' の形で、右辺をタプル 1 つにしてください"), MSG0("parse.261", "入れ子の分解と、カンマで並べた右辺は一緒に使えません"));
             Node vhead = {0};
             Node *vtail = &vhead;
             vtail->next = n->rhs;
@@ -1438,6 +1537,8 @@ static Node *simple_stmt(Parser *p) {
             blk->body = head.next;
             return blk;
         }
+        // ★ 入れ子の分解を後ろに続けます（文の並びとして返します。block が末尾まで進めます）
+        n->next = pd.head;
         return n;
     }
 
@@ -1522,7 +1623,8 @@ static Node *block(Parser *p) {
     //    理屈の上では到達しませんが、入れておかないと万一のとき無限ループになります。
     while (peek(p)->kind != TK_DEDENT && peek(p)->kind != TK_EOF) {
         cur->next = stmt(p);
-        cur = cur->next;
+        // ★ 1 つの文が複数の文に脱糖されることがあります（入れ子の分解。A-47）
+        while (cur->next) cur = cur->next;
     }
     expect(p, TK_DEDENT, MSG0("parse.163", "ブロックの終わり"), NULL);
 
@@ -1589,12 +1691,20 @@ static Node *match_stmt(Parser *p) {
         //   注意: `_` は名前ではなく**印**として読みます。束縛はしません
         //     （束縛できるようにすると、中身つきの枝が入ったときに
         //     「どこまでが名前でどこからが値か」が曖昧になります）。
+        //
+        // ★ ガード `case P if 条件:`（A-48）。条件は cn->rhs に持ちます。
+        //   注意: パターンは or_expr で読みます（expr は三項演算子まで読むので、
+        //     `if` を三項演算子の if と取り違えます。内包表記と同じ理由）。
         Token *pat = peek(p);
         if (pat->kind == TK_IDENT && strcmp(pat->text, "_") == 0 &&
             tok_is(peek_at(p, 1), ":")) {
             advance(p);
+        } else if (pat->kind == TK_IDENT && strcmp(pat->text, "_") == 0 &&
+                   tok_is_kw(peek_at(p, 1), "if")) {
+            error_at_hint_m(peek_at(p, 1), MSG0("parse.266", "条件で絞りたいときは、枝や値のほうに書きます（例: case Shape.Circle(r) if r > 0:）"), MSG0("parse.265", "case _ には if を書けません"));
         } else {
-            cn->lhs = expr(p);
+            cn->lhs = or_expr(p);
+            if (consume_kw(p, "if")) cn->rhs = expr(p);
         }
 
         expect_colon(p, "case");
@@ -1649,6 +1759,15 @@ static Node *hidden_decl(Token *tok, char *name, Node *init) {
     return n;  // type_ref は NULL のまま
 }
 
+// 本体の先頭に文の並びを差し込む（ループ変数の分解。A-47）
+static void prepend_stmts(Node *body, Node *pre) {
+    if (!pre) return;
+    Node *last = pre;
+    while (last->next) last = last->next;
+    last->next = body->body;
+    body->body = pre;
+}
+
 // for_stmt ::= "for" IDENT "in" expr ":" block
 //
 // ★ この章の主題：for は新しい機能ではなく while の書き換えです。
@@ -1666,13 +1785,13 @@ static Node *hidden_decl(Token *tok, char *name, Node *init) {
 //    for のトークンを流用します（全ノードが tok を持つ約束）。
 // list をまわる for の脱糖（ enumerate と共用にしました）
 //
-//   for x in xs:            → idx_tok == NULL
-//   for i, x in enumerate(xs):  → idx_tok が添字の変数
+//   for x in xs:            → idx_name == NULL
+//   for i, x in enumerate(xs):  → idx_name が添字の変数
 //
 // ★ 違いは「隠しの添字変数を、利用者の名前でも束縛するか」だけです。
 //   enumerate のために新しい仕組みを足していません。
-static Node *for_over_list(Parser *p, Token *t, Node *iter, Token *var_tok,
-                           Token *idx_tok, Node *body) {
+static Node *for_over_list(Parser *p, Token *t, Node *iter, char *var_name,
+                           char *idx_name, Node *body) {
     Node head = {0};
     Node *cur = &head;
 
@@ -1697,11 +1816,11 @@ static Node *for_over_list(Parser *p, Token *t, Node *iter, Token *var_tok,
     Node *idx = new_node(ND_INDEX, t);
     idx->lhs = new_var_node(t, it);
     idx->rhs = new_var_node(t, ix);
-    Node *bind = hidden_decl(t, var_tok->text, idx);
+    Node *bind = hidden_decl(t, var_name, idx);
 
     // ★ enumerate なら、添字も利用者の名前で束縛します（i = for.ix.N）
-    if (idx_tok) {
-        Node *ibind = hidden_decl(t, idx_tok->text, new_var_node(t, ix));
+    if (idx_name) {
+        Node *ibind = hidden_decl(t, idx_name, new_var_node(t, ix));
         ibind->next = bind;
         bind = ibind;
     }
@@ -1731,27 +1850,58 @@ static Node *for_over_list(Parser *p, Token *t, Node *iter, Token *var_tok,
 static Node *for_stmt(Parser *p) {
     Token *t = advance(p);  // "for"
 
-    Token *var_tok = peek(p);
-    if (var_tok->kind != TK_IDENT)
-        error_at_hint_m(var_tok, MSG0("parse.039", "for のループ変数は名前で書きます（例: for x in xs:）"), MSG0("parse.010", "ループ変数の名前が必要です"));
-    advance(p);
-
-    // ★ for i, x in enumerate(xs)
+    // ★ 受け取る名前（A-47）
     //
-    // 注意: タプルはありません。**この形だけ**を特別に認めます
-    //   （2 つ目の変数は「添字」に固定。一般の分解代入ではありません）。
-    Token *idx_tok = NULL;
-    if (tok_is(peek(p), ",")) {
-        advance(p);
-        idx_tok = var_tok;          // 1 つ目が添字
-        var_tok = peek(p);          // 2 つ目が要素
+    //   for x in xs:                 … 名前 1 つ（今までどおり）
+    //   for i, x in enumerate(xs):   … 添字と要素（今までどおり）
+    //   for a, b in pairs:           … 要素を分解する
+    //   for i, (a, b) in enumerate(pairs):
+    //
+    //   分解するときは、隠しのループ変数（for.tp.N）で回して、本体の先頭に
+    //   `a, b = for.tp.N` を差し込みます（分解代入と同じ ND_UNPACK）。
+    Token *var_tok = peek(p);
+    char *var_name = var_tok->text;
+    char *idx_name = NULL;
+    Pend fpd = {0};
+    Node *targets = NULL;
+    if (tok_is(var_tok, "(") || (var_tok->kind == TK_IDENT && tok_is(peek_at(p, 1), ","))) {
+        targets = unpack_targets(p, &fpd);
+    } else {
         if (var_tok->kind != TK_IDENT)
-            error_at_hint_m(var_tok, MSG0("parse.041", "書き方は 'for i, x in enumerate(xs):' です"), MSG0("parse.040", "2 つ目のループ変数の名前が必要です"));
+            error_at_hint_m(var_tok, MSG0("parse.039", "for のループ変数は名前で書きます（例: for x in xs:）"), MSG0("parse.010", "ループ変数の名前が必要です"));
         advance(p);
     }
 
     if (!consume_kw(p, "in"))
         error_at_hint_m(peek(p), MSG0("parse.042", "for は「for 変数 in 対象:」の形で書きます"), MSG0("parse.012", "'in' が必要です"));
+
+    bool is_enum = peek(p)->kind == TK_IDENT && strcmp(peek(p)->text, "enumerate") == 0 &&
+                   tok_is(peek_at(p, 1), "(");
+
+    // 本体の先頭に差し込む分解（無ければ NULL）
+    Node *pre = NULL;
+    if (is_enum && targets && targets->next && !targets->next->next &&
+        !strchr(targets->name, '.')) {
+        // for i, x in enumerate(xs) / for i, (a, b) in enumerate(xs)
+        idx_name = targets->name;
+        var_name = targets->next->name;   // 括弧なら隠し変数（unp.N）で、分解は fpd にあります
+        pre = fpd.head;
+    } else if (targets && !is_enum) {
+        char *tp = hidden_name(p, "for.tp");
+        Node *up = new_node(ND_UNPACK, var_tok);
+        up->params = targets;
+        up->rhs = new_var_node(var_tok, tp);
+        up->next = fpd.head;
+        pre = up;
+        var_name = tp;
+    } else if (targets) {
+        Diag d = {0};
+        d.message = MSG0("parse.263", "enumerate で受け取るのは添字と要素の 2 つです");
+        d.primary.tok = var_tok;
+        d.primary.label = MSG0("parse.173", "添字と要素の 2 つを受け取ります");
+        d.hint = MSG0("parse.264", "要素を分解するときは括弧で囲みます（例: for i, (a, b) in enumerate(pairs):）");
+        diag_fail(&d);
+    }
 
     Node *iter = NULL;
 
@@ -1763,9 +1913,8 @@ static Node *for_stmt(Parser *p) {
     // ★ enumerate(xs) も同じく特別扱いです。
     //   注意: **中身を剥がすだけ**：enumerate(xs) → xs として読み、
     //     隠しの添字変数を 2 つ目のループ変数に束縛します。
-    if (peek(p)->kind == TK_IDENT && strcmp(peek(p)->text, "enumerate") == 0 &&
-        tok_is(peek_at(p, 1), "(")) {
-        if (!idx_tok) {
+    if (is_enum) {
+        if (!idx_name) {
             Diag d = {0};
             d.message = MSG0("parse.172", "enumerate には 2 つのループ変数が必要です");
             d.primary.tok = peek(p);
@@ -1780,20 +1929,13 @@ static Node *for_stmt(Parser *p) {
 
         expect_colon(p, MSG0("parse.174", "for の対象"));
         Node *ebody = block(p);
-        return for_over_list(p, t, iter, var_tok, idx_tok, ebody);
-    }
-
-    if (idx_tok) {
-        Diag d = {0};
-        d.message = MSG0("parse.175", "ループ変数を 2 つ書けるのは enumerate だけです");
-        d.primary.tok = peek(p);
-        d.primary.label = MSG0("parse.176", "ここには enumerate(...) が必要です");
-        d.hint = MSG0("parse.177", "タプルはありません。'for i, x in enumerate(xs):' の形だけです");
-        diag_fail(&d);
+        prepend_stmts(ebody, pre);
+        return for_over_list(p, t, iter, var_name, idx_name, ebody);
     }
 
     Node *start = NULL, *stop = NULL;
     long long step = 1;
+    Node *step_expr = NULL;   // ★ 増分がリテラルでないとき（A-46）
 
     if (is_range) {
         advance(p);                 // "range"
@@ -1814,21 +1956,22 @@ static Node *for_stmt(Parser *p) {
         }
 
         if (a3) {
-            // 注意: 増分は整数リテラルだけ（v1 の制限）。
-            //    符号が実行時に決まると条件式が複雑になります
-            //    （(step>0 and i<end) or (step<0 and i>end) を組み立てることになる）。
-            //    符号がコンパイル時に分かれば '<' か '>' を選ぶだけで済みます。
+            // ★ 増分がリテラルなら、符号がコンパイル時に分かるので '<' か '>' を
+            //   選ぶだけで済みます。リテラルでなければ、実行時に向きを決める形に
+            //   します（A-46。下の脱糖）。
             long long sign = 1;
             Node *lit = a3;
             if (lit->kind == ND_UNARY && lit->op == OP_NEG) {
                 sign = -1;
                 lit = lit->lhs;
             }
-            if (lit->kind != ND_INT)
-                error_at_hint_m(a3->tok, MSG0("parse.043", "増分は整数リテラルで書いてください（例: range(0, 10, 2)）。変数を使いたい場合は while で書けます"), MSG0("parse.015", "range の増分が定数ではありません"));
-            step = sign * lit->ival;
-            if (step == 0)
-                error_at_hint_m(a3->tok, MSG0("parse.018", "増分が 0 だと無限ループになります"), MSG0("parse.017", "range の増分に 0 は使えません"));
+            if (lit->kind != ND_INT) {
+                step_expr = a3;
+            } else {
+                step = sign * lit->ival;
+                if (step == 0)
+                    error_at_hint_m(a3->tok, MSG0("parse.018", "増分が 0 だと無限ループになります"), MSG0("parse.017", "range の増分に 0 は使えません"));
+            }
         }
     } else {
         iter = expr(p);
@@ -1836,6 +1979,7 @@ static Node *for_stmt(Parser *p) {
 
     expect_colon(p, MSG0("parse.174", "for の対象"));
     Node *body = block(p);
+    prepend_stmts(body, pre);
 
     // ── ここから脱糖 ──
     Node head = {0};
@@ -1852,7 +1996,7 @@ static Node *for_stmt(Parser *p) {
     //   （連番を持っているのはパーサなので、IR に出る名前が変わりません）。
     if (!is_range) {
         Node *fe = new_node(ND_FOREACH, t);
-        fe->name = var_tok->text;
+        fe->name = var_name;
         fe->lhs = iter;
         fe->body = body;
         fe->hid_cur = ix;
@@ -1865,11 +2009,54 @@ static Node *for_stmt(Parser *p) {
         cur->next = hidden_decl(t, ix, start);
         cur = cur->next;
 
+        if (step_expr) {
+            // ★ 増分が変数（A-46）
+            //
+            //   for.st.N = range.step(<増分>)   ← 1 回だけ評価。0 なら実行時に止める
+            //   while (for.st.N > 0 and for.ix.N < 終端) or (for.st.N < 0 and for.ix.N > 終端):
+            //
+            //   注意: **終端は複製して 2 か所に置きます。** 増分がリテラルの形と同じく、
+            //     終端は条件を見るたびに評価されます（and で片方しか評価されません）。
+            char *st = hidden_name(p, "for.st");
+            Node *chk = new_node(ND_CALL, t);
+            chk->name = "range.step";
+            chk->args = step_expr;
+            cur->next = hidden_decl(t, st, chk);
+            cur = cur->next;
+
+            Node *up = new_logical_node(t, OP_AND,
+                                      new_binop_node(t, OP_GT, new_var_node(t, st), new_int_node(t, 0)),
+                                      new_binop_node(t, OP_LT, new_var_node(t, ix), ast_clone(stop)));
+            Node *down = new_logical_node(t, OP_AND,
+                                        new_binop_node(t, OP_LT, new_var_node(t, st), new_int_node(t, 0)),
+                                        new_binop_node(t, OP_GT, new_var_node(t, ix), stop));
+            cond = new_logical_node(t, OP_OR, up, down);
+            bind = hidden_decl(t, var_name, new_var_node(t, ix));
+
+            bind->next = body->body;
+            body->body = bind;
+
+            // for.ix.N += for.st.N — ★ continue の飛び先
+            Node *vinc = new_node(ND_ASSIGN, t);
+            vinc->lhs = new_var_node(t, ix);
+            vinc->rhs = new_binop_node(t, OP_ADD, new_var_node(t, ix), new_var_node(t, st));
+
+            Node *vwh = new_node(ND_WHILE, t);
+            vwh->lhs = cond;
+            vwh->body = body;
+            vwh->incr = vinc;
+            cur->next = vwh;
+
+            Node *vblk = new_node(ND_BLOCK, t);
+            vblk->body = head.next;
+            return vblk;
+        }
+
         // 増分の符号で条件の向きが変わる
         cond = new_binop_node(t, step > 0 ? OP_LT : OP_GT, new_var_node(t, ix), stop);
 
         // x = for.ix.N
-        bind = hidden_decl(t, var_tok->text, new_var_node(t, ix));
+        bind = hidden_decl(t, var_name, new_var_node(t, ix));
     } else {
         // for.it.N = <対象>（★ 1 回だけ評価する）
         char *it = hidden_name(p, "for.it");
@@ -1890,7 +2077,7 @@ static Node *for_stmt(Parser *p) {
         Node *idx = new_node(ND_INDEX, t);
         idx->lhs = new_var_node(t, it);
         idx->rhs = new_var_node(t, ix);
-        bind = hidden_decl(t, var_tok->text, idx);
+        bind = hidden_decl(t, var_name, idx);
     }
 
     // 本体の先頭にループ変数の束縛を差し込む
@@ -2160,6 +2347,18 @@ static Node *type_ref(Parser *p, const char *what) {
             diag_fail(&d);
         }
         n->rhs = type_ref(p, MSG0("parse.187", "戻り型を書いてください"));
+        // ★ 投げうるエラー（A-49）。関数定義と同じく `raises A | B`
+        if (tok_is_kw(peek(p), "raises")) {
+            advance(p);
+            Node rhead = {0};
+            Node *rcur = &rhead;
+            for (;;) {
+                rcur->next = raises_type(p);
+                rcur = rcur->next;
+                if (!consume(p, "|")) break;
+            }
+            n->raises = rhead.next;
+        }
         return n;
     }
 

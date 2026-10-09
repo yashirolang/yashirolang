@@ -1,0 +1,34 @@
+# OUTPUT: built
+# OUTPUT: free root
+# OUTPUT: free a
+# OUTPUT: free b
+# OUTPUT: end
+# A-50: 親を弱参照で指す木は、最後の rc を手放したところで全部解放されます
+#   （親を rc で指すと、循環して解放されません）。
+class Node:
+    name: str
+    parent: weak[Node] | None
+    children: list[rc[Node]]
+    def init(self, name: own str) -> None:
+        self.name = name
+        self.parent = None
+        self.children = []
+    def drop(self) -> None:
+        print("free " + self.name)
+
+def add_child(p: mut rc[Node], name: own str) -> rc[Node]:
+    c: rc[Node] = rc(Node(name))
+    c.parent = weak(p)
+    p.children.append(c)
+    return c
+
+def build() -> None:
+    root: rc[Node] = rc(Node("root" + ""))
+    a: rc[Node] = add_child(root, "a" + "")
+    b: rc[Node] = add_child(a, "b" + "")
+    print("built")
+
+def main() -> int:
+    build()
+    print("end")
+    return 0

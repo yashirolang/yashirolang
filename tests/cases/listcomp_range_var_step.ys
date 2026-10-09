@@ -1,0 +1,19 @@
+# OUTPUT: 3
+# OUTPUT: 70
+# OUTPUT: 3
+# OUTPUT: 1
+# OUTPUT: True
+# OUTPUT: False
+# A-46: 内包表記と量化子の range も、増分に変数を書けます。
+def main() -> int:
+    k: int = 3
+    xs: list[int] = [i * 10 for i in range(1, 8, k)]
+    print(len(xs))
+    print(xs[2])
+    d: int = -4
+    ys: list[int] = [i for i in range(9, 0, d)]
+    print(len(ys))
+    print(ys[2])
+    print(all(i % 3 == 1 for i in range(1, 10, k)))
+    print(any(i > 100 for i in range(0, 50, k)))
+    return 0

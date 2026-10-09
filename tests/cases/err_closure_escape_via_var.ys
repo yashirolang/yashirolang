@@ -1,0 +1,8 @@
+# ERROR: 捕獲した lambda は返すことができません
+# A-51 で塞いだ穴：変数に入れてから返すと、検査をすり抜けていました。
+def mk(k: int) -> fn(int) -> int:
+    f: fn(int) -> int = lambda x: x + k
+    return f
+
+def main() -> int:
+    return 0

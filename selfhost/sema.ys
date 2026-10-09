@@ -209,7 +209,7 @@ def bind_args_sig(n: mut rc[ast.Node], f: rc[types.FuncSig], skip: int,
 
 # rc[T] / rc[T] | None（ownck の ty_is_rc と同じ判定）
 def ty_is_rc_shared(t: rc[ast.Type]) -> bool:
-    if t.kind == ast.TY_RC:
+    if t.kind == ast.TY_RC or t.kind == ast.TY_WEAK:   # weak も共有型（A-50）
         return True
     if t.kind == ast.TY_OPT:
         return ty_is_rc_shared(ast.elem_of(t))
@@ -283,6 +283,125 @@ class Instance:
         self.is_func = is_func
 
 
+# ★ match のガードと入れ子のパターン（A-48）で使う読み替え表と落ち先。
+#   対になる定義: src/sema.c の Rename / Fallback
+class Rename:
+    from_: str
+    to: str
+    tok: rc[token.Token] | None
+
+    def init(self, from_: own str, to: own str, tok: own rc[token.Token] | None) -> None:
+        self.from_ = from_
+        self.to = to
+        self.tok = tok
+
+
+class Fallback:
+    rest: rc[ast.Node] | None
+    used: int
+
+    def init(self, rest: own rc[ast.Node] | None) -> None:
+        self.rest = rest
+        self.used = 0
+
+    def take(mut self) -> rc[ast.Node] | None:
+        r: rc[ast.Node] | None = self.rest
+        if r is None:
+            return None
+        self.used = self.used + 1
+        if self.used > 1:
+            return ast.ast_clone(r)
+        return r
+
+
+def case_refutable(c: rc[ast.Node]) -> bool:
+    if c.rhs is not None:
+        return True
+    pl: rc[ast.Node] | None = c.lhs
+    if pl is not None:
+        p: rc[ast.Node] = pl
+        if p.kind == ast.ND_METHOD:
+            a: rc[ast.Node] | None = p.args
+            while a is not None:
+                an: rc[ast.Node] = a
+                if an.kind != ast.ND_VAR:
+                    return True
+                a = an.next
+    return False
+
+
+def same_case_key(a: rc[ast.Node], b: rc[ast.Node]) -> bool:
+    ea: bool = a.kind == ast.ND_FIELD or a.kind == ast.ND_METHOD
+    eb: bool = b.kind == ast.ND_FIELD or b.kind == ast.ND_METHOD
+    if ea or eb:
+        return ea and eb and len(a.name) > 0 and a.name == b.name
+    if a.kind == ast.ND_INT and b.kind == ast.ND_INT:
+        return a.ival == b.ival
+    if a.kind == ast.ND_STR and b.kind == ast.ND_STR:
+        return a.sval == b.sval
+    return False
+
+
+def count_args(pat: rc[ast.Node] | None) -> int:
+    k: int = 0
+    if pat is not None:
+        p: rc[ast.Node] = pat
+        if p.kind == ast.ND_METHOD:
+            a: rc[ast.Node] | None = p.args
+            while a is not None:
+                an: rc[ast.Node] = a
+                k = k + 1
+                a = an.next
+    return k
+
+
+def new_block_of(t: rc[token.Token] | None, body: rc[ast.Node] | None) -> rc[ast.Node]:
+    b: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, t)
+    b.body = body
+    return b
+
+
+# ガードの中の名前を読み替える
+def rename_expr(n0: rc[ast.Node] | None, rn: list[rc[Rename]]) -> None:
+    n: rc[ast.Node] | None = n0
+    while n is not None:
+        nn: rc[ast.Node] = n
+        if nn.kind == ast.ND_VAR and len(nn.mod_name) == 0:
+            for r in rn:
+                if nn.name == r.from_:
+                    nn.name = copy(r.to)
+                    break
+        rename_expr(nn.lhs, rn)
+        rename_expr(nn.rhs, rn)
+        rename_expr(nn.els, rn)
+        rename_expr(nn.args, rn)
+        rename_expr(nn.body, rn)
+        n = nn.next
+
+
+# ★ 失敗しうる関数の値は、別の場所で呼ばれる先（spawn / lock）へ渡せない（A-49）。
+#   対になる定義: src/sema.c の reject_raising_fn
+def reject_raising_fn(at: rc[ast.Node], ft: rc[ast.Type], where: str) -> None:
+    if ft.kind != ast.TY_FN or len(ft.err_classes) == 0:
+        return
+    diag.error_full(unwrap_tok(at.tok),
+                    diag.msg("sema.621", "'{0}' は失敗しうる関数なので、{1} に渡せません", [copy(ast.type_name(ft)), copy(where)]),
+                    diag.msg0("sema.622", "渡した先には、エラーを受け止める相手がいません"), None, "",
+                    diag.msg0("sema.623", "関数の中で try を使ってエラーを受け止めてください"))
+
+
+# 値ごと写して捕まえる型（A-43）。対になる定義: src/sema.c の capture_by_value
+def capture_by_value(t: rc[ast.Type]) -> bool:
+    if t.kind == ast.TY_INT or t.kind == ast.TY_FLOAT or t.kind == ast.TY_BOOL:
+        return True
+    if t.kind == ast.TY_ENUM:
+        e0: rc[ast.EnumDef] | None = t.en
+        if e0 is None:
+            return True
+        return not unwrap_enumdef(e0).has_payload
+    return False
+
+
 class Sema:
     prims: ast.Prims | None
     scope: rc[types.Scope] | None
@@ -353,6 +472,9 @@ class Sema:
             Builtin("int", ast.TY_FLOAT, ast.TY_INT, "pl_int_from_float"),
             Builtin("float", ast.TY_INT, ast.TY_FLOAT, "pl_float_from_int"),
             Builtin("ord", ast.TY_STR, ast.TY_INT, "pl_ord"),
+            # ★ range の増分が変数のとき、for の脱糖が 1 回だけ呼びます（A-46）。
+            #   注意: 名前に '.' があるので、利用者のコードからは書けません。
+            Builtin("range.step", ast.TY_INT, ast.TY_INT, "pl_range_step"),
             Builtin("chr", ast.TY_INT, ast.TY_STR, "pl_chr"),
             Builtin("exit", ast.TY_INT, ast.TY_NONE, "pl_exit"),
             Builtin("panic", ast.TY_STR, ast.TY_NONE, "pl_panic"),
@@ -677,6 +799,13 @@ class Sema:
                 ft.params.append(self.resolve_type(an))
                 a = an.next
             ft.elem = self.resolve_type(unwrap_node(tr.rhs))
+            # ★ 投げうるエラー（A-49）。関数定義の raises と同じ規則で解決する
+            #   対になる定義: src/sema.c の resolve_type
+            if tr.err_types is not None:
+                ftmp: rc[types.FuncSig] = rc(types.FuncSig("fn", tr.tok))
+                self.resolve_raises(tr, ftmp)
+                for ec in ftmp.raises_cls:
+                    ft.err_classes.append(ec)
             return ft
 
         base: rc[ast.Type] = self.resolve_base_type(tr)
@@ -960,6 +1089,21 @@ class Sema:
                                    diag.msg("sema.026", "'{0}' は rc に入れられません", [copy(ast.type_name(rel))]))
             return ast.type_rc(rel)
 
+        # ── weak[T]（弱参照。A-50）── rc[T] と同じく中身はクラスだけ
+        #   対になる定義: src/sema.c の resolve_base_type
+        if tr.name == "weak":
+            if tr.lhs is None:
+                diag.error_at_hint(unwrap_tok(tr.tok),
+                                   diag.msg0("sema.627", "中身の型を書いてください（例: weak[Node]）"),
+                                   diag.msg0("sema.626", "weak には中身の型が必要です"))
+                return self.ty_int()
+            wel: rc[ast.Type] = self.resolve_type(unwrap_node(tr.lhs))
+            if wel.kind != ast.TY_CLASS:
+                diag.error_at_hint(unwrap_tok(tr.tok),
+                                   diag.msg0("sema.629", "weak に入れられるのはクラスだけです（例: weak[Node]）"),
+                                   diag.msg("sema.628", "'{0}' は weak にできません", [copy(ast.type_name(wel))]))
+            return ast.type_weak(wel)
+
         # ── Thread[R] / mutex[T]（A-18）──
         #
         # ★ Thread[R] の R は**戻り型**。spawn した関数が返すものを join が返す。
@@ -1107,6 +1251,11 @@ class Sema:
                 if not ast.type_equal(got.params[fi], want.params[fi]):
                     return (diag.msg("sema.044", "{0} 番目の引数の型が違います（'{1}' と '{2}'）", [copy(str(fi + 1)), copy(ast.type_name(got.params[fi])), copy(ast.type_name(want.params[fi]))]))
                 fi = fi + 1
+            # ★ 投げうるエラーが違う（A-49）
+            if ast.type_equal(ast.elem_of(got), ast.elem_of(want)):
+                if len(want.err_classes) == 0:
+                    return (diag.msg("sema.624", "この関数は失敗しえます（'{0}'）。失敗しない関数の型には入りません", [copy(ast.type_name(got))]))
+                return (diag.msg("sema.625", "投げうるエラーが違います。ここには '{0}' が必要です", [copy(ast.type_name(want))]))
             return (diag.msg("sema.045", "戻り型が違います（'{0}' と '{1}'）", [copy(ast.type_name(ast.elem_of(got))), copy(ast.type_name(ast.elem_of(want)))]))
 
         # ★ クラス → インタフェースなら、実装宣言の書き忘れを疑う
@@ -1550,6 +1699,9 @@ class Sema:
         for pt in f.params:
             t.params.append(pt)
         t.elem = f.ret
+        # ★ raises する関数も値にできる（A-49）。投げうるエラーは型に載る
+        for ec in f.raises_cls:
+            t.err_classes.append(ec)
         return t
 
     def check_var(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
@@ -1600,11 +1752,6 @@ class Sema:
                                 diag.msg0("sema.395", "ここでは値として使えません"), None, "",
                                 diag.msg0("sema.396", "値にするには型が 1 つに決まっている必要があります（呼び出しなら実引数から決まります）"))
             if fs is not None:
-                if len(fs.raises_cls) > 0:
-                    diag.error_full(unwrap_tok(n.tok),
-                                    diag.msg("sema.077", "'{0}' は raises する関数なので値にできません", [copy(n.name)]),
-                                    diag.msg0("sema.395", "ここでは値として使えません"), None, "",
-                                    diag.msg0("sema.397", "関数型はエラーの受け渡しを表せません（raises しない関数で包んでください）"))
                 n.ir_name = copy(fs.ir_name)
                 n.is_func_ref = True
                 return self.fn_type_of(fs)
@@ -1638,6 +1785,10 @@ class Sema:
                             diag.msg("sema.082", "使う前に宣言してください（例: {0}: int = 0）", [copy(n.name)]))
             return self.ty_int()
         n.ir_name = copy(v.ir_name)
+        # ★ 捕獲した lambda を入れた変数（A-51）。読んだ節点に捕獲を書き写す
+        #   対になる定義: src/sema.c の check_var
+        if v.caps is not None:
+            n.caps = v.caps
         return unwrap_type(v.type)
 
     def check_expr(mut self, n: mut rc[ast.Node]) -> rc[ast.Type]:
@@ -1803,6 +1954,11 @@ class Sema:
         v: rc[types.VarEntry] = self.declare(n.name, want, n.tok)
         n.ir_name = copy(v.ir_name)
         n.type = want
+        rh: rc[ast.Node] | None = n.rhs
+        if rh is not None:
+            rhn: rc[ast.Node] = rh
+            if rhn.caps is not None:
+                v.caps = rhn.caps   # A-51
 
     def check_assign(mut self, n: mut rc[ast.Node]) -> None:
         target: rc[ast.Node] = unwrap_node(n.lhs)
@@ -1916,6 +2072,23 @@ class Sema:
         gv0: rc[types.VarEntry] | None = self.lookup(target.name)
         if gv0 is not None and gv0.is_global:
             self.reject_escaping_closure(n.rhs, diag.msg0("sema.410", "しまうことが"))
+        # ★ 借りて捕まえた lambda は**宣言でだけ**受け取れる（A-51）
+        #   対になる定義: src/sema.c の check_assign
+        arhs: rc[ast.Node] = unwrap_node(n.rhs)
+        if arhs.caps is not None:
+            cq: rc[ast.Node] | None = arhs.caps
+            while cq is not None:
+                cqn: rc[ast.Node] = cq
+                if not capture_by_value(unwrap_type(cqn.type)):
+                    diag.error_full(unwrap_tok(arhs.tok),
+                                    diag.msg("sema.639", "'{0}' を借りて捕まえた lambda は、代入では受け取れません", [copy(cqn.name)]),
+                                    diag.msg0("sema.640", "ここで既にある変数へ入れています"),
+                                    cqn.tok, diag.msg("sema.251", "'{0}' を捕まえています", [copy(cqn.name)]),
+                                    diag.msg0("sema.641", "新しい変数の宣言で受け取ってください（例: f2: fn(int) -> int = lambda x: …）"))
+                cq = cqn.next
+            if gv0 is not None:
+                gvv: rc[types.VarEntry] = gv0
+                gvv.caps = arhs.caps
         self.expected = None
         if not ast.type_assignable(actual2, declared2):
             diag.error_full(unwrap_tok(unwrap_node(n.rhs).tok), diag.msg0("sema.409", "型が一致しません"),
@@ -2815,6 +2988,13 @@ class Sema:
         vlv: rc[types.VarEntry] = self.declare(lv.name, elem_t, lv.tok)
         lv.ir_name = copy(vlv.ir_name)
 
+        # ★ 受け取る名前の分解（A-47）。ループ変数の見えるところで宣言する
+        u: rc[ast.Node] | None = n.incr
+        while u is not None:
+            un: rc[ast.Node] = u
+            self.check_unpack(un)
+            u = un.next
+
         et: rc[ast.Type] = self.check_expr(unwrap_node(n.lhs))
         if et.kind == ast.TY_NONE:
             diag.error_full(unwrap_tok(unwrap_node(n.lhs).tok),
@@ -3351,6 +3531,19 @@ class Sema:
 
             return self.resolve_type(unwrap_node(sig2.type_ref))
 
+        # ── weak[T].upgrade() — 生きていれば rc[T]、無ければ None（A-50）──
+        if ot.kind == ast.TY_WEAK:
+            if n.name != "upgrade":
+                diag.error_at_hint(unwrap_tok(n.tok),
+                                   diag.msg0("sema.636", "weak にあるのは upgrade() だけです（中身を使うには upgrade() で rc[T] に戻します）"),
+                                   diag.msg("sema.635", "'weak' に '{0}' はありません", [copy(n.name)]))
+            if n.args is not None:
+                diag.error_at_hint(unwrap_tok(n.tok),
+                                   diag.msg0("sema.638", "w.upgrade() の形で使ってください"),
+                                   diag.msg0("sema.637", "upgrade は引数を取りません"))
+            ur: rc[ast.Type] = ast.type_rc(ast.elem_of(ot))
+            return ast.type_opt(ur)
+
         # ── Thread[R].join() — 終わるまで待って戻り値を受け取る ──
         #
         # 注意: join は所有を消費します（2 回 join できません）。それを保証するのは
@@ -3387,6 +3580,7 @@ class Sema:
                                    diag.msg("sema.176", "lock には 'fn({0}) -> R' の関数を渡してください", [copy(ast.type_name(ast.elem_of(ot)))]),
                                    diag.msg("sema.175", "'{0}' はその形の関数ではありません", [copy(ast.type_name(lft))]))
                 return self.ty_int()
+            reject_raising_fn(lan, lft, "lock")
             if not ast.type_assignable(ast.elem_of(ot), lft.params[0]):
                 diag.error_at_hint(unwrap_tok(lan.tok),
                                    diag.msg("sema.178", "中身は '{0}' です", [copy(ast.type_name(ast.elem_of(ot)))]),
@@ -3682,6 +3876,17 @@ class Sema:
             n.ir_name = copy(fv.ir_name)
             n.is_indirect = True
             n.type = ast.elem_of(ftv)
+            # ★ 失敗しうる関数の値（A-49）。**型に書いてある raises** で見る
+            #   対になる定義: src/sema.c の check_call
+            if len(ftv.err_classes) > 0:
+                dt: rc[token.Token] | None = fv.decl_tok
+                if dt is None:
+                    dt = n.tok
+                ctmp: rc[types.FuncSig] = rc(types.FuncSig(n.name, dt))
+                for ec in ftv.err_classes:
+                    ctmp.raises_cls.append(ec)
+                shown_fv: str = copy(n.name)
+                self.check_can_fail(n, ctmp, shown_fv)
             return ast.elem_of(ftv)
 
         # ★ 組み込み（print / len / append …）には引数の名前がありません（A-38）。
@@ -3762,6 +3967,26 @@ class Sema:
             n.is_extern = False
             return ast.type_rc(at0)
 
+        # ── weak(r) — 弱参照を作る（A-50）── r は借りるだけ
+        #   対になる定義: src/sema.c の check_call
+        if n.name == "weak" and self.lookup_func("weak") is None:
+            nargsw: int = count_siblings(n.args)
+            if nargsw != 1:
+                diag.error_at_hint(unwrap_tok(n.tok), diag.msg0("sema.631", "weak(r) の形で使ってください（r は rc[T]）"),
+                                   diag.msg0("sema.630", "weak は 1 個の引数を取ります"))
+                return self.ty_int()
+            atw: rc[ast.Type] = self.check_expr(unwrap_node(n.args))
+            if atw.kind != ast.TY_RC:
+                diag.error_full(unwrap_tok(unwrap_node(n.args).tok),
+                                diag.msg("sema.632", "'{0}' から弱参照は作れません", [copy(ast.type_name(atw))]),
+                                diag.msg0("sema.633", "ここには rc[T] が必要です"), None, "",
+                                diag.msg0("sema.634", "弱参照は共有している値（rc[T]）を指します。先に rc(...) で包んでください"))
+                return self.ty_int()
+            n.is_extern = False
+            wt: rc[ast.Type] = ast.type_weak(ast.elem_of(atw))
+            n.type = wt
+            return wt
+
         # ── spawn(f, a…) — 別スレッドで f(a…) を始める（A-18）──
         #
         # ★ 新しい構文は作りません。**呼び出しの形のまま**です。
@@ -3786,6 +4011,7 @@ class Sema:
                                    diag.msg0("sema.222", "spawn の 1 つ目は関数です（例: spawn(work, job)）"),
                                    diag.msg("sema.221", "'{0}' は関数ではありません", [copy(ast.type_name(ft))]))
                 return self.ty_int()
+            reject_raising_fn(fa, ft, "spawn")
             if len(ft.params) != nsp - 1:
                 diag.error_at_hint(unwrap_tok(fa.tok),
                                    diag.msg("sema.224", "'{0}' は {1} 個の引数を取ります", [copy(ast.type_name(ft)), copy(str(len(ft.params)))]),
@@ -4089,7 +4315,7 @@ class Sema:
             if ab.kind != ast.ND_VAR:
                 diag.error_full(unwrap_tok(ab.tok), diag.msg0("sema.513", "case の中身には名前を書きます"),
                                 diag.msg0("sema.514", "ここは名前ではありません"), None, "",
-                                diag.msg0("sema.515", "束縛する名前を書きます（例: case Shape.Circle(r):）。値で絞りたいときは本体で if を使ってください"))
+                                diag.msg0("sema.515", "束縛する名前を書きます（例: case Shape.Circle(r):）。値で絞りたいときはガードを使ってください（例: case Shape.Circle(r) if r > 0:）"))
             for s0 in seen:
                 if s0 == ab.name:
                     diag.error_full(unwrap_tok(ab.tok),
@@ -4140,6 +4366,204 @@ class Sema:
         cbody.body = head.next
 
     # match 全体を「タグで調べる形」に書き換える
+    # ── match のガードと入れ子のパターン（A-48）──────────────
+    #   同じ枝の case を 1 つにまとめ、中身を if と match で組み立てる。
+    #   対になる定義: src/sema.c の lower_match_refine（説明はそちら）
+    #   注意: 隠し変数の番号の振り方は C 版と 1 つも違えないこと。
+
+    # 入れ子のパターンの中の名前を、隠し変数に置き換える（深さ優先・左から）
+    def rename_pattern(mut self, pat: rc[ast.Node], rn: mut list[rc[Rename]]) -> None:
+        if pat.kind != ast.ND_METHOD:
+            return
+        a: rc[ast.Node] | None = pat.args
+        while a is not None:
+            an: rc[ast.Node] = a
+            if an.kind == ast.ND_VAR:
+                h: str = self.sema_hidden("match.n")
+                rn.append(rc(Rename(copy(an.name), copy(h), an.tok)))
+                an.name = copy(h)
+            else:
+                self.rename_pattern(an, rn)
+            a = an.next
+
+    def refine_chain(mut self, mem: list[rc[ast.Node]], i: int, dflt: rc[ast.Node] | None,
+                     hid: list[str], used_default: mut list[bool]) -> rc[ast.Node] | None:
+        if i == len(mem):
+            if dflt is None:
+                return None
+            used_default[0] = True
+            dd: rc[ast.Node] = dflt
+            return ast.ast_clone(dd.body)
+        c: rc[ast.Node] = mem[i]
+        t: rc[token.Token] | None = c.tok
+
+        # ① この case の名前を読み替える
+        rn: list[rc[Rename]] = []
+        argv: list[rc[ast.Node]] = []
+        pl: rc[ast.Node] | None = c.lhs
+        if pl is not None:
+            pat: rc[ast.Node] = pl
+            if pat.kind == ast.ND_METHOD:
+                k: int = 0
+                a: rc[ast.Node] | None = pat.args
+                while a is not None:
+                    an: rc[ast.Node] = a
+                    argv.append(an)
+                    if an.kind == ast.ND_VAR:
+                        rn.append(rc(Rename(copy(an.name), copy(hid[k]), an.tok)))
+                    else:
+                        self.rename_pattern(an, rn)
+                    k = k + 1
+                    a = an.next
+
+        # ② 後ろの case（落ち先）
+        fb: Fallback = Fallback(self.refine_chain(mem, i + 1, dflt, hid, used_default))
+
+        # ③ 当たったときの本体：利用者の名前を宣言してから本体
+        head: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, t)
+        cur: rc[ast.Node] = head
+        for r in rn:
+            d: rc[ast.Node] = self.hidden_var(r.tok, r.from_, ast.new_var_node(r.tok, r.to))
+            cur.next = d
+            cur = d
+        cur.next = c.body
+        inner: rc[ast.Node] = new_block_of(t, head.next)
+
+        # ④ ガード（いちばん内側）
+        gl: rc[ast.Node] | None = c.rhs
+        if gl is not None:
+            g: rc[ast.Node] = gl
+            rename_expr(g, rn)
+            iff: rc[ast.Node] = ast.new_node(ast.ND_IF, g.tok)
+            iff.lhs = g
+            iff.body = inner
+            iff.els = fb.take()
+            if iff.els is None:
+                diag.error_full(unwrap_tok(g.tok),
+                                diag.msg0("sema.617", "ガードが外れたときに当たる case がありません"),
+                                diag.msg0("sema.618", "この条件が偽のとき、どこへも行けません"),
+                                None, "",
+                                diag.msg0("sema.619", "後ろに同じ枝の case か case _: を書いてください"))
+            inner = new_block_of(t, iff)
+
+        # ⑤ 入れ子のパターン（後ろから包む）
+        j: int = len(argv) - 1
+        while j >= 0:
+            av: rc[ast.Node] = argv[j]
+            if av.kind != ast.ND_VAR:
+                av.next = None
+                m: rc[ast.Node] = ast.new_node(ast.ND_MATCH, av.tok)
+                m.lhs = ast.new_var_node(av.tok, hid[j])
+                cp: rc[ast.Node] = ast.new_node(ast.ND_CASE, av.tok)
+                cp.lhs = av
+                cp.body = inner
+                rest: rc[ast.Node] | None = fb.take()
+                if rest is not None:
+                    cd: rc[ast.Node] = ast.new_node(ast.ND_CASE, av.tok)
+                    cd.body = rest
+                    cd.is_fallback = True
+                    cp.next = cd
+                m.body = cp
+                inner = new_block_of(t, m)
+            j = j - 1
+        return inner
+
+    def lower_match_refine(mut self, n: mut rc[ast.Node]) -> None:
+        any_: bool = False
+        dflt: rc[ast.Node] | None = None
+        cs: list[rc[ast.Node]] = []
+        c: rc[ast.Node] | None = n.body
+        while c is not None:
+            cc: rc[ast.Node] = c
+            if cc.lhs is None:
+                # 注意: case _ が最後でないときは、何もしないで今までの検査に断らせる
+                if cc.next is not None:
+                    return
+                dflt = cc
+            else:
+                cs.append(cc)
+                if case_refutable(cc):
+                    any_ = True
+            c = cc.next
+        if not any_:
+            return
+
+        done: list[bool] = []
+        for x in cs:
+            done.append(False)
+
+        used_default: list[bool] = [False]
+        head: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, n.tok)
+        cur: rc[ast.Node] = head
+        i: int = 0
+        while i < len(cs):
+            if done[i]:
+                i = i + 1
+                continue
+            # 同じ枝（同じ値）の case を、書いた順に集める
+            mem: list[rc[ast.Node]] = []
+            j: int = i
+            while j < len(cs):
+                if not done[j] and same_case_key(unwrap_node(cs[i].lhs), unwrap_node(cs[j].lhs)):
+                    # ★ 外れない case の後ろの同じ枝は、決して選ばれない
+                    if len(mem) > 0 and not case_refutable(mem[len(mem) - 1]):
+                        diag.error_full(unwrap_tok(unwrap_node(cs[j].lhs).tok),
+                                        diag.msg0("sema.533", "同じ値の case が 2 つあります"),
+                                        diag.msg0("sema.534", "2 つめは決して選ばれません"),
+                                        unwrap_node(mem[len(mem) - 1].lhs).tok,
+                                        diag.msg0("sema.535", "最初の case はここです"), "")
+                    if len(mem) > 0 and count_args(cs[j].lhs) != count_args(mem[0].lhs):
+                        diag.error_full(unwrap_tok(unwrap_node(cs[j].lhs).tok),
+                                        diag.msg0("sema.620", "同じ枝の case で、中身の数が違います"),
+                                        diag.msg0("sema.512", "中身の数が合っていません"),
+                                        unwrap_node(mem[0].lhs).tok,
+                                        diag.msg0("sema.535", "最初の case はここです"), "")
+                    mem.append(cs[j])
+                    done[j] = True
+                j = j + 1
+
+            # まとめた case：中身は隠し変数で受け取る
+            first: rc[ast.Node] = mem[0]
+            fl: rc[ast.Node] = unwrap_node(first.lhs)
+            nargs: int = count_args(fl)
+            hid: list[str] = []
+            k: int = 0
+            while k < nargs:
+                hid.append(self.sema_hidden("match.h"))
+                k = k + 1
+            mc: rc[ast.Node] = ast.new_node(ast.ND_CASE, first.tok)
+            if fl.kind == ast.ND_METHOD:
+                pat: rc[ast.Node] = ast.new_node(ast.ND_METHOD, fl.tok)
+                pat.lhs = fl.lhs
+                pat.name = copy(fl.name)
+                pat.mod_name = copy(fl.mod_name)
+                ah: rc[ast.Node] = ast.new_node(ast.ND_BLOCK, fl.tok)
+                at: rc[ast.Node] = ah
+                k = 0
+                a: rc[ast.Node] | None = fl.args
+                while a is not None:
+                    an: rc[ast.Node] = a
+                    nv: rc[ast.Node] = ast.new_var_node(an.tok, hid[k])
+                    at.next = nv
+                    at = nv
+                    k = k + 1
+                    a = an.next
+                pat.args = ah.next
+                mc.lhs = pat
+            else:
+                mc.lhs = fl
+            mc.body = self.refine_chain(mem, 0, dflt, hid, used_default)
+            cur.next = mc
+            cur = mc
+            i = i + 1
+        # ★ 落ち先に使った case _ は届く（枝を全部書いてあっても断らない）
+        if dflt is not None:
+            dd: rc[ast.Node] = dflt
+            if used_default[0]:
+                dd.is_fallback = True
+            cur.next = dd
+        n.body = head.next
+
     def lower_match_payload(mut self, n: mut rc[ast.Node],
                             e: rc[ast.EnumDef]) -> None:
         t: rc[token.Token] | None = n.tok
@@ -4179,6 +4603,9 @@ class Sema:
     def check_match(mut self, n: mut rc[ast.Node]) -> None:
         subj: rc[ast.Node] = unwrap_node(n.lhs)
         st: rc[ast.Type] = auto_deref(self.check_expr(subj))
+
+        # ★ ガードと入れ子のパターン（A-48）。同じ枝の case をまとめる
+        self.lower_match_refine(n)
 
         # ★ 中身を持つ列挙（A-41）。**タグで調べる形に書き換えて**から
         #   検査し直します。書き換えたあとは今までの match と同じ形です。
@@ -4301,7 +4728,7 @@ class Sema:
                     if cc3.lhs is not None:
                         ncase = ncase + 1
                     c3 = cc3.next
-                if ncase == ed.nvals:
+                if ncase == ed.nvals and not unwrap_node(default_at).is_fallback:
                     diag.error_at_hint(unwrap_tok(unwrap_node(default_at).tok),
                                        diag.msg0("sema.274", "枝を全部書いてあるので case _ は届きません"),
                                        diag.msg0("sema.273", "この case は選ばれません"))
@@ -5185,14 +5612,18 @@ class Sema:
             cur = c.next
 
     # 捕まえられる型か（A-43）。**値型だけ**です。
+    # ★ A-51 から str / list / クラスなども**借りて**捕まえられる。
+    #   対になる定義: src/sema.c の capturable / capture_by_value
     def capturable(self, t: rc[ast.Type]) -> bool:
-        if t.kind == ast.TY_INT or t.kind == ast.TY_FLOAT or t.kind == ast.TY_BOOL:
+        if capture_by_value(t):
             return True
-        if t.kind == ast.TY_ENUM:
-            e0: rc[ast.EnumDef] | None = t.en
-            if e0 is None:
-                return True
-            return not unwrap_enumdef(e0).has_payload
+        k: int = t.kind
+        if (k == ast.TY_STR or k == ast.TY_LIST or k == ast.TY_CLASS or k == ast.TY_IFACE or
+                k == ast.TY_TUPLE or k == ast.TY_RC or k == ast.TY_WEAK or k == ast.TY_ENUM):
+            return True
+        if k == ast.TY_OPT:
+            return self.capturable(ast.elem_of(t))
+        # 注意: fn の値は捕まえない（その値がさらに借りているものを追えなくなる）
         return False
 
     def instantiate_lambda(mut self, tmpl: rc[types.FuncSig],
@@ -5236,7 +5667,7 @@ class Sema:
                 diag.error_full(unwrap_tok(ref.tok),
                                 diag.msg("sema.343", "'{0}' は捕まえられません（'{1}' 型）", [copy(c.name), copy(ast.type_name(unwrap_type(c.type)))]),
                                 diag.msg0("sema.593", "この lambda が外の変数を使っています"), None, "",
-                                diag.msg0("sema.594", "捕まえられるのは値型だけです（int / float / bool / 列挙 / 範囲型）。それ以外は引数で受け取るか、def で書いた関数にしてください"))
+                                diag.msg0("sema.642", "関数の値・Thread・mutex・ptr は捕まえられません。引数で受け取るか、def で書いた関数にしてください"))
 
         # 束ねる型の並び（引数 … と戻り型 … と捕まえた値の型）
         args: list[rc[ast.Type]] = []

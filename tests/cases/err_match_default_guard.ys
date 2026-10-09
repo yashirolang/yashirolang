@@ -1,0 +1,9 @@
+# ERROR: case _ には if を書けません
+def main() -> int:
+    n: int = 1
+    match n:
+        case 1:
+            print("a")
+        case _ if n > 0:
+            print("b")
+    return 0

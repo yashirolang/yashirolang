@@ -1,0 +1,19 @@
+# OUTPUT: 1a
+# OUTPUT: 2b
+# OUTPUT: 0:a
+# OUTPUT: 1:b
+# OUTPUT: 3
+# A-47: for でタプルの要素を分解できます。enumerate の要素は括弧で囲みます。
+def main() -> int:
+    ps: list[(int, str)] = [(1, "a"), (2, "b")]
+    for n, s in ps:
+        print(str(n) + s)
+    for i, (n, s) in enumerate(ps):
+        print(str(i) + ":" + s)
+    t: int = 0
+    for n, s in ps:
+        if n == 1:
+            continue
+        t += n + 1
+    print(t)
+    return 0

@@ -1,0 +1,7 @@
+# ERROR: 括弧の中の名前が 1 つです
+def f() -> (int, int):
+    return 1, 2
+
+def main() -> int:
+    a, (b) = f()
+    return 0

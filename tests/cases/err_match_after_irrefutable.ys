@@ -1,0 +1,17 @@
+# ERROR: 同じ値の case が 2 つあります
+# ERROR: 2 つめは決して選ばれません
+enum Shape:
+    Circle(r: int)
+    Dot
+
+def f(s: Shape) -> int:
+    match s:
+        case Shape.Circle(r):
+            return r
+        case Shape.Circle(q) if q > 0:
+            return q
+        case Shape.Dot:
+            return 0
+
+def main() -> int:
+    return 0

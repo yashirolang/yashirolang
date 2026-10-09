@@ -1,0 +1,7 @@
+# ERROR: enumerate で受け取るのは添字と要素の 2 つです
+# ERROR: = ヒント: 要素を分解するときは括弧で囲みます
+def main() -> int:
+    ps: list[(int, str)] = [(1, "a")]
+    for i, n, s in enumerate(ps):
+        print(s)
+    return 0

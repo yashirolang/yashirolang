@@ -329,6 +329,14 @@ static void dump(Node *n, int depth) {
             // 注意: `case _` は調べる式を持ちません（lhs が NULL）。
             printf("(case\n");
             if (n->lhs) dump(n->lhs, depth + 1);
+            // ★ ガード（A-48）
+            if (n->rhs) {
+                for (int i = 0; i < depth + 1; i++) printf("  ");
+                printf("(if\n");
+                dump(n->rhs, depth + 2);
+                for (int i = 0; i < depth + 1; i++) printf("  ");
+                printf(")\n");
+            }
             dump(n->body, depth + 1);
             for (int i = 0; i < depth; i++) printf("  ");
             printf(")\n");
@@ -449,10 +457,14 @@ static void dump(Node *n, int depth) {
         //   body の 3 つは隠し宣言なので出しません（読む人の役に立たないため）。
         case ND_LISTCOMP:
             printf("(listcomp %s\n", n->body->name);
+            // ★ 受け取る名前の分解（A-47）
+            for (Node *u = n->incr; u; u = u->next) dump(u, depth + 1);
             dump(n->lhs, depth + 1);
             if (n->args) {
                 for (int i = 0; i < depth + 1; i++) printf("  ");
-                printf("(range step=%lld\n", n->ival);
+                // ★ 増分が変数なら ival は 0 で、3 つ目の引数に式があります（A-46）
+                if (n->ival == 0) printf("(range step=var\n");
+                else printf("(range step=%lld\n", n->ival);
                 for (Node *a = n->args; a; a = a->next) dump(a, depth + 2);
                 for (int i = 0; i < depth + 1; i++) printf("  ");
                 printf(")\n");
@@ -527,6 +539,7 @@ Node *ast_clone(Node *n) {
     c->hid_cur = n->hid_cur;
     c->hid_obj = n->hid_obj;
     c->is_lambda = n->is_lambda;   // A-42
+    c->is_fallback = n->is_fallback;   // A-48
 
     c->lhs = ast_clone(n->lhs);
     c->rhs = ast_clone(n->rhs);
@@ -537,6 +550,10 @@ Node *ast_clone(Node *n) {
     c->type_ref = ast_clone(n->type_ref);
     c->targs = ast_clone(n->targs);
     c->incr = ast_clone(n->incr);
+    // ★ raises 節も写します。写さないと、ジェネリック関数の raises が
+    //   単相化で消えていました（`def first[T](xs: list[T]) -> T raises E`
+    //   が「宣言がありません」で通らなかった。A-49 で見つけて直しました）。
+    c->raises = ast_clone(n->raises);
     c->next = ast_clone(n->next);
     return c;
 }

@@ -75,6 +75,9 @@ class VarEntry:
     type: rc[ast.Type] | None
 
     decl_tok: rc[token.Token] | None
+    # ★ 捕獲した lambda を入れたことがある変数なら、その捕獲の並び（A-51）
+    #   対になる定義: src/sema.c の VarEntry.caps
+    caps: rc[ast.Node] | None
     next: rc[VarEntry] | None
 
     def init(self, name: str, tok: rc[token.Token] | None) -> None:
@@ -82,6 +85,7 @@ class VarEntry:
         self.ir_name = ""
         self.is_global = False
         self.decl_tok = tok
+        self.caps = None
 
 
 class Scope:

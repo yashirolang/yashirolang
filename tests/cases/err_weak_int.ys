@@ -1,0 +1,9 @@
+# ERROR: は weak にできません
+class N:
+    v: int
+    def init(self, v: int) -> None:
+        self.v = v
+
+def main() -> int:
+    w: weak[int] | None = None
+    return 0

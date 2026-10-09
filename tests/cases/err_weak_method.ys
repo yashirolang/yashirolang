@@ -1,0 +1,11 @@
+# ERROR: にあるのは upgrade() だけです
+class N:
+    v: int
+    def init(self, v: int) -> None:
+        self.v = v
+
+def main() -> int:
+    r: rc[N] = rc(N(1))
+    w: weak[N] = weak(r)
+    print(w.get())
+    return 0

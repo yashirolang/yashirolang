@@ -31,6 +31,10 @@ struct VarEntry {
     Type *declared;
     Type *type;
     Token *decl_tok;  // 宣言された位置（再宣言エラーで「前の宣言はここ」を示す）
+    // ★ 捕獲した lambda を入れたことがある変数なら、その捕獲の並び（A-51）。
+    //   この変数を読んだ節点にも書き写すので、「変数に入れてから返す・しまう」
+    //   も、lambda を直接書いたときと同じ検査で止まります。
+    Node *caps;
     VarEntry *next;
 };
 
@@ -538,6 +542,7 @@ static Type *check_call(Sema *s, Node *n);
 static Type *check_list_lit(Sema *s, Node *n);
 static Type *check_index_expr(Sema *s, Node *n);
 static Type *check_listcomp(Sema *s, Node *n);
+static void check_unpack(Sema *s, Node *n);
 static void rewrite_old(Node *fn);
 static Type *check_method(Sema *s, Node *n);
 static Type *check_class_method(Sema *s, Node *n, Class *c);
@@ -550,6 +555,7 @@ static void resolve_raises(Sema *s, Node *fn, FuncSig *f);
 static Class *branch_class(Sema *s, EnumDef *e, EnumVal *ev);
 // 捕獲した lambda を逃がさない（A-43）
 static void reject_escaping_closure(Node *v, const char *what);
+static bool capture_by_value(Type *t);   // A-51
 static bool fn_param_escapes_at(Sema *s, Node *body, const char *pname,
                                 int hops);
 static Type *check_new(Sema *s, Node *n, Class *c);
@@ -616,6 +622,13 @@ static Type *resolve_type(Sema *s, Node *tr) {
         int k = 0;
         for (Node *a = tr->body; a; a = a->next) t->params[k++] = resolve_type(s, a);
         t->elem = resolve_type(s, tr->rhs);
+        // ★ 投げうるエラー（A-49）。関数定義の raises と同じ規則で解決します
+        if (tr->raises) {
+            FuncSig tmp = {0};
+            resolve_raises(s, tr, &tmp);
+            t->nraises = tmp.nraises;
+            t->raises = tmp.raises;
+        }
         return t;
     }
 
@@ -925,6 +938,16 @@ static Type *resolve_base_type(Sema *s, Node *tr) {
         return type_rc(elem);
     }
 
+    // ── weak[T]（弱参照。A-50）── rc[T] と同じく中身はクラスだけです
+    if (strcmp(tr->name, "weak") == 0) {
+        if (!tr->lhs)
+            error_at_hint_m(tr->tok, MSG0("sema.627", "中身の型を書いてください（例: weak[Node]）"), MSG0("sema.626", "weak には中身の型が必要です"));
+        Type *elem = resolve_type(s, tr->lhs);
+        if (elem->kind != TY_CLASS)
+            error_at_hint_m(tr->tok, MSG0("sema.629", "weak に入れられるのはクラスだけです（例: weak[Node]）"), MSG1("sema.628", "'{0}' は weak にできません", type_name(elem)));
+        return type_weak(elem);
+    }
+
     // ── Thread[R] / mutex[T]（A-18）──
     //
     // ★ Thread[R] の R は**戻り型**です。spawn した関数が返すものを、
@@ -1046,6 +1069,11 @@ static const char *no_implicit_hint(Type *got, Type *want) {
         for (int i = 0; i < got->nparams; i++)
             if (!type_equal(got->params[i], want->params[i]))
                 return MSG3("sema.044", "{0} 番目の引数の型が違います（'{1}' と '{2}'）", diag_fmt("%d", i + 1), type_name(got->params[i]), type_name(want->params[i]));
+        // ★ 投げうるエラーが違う（A-49）。集合が一致しなければ別の型です
+        if (type_equal(got->elem, want->elem))
+            return want->nraises == 0
+                ? MSG1("sema.624", "この関数は失敗しえます（'{0}'）。失敗しない関数の型には入りません", type_name(got))
+                : MSG1("sema.625", "投げうるエラーが違います。ここには '{0}' が必要です", type_name(want));
         return MSG2("sema.045", "戻り型が違います（'{0}' と '{1}'）", type_name(got->elem), type_name(want->elem));
     }
 
@@ -1555,6 +1583,9 @@ static Type *fn_type_of(FuncSig *f) {
     t->nparams = f->nparams;
     t->params = f->params;
     t->elem = f->ret;
+    // ★ raises する関数も値にできます（A-49）。投げうるエラーは型に載ります
+    t->nraises = f->nraises;
+    t->raises = f->raises;
     return t;
 }
 
@@ -1609,14 +1640,6 @@ static Type *check_var(Sema *s, Node *n) {
             diag_fail(&d);
         }
         if (f) {
-            if (f->nraises > 0) {
-                Diag d = {0};
-                d.message = MSG1("sema.077", "'{0}' は raises する関数なので値にできません", n->name);
-                d.primary.tok = n->tok;
-                d.primary.label = MSG0("sema.395", "ここでは値として使えません");
-                d.hint = MSG0("sema.397", "関数型はエラーの受け渡しを表せません（raises しない関数で包んでください）");
-                diag_fail(&d);
-            }
             n->ir_name = f->ir_name;
             n->is_func_ref = true;
             return fn_type_of(f);
@@ -1665,6 +1688,10 @@ static Type *check_var(Sema *s, Node *n) {
         diag_fail(&d);
     }
     n->ir_name = v->ir_name;  // ★ codegen はこれを使う
+    // ★ 捕獲した lambda を入れた変数（A-51）。読んだ節点に捕獲を書き写すので、
+    //   返す・しまう・別スレッドへ渡す検査が、変数越しにも効きます。
+    //   注意: codegen は is_func_ref のときだけ caps を見るので、IR は変わりません。
+    if (v->caps) n->caps = v->caps;
     return v->type;
 }
 
@@ -1802,6 +1829,7 @@ static void check_vardecl(Sema *s, Node *n) {
     VarEntry *v = declare(s, n->name, declared, n->tok);
     n->ir_name = v->ir_name;  // ★ codegen が alloca / store に使う名前
     n->type = declared;
+    if (n->rhs && n->rhs->caps) v->caps = n->rhs->caps;   // A-51
 }
 
 static void check_assign(Sema *s, Node *n) {
@@ -1912,6 +1940,23 @@ static void check_assign(Sema *s, Node *n) {
     Type *actual = check_expr(s, n->rhs);
     // ★ グローバルは枠より長生きするので、捕獲した lambda は入れられません（A-43）
     if (v->is_global) reject_escaping_closure(n->rhs, MSG0("sema.410", "しまうことが"));
+    // ★ 借りて捕まえた lambda は**宣言でだけ**受け取れます（A-51）。
+    //   代入だと、内側のスコープの変数を捕まえた lambda を外側の変数へ
+    //   運べてしまい、捕まえた変数が先に解放されます。
+    if (n->rhs->caps) {
+        for (Node *c = n->rhs->caps; c; c = c->next)
+            if (!capture_by_value(c->type)) {
+                Diag d = {0};
+                d.message = MSG1("sema.639", "'{0}' を借りて捕まえた lambda は、代入では受け取れません", c->name);
+                d.primary.tok = n->rhs->tok;
+                d.primary.label = MSG0("sema.640", "ここで既にある変数へ入れています");
+                d.related.tok = c->tok;
+                d.related.label = MSG1("sema.251", "'{0}' を捕まえています", c->name);
+                d.hint = MSG0("sema.641", "新しい変数の宣言で受け取ってください（例: f2: fn(int) -> int = lambda x: …）");
+                diag_fail(&d);
+            }
+        v->caps = n->rhs->caps;
+    }
     s->expected = NULL;
     if (!type_assignable(actual, v->declared)) {
         Diag d = {0};
@@ -2077,6 +2122,9 @@ const Builtin BUILTINS[] = {
     {"int", TY_FLOAT, TY_INT, "pl_int_from_float"},
     {"float", TY_INT, TY_FLOAT, "pl_float_from_int"},
     {"ord", TY_STR, TY_INT, "pl_ord"},
+    // ★ range の増分が変数のとき、for の脱糖が 1 回だけ呼びます（A-46）。
+    //   注意: 名前に '.' があるので、利用者のコードからは書けません。
+    {"range.step", TY_INT, TY_INT, "pl_range_step"},
     {"chr", TY_INT, TY_STR, "pl_chr"},
     {"exit", TY_INT, TY_NONE, "pl_exit"},
     {"panic", TY_STR, TY_NONE, "pl_panic"},
@@ -2452,6 +2500,9 @@ static Type *check_listcomp(Sema *s, Node *n) {
     VarEntry *vlv = declare(s, lv->name, elem_t, lv->tok);
     lv->ir_name = vlv->ir_name;
 
+    // ★ 受け取る名前の分解（A-47）。ループ変数の見えるところで宣言します
+    for (Node *u = n->incr; u; u = u->next) check_unpack(s, u);
+
     Type *et = check_expr(s, n->lhs);
     if (et->kind == TY_NONE) {
         Diag d = {0};
@@ -2816,6 +2867,7 @@ static Type *check_field(Sema *s, Node *n) {
 // ★ 「関数呼び出しの検査に self を 1 個足すだけ」です。
 //   名前を修飾して関数表に載せておいたので、引ける表はそのまま。
 static void check_can_fail(Sema *s, Node *n, FuncSig *f, const char *shown);
+static void reject_raising_fn(Node *at, Type *ft, const char *where);
 
 // 実引数に「own の仮引数へ渡す rc[T] か」を書き写す（A-21 ⑬）。
 //
@@ -3190,6 +3242,15 @@ static Type *check_method(Sema *s, Node *n) {
         return resolve_type(s, sig->type_ref);
     }
 
+    // ── weak[T].upgrade() — 中身が生きていれば rc[T]、無ければ None（A-50）──
+    if (ot->kind == TY_WEAK) {
+        if (strcmp(n->name, "upgrade") != 0)
+            error_at_hint_m(n->tok, MSG0("sema.636", "weak にあるのは upgrade() だけです（中身を使うには upgrade() で rc[T] に戻します）"), MSG1("sema.635", "'weak' に '{0}' はありません", n->name));
+        if (n->args)
+            error_at_hint_m(n->tok, MSG0("sema.638", "w.upgrade() の形で使ってください"), MSG0("sema.637", "upgrade は引数を取りません"));
+        return type_opt(type_rc(ot->elem));
+    }
+
     // ── Thread[R].join() — 終わるまで待って戻り値を受け取る ──
     //
     // 注意: join は所有を消費します（2 回 join できません）。それを保証するのは
@@ -3216,6 +3277,7 @@ static Type *check_method(Sema *s, Node *n) {
         Type *ft = check_expr(s, n->args);
         if (ft->kind != TY_FN || ft->nparams != 1)
             error_at_hint_m(n->args->tok, MSG1("sema.176", "lock には 'fn({0}) -> R' の関数を渡してください", type_name(ot->elem)), MSG1("sema.175", "'{0}' はその形の関数ではありません", type_name(ft)));
+        reject_raising_fn(n->args, ft, "lock");
         if (!type_assignable(ot->elem, ft->params[0]))
             error_at_hint_m(n->args->tok, MSG1("sema.178", "中身は '{0}' です", type_name(ot->elem)), MSG1("sema.177", "この関数は '{0}' を受け取ります", type_name(ft->params[0])));
         return ft->elem;
@@ -3512,6 +3574,18 @@ static Type *check_lowlevel_call(Sema *s, Node *n, const LowLevel *ll) {
     return ty_int;
 }
 
+// ★ 失敗しうる関数の値は、別の場所で呼ばれる先（spawn / lock）へ渡せません（A-49）。
+//   そこにはエラーを受け止める相手がいないためです。
+static void reject_raising_fn(Node *at, Type *ft, const char *where) {
+    if (ft->kind != TY_FN || ft->nraises == 0) return;
+    Diag d = {0};
+    d.message = MSG2("sema.621", "'{0}' は失敗しうる関数なので、{1} に渡せません", type_name(ft), where);
+    d.primary.tok = at->tok;
+    d.primary.label = MSG0("sema.622", "渡した先には、エラーを受け止める相手がいません");
+    d.hint = MSG0("sema.623", "関数の中で try を使ってエラーを受け止めてください");
+    diag_fail(&d);
+}
+
 static Type *check_call(Sema *s, Node *n) {
     // ★ 名前が **関数型の変数**なら間接呼び出しです。
     //   注意: 変数を先に見ます。同名の関数があっても変数が勝ちます。
@@ -3549,6 +3623,16 @@ static Type *check_call(Sema *s, Node *n) {
         n->ir_name = fv->ir_name;
         n->is_indirect = true;
         n->type = ft->elem;
+        // ★ 失敗しうる関数の値（A-49）。**型に書いてある raises** で見ます
+        //   （インタフェース越しの呼び出し A-40 と同じ考え方です）。
+        if (ft->nraises > 0) {
+            FuncSig tmp = {0};
+            tmp.name = n->name;
+            tmp.tok = fv->decl_tok ? fv->decl_tok : n->tok;
+            tmp.nraises = ft->nraises;
+            tmp.raises = ft->raises;
+            check_can_fail(s, n, &tmp, n->name);
+        }
         return ft->elem;
     }
 
@@ -3630,6 +3714,30 @@ static Type *check_call(Sema *s, Node *n) {
         return type_rc(at);
     }
 
+    // ── weak(r) — 弱参照を作る（A-50）──
+    //
+    // ★ 受け取るのは rc[T] だけです（借りるだけで、r はそのまま使えます）。
+    //   中身を生かしておく力は持たないので、使うときは upgrade() で戻します。
+    if (strcmp(n->name, "weak") == 0 && !lookup_func(s, "weak")) {
+        int nargs = 0;
+        for (Node *a = n->args; a; a = a->next) nargs++;
+        if (nargs != 1)
+            error_at_hint_m(n->tok, MSG0("sema.631", "weak(r) の形で使ってください（r は rc[T]）"), MSG0("sema.630", "weak は 1 個の引数を取ります"));
+        Type *at = check_expr(s, n->args);
+        if (at->kind != TY_RC) {
+            Diag d = {0};
+            d.message = MSG1("sema.632", "'{0}' から弱参照は作れません", type_name(at));
+            d.primary.tok = n->args->tok;
+            d.primary.label = MSG0("sema.633", "ここには rc[T] が必要です");
+            d.hint = MSG0("sema.634", "弱参照は共有している値（rc[T]）を指します。先に rc(...) で包んでください");
+            diag_fail(&d);
+        }
+        n->is_extern = false;
+        n->name = "weak";
+        n->type = type_weak(at->elem);
+        return n->type;
+    }
+
     // ── spawn(f, a…) — 別スレッドで f(a…) を始める（A-18）──
     //
     // ★ 新しい構文は作りません。**呼び出しの形のまま**です
@@ -3649,6 +3757,7 @@ static Type *check_call(Sema *s, Node *n) {
         Type *ft = check_expr(s, n->args);
         if (ft->kind != TY_FN)
             error_at_hint_m(n->args->tok, MSG0("sema.222", "spawn の 1 つ目は関数です（例: spawn(work, job)）"), MSG1("sema.221", "'{0}' は関数ではありません", type_name(ft)));
+        reject_raising_fn(n->args, ft, "spawn");
         // ★ 別のスレッドは、作った枠より長生きしえます（A-43）
         reject_escaping_closure(n->args, MSG0("sema.483", "別のスレッドへ渡すことが"));
         if (ft->nparams != nargs - 1)
@@ -4250,7 +4359,7 @@ static void bind_pattern(Sema *s, Node *c, Node *pat, EnumDef *e, EnumVal *v,
             d.message = MSG0("sema.513", "case の中身には名前を書きます");
             d.primary.tok = a->tok;
             d.primary.label = MSG0("sema.514", "ここは名前ではありません");
-            d.hint = MSG0("sema.515", "束縛する名前を書きます（例: case Shape.Circle(r):）。値で絞りたいときは本体で if を使ってください");
+            d.hint = MSG0("sema.515", "束縛する名前を書きます（例: case Shape.Circle(r):）。値で絞りたいときはガードを使ってください（例: case Shape.Circle(r) if r > 0:）");
             diag_fail(&d);
         }
         for (Node *q = pat->args; q != a; q = q->next)
@@ -4302,6 +4411,311 @@ static void bind_pattern(Sema *s, Node *c, Node *pat, EnumDef *e, EnumVal *v,
 }
 
 // match 全体を「タグで調べる形」に書き換える
+// ── match のガードと入れ子のパターン（A-48）──────────────────
+//
+//   case Shape.Circle(r) if r > 10:   ← ガード
+//   case Outer.Wrap(Inner.A(v)):       ← 入れ子のパターン
+//
+// ★ **同じ枝（同じ値）の case を 1 つにまとめ、中身を if と match で組み立てます。**
+//   まとめた後は「同じ値を 2 回書かない match」に戻るので、網羅の検査も
+//   中身を持つ枝の書き換え（lower_match_payload）も codegen も今までどおりです。
+//
+//   match s:                                    match s:
+//       case Circle(r) if r > 10: A                 case Circle(match.h.0):
+//       case Circle(r): B              →                if match.h.0 > 10:
+//       case Dot: C                                         r = match.h.0
+//                                                           A
+//                                                       else:
+//                                                           r = match.h.0
+//                                                           B
+//                                                   case Dot: C
+//
+// ★ ガードが外れた・入れ子が外れたときは、**同じ枝の次の case**（無ければ
+//   case _ の中身）へ落ちます。落ち先は if の else と内側の match の case _ に
+//   置きます。2 回目からは複製です（return の解析が if / else のまま働くように）。
+//
+// ★ **判定のあいだは隠し変数だけを使います。** 利用者の名前は、当たったときの
+//   本体の先頭でだけ宣言します。そうしないと、後ろの case が同じ名前を
+//   束縛したとき、外側の名前を隠すことになります（シャドーイングは禁止）。
+//   ガードの式の中の名前は、隠し変数に読み替えます。
+//
+// 注意: 隠し変数の番号は「この case の名前を読み替える → 後ろの case を
+//   組み立てる → 自分を組み立てる」の順に振ります（2 実装で同じ IR）。
+//   対になる定義: selfhost/sema の lower_match_refine
+
+static Node *hidden_var(Token *tok, char *name, Node *init);
+
+// 読み替え表（利用者の名前 → 隠し変数）
+typedef struct Rename {
+    char *from;
+    char *to;
+    Token *tok;
+    struct Rename *next;
+} Rename;
+
+static bool case_refutable(Node *c) {
+    if (c->rhs) return true;
+    if (c->lhs && c->lhs->kind == ND_METHOD)
+        for (Node *a = c->lhs->args; a; a = a->next)
+            if (a->kind != ND_VAR) return true;
+    return false;
+}
+
+static bool same_case_key(Node *a, Node *b) {
+    bool ea = a->kind == ND_FIELD || a->kind == ND_METHOD;
+    bool eb = b->kind == ND_FIELD || b->kind == ND_METHOD;
+    if (ea || eb) return ea && eb && a->name && b->name && strcmp(a->name, b->name) == 0;
+    if (a->kind == ND_INT && b->kind == ND_INT) return a->ival == b->ival;
+    if (a->kind == ND_STR && b->kind == ND_STR)
+        return a->slen == b->slen && memcmp(a->sval, b->sval, (size_t)a->slen) == 0;
+    return false;
+}
+
+static int count_args(Node *pat) {
+    int k = 0;
+    if (pat && pat->kind == ND_METHOD)
+        for (Node *a = pat->args; a; a = a->next) k++;
+    return k;
+}
+
+static Node *new_block_of(Token *t, Node *body) {
+    Node *b = new_node(ND_BLOCK, t);
+    b->body = body;
+    return b;
+}
+
+// 入れ子のパターンの中の名前を、隠し変数に置き換える（深さ優先・左から）
+static void rename_pattern(Sema *s, Node *pat, Rename **rn) {
+    if (!pat || pat->kind != ND_METHOD) return;
+    for (Node *a = pat->args; a; a = a->next) {
+        if (a->kind == ND_VAR) {
+            Rename *r = xmalloc(sizeof(Rename));
+            r->from = a->name;
+            r->to = sema_hidden(s, "match.n");
+            r->tok = a->tok;
+            r->next = *rn;
+            *rn = r;
+            a->name = r->to;
+        } else {
+            rename_pattern(s, a, rn);
+        }
+    }
+}
+
+// ガードの中の名前を読み替える
+static void rename_expr(Node *n, Rename *rn) {
+    for (; n; n = n->next) {
+        if (n->kind == ND_VAR && !n->mod_name)
+            for (Rename *r = rn; r; r = r->next)
+                if (strcmp(n->name, r->from) == 0) {
+                    n->name = r->to;
+                    break;
+                }
+        rename_expr(n->lhs, rn);
+        rename_expr(n->rhs, rn);
+        rename_expr(n->els, rn);
+        rename_expr(n->args, rn);
+        rename_expr(n->body, rn);
+    }
+}
+
+typedef struct {
+    Node *rest;   // 落ち先（ND_BLOCK）。無ければ NULL
+    int used;
+} Fallback;
+
+static Node *fb_take(Fallback *fb) {
+    if (!fb->rest) return NULL;
+    return fb->used++ ? ast_clone(fb->rest) : fb->rest;
+}
+
+// mem[i..] を順に試す文（ND_BLOCK）。どれにも当たらなければ case _ の中身（複製）。
+static Node *refine_chain(Sema *s, Node **mem, int nmem, int i, Node *dflt,
+                          char **hid, bool *used_default) {
+    if (i == nmem) {
+        if (!dflt) return NULL;
+        *used_default = true;
+        return ast_clone(dflt->body);
+    }
+    Node *c = mem[i];
+    Token *t = c->tok;
+
+    // ① この case の名前を読み替える
+    Rename *rn = NULL;
+    int k = 0;
+    Node *pat = c->lhs;
+    int nargs = count_args(pat);
+    Node **argv = nargs ? xmalloc(sizeof(Node *) * (size_t)nargs) : NULL;
+    if (pat && pat->kind == ND_METHOD)
+        for (Node *a = pat->args; a; a = a->next, k++) {
+            argv[k] = a;
+            if (a->kind == ND_VAR) {
+                Rename *r = xmalloc(sizeof(Rename));
+                r->from = a->name;
+                r->to = hid[k];
+                r->tok = a->tok;
+                r->next = rn;
+                rn = r;
+            } else {
+                rename_pattern(s, a, &rn);
+            }
+        }
+
+    // ② 後ろの case（落ち先）
+    Fallback fb = {refine_chain(s, mem, nmem, i + 1, dflt, hid, used_default), 0};
+
+    // ③ 当たったときの本体：利用者の名前を宣言してから本体
+    //   注意: 表は先頭に積んだので、書いた順に戻して並べます。
+    Node head = {0};
+    Node *cur = &head;
+    Rename *rev = NULL;
+    for (Rename *r = rn; r;) {
+        Rename *nx = r->next;
+        r->next = rev;
+        rev = r;
+        r = nx;
+    }
+    rn = rev;
+    for (Rename *r = rn; r; r = r->next) {
+        cur->next = hidden_var(r->tok, r->from, new_var_node(r->tok, r->to));
+        cur = cur->next;
+    }
+    cur->next = c->body;
+    Node *inner = new_block_of(t, head.next);
+
+    // ④ ガード（いちばん内側）
+    if (c->rhs) {
+        rename_expr(c->rhs, rn);
+        Node *iff = new_node(ND_IF, c->rhs->tok);
+        iff->lhs = c->rhs;
+        iff->body = inner;
+        iff->els = fb_take(&fb);
+        if (!iff->els) {
+            Diag d = {0};
+            d.message = MSG0("sema.617", "ガードが外れたときに当たる case がありません");
+            d.primary.tok = c->rhs->tok;
+            d.primary.label = MSG0("sema.618", "この条件が偽のとき、どこへも行けません");
+            d.hint = MSG0("sema.619", "後ろに同じ枝の case か case _: を書いてください");
+            diag_fail(&d);
+        }
+        inner = new_block_of(t, iff);
+    }
+
+    // ⑤ 入れ子のパターン（後ろから包む）
+    for (int j = nargs - 1; j >= 0; j--) {
+        Node *a = argv[j];
+        if (a->kind == ND_VAR) continue;
+        a->next = NULL;
+        Node *m = new_node(ND_MATCH, a->tok);
+        m->lhs = new_var_node(a->tok, hid[j]);
+        Node *cp = new_node(ND_CASE, a->tok);
+        cp->lhs = a;
+        cp->body = inner;
+        Node *rest = fb_take(&fb);
+        if (rest) {
+            Node *cd = new_node(ND_CASE, a->tok);
+            cd->body = rest;
+            cd->is_fallback = true;
+            cp->next = cd;
+        }
+        m->body = cp;
+        inner = new_block_of(t, m);
+    }
+    return inner;
+}
+
+static void lower_match_refine(Sema *s, Node *n) {
+    bool any = false;
+    Node *dflt = NULL;
+    int ncase = 0;
+    for (Node *c = n->body; c; c = c->next) {
+        if (!c->lhs) {
+            // 注意: case _ が最後でないときは、何もしないで今までの検査に断らせます
+            if (c->next) return;
+            dflt = c;
+            continue;
+        }
+        ncase++;
+        if (case_refutable(c)) any = true;
+    }
+    if (!any) return;
+
+    Node **cs = xmalloc(sizeof(Node *) * (size_t)ncase);
+    int k = 0;
+    for (Node *c = n->body; c; c = c->next)
+        if (c->lhs) cs[k++] = c;
+    bool *done = xmalloc(sizeof(bool) * (size_t)ncase);
+    for (int i = 0; i < ncase; i++) done[i] = false;
+
+    bool used_default = false;
+    Node head = {0};
+    Node *cur = &head;
+    for (int i = 0; i < ncase; i++) {
+        if (done[i]) continue;
+        // 同じ枝（同じ値）の case を、書いた順に集める
+        Node **mem = xmalloc(sizeof(Node *) * (size_t)ncase);
+        int nmem = 0;
+        for (int j = i; j < ncase; j++) {
+            if (done[j] || !same_case_key(cs[i]->lhs, cs[j]->lhs)) continue;
+            // ★ 外れない case の後ろの同じ枝は、決して選ばれません
+            if (nmem > 0 && !case_refutable(mem[nmem - 1])) {
+                Diag d = {0};
+                d.message = MSG0("sema.533", "同じ値の case が 2 つあります");
+                d.primary.tok = cs[j]->lhs->tok;
+                d.primary.label = MSG0("sema.534", "2 つめは決して選ばれません");
+                d.related.tok = mem[nmem - 1]->lhs->tok;
+                d.related.label = MSG0("sema.535", "最初の case はここです");
+                diag_fail(&d);
+            }
+            // 中身の数は同じでなければなりません（枝の定義との照合は後で行います）
+            if (nmem > 0 && count_args(cs[j]->lhs) != count_args(mem[0]->lhs)) {
+                Diag d = {0};
+                d.message = MSG0("sema.620", "同じ枝の case で、中身の数が違います");
+                d.primary.tok = cs[j]->lhs->tok;
+                d.primary.label = MSG0("sema.512", "中身の数が合っていません");
+                d.related.tok = mem[0]->lhs->tok;
+                d.related.label = MSG0("sema.535", "最初の case はここです");
+                diag_fail(&d);
+            }
+            mem[nmem++] = cs[j];
+            done[j] = true;
+        }
+
+        // まとめた case：中身は隠し変数で受け取る
+        Node *first = mem[0];
+        int nargs = count_args(first->lhs);
+        char **hid = nargs ? xmalloc(sizeof(char *) * (size_t)nargs) : NULL;
+        for (int j = 0; j < nargs; j++) hid[j] = sema_hidden(s, "match.h");
+        Node *mc = new_node(ND_CASE, first->tok);
+        if (first->lhs->kind == ND_METHOD) {
+            Node *pat = new_node(ND_METHOD, first->lhs->tok);
+            pat->lhs = first->lhs->lhs;
+            pat->name = first->lhs->name;
+            pat->mod_name = first->lhs->mod_name;
+            Node ah = {0};
+            Node *at = &ah;
+            int j = 0;
+            for (Node *a = first->lhs->args; a; a = a->next, j++) {
+                at->next = new_var_node(a->tok, hid[j]);
+                at = at->next;
+            }
+            pat->args = ah.next;
+            mc->lhs = pat;
+        } else {
+            mc->lhs = first->lhs;
+        }
+        mc->body = refine_chain(s, mem, nmem, 0, dflt, hid, &used_default);
+        cur->next = mc;
+        cur = mc;
+    }
+    // ★ 落ち先に使った case _ は届きます（枝を全部書いてあっても断りません）
+    if (dflt) {
+        if (used_default) dflt->is_fallback = true;
+        cur->next = dflt;
+    }
+    n->body = head.next;
+}
+
 static void lower_match_payload(Sema *s, Node *n, EnumDef *e) {
     Token *t = n->tok;
 
@@ -4563,6 +4977,9 @@ static void check_stmt(Sema *s, Node *n) {
         case ND_MATCH: {
             Type *st = auto_deref(check_expr(s, n->lhs));
 
+            // ★ ガードと入れ子のパターン（A-48）。同じ枝の case をまとめます
+            lower_match_refine(s, n);
+
             // ★ 中身を持つ列挙（A-41）。**タグで調べる形に書き換えて**から
             //   検査し直します。書き換えたあとは今までの match と同じ形です。
             if (st->kind == TY_ENUM && st->en->has_payload) {
@@ -4690,7 +5107,7 @@ static void check_stmt(Sema *s, Node *n) {
                     int ncase = 0;
                     for (Node *c = n->body; c; c = c->next)
                         if (c->lhs) ncase++;
-                    if (ncase == men->nvals)
+                    if (ncase == men->nvals && !default_at->is_fallback)
                         error_at_hint_m(default_at->tok, MSG0("sema.274", "枝を全部書いてあるので case _ は届きません"), MSG0("sema.273", "この case は選ばれません"));
                 }
             } else if (!has_default) {
@@ -5816,12 +6233,36 @@ static void collect_captures(Sema *s, Node *n, Node *params, Node **out) {
 // ★ **値型だけ**です。`str` や `list` を捕まえると「借りものを枠の上に
 //   持ち回る」話になり、元を動かせるかどうかの検査が要ります。
 //   まずは黙って壊れない範囲から入れます（design/closures.md §4）。
-static bool capturable(Type *t) {
+// 値ごと写して捕まえる型（A-43）
+static bool capture_by_value(Type *t) {
     switch (t->kind) {
         case TY_INT:
         case TY_FLOAT:
         case TY_BOOL: return true;
         case TY_ENUM: return !(t->en && t->en->has_payload);
+        default: return false;
+    }
+}
+
+// ★ A-51 から、`str` / `list` / クラスなども**借りて**捕まえられます。
+//   記録には借りたポインタを置くだけで、写しも数え札も増やしません。
+//   捕まえたあとで元を書き換えたり移動したりしてから lambda を使うと、
+//   所有権検査が止めます（ownck の record_capture_loans）。
+//   注意: Thread / mutex / 生ポインタは捕まえません（借りて持ち回る意味がない）。
+static bool capturable(Type *t) {
+    if (capture_by_value(t)) return true;
+    switch (t->kind) {
+        case TY_STR:
+        case TY_LIST:
+        case TY_CLASS:
+        case TY_IFACE:
+        case TY_TUPLE:
+        case TY_RC:
+        case TY_WEAK:
+        case TY_ENUM: return true;
+        case TY_OPT: return capturable(t->elem);
+        // 注意: fn の値は捕まえません。その値がさらに借りているものを、
+        //   所有権検査が追えなくなるためです。
         default: return false;
     }
 }
@@ -5861,7 +6302,7 @@ static FuncSig *instantiate_lambda(Sema *s, FuncSig *tmpl, Node *ref) {
             d.message = MSG2("sema.343", "'{0}' は捕まえられません（'{1}' 型）", c->name, type_name(c->type));
             d.primary.tok = ref->tok;
             d.primary.label = MSG0("sema.593", "この lambda が外の変数を使っています");
-            d.hint = MSG0("sema.594", "捕まえられるのは値型だけです（int / float / bool / 列挙 / 範囲型）。それ以外は引数で受け取るか、def で書いた関数にしてください");
+            d.hint = MSG0("sema.642", "関数の値・Thread・mutex・ptr は捕まえられません。引数で受け取るか、def で書いた関数にしてください");
             diag_fail(&d);
         }
         ncap++;

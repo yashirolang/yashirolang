@@ -192,7 +192,7 @@ static void emit_drops_until(Emitter *e, struct ScopeCtx *stop);
 static void emit_default_ret(Emitter *e);
 static char *deref_rc(Emitter *e, Type *t, char *v);
 static char *maybe_retain(Emitter *e, Node *rhs, char *val);
-static char *force_retain(Emitter *e, char *val);
+static char *force_retain(Emitter *e, Type *ty, char *val);
 
 // 新しい一時値の名前を返す（"%t0", "%t1", ...）
 //
@@ -234,6 +234,7 @@ static const char *llvm_type(Type *t) {
         case TY_CLASS: return "ptr";  // インスタンスへのポインタ
         case TY_OPT: return "ptr";    // T | None。None は null
         case TY_RC: return "ptr";     // rc[T]
+        case TY_WEAK: return "ptr";   // weak[T]（rc と同じ箱へのポインタ。A-50）
         case TY_PTR: return "ptr";    // ptr[T]（生ポインタ）
         case TY_THREAD: return "ptr"; // Thread[R]（PlThread への不透明な参照）
         case TY_MUTEX: return "ptr";  // mutex[T]（PlMutex への不透明な参照）
@@ -264,6 +265,7 @@ static const char *llvm_mem_type(Type *t) {
         case TY_CLASS: return "ptr";
         case TY_OPT: return "ptr";
         case TY_RC: return "ptr";     // 数え札付きの箱へのポインタ
+        case TY_WEAK: return "ptr";
         case TY_PTR: return "ptr";
         case TY_THREAD: return "ptr";
         case TY_MUTEX: return "ptr";
@@ -1522,7 +1524,7 @@ static bool elem_is_ptr(Type *elem) {
     //   （list[Thread[R]] は spawn した本数を並べる、いちばん自然な形です）
     return elem->kind == TY_STR || elem->kind == TY_LIST ||
            elem->kind == TY_CLASS || elem->kind == TY_OPT ||
-           elem->kind == TY_RC || elem->kind == TY_NULL ||
+           elem->kind == TY_RC || elem->kind == TY_WEAK || elem->kind == TY_NULL ||
            elem->kind == TY_IFACE || elem->kind == TY_TUPLE ||
            elem->kind == TY_THREAD || elem->kind == TY_MUTEX;
 }
@@ -1622,6 +1624,41 @@ static char *gen_list_lit(Emitter *e, Node *n) {
 //   結果は φ で合流します：最後まで回った道は all なら true / any なら false、
 //   途中で止まった道はその逆です。
 //   注意: 対になる定義は selfhost/codegen の gen_quant です（IR は 1 バイトも違えません）。
+static char *gen_stmt(Emitter *e, Node *n);
+
+// 内包表記の受け取る名前の分解（A-47）。ループ変数を束縛した直後に通します。
+static void gen_comp_unpack(Emitter *e, Node *n) {
+    for (Node *u = n->incr; u; u = u->next) gen_stmt(e, u);
+}
+
+// ★ range の増分が変数のとき（A-46。構文解析器が ival = 0 を印にしています）。
+//   増分を 1 回だけ評価し、0 なら実行時に止めます（pl_range_step）。
+//   注意: 対になる定義は selfhost/codegen の gen_range_step です。
+static char *gen_range_step(Emitter *e, Node *step) {
+    declare_rt(e, "i64 @pl_range_step(i64)");
+    char *v = gen_expr(e, step);
+    char *t = new_tmp(e);
+    sb_printf(&e->fn, "  %s = call i64 @pl_range_step(i64 %s)\n", t, v);
+    return t;
+}
+
+// 範囲の条件。増分がリテラルなら向きは決まっていて、変数なら select で選びます。
+static char *gen_range_go(Emitter *e, Node *n, char *i, char *stop, char *st) {
+    char *go = new_tmp(e);
+    if (!st) {
+        sb_printf(&e->fn, "  %s = icmp %s i64 %s, %s\n", go, n->ival > 0 ? "slt" : "sgt", i, stop);
+        return go;
+    }
+    char *lt = new_tmp(e);
+    sb_printf(&e->fn, "  %s = icmp slt i64 %s, %s\n", lt, i, stop);
+    char *gt = new_tmp(e);
+    sb_printf(&e->fn, "  %s = icmp sgt i64 %s, %s\n", gt, i, stop);
+    char *up = new_tmp(e);
+    sb_printf(&e->fn, "  %s = icmp sgt i64 %s, 0\n", up, st);
+    sb_printf(&e->fn, "  %s = select i1 %s, i1 %s, i1 %s\n", go, up, lt, gt);
+    return go;
+}
+
 static char *gen_quant(Emitter *e, Node *n) {
     Node *lv = n->body;
     Node *res = lv->next;
@@ -1640,10 +1677,11 @@ static char *gen_quant(Emitter *e, Node *n) {
     snprintf(keep_l, sizeof(keep_l), "quant.keep.%d", id);
     snprintf(stop_l, sizeof(stop_l), "quant.stop.%d", id);
 
-    char *it = NULL, *stop = NULL;
+    char *it = NULL, *stop = NULL, *st = NULL;
     if (n->args) {
         char *start = gen_expr(e, n->args);
         stop = gen_expr(e, n->args->next);
+        if (n->ival == 0) st = gen_range_step(e, n->args->next->next);
         sb_printf(&e->fn, "  store i64 %s, ptr %s\n", start, ix->ir_name);
     } else {
         it = gen_expr(e, n->rhs);
@@ -1653,10 +1691,11 @@ static char *gen_quant(Emitter *e, Node *n) {
     emit_label(e, cond_l);
     char *i = new_tmp(e);
     sb_printf(&e->fn, "  %s = load i64, ptr %s\n", i, ix->ir_name);
-    char *go = new_tmp(e);
+    char *go;
     if (n->args) {
-        sb_printf(&e->fn, "  %s = icmp %s i64 %s, %s\n", go, n->ival > 0 ? "slt" : "sgt", i, stop);
+        go = gen_range_go(e, n, i, stop, st);
     } else {
+        go = new_tmp(e);
         char *lenp = new_tmp(e);
         sb_printf(&e->fn, "  %s = getelementptr i8, ptr %s, i64 8\n", lenp, it);
         char *len = new_tmp(e);
@@ -1674,6 +1713,7 @@ static char *gen_quant(Emitter *e, Node *n) {
         sb_printf(&e->fn, "  %s = load %s, ptr %s" TBAA_LISTELEM "\n", v, sty, ep);
         gen_store(e, elem, slot_to_elem(e, elem, v), lv->ir_name);
     }
+    gen_comp_unpack(e, n);
     if (n->els) {
         char *c = gen_expr(e, n->els);
         emit_cond_br(e, c, keep_l, next_l);
@@ -1688,7 +1728,8 @@ static char *gen_quant(Emitter *e, Node *n) {
     char *i2 = new_tmp(e);
     sb_printf(&e->fn, "  %s = load i64, ptr %s\n", i2, ix->ir_name);
     char *i3 = new_tmp(e);
-    sb_printf(&e->fn, "  %s = add i64 %s, %lld\n", i3, i2, n->args ? n->ival : 1);
+    if (st) sb_printf(&e->fn, "  %s = add i64 %s, %s\n", i3, i2, st);
+    else sb_printf(&e->fn, "  %s = add i64 %s, %lld\n", i3, i2, n->args ? n->ival : 1);
     sb_printf(&e->fn, "  store i64 %s, ptr %s\n", i3, ix->ir_name);
     sb_printf(&e->fn, "  br label %%%s\n", cond_l);
     e->terminated = true;
@@ -1733,10 +1774,11 @@ static char *gen_listcomp(Emitter *e, Node *n) {
     declare_rt(e, sb_str(&sig));
 
     // 注意: 対象（list）と range の端は **ループの外で 1 回だけ**評価します。
-    char *it = NULL, *stop = NULL;
+    char *it = NULL, *stop = NULL, *st = NULL;
     if (n->args) {
         char *start = gen_expr(e, n->args);
         stop = gen_expr(e, n->args->next);
+        if (n->ival == 0) st = gen_range_step(e, n->args->next->next);
         sb_printf(&e->fn, "  store i64 %s, ptr %s\n", start, ix->ir_name);
     } else {
         it = gen_expr(e, n->rhs);
@@ -1746,12 +1788,12 @@ static char *gen_listcomp(Emitter *e, Node *n) {
     emit_label(e, cond_l);
     char *i = new_tmp(e);
     sb_printf(&e->fn, "  %s = load i64, ptr %s\n", i, ix->ir_name);
-    char *go = new_tmp(e);
+    char *go;
     if (n->args) {
-        // 増分の符号で向きが変わります（構文解析器が定数だと確かめています）
-        sb_printf(&e->fn, "  %s = icmp %s i64 %s, %s\n", go,
-                  n->ival > 0 ? "slt" : "sgt", i, stop);
+        // 増分の符号で向きが変わります（変数なら実行時に選びます。A-46）
+        go = gen_range_go(e, n, i, stop, st);
     } else {
+        go = new_tmp(e);
         char *lenp = new_tmp(e);
         sb_printf(&e->fn, "  %s = getelementptr i8, ptr %s, i64 8\n", lenp, it);
         char *len = new_tmp(e);
@@ -1770,6 +1812,7 @@ static char *gen_listcomp(Emitter *e, Node *n) {
         sb_printf(&e->fn, "  %s = load %s, ptr %s" TBAA_LISTELEM "\n", v, sty, ep);
         gen_store(e, elem, slot_to_elem(e, elem, v), lv->ir_name);
     }
+    gen_comp_unpack(e, n);
 
     // if の条件（あれば）
     if (n->els) {
@@ -1789,8 +1832,9 @@ static char *gen_listcomp(Emitter *e, Node *n) {
     sb_printf(&e->fn, "  %s = load i64, ptr %s\n", i2, ix->ir_name);
     char *i3 = new_tmp(e);
     // 注意: ここは桁あふれ検査を出しません（長さ／終端までしか進まないため）。
-    sb_printf(&e->fn, "  %s = add i64 %s, %lld\n", i3, i2,
-              n->args ? n->ival : 1);
+    if (st) sb_printf(&e->fn, "  %s = add i64 %s, %s\n", i3, i2, st);
+    else sb_printf(&e->fn, "  %s = add i64 %s, %lld\n", i3, i2,
+                   n->args ? n->ival : 1);
     sb_printf(&e->fn, "  store i64 %s, ptr %s\n", i3, ix->ir_name);
     sb_printf(&e->fn, "  br label %%%s\n", cond_l);
     e->terminated = true;
@@ -2399,7 +2443,7 @@ static void gen_args(Emitter *e, Node *args, StrBuf *vals, StrBuf *types,
         // ★ rc[T] を own の仮引数へ渡すときは、参照を 1 つ増やして渡します。
         //   rc[T] は移動しないので（ownck は共有として扱う）、増やさないと
         //   受け取った側の「出口で手放す」だけが残り、二重解放になります。
-        if (e->drop && a->arg_own_rc) v = force_retain(e, v);
+        if (e->drop && a->arg_own_rc) v = force_retain(e, a->type, v);
         sb_printf(vals, "%s%s %s", first ? "" : ", ", llvm_type(a->type), v);
         sb_printf(types, "%s%s", first ? "" : ", ", llvm_type(a->type));
         first = false;
@@ -2529,6 +2573,15 @@ static char *gen_method(Emitter *e, Node *n) {
     // ★ Thread[R].join() / mutex[T].lock(f)（A-18）
     if (n->lhs && n->lhs->type) {
         Type *ot = n->lhs->type;
+        // ★ weak[T].upgrade()（A-50）。生きていれば strong を 1 つ増やして返す
+        if (ot->kind == TY_WEAK) {
+            char *w = gen_expr(e, n->lhs);
+            declare_rt(e, "ptr @pl_rc_upgrade(ptr)");
+            char *r = new_tmp(e);
+            sb_printf(&e->fn, "  %s = call ptr @pl_rc_upgrade(ptr %s)\n", r, w);
+            drop_temp(e, n->lhs, w);
+            return r;
+        }
         if (ot->kind == TY_THREAD) {
             char *h = gen_expr(e, n->lhs);
             declare_rt(e, "i64 @pl_thread_join(ptr)");
@@ -2723,15 +2776,27 @@ static char *gen_method(Emitter *e, Node *n) {
 //   nullable な rc を共有すると数が足りず、`--drop` で早すぎる解放になりました。
 static bool ty_is_rc_shared(Type *t) {
     if (!t) return false;
-    if (t->kind == TY_RC) return true;
-    return t->kind == TY_OPT && t->elem && t->elem->kind == TY_RC;
+    if (t->kind == TY_RC || t->kind == TY_WEAK) return true;
+    return t->kind == TY_OPT && t->elem &&
+           (t->elem->kind == TY_RC || t->elem->kind == TY_WEAK);
+}
+
+// 参照を 1 つ増やす関数。weak[T] は弱い数え札のほうを増やします（A-50）
+static const char *retain_rt(Emitter *e, Type *t) {
+    Type *b = t && t->kind == TY_OPT ? t->elem : t;
+    if (b && b->kind == TY_WEAK) {
+        declare_rt(e, "ptr @pl_rc_weak_retain(ptr)");
+        return "pl_rc_weak_retain";
+    }
+    declare_rt(e, "ptr @pl_rc_retain(ptr)");
+    return "pl_rc_retain";
 }
 
 // 参照を 1 つ増やす（場所かどうかを問わない）。
-static char *force_retain(Emitter *e, char *val) {
-    declare_rt(e, "ptr @pl_rc_retain(ptr)");
+static char *force_retain(Emitter *e, Type *ty, char *val) {
+    const char *fn = retain_rt(e, ty);
     char *t = new_tmp(e);
-    sb_printf(&e->fn, "  %s = call ptr @pl_rc_retain(ptr %s)\n", t, val);
+    sb_printf(&e->fn, "  %s = call ptr @%s(ptr %s)\n", t, fn, val);
     return t;
 }
 
@@ -2739,9 +2804,9 @@ static char *maybe_retain(Emitter *e, Node *rhs, char *val) {
     if (!e->drop || !rhs || !ty_is_rc_shared(rhs->type)) return val;
     if (rhs->kind != ND_VAR && rhs->kind != ND_FIELD && rhs->kind != ND_INDEX)
         return val;
-    declare_rt(e, "ptr @pl_rc_retain(ptr)");
+    const char *fn = retain_rt(e, rhs->type);
     char *t = new_tmp(e);
-    sb_printf(&e->fn, "  %s = call ptr @pl_rc_retain(ptr %s)\n", t, val);
+    sb_printf(&e->fn, "  %s = call ptr @%s(ptr %s)\n", t, fn, val);
     return t;
 }
 
@@ -2952,7 +3017,7 @@ static char *gen_new(Emitter *e, Node *n) {
         char *v = gen_expr(e, a);
         // ★ gen_args と同じ理由で、own の仮引数へ渡す rc[T] は参照 +1。
         //   （生成は init を直に呼ぶので、gen_args を通りません）
-        if (e->drop && a->arg_own_rc) v = force_retain(e, v);
+        if (e->drop && a->arg_own_rc) v = force_retain(e, a->type, v);
         sb_printf(&args, ", %s %s", llvm_type(a->type), v);
         sb_printf(&ptypes, ", %s", llvm_type(a->type));
     }
@@ -3535,6 +3600,10 @@ static const char *drop_fn_for(Emitter *e, Type *t) {
             return "@pl_drop_str";
         case TY_LIST: return gen_list_drop(e, t);
         case TY_RC: return gen_rc_drop(e, t);
+        // ★ 弱参照は中身の型によらず同じ手放し方です（A-50）
+        case TY_WEAK:
+            declare_rt(e, "void @pl_rc_weak_release(ptr)");
+            return "@pl_rc_weak_release";
         case TY_CLASS: return gen_class_drop(e, t->cls);
         // ★ 中身を持つ列挙（A-41）。名前だけの列挙は i64 なので何もしません。
         case TY_ENUM: return t->en && t->en->has_payload ? gen_enum_drop(e, t) : NULL;
@@ -3610,6 +3679,7 @@ static bool is_droppable(Node *decl) {
            (decl->type->kind == TY_STR || decl->type->kind == TY_LIST ||
             decl->type->kind == TY_CLASS || decl->type->kind == TY_OPT ||
             decl->type->kind == TY_RC ||   // rc[T] はカウントを減らす
+            decl->type->kind == TY_WEAK || // weak[T] は弱い数え札を減らす（A-50）
             payload_enum);
 }
 
@@ -4669,6 +4739,9 @@ static char *gen_call(Emitter *e, Node *n) {
         sb_init(&t2);
         sb_printf(&a2, "ptr %s", clo);
         gen_args(e, n->args, &a2, &t2, false);   // 先頭は記録なので first=false
+        // ★ 失敗しうる関数の値（A-49）。エラースロットを渡して、戻ったら
+        //   タグを見る段取りは、名前で呼ぶときと同じです。
+        if (n->can_fail) return emit_call_to(e, n, fp, sb_str(&a2));
         if (n->type->kind == TY_NONE) {
             sb_printf(&e->fn, "  call void %s(%s)\n", fp, sb_str(&a2));
             return NULL;
@@ -4720,6 +4793,16 @@ static char *gen_call(Emitter *e, Node *n) {
         declare_rt(e, "ptr @pl_mutex_new(i64)");
         char *t = new_tmp(e);
         sb_printf(&e->fn, "  %s = call ptr @pl_mutex_new(i64 %s)\n", t, vi);
+        return t;
+    }
+
+    // ★ weak(r) — 弱参照を作る（A-50）。r は借りるだけです
+    if (!n->ir_name && strcmp(n->name, "weak") == 0 && n->type && n->type->kind == TY_WEAK) {
+        char *v = gen_expr(e, n->args);
+        declare_rt(e, "ptr @pl_rc_weak_new(ptr)");
+        char *t = new_tmp(e);
+        sb_printf(&e->fn, "  %s = call ptr @pl_rc_weak_new(ptr %s)\n", t, v);
+        drop_temp(e, n->args, v);
         return t;
     }
 
@@ -4918,6 +5001,11 @@ static const char *closure_ref(Emitter *e, const char *ir_name, Type *ft) {
     for (int i = 0; i < ft->nparams; i++) {
         sb_printf(&params, ", %s %%a%d", llvm_type(ft->params[i]), i);
         sb_printf(&argl, "%s%s %%a%d", i ? ", " : "", llvm_type(ft->params[i]), i);
+    }
+    // ★ 失敗しうる関数（A-49）。エラー出力の ptr を末尾でそのまま渡します
+    if (ft->nraises > 0) {
+        sb_printf(&params, ", ptr %%err");
+        sb_printf(&argl, "%sptr %%err", ft->nparams ? ", " : "");
     }
 
     StrBuf b;
@@ -5367,6 +5455,9 @@ static void collect_allocas(Emitter *e, Node *n) {
     //   （"use of undefined value" で clang に叱られて気づきました）。
     for (Node *a = n->args; a; a = a->next) collect_allocas(e, a);
     for (Node *s = n->body; s; s = s->next) collect_allocas(e, s);
+    // ★ 内包表記の分解（A-47）。受け取る名前の箱が要ります
+    if (n->kind == ND_LISTCOMP)
+        for (Node *u = n->incr; u; u = u->next) collect_allocas(e, u);
 }
 
 // ── 関数の生成 ──────────────────────────────────────────────

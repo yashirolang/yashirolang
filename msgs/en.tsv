@@ -78,8 +78,6 @@ parse.011	write a comprehension as [expr for var in iterable]	内包表記は [�
 parse.012	expected 'in'	'in' が必要です
 parse.013	wrong number of arguments to range	range の引数の個数が違います
 parse.014	range takes 1 to 3 arguments	range は 1〜3 個の引数を取ります
-parse.015	the step of range is not a constant	range の増分が定数ではありません
-parse.016	write the step as an integer literal (e.g. range(0, 10, 2)); use a for statement if you need a variable	増分は整数リテラルで書いてください（例: range(0, 10, 2)）。変数を使いたい場合は for 文で書けます
 parse.017	the step of range cannot be 0	range の増分に 0 は使えません
 parse.018	a step of 0 would loop forever	増分が 0 だと無限ループになります
 parse.019	the comprehension has two 'for's	内包表記の 'for' が 2 つあります
@@ -103,10 +101,8 @@ parse.036	expected ':' after {0}	{0}の後に ':' が必要です
 parse.037	match cannot be empty	空の match は書けません
 parse.038	write at least one case	case を 1 つ以上書いてください
 parse.039	the loop variable of for is a name (e.g. for x in xs:)	for のループ変数は名前で書きます（例: for x in xs:）
-parse.040	expected the name of the second loop variable	2 つ目のループ変数の名前が必要です
 parse.041	write it as 'for i, x in enumerate(xs):'	書き方は 'for i, x in enumerate(xs):' です
 parse.042	write for as 'for var in iterable:'	for は「for 変数 in 対象:」の形で書きます
-parse.043	write the step as an integer literal (e.g. range(0, 10, 2)); use while if you need a variable	増分は整数リテラルで書いてください（例: range(0, 10, 2)）。変数を使いたい場合は while で書けます
 parse.044	expected a variable name	変数名が必要です
 parse.045	write a variable name after as (e.g. except IOError as e:)	as の後には変数名を書きます（例: except IOError as e:）
 parse.046	this try has no except	この try には except がありません
@@ -238,9 +234,6 @@ parse.171	the condition of if	if の条件
 parse.172	enumerate needs two loop variables	enumerate には 2 つのループ変数が必要です
 parse.173	it receives both the index and the element	添字と要素の 2 つを受け取ります
 parse.174	the target of for	for の対象
-parse.175	only enumerate allows two loop variables	ループ変数を 2 つ書けるのは enumerate だけです
-parse.176	expected enumerate(...) here	ここには enumerate(...) が必要です
-parse.177	there are no tuples; only 'for i, x in enumerate(xs):' is allowed	タプルはありません。'for i, x in enumerate(xs):' の形だけです
 parse.178	the condition of while	while の条件
 parse.179	write the error type to catch after except (e.g. except IOError:)	except には捕まえるエラーの型名を書きます（例: except IOError:）
 parse.180	no matching 'if' for this line	この行に対応する 'if' が見つかりません
@@ -322,6 +315,14 @@ parse.255	only def / class / import / extern and global variables are allowed at
 parse.256	statements cannot be written at the top level	トップレベルに実行文は書けません
 parse.257	only def / class / import / extern and global variables are allowed here	ここに書けるのは def / class / import / extern とグローバル変数だけです
 parse.258	put the code inside main:\n             def main() -> int:\n                 ...\n                 return 0	処理は main の中に書いてください:\n             def main() -> int:\n                 ...\n                 return 0
+parse.259	only one name inside the parentheses	括弧の中の名前が 1 つです
+parse.260	write two or more names inside the parentheses (e.g. a, (b, c) = t)	括弧の中には 2 つ以上の名前を書きます（例: a, (b, c) = t）
+parse.261	nested destructuring cannot be combined with comma-separated values on the right	入れ子の分解と、カンマで並べた右辺は一緒に使えません
+parse.262	write nested destructuring as 'a, (b, c) = t', with a single tuple on the right	入れ子の分解は 'a, (b, c) = t' の形で、右辺をタプル 1 つにしてください
+parse.263	enumerate gives an index and an element (two names)	enumerate で受け取るのは添字と要素の 2 つです
+parse.264	put parentheses around the element to destructure it (e.g. for i, (a, b) in enumerate(pairs):)	要素を分解するときは括弧で囲みます（例: for i, (a, b) in enumerate(pairs):）
+parse.265	case _ cannot have an if guard	case _ には if を書けません
+parse.266	put the condition on a branch or a value instead (e.g. case Shape.Circle(r) if r > 0:)	条件で絞りたいときは、枝や値のほうに書きます（例: case Shape.Circle(r) if r > 0:）
 
 # ── モジュールの読み込み ──
 mod.001	found in:	見つかった場所:
@@ -419,7 +420,6 @@ sema.073	define '__contains__(self, x) -> bool' on class '{0}' to use 'in'	ク�
 sema.074	this has type '{0}'	こちらは '{0}' 型です
 sema.075	unary operator '{1}' cannot be applied to type '{0}'	型 '{0}' に単項演算子 '{1}' は適用できません
 sema.076	'{0}' takes type arguments, so it cannot be used as a value	'{0}' は型引数を取る関数なので、値にできません
-sema.077	'{0}' raises, so it cannot be used as a value	'{0}' は raises する関数なので値にできません
 sema.078	module '{0}' cannot be used as a value	モジュール '{0}' は値として使えません
 sema.079	use the module's contents as '{0}.name'	モジュールの中身は '{0}.名前' の形で使います
 sema.080	a lambda cannot use the outer variable '{0}'	lambda の中から外の変数 '{0}' は使えません
@@ -739,7 +739,6 @@ sema.393	this function returns no value	この関数は値を返しません
 sema.394	make it an ensures that does not look at the return value (e.g. a condition on globals), or give the function a return type	戻り値を見ない ensures（グローバルの条件など）にするか、戻り型を付けてください
 sema.395	cannot be used as a value here	ここでは値として使えません
 sema.396	to be used as a value, its type must be uniquely determined (in a call it is determined from the arguments)	値にするには型が 1 つに決まっている必要があります（呼び出しなら実引数から決まります）
-sema.397	function types cannot carry errors (wrap it in a function that does not raise)	関数型はエラーの受け渡しを表せません（raises しない関数で包んでください）
 sema.398	a module name cannot be written here	ここにはモジュール名を書けません
 sema.399	this module is not visible from here	このモジュールはここからは見えません
 sema.400	this name is from outside the lambda	この名前は lambda の外のものです
@@ -857,7 +856,7 @@ sema.511	this is the enum being matched	調べている列挙はこれです
 sema.512	the number of values does not match	中身の数が合っていません
 sema.513	write names for the values of a case	case の中身には名前を書きます
 sema.514	this is not a name	ここは名前ではありません
-sema.515	write names to bind (e.g. case Shape.Circle(r):). To filter by value, use if in the body	束縛する名前を書きます（例: case Shape.Circle(r):）。値で絞りたいときは本体で if を使ってください
+sema.515	write a name to bind (e.g. case Shape.Circle(r):); to filter by value, use a guard (e.g. case Shape.Circle(r) if r > 0:)	束縛する名前を書きます（例: case Shape.Circle(r):）。値で絞りたいときはガードを使ってください（例: case Shape.Circle(r) if r > 0:）
 sema.516	second one	2 つめです
 sema.517	first one here	最初はここです
 sema.518	this for uses that protocol	この for がその規約を使います
@@ -936,7 +935,6 @@ sema.590	cannot determine what kind of function this lambda is	この lambda が
 sema.591	the parameter and return types cannot be determined here	ここでは引数と戻り値の型が決まりません
 sema.592	put it in a variable with a type annotation, or pass it to a parameter of function type:\n             p: fn(int) -> bool = lambda x: x > 0\n             count_if(xs, lambda x: x > 0)	型注釈のある変数に入れるか、関数型の引数に渡してください:\n             p: fn(int) -> bool = lambda x: x > 0\n             count_if(xs, lambda x: x > 0)
 sema.593	this lambda uses an outer variable	この lambda が外の変数を使っています
-sema.594	only value types can be captured (int / float / bool / enum / range types). Take anything else as a parameter, or write a def function	捕まえられるのは値型だけです（int / float / bool / 列挙 / 範囲型）。それ以外は引数で受け取るか、def で書いた関数にしてください
 sema.595	cannot be determined from the arguments	実引数から決まりません
 sema.596	the function is defined here	この関数の定義です
 sema.597	type arguments are determined **from the parameter types** (a type parameter that appears only in the return type is not allowed)	型引数は **引数の型から**決まります（戻り型にしか現れない型引数は書けません）
@@ -959,6 +957,32 @@ sema.613	this parameter also needs a default value	この引数にも既定値�
 sema.614	put parameters with default values at the end (otherwise arguments cannot be matched from the front)	既定値のある引数は後ろにまとめてください（そうしないと、前から順に当てられません）
 sema.615	there are two enums with the same name	同じ名前の列挙が 2 つあります
 sema.616	there are two range types with the same name	同じ名前の範囲型が 2 つあります
+sema.617	no case matches when the guard is false	ガードが外れたときに当たる case がありません
+sema.618	when this condition is false, there is nowhere to go	この条件が偽のとき、どこへも行けません
+sema.619	add another case for the same branch, or case _:, after this one	後ろに同じ枝の case か case _: を書いてください
+sema.620	cases for the same branch have different numbers of fields	同じ枝の case で、中身の数が違います
+sema.621	'{0}' can fail, so it cannot be passed to {1}	'{0}' は失敗しうる関数なので、{1} に渡せません
+sema.622	nothing there can handle the error	渡した先には、エラーを受け止める相手がいません
+sema.623	catch the error with try inside the function	関数の中で try を使ってエラーを受け止めてください
+sema.624	this function can fail ('{0}'); it does not fit a function type that cannot fail	この関数は失敗しえます（'{0}'）。失敗しない関数の型には入りません
+sema.625	the errors it can raise are different; '{0}' is required here	投げうるエラーが違います。ここには '{0}' が必要です
+sema.626	weak needs an element type	weak には中身の型が必要です
+sema.627	write the element type (e.g. weak[Node])	中身の型を書いてください（例: weak[Node]）
+sema.628	'{0}' cannot be made weak	'{0}' は weak にできません
+sema.629	only classes can be held by weak (e.g. weak[Node])	weak に入れられるのはクラスだけです（例: weak[Node]）
+sema.630	weak takes 1 argument	weak は 1 個の引数を取ります
+sema.631	use it as weak(r), where r is an rc[T]	weak(r) の形で使ってください（r は rc[T]）
+sema.632	cannot make a weak reference from '{0}'	'{0}' から弱参照は作れません
+sema.633	an rc[T] is required here	ここには rc[T] が必要です
+sema.634	a weak reference points to a shared value (rc[T]); wrap it with rc(...) first	弱参照は共有している値（rc[T]）を指します。先に rc(...) で包んでください
+sema.635	'weak' has no '{0}'	'weak' に '{0}' はありません
+sema.636	weak only has upgrade() (use upgrade() to get an rc[T] back before using the value)	weak にあるのは upgrade() だけです（中身を使うには upgrade() で rc[T] に戻します）
+sema.637	upgrade takes no arguments	upgrade は引数を取りません
+sema.638	use it as w.upgrade()	w.upgrade() の形で使ってください
+sema.639	a lambda that borrows '{0}' cannot be received by assignment	'{0}' を借りて捕まえた lambda は、代入では受け取れません
+sema.640	assigned to an existing variable here	ここで既にある変数へ入れています
+sema.641	receive it in a new variable declaration (e.g. f2: fn(int) -> int = lambda x: …)	新しい変数の宣言で受け取ってください（例: f2: fn(int) -> int = lambda x: …）
+sema.642	function values, Thread, mutex and ptr cannot be captured; take it as a parameter or write a def function	関数の値・Thread・mutex・ptr は捕まえられません。引数で受け取るか、def で書いた関数にしてください
 
 # ── 所有権・借用の検査 ──
 own.001	use of possibly moved value '{0}'	移動済みかもしれない値 '{0}' を使っています

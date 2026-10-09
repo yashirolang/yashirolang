@@ -1,0 +1,15 @@
+# OUTPUT: 2
+# OUTPUT: c!
+# OUTPUT: True
+# OUTPUT: 11
+# A-47: 内包表記と量化子でも分解できます。
+def main() -> int:
+    ps: list[(int, str)] = [(1, "a"), (2, "b"), (3, "c")]
+    xs: list[str] = [s + "!" for n, s in ps if n != 2]
+    print(str(len(xs)))
+    print(xs[1])
+    print(all(n > 0 for n, s in ps))
+    qs: list[(int, (int, str))] = [(1, (10, "x"))]
+    ys: list[int] = [a + b for a, (b, c) in qs]
+    print(str(ys[0]))
+    return 0

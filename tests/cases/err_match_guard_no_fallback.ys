@@ -1,0 +1,14 @@
+# ERROR: ガードが外れたときに当たる case がありません
+enum Shape:
+    Circle(r: int)
+    Dot
+
+def f(s: Shape) -> int:
+    match s:
+        case Shape.Circle(r) if r > 0:
+            return r
+        case Shape.Dot:
+            return 0
+
+def main() -> int:
+    return 0

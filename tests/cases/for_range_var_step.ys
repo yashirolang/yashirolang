@@ -1,0 +1,24 @@
+# OUTPUT: 0
+# OUTPUT: 3
+# OUTPUT: 6
+# OUTPUT: 9
+# OUTPUT: 5
+# OUTPUT: 3
+# OUTPUT: 1
+# OUTPUT: 2
+# A-46: range の増分に変数を書けます。向きは実行時に決まります。
+#   continue は増分ぶん進めてから条件に戻ります（脱糖の incr）。
+def main() -> int:
+    k: int = 3
+    for i in range(0, 10, k):
+        print(i)
+    d: int = -2
+    for i in range(5, 0, d):
+        print(i)
+    c: int = 0
+    for i in range(0, 9, k):
+        if i == 3:
+            continue
+        c += 1
+    print(c)
+    return 0

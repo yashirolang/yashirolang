@@ -1,0 +1,29 @@
+# OUTPUT: hi bob
+# OUTPUT: 1
+# OUTPUT: ann!
+# A-51: str / list / クラスも捕まえられます（借りて捕まえる。写しも確保もしません）。
+class P:
+    name: str
+    def init(self, name: own str) -> None:
+        self.name = name
+
+def count_if(xs: list[int], f: fn(int) -> bool) -> int:
+    n: int = 0
+    for x in xs:
+        if f(x):
+            n += 1
+    return n
+
+def apply(f: fn(str) -> str, s: str) -> str:
+    return f(s)
+
+def main() -> int:
+    prefix: str = "hi " + ""
+    greet: fn(str) -> str = lambda who: prefix + who
+    print(greet("bob"))
+    limits: list[int] = [2, 4]
+    xs: list[int] = [1, 2, 3, 4, 5]
+    print(count_if(xs, lambda x: x > limits[0] and x < limits[1]))
+    p: P = P("ann" + "")
+    print(apply(lambda s: p.name + s, "!"))
+    return 0

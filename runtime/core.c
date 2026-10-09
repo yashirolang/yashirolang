@@ -1022,6 +1022,13 @@ _Noreturn void pl_fdiv_zero_fail(void) {
     pl_panic(pl_t("float を 0 で割りました", "float division by zero"));
 }
 
+// ★ range の増分が変数のときの検査（A-46）。0 なら止めます（Python の ValueError と同じ場面）。
+//   注意: 増分がリテラルのときは構文解析の時点で断るので、ここには来ません。
+long long pl_range_step(long long step) {
+    if (step == 0) pl_panic(pl_t("range の増分が 0 です", "range() step must not be zero"));
+    return step;
+}
+
 long long pl_ord(const char *s) {
     if (s[0] == '\0') pl_panic(pl_t("ord(): 空の文字列です", "ord(): empty string"));
     return (long long)(unsigned char)s[0];
@@ -1857,10 +1864,16 @@ char *pl_str_copy(const char *s) {
 // 注意: 設計（ownership.md §7）では「中身を埋め込む」形にしていましたが、
 //    本言語の所有型はすべてポインタなので、**ポインタを 1 本持つ**ほうが
 //    型ごとのレイアウト計算が要らず、どの型でも同じ形になります。
+//
+// ★ 末尾に weak の数え札があります（A-50）。**前の 3 つの位置は変えていません**
+//   （codegen は中身をオフセット 16 で読みます）。中身は strong が 0 になったら
+//   解放し、箱そのものは weak も 0 になるまで残します（upgrade が「もう無い」と
+//   答えられるように）。
 typedef struct {
     long long strong;
     long long borrow;
     void *value;
+    long long weak;
 } PlRc;
 
 void *pl_rc_new(void *value) {
@@ -1868,6 +1881,7 @@ void *pl_rc_new(void *value) {
     r->strong = 1;
     r->borrow = 0;
     r->value = value;
+    r->weak = 0;
     return r;
 }
 
@@ -1897,8 +1911,48 @@ void pl_rc_release(void *p, void (*value_drop)(void *)) {
     r->strong--;
     if (r->strong > 0) return;
     if (r->borrow > 0) pl_panic(pl_t("rc: 借用したまま解放されました", "rc: freed while borrowed"));
-    if (value_drop) value_drop(r->value);
-    pl_hook_free(r);
+    // ★ 中身を解放するあいだは、箱を weak で 1 つ押さえておきます（A-50）。
+    //   中身が自分への弱参照を持っていると（親を指す子など）、その解放で
+    //   weak が 0 になり、ここで箱が先に消えてしまうためです。
+    r->weak++;
+    void *v = r->value;
+    r->value = NULL;
+    if (value_drop) value_drop(v);
+    r->weak--;
+    if (r->weak == 0) pl_hook_free(r);
+}
+
+// ── 弱参照 weak[T]（A-50）──
+//
+// ★ 同じ箱を指します。中身を生かしておく力は持ちません。
+
+// weak(r) — 弱参照を作る
+void *pl_rc_weak_new(void *p) {
+    if (p) ((PlRc *)p)->weak++;
+    return p;
+}
+
+// 弱参照を写す（保存・返却で 1 つ増やす。pl_rc_retain と同じ役）
+void *pl_rc_weak_retain(void *p) {
+    if (p) ((PlRc *)p)->weak++;
+    return p;
+}
+
+// 弱参照を手放す。中身がもう無く、弱参照も最後なら箱を解放します
+void pl_rc_weak_release(void *p) {
+    if (!p) return;
+    PlRc *r = p;
+    r->weak--;
+    if (r->weak == 0 && r->strong == 0) pl_hook_free(r);
+}
+
+// w.upgrade() — 中身が生きていれば rc[T] を 1 つ作って返し、無ければ None
+void *pl_rc_upgrade(void *p) {
+    if (!p) return NULL;
+    PlRc *r = p;
+    if (r->strong == 0) return NULL;
+    r->strong++;
+    return r;
 }
 
 // 借用の数え札（仕様 §7.2。検査は**実行時**）

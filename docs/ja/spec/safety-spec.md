@@ -107,7 +107,7 @@ yashirolang は同じ保証を、**注釈をほぼ書かせずに**得ること�
 証明（SPARK 相当）は**入れません** — 証明器を同梱することになり、
 「clang だけで建つ」という約束が壊れるためです。
 
-**注意: 保証しないこと**：`rc[T]` の循環参照によるリーク（§7.4）、`unsafe:` の中身、
+**注意: 保証しないこと**：`rc[T]` の循環参照によるリーク（§7.4。弱参照 `weak[T]` で解けます：§7.5）、`unsafe:` の中身、
 `--no-overflow-check` を付けたときの桁あふれと float の 0 除算、
 `--warn-own` を付けたときの所有権の検査。
 
@@ -413,8 +413,29 @@ with node.borrow_mut() as n:   # 可変借用（1 つだけ。違反すれば pa
 
 ### 7.4 制限
 
-- 循環参照はリークします（弱参照 `weak[T]` は将来検討）
+- 循環参照はリークします。片方を弱参照（`weak[T]`。§7.5）にすれば解けます
 - OS 開発モード（§10.4）では既定で**使用禁止**にできます
+
+### 7.5 弱参照 `weak[T]`（A-50）
+
+```python
+class Node:
+    name: str
+    parent: weak[Node] | None       # 親は弱参照で指す
+    children: list[rc[Node]]
+
+c.parent = weak(p)                  # p: rc[Node]。p は借りるだけ
+pr: rc[Node] | None = w.upgrade()   # 中身が生きていれば rc、無ければ None
+```
+
+- `weak(r)` は `rc[T]` から弱参照を作ります。**中身を生かしておく力は持ちません**
+- 中身を使うときは `upgrade()` で `rc[T] | None` に戻します。最後の `rc[T]` が手放されて
+  いれば `None` です（フィールドを直接は読めません）
+- 親を指す・観察者の一覧のような「逆向きの参照」を弱参照にすると、循環しても解放されます
+- `rc[T]` と同じく共有型です（写すと数え札が増え、スコープを抜けると減ります）。
+  スレッドには渡せません（`E-SEND-2`）
+- 表現：`rc[T]` と**同じ箱**を指します。箱の末尾に弱い数え札があり、中身は strong が 0 に
+  なったときに、箱は weak も 0 になったときに解放します
 
 ---
 
@@ -503,6 +524,34 @@ class Memory(Writer):
 呼べません」でした。**失敗しうる操作を差し替えられない**——書き出し先を
 差し替える `Writer`、再試行する `Transport` が型で表せない——という穴だったので、
 0.34.0 で埋めました。
+
+
+### 8.3.6 失敗しうる関数の値（A-49）
+
+関数型にも `raises` を書けます。`raises` する関数をそのまま値にできます。
+
+```python
+def parse_pos(s: str) -> int raises ParseError:
+    ...
+
+def apply_all(f: fn(str) -> int raises ParseError, xs: list[str]) -> int:
+    total: int = 0
+    for x in xs:
+        try:
+            total += f(x)            # ← 呼ぶ側は try か raises で受け止める
+        except ParseError as e:
+            print(e.message)
+    return total
+
+print(apply_all(parse_pos, ["1", "2"]))
+```
+
+- **投げうるエラーは型の一部です。** `fn(str) -> int` と `fn(str) -> int raises ParseError` は
+  別の型で、互いに代入できません（エラーの集合が同じなら、書く順は問いません）
+- 関数の値を呼ぶときも §8.2 の検査が働きます（型に書いた `raises` で決まります）
+- 失敗しうる関数の値は `spawn` と `mutex` の `lock` に渡せません（渡した先にエラーを
+  受け止める相手がいないため）。関数の中で `try` を使ってください
+- `lambda` は `raises` できません（本体は式なので、`raise` を書く場所がありません）
 
 ### 8.4 `panic` との使い分け
 
@@ -670,4 +719,3 @@ help: どうしても両方で持ちたいなら 'ys = copy(xs)' か 'rc[list[in
 | `Send` / `Sync` に相当するトレイト | スレッドに渡せるかは「借りか・所有か・`rc` か」で決まるので、書くものを増やしません |
 | アンワインドする例外 | ベアメタルで使えなくなります。`raises` は戻り値検査に落ちます |
 | GC | OS 開発が目標のためです |
-| 弱参照（`weak[T]`） | `rc[T]` の循環参照を解く手段は、必要になってから設計します |

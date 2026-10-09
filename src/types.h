@@ -68,6 +68,13 @@ typedef enum {
     //   「型 'Color' は…」とエラーで止まります。
     TY_ENUM,    // enum Color → i64
 
+    // ── 弱参照（A-50）──
+    //
+    // ★ rc[T] と**同じ箱**を指します（ヒープの PlRc。末尾に weak の数え札）。
+    //   中身を生かしておく力は持たず、使うときは upgrade() で rc[T] | None に
+    //   戻します。循環参照（親を指す・観察者の一覧）を解放できるようにします。
+    TY_WEAK,    // weak[T] → ptr（PlRc へのポインタ）
+
 } TypeKind;
 
 // クラス定義の実体は ast.h にあります（フィールドの並びとメソッドを持つため）。
@@ -84,6 +91,10 @@ struct Type {
     //   （list[T] の要素型と同じ場所を使い回します）。
     Type **params;
     int nparams;
+    // ★ fn 型が投げうるエラー（`fn(int) -> int raises E`。A-49）。
+    //   型の同一性に含みます（集合として比べます）。
+    struct Class **raises;
+    int nraises;
 
     // list[T] の要素型。fn では **戻り型**です。
 
@@ -154,6 +165,7 @@ Type *type_list(Type *elem);
 
 // rc[T] を作る。list[T] と同じく、書かれた場所ごとに作ります。
 Type *type_rc(Type *elem);
+Type *type_weak(Type *elem);   // weak[T]（A-50）
 
 // ptr[T] を作る
 Type *type_ptr(Type *elem);

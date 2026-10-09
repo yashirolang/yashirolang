@@ -39,6 +39,7 @@ TY_MUTEX: int = 15   # mutex[T]  → ptr（ランタイムの PlMutex への不�
 #     全部「列挙も通す」意味になり、書き忘れた場所が静かに通ります。
 #   対になる定義: src/types.h の TY_ENUM
 TY_ENUM: int = 16    # enum Color → i64
+TY_WEAK: int = 17    # weak[T] → ptr（rc と同じ箱へのポインタ。A-50）
 
 # ★ プログラム全体のインタフェース・メソッド数（vtable の長さ）。
 #   注意: sema が数え、codegen が読みます（codegen の引数を増やさないための割り切り）。
@@ -55,6 +56,9 @@ class Type:
     opt: rc[Type] | None      # この型の「T | None」版（1 個だけ作る）
     # ★ 関数型の引数の並び（fn 以外では空）
     params: list[rc[Type]]
+    # ★ fn 型が投げうるエラー（A-49）。型の同一性に含む（集合として比べる）。
+    #   注意: 'raises' はキーワードなので名前を変えている（C 版は raises）。
+    err_classes: list[rc[Class]]
     # ── 範囲型（部分型。A-28）──
     #
     # ★ **kind は TY_INT のまま**。表現も i64 のままで、変わるのは
@@ -68,6 +72,7 @@ class Type:
         self.kind = kind
         self.name = ""
         self.params = []
+        self.err_classes = []
         self.lo = 0
         self.hi = 0
 
@@ -244,6 +249,12 @@ def type_rc(elem: rc[Type] | None) -> rc[Type]:
     t.elem = elem
     return t
 
+# weak[T]（A-50）。★ rc[T] と同じ作り
+def type_weak(elem: rc[Type] | None) -> rc[Type]:
+    t: rc[Type] = rc(Type(TY_WEAK))
+    t.elem = elem
+    return t
+
 # Thread[R]（elem は**戻り型**）と mutex[T]。★ rc[T] と同じ作り
 def type_thread(ret: rc[Type] | None) -> rc[Type]:
     t: rc[Type] = rc(Type(TY_THREAD))
@@ -286,7 +297,8 @@ def type_class(name: str, c: rc[Class] | None) -> rc[Type]:
 
 # nullable にできる型か（参照型だけ）
 def type_can_be_opt(t: rc[Type]) -> bool:
-    return t.kind == TY_STR or t.kind == TY_LIST or t.kind == TY_CLASS or t.kind == TY_RC
+    return (t.kind == TY_STR or t.kind == TY_LIST or t.kind == TY_CLASS or t.kind == TY_RC or
+            t.kind == TY_WEAK)
 
 def type_opt(elem: mut rc[Type]) -> rc[Type]:
     if elem.kind == TY_OPT:
@@ -327,8 +339,18 @@ def type_equal(a: rc[Type], b: rc[Type]) -> bool:
             if not type_equal(a.params[fi], b.params[fi]):
                 return False
             fi = fi + 1
+        # ★ 投げうるエラーも型の一部（A-49）。集合として比べる
+        if len(a.err_classes) != len(b.err_classes):
+            return False
+        for ac in a.err_classes:
+            found: bool = False
+            for bc in b.err_classes:
+                if ac == bc:
+                    found = True
+            if not found:
+                return False
         return type_equal(elem_of(a), elem_of(b))
-    if a.kind == TY_RC:
+    if a.kind == TY_RC or a.kind == TY_WEAK:
         return type_equal(elem_of(a), elem_of(b))
     # ★ Thread[R] / mutex[T] / ptr[T] も中身まで見る
     if a.kind == TY_THREAD or a.kind == TY_MUTEX or a.kind == TY_PTR:
@@ -430,7 +452,15 @@ def type_name(t: rc[Type]) -> str:
         ps: list[str] = []
         for pt in t.params:
             ps.append(type_name(pt))
-        return "fn(" + strings.join(ps, ", ") + ") -> " + type_name(elem_of(t))
+        fs: str = "fn(" + strings.join(ps, ", ") + ") -> " + type_name(elem_of(t))
+        ri: int = 0
+        for ec in t.err_classes:
+            if ri == 0:
+                fs = fs + " raises " + ec.name
+            else:
+                fs = fs + " | " + ec.name
+            ri = ri + 1
+        return fs
     if t.kind == TY_TUPLE:
         ts: list[str] = []
         for et in t.params:
@@ -442,6 +472,8 @@ def type_name(t: rc[Type]) -> str:
         return copy(t.name)
     if t.kind == TY_RC:
         return "rc[" + type_name(elem_of(t)) + "]"
+    if t.kind == TY_WEAK:
+        return "weak[" + type_name(elem_of(t)) + "]"
     if t.kind == TY_THREAD:
         return "Thread[" + type_name(elem_of(t)) + "]"
     if t.kind == TY_MUTEX:
@@ -761,6 +793,9 @@ class Node:
     has_payload: bool
     is_enum_branch: bool
     is_enum_view: bool
+    # ★ match の書き換え（A-48）が作った `case _`（届かなくても断らない）
+    #   対になる定義: src/ast.h の is_fallback
+    is_fallback: bool
 
     # 型注釈のモジュール修飾（ND_TYPEREF）
     mod_name: str
@@ -885,6 +920,7 @@ class Node:
         self.has_payload = False
         self.is_enum_branch = False
         self.is_enum_view = False
+        self.is_fallback = False
         self.nullable = False
         self.mod_name = ""
         self.ir_name = ""
@@ -1194,9 +1230,19 @@ def dump(n: rc[Node] | None, depth: int) -> None:
         if lv is not None:
             lvname = lv.name
         print(pad + "(listcomp " + lvname)
+        # ★ 受け取る名前の分解（A-47）
+        uq: rc[Node] | None = n.incr
+        while uq is not None:
+            uqn: rc[Node] = uq
+            dump(uqn, depth + 1)
+            uq = uqn.next
         dump(n.lhs, depth + 1)
         if n.args is not None:
-            print(pad + "  (range step=" + str(n.ival))
+            # ★ 増分が変数なら ival は 0 で、3 つ目の引数に式がある（A-46）
+            if n.ival == 0:
+                print(pad + "  (range step=var")
+            else:
+                print(pad + "  (range step=" + str(n.ival))
             dump_siblings(n.args, depth + 2)
             print(pad + "  )")
         else:
@@ -1242,6 +1288,11 @@ def dump(n: rc[Node] | None, depth: int) -> None:
         print(pad + "(case")
         if n.lhs is not None:
             dump(n.lhs, depth + 1)
+        # ★ ガード（A-48）
+        if n.rhs is not None:
+            print(pad + "  (if")
+            dump(n.rhs, depth + 2)
+            print(pad + "  )")
         dump(n.body, depth + 1)
         print(pad + ")")
     elif n.kind == ND_REQUIRES:
@@ -1329,6 +1380,7 @@ def ast_clone(n: rc[Node] | None) -> rc[Node] | None:
     c.has_payload = src.has_payload       # A-41
     c.is_enum_branch = src.is_enum_branch
     c.is_enum_view = src.is_enum_view
+    c.is_fallback = src.is_fallback       # A-48
 
     c.lhs = ast_clone(src.lhs)
     c.rhs = ast_clone(src.rhs)
@@ -1340,6 +1392,9 @@ def ast_clone(n: rc[Node] | None) -> rc[Node] | None:
     c.targs = ast_clone(src.targs)
     c.ifaces = ast_clone(src.ifaces)
     c.incr = ast_clone(src.incr)
+    # ★ raises 節も写す（写さないと、ジェネリック関数の raises が単相化で消えていた。A-49）
+    #   対になる定義: src/ast.c の ast_clone
+    c.err_types = ast_clone(src.err_types)
     c.next = ast_clone(src.next)
     return c
 

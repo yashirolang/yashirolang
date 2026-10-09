@@ -1,0 +1,11 @@
+# ERROR: E-BORROW-9
+# A-51: 捕まえた変数を書き換えた後で lambda を呼ぶと止まります。
+def keep(s: own str) -> None:
+    print(s)
+
+def main() -> int:
+    s: str = "a" + ""
+    f: fn() -> int = lambda: len(s)
+    s = "bb" + ""
+    print(f())
+    return 0

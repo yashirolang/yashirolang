@@ -1,4 +1,5 @@
 #include "types.h"
+#include "ast.h"   // fn 型の raises に書くクラス名（A-49）
 
 #include <string.h>
 
@@ -35,7 +36,7 @@ bool type_can_be_opt(Type *t) {
     // ★ rc[T] もポインタ 1 個なので nullable にできます
     //   （木の「子が無い」を表すのに要ります）。
     return t->kind == TY_STR || t->kind == TY_LIST || t->kind == TY_CLASS ||
-           t->kind == TY_RC;
+           t->kind == TY_RC || t->kind == TY_WEAK;
 }
 
 Type *type_opt(Type *elem) {
@@ -82,6 +83,14 @@ Type *type_list(Type *elem) {
 Type *type_rc(Type *elem) {
     Type *t = xmalloc(sizeof(Type));
     t->kind = TY_RC;
+    t->elem = elem;
+    return t;
+}
+
+// weak[T]（A-50）。★ rc[T] と同じ作り
+Type *type_weak(Type *elem) {
+    Type *t = xmalloc(sizeof(Type));
+    t->kind = TY_WEAK;
     t->elem = elem;
     return t;
 }
@@ -150,6 +159,7 @@ int type_size(Type *t) {
         case TY_LIST:
         case TY_CLASS:
         case TY_RC:   // rc[T] もポインタ 1 個（指す先に数え札が付く）
+        case TY_WEAK: // weak[T] も同じ箱へのポインタ（A-50）
         case TY_PTR:  // 生ポインタ
         case TY_THREAD:  // ランタイムの箱への不透明なポインタ
         case TY_MUTEX:
@@ -180,11 +190,21 @@ bool type_equal(Type *a, Type *b) {
         if (a->nparams != b->nparams) return false;
         for (int i = 0; i < a->nparams; i++)
             if (!type_equal(a->params[i], b->params[i])) return false;
+        // ★ 投げうるエラーも型の一部です（A-49）。集合として比べます
+        //   （書く順は問いません）。
+        if (a->nraises != b->nraises) return false;
+        for (int i = 0; i < a->nraises; i++) {
+            bool found = false;
+            for (int j = 0; j < b->nraises && !found; j++)
+                if (a->raises[i] == b->raises[j]) found = true;
+            if (!found) return false;
+        }
         return type_equal(a->elem, b->elem);
     }
 
     // ★ rc[T] も中身まで見る（rc[Node] と rc[Token] は別の型）
     if (a->kind == TY_RC) return type_equal(a->elem, b->elem);
+    if (a->kind == TY_WEAK) return type_equal(a->elem, b->elem);
     if (a->kind == TY_PTR) return type_equal(a->elem, b->elem);
 
     // ★ Thread[R] / mutex[T] も中身まで見る
@@ -269,6 +289,12 @@ const char *type_name(Type *t) {
             sb_printf(&sb, "rc[%s]", type_name(t->elem));
             return sb_str(&sb);
         }
+        case TY_WEAK: {
+            StrBuf sb;
+            sb_init(&sb);
+            sb_printf(&sb, "weak[%s]", type_name(t->elem));
+            return sb_str(&sb);
+        }
         case TY_THREAD: {
             StrBuf sb;
             sb_init(&sb);
@@ -294,6 +320,8 @@ const char *type_name(Type *t) {
             for (int i = 0; i < t->nparams; i++)
                 sb_printf(&sb, "%s%s", i ? ", " : "", type_name(t->params[i]));
             sb_printf(&sb, ") -> %s", type_name(t->elem));
+            for (int i = 0; i < t->nraises; i++)
+                sb_printf(&sb, "%s%s", i ? " | " : " raises ", t->raises[i]->name);
             return sb_str(&sb);
         }
         case TY_NULL: return "None";

@@ -1,0 +1,18 @@
+# ERROR: match に書いていない枝があります: Inner.B
+enum Inner:
+    A(v: int)
+    B
+
+enum Outer:
+    Wrap(i: Inner)
+    Nil
+
+def f(o: Outer) -> int:
+    match o:
+        case Outer.Wrap(Inner.A(v)):
+            return v
+        case Outer.Nil:
+            return 0
+
+def main() -> int:
+    return 0

@@ -1,0 +1,22 @@
+# OUTPUT: 3
+# OUTPUT: empty
+# ジェネリック関数の raises が単相化で消えていたのを直しました（A-49 で発見）。
+class E:
+    msg: str
+    def init(self, msg: own str) -> None:
+        self.msg = msg
+
+def first[T](xs: list[T]) -> T raises E:
+    if len(xs) == 0:
+        raise E("empty")
+    return xs[0]
+
+def main() -> int:
+    ys: list[int] = [3]
+    xs: list[int] = []
+    try:
+        print(first(ys))
+        print(first(xs))
+    except E as e:
+        print(e.msg)
+    return 0

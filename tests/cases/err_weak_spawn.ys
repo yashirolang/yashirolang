@@ -1,0 +1,13 @@
+# ERROR: E-SEND-2
+class N:
+    v: int
+    def init(self, v: int) -> None:
+        self.v = v
+
+def work(w: own weak[N]) -> int:
+    return 0
+
+def main() -> int:
+    r: rc[N] = rc(N(1))
+    t: Thread[int] = spawn(work, weak(r))
+    return t.join()

@@ -1,0 +1,43 @@
+# OUTPUT: negative: -2
+# OUTPUT: 4
+# OUTPUT: 10
+# OUTPUT: caught negative: -7
+# A-49: raises する関数も値にできます。投げうるエラーは関数型に書きます
+#   （fn(str) -> int raises ParseError）。呼ぶ側は try か raises で受け止めます。
+class ParseError:
+    msg: str
+    def init(self, msg: own str) -> None:
+        self.msg = msg
+
+class Other:
+    code: int
+    def init(self, code: int) -> None:
+        self.code = code
+
+def parse_pos(s: str) -> int raises ParseError:
+    n: int = int(s)
+    if n < 0:
+        raise ParseError("negative: " + s)
+    return n
+
+def twice(f: fn(str) -> int raises ParseError, s: str) -> int raises ParseError:
+    return f(s) * 2
+
+def apply_all(f: fn(str) -> int raises ParseError, xs: list[str]) -> int:
+    total: int = 0
+    for x in xs:
+        try:
+            total += f(x)
+        except ParseError as e:
+            print(e.msg)
+    return total
+
+def main() -> int:
+    g: fn(str) -> int raises ParseError = parse_pos
+    print(apply_all(g, ["1", "-2", "3"]))
+    try:
+        print(twice(parse_pos, "5"))
+        print(twice(g, "-7"))
+    except ParseError as e:
+        print("caught " + e.msg)
+    return 0

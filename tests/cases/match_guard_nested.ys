@@ -1,0 +1,64 @@
+# OUTPUT: big 20
+# OUTPUT: small 3
+# OUTPUT: dot
+# OUTPUT: pos 5
+# OUTPUT: nonpos -2
+# OUTPUT: other
+# OUTPUT: one a1
+# OUTPUT: other
+# OUTPUT: other
+# OUTPUT: seven
+# A-48: match のガードと入れ子のパターン。ガードが外れたら、同じ枝の次の case
+#   （無ければ case _）へ進みます。
+enum Inner:
+    A(v: int)
+    B
+
+enum Outer:
+    Wrap(i: Inner)
+    Pair(x: int, y: str)
+    Nil
+
+enum Shape:
+    Circle(r: int)
+    Dot
+
+def size(s: Shape) -> str:
+    match s:
+        case Shape.Circle(r) if r > 10:
+            return "big " + str(r)
+        case Shape.Circle(r):
+            return "small " + str(r)
+        case Shape.Dot:
+            return "dot"
+
+def look(o: Outer) -> str:
+    match o:
+        case Outer.Wrap(Inner.A(v)) if v > 0:
+            return "pos " + str(v)
+        case Outer.Wrap(Inner.A(v)):
+            return "nonpos " + str(v)
+        case Outer.Pair(x, y) if x == 1:
+            return "one " + y
+        case _:
+            return "other"
+
+def main() -> int:
+    print(size(Shape.Circle(20)))
+    print(size(Shape.Circle(3)))
+    print(size(Shape.Dot))
+    print(look(Outer.Wrap(Inner.A(5))))
+    print(look(Outer.Wrap(Inner.A(-2))))
+    print(look(Outer.Wrap(Inner.B)))
+    print(look(Outer.Pair(1, "a" + str(1))))
+    print(look(Outer.Pair(2, "b")))
+    print(look(Outer.Nil))
+    n: int = 7
+    match n:
+        case 7 if n > 100:
+            print("no")
+        case 7:
+            print("seven")
+        case _:
+            print("x")
+    return 0

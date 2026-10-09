@@ -151,7 +151,8 @@ def place_overlaps(a: rc[Place], b: rc[Place]) -> bool:
 
 # ── 型の分類（C 版 ty_is_rc / ty_is_owned と対）──────────────
 def ty_is_rc(t: rc[ast.Type]) -> bool:
-    if t.kind == ast.TY_RC:
+    # ★ weak[T]（A-50）も共有型。写すと弱い数え札が 1 つ増える
+    if t.kind == ast.TY_RC or t.kind == ast.TY_WEAK:
         return True
     if t.kind == ast.TY_OPT:
         return ty_is_rc(ast.elem_of(t))
@@ -168,7 +169,7 @@ def unwrap_enum(e: rc[ast.EnumDef] | None) -> rc[ast.EnumDef]:
 
 def ty_is_owned(t: rc[ast.Type]) -> bool:
     if (t.kind == ast.TY_STR or t.kind == ast.TY_LIST or
-            t.kind == ast.TY_CLASS or t.kind == ast.TY_RC):
+            t.kind == ast.TY_CLASS or t.kind == ast.TY_RC or t.kind == ast.TY_WEAK):
         return True
     # ★ 中身を持つ列挙（A-41）はヒープの物体です。名前だけの列挙は
     #   ただの i64 なので、後始末は要りません。
@@ -1116,6 +1117,26 @@ def record_loan(o: mut Own, target: rc[ast.Node], rhs: rc[ast.Node] | None) -> N
     forget_loan(o, target.ir_name)
     o.loans.append(rc(Loan(copy(target.ir_name), copy(target.name), src, hops)))
 
+# ★ 捕獲した lambda を入れた変数は、捕まえた変数を**借りている**（A-51）。
+#   捕まえた変数ごとに借りを登録して、書き換え・移動の後の使用を E-BORROW-9 で止める。
+#   注意: 値型は写して捕まえるので、借りではない。
+#   対になる定義: src/ownck.c の record_capture_loans
+def record_capture_loans(o: mut Own, target: rc[ast.Node], caps: rc[ast.Node] | None) -> None:
+    if len(target.ir_name) == 0:
+        return
+    forget_loan(o, target.ir_name)
+    c: rc[ast.Node] | None = caps
+    while c is not None:
+        cn: rc[ast.Node] = c
+        ct: rc[ast.Type] | None = node_type(cn)
+        if ct is not None and ty_is_owned(ct):
+            rp: rc[Place] | None = place_of(cn)
+            if rp is not None:
+                src: rc[Place] = resolve_place(o, place_opt(rp))
+                hops: list[rc[RcHop]] = hops_of(o, cn)
+                o.loans.append(rc(Loan(copy(target.ir_name), copy(target.name), src, hops)))
+        c = cn.next
+
 # 場所 w が書き換えられた。w（またはその中）を借りている別名を無効にする。
 #   strict … w **そのもの**を借りている別名は残す（mut self は中身を変えるだけ）
 def invalidate_loans(o: mut Own, f: mut rc[Flow], w0: rc[Place], strict: bool,
@@ -1374,6 +1395,15 @@ def use_expr(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
             elem_ref.rhs = nn.rhs   # 添字の中身は見ないので何でもよい
             bind_alias(o, lv, elem_ref)
 
+        # ★ 受け取る名前の分解（A-47）。ループ変数（借りもの）を分解するので、
+        #   名前も借りものになる（stmt の ND_UNPACK）。
+        #   対になる定義: src/ownck.c の use_expr（ND_LISTCOMP）
+        uq: rc[ast.Node] | None = nn.incr
+        while uq is not None:
+            uqn: rc[ast.Node] = uq
+            stmt(o, f, uqn)
+            uq = uqn.next
+
         if nn.els is not None:
             use_expr(o, f, nn.els)
         move_expr(o, f, nn.lhs, MV_APPEND)
@@ -1616,6 +1646,7 @@ def ty_reaches(t0: rc[ast.Type] | None, cls: rc[ast.Type], seen: mut list[str]) 
             fl = ff.next
         return False
     if (t.kind == ast.TY_OPT or t.kind == ast.TY_LIST or t.kind == ast.TY_RC or
+            t.kind == ast.TY_WEAK or
             t.kind == ast.TY_MUTEX or t.kind == ast.TY_THREAD):
         return ty_reaches(t.elem, cls, seen)
     if t.kind == ast.TY_TUPLE:
@@ -1801,6 +1832,14 @@ def call_args(o: mut Own, f: mut rc[Flow], n: rc[ast.Node], skip_self: bool) -> 
             spawn_args(o, f, n)
             return
 
+    # ★ 関数の値を通した呼び出しは、その変数を**読む**（A-51）。
+    #   対になる定義: src/ownck.c の call_args
+    if n.kind == ast.ND_CALL and n.is_indirect and len(n.ir_name) > 0:
+        vk: int = PL_LOCAL
+        if strings.startswith(n.ir_name, "@"):
+            vk = PL_GLOBAL
+        check_use(o, f, rc(Place(vk, None, copy(n.ir_name), copy(n.name))), node_tok(n))
+
     fn: rc[ast.Node] | None = callee_of(o, n)
     pm: rc[ast.Node] | None = None
     if fn is not None:
@@ -1843,6 +1882,16 @@ def call_args(o: mut Own, f: mut rc[Flow], n: rc[ast.Node], skip_self: bool) -> 
             if is_mut_param:
                 check_mut(o, an, an, WR_ARG)
         refs.append(rc(ArgRef(an, is_mut_param, WR_ARG)))
+        # ★ 捕獲した lambda を渡すときは、捕まえた変数も共有の借りとして並べる（A-51）
+        #   注意: C 版は組み込み（呼び先の定義が無いもの）ではこの検査をしないので合わせる
+        if fn is not None:
+            cq: rc[ast.Node] | None = an.caps
+            while cq is not None:
+                cqn: rc[ast.Node] = cq
+                cqt: rc[ast.Type] | None = node_type(cqn)
+                if cqt is not None and ty_is_owned(cqt):
+                    refs.append(rc(ArgRef(cqn, False, WR_ARG)))
+                cq = cqn.next
         a = an.next
     # ② 同じ場所を可変借用と他の借用で同時に渡していないか（B1）
     check_arg_aliases(o, refs)
@@ -2298,11 +2347,45 @@ def stmt(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
             forget_loan(o, nn.ir_name)
         else:
             record_loan(o, nn, nn.rhs)
+        # ★ 捕獲した lambda（A-51）
+        vr: rc[ast.Node] | None = nn.rhs
+        if vr is not None:
+            vrn: rc[ast.Node] = vr
+            if vrn.caps is not None:
+                record_capture_loans(o, nn, vrn.caps)
         if len(nn.ir_name) > 0:
             pk: int = PL_LOCAL
             if strings.startswith(nn.ir_name, "@"):
                 pk = PL_GLOBAL
             flow_clear(f, rc(Place(pk, None, copy(nn.ir_name), copy(nn.name))))
+        return
+
+    # ★ 分解代入 q, r = 右辺（A-47 で塞いだ穴）
+    #   右辺が**場所**（変数・添字・フィールド）なら、受け取る名前は中身を借りる
+    #   （`s: str = p[1]` と同じ扱い）。新しく作った値なら、名前が中身を所有する。
+    #   対になる定義: src/ownck.c の stmt（ND_UNPACK）
+    if k == ast.ND_UNPACK:
+        ur: rc[ast.Node] = node_of_opt(nn.rhs)
+        place: bool = ur.kind == ast.ND_VAR or ur.kind == ast.ND_INDEX or ur.kind == ast.ND_FIELD
+        if place:
+            use_expr(o, f, ur)
+        else:
+            move_expr(o, f, ur, MV_ASSIGN)
+        uv: rc[ast.Node] | None = nn.params
+        while uv is not None:
+            pv: rc[ast.Node] = uv
+            pt: rc[ast.Type] | None = node_type(pv)
+            if place and pt is not None and ty_is_owned(pt):
+                pv.binds_borrow = True
+            remember_decl(o, pv)
+            if place:
+                bind_alias(o, pv, ur)
+                record_loan(o, pv, ur)
+            else:
+                forget_loan(o, pv.ir_name)
+            if len(pv.ir_name) > 0:
+                flow_clear(f, rc(Place(PL_LOCAL, None, copy(pv.ir_name), copy(pv.name))))
+            uv = pv.next
         return
 
     if k == ast.ND_ASSIGN:
@@ -2710,7 +2793,7 @@ def rc_inside(t: rc[ast.Type] | None, seen: mut list[str]) -> str:
     if t is None:
         return ""
     tt: rc[ast.Type] = t
-    if tt.kind == ast.TY_RC:
+    if tt.kind == ast.TY_RC or tt.kind == ast.TY_WEAK:   # weak も（A-50）
         return ast.type_name(tt)
     # 注意: mutex に入っていても同じです。ロックが守るのは**中身**で、
     #    数え札は箱の外（rc が指す先）にあるためです。

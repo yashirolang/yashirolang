@@ -124,10 +124,12 @@ static bool place_overlaps(Place *a, Place *b) {
 // ── ② 所有型かどうか ───────────────────────────────────────
 
 // rc[T] か rc[T] | None か。**共有型はこの 2 つ**です。
+//   ★ weak[T]（A-50）も共有型です。写すと弱い数え札が 1 つ増えます。
 bool ty_is_rc(Type *t) {
     if (!t) return false;
-    if (t->kind == TY_RC) return true;
-    return t->kind == TY_OPT && t->elem && t->elem->kind == TY_RC;
+    if (t->kind == TY_RC || t->kind == TY_WEAK) return true;
+    return t->kind == TY_OPT && t->elem &&
+           (t->elem->kind == TY_RC || t->elem->kind == TY_WEAK);
 }
 
 bool ty_is_owned(Type *t) {
@@ -137,6 +139,7 @@ bool ty_is_owned(Type *t) {
         case TY_LIST:
         case TY_CLASS:
         case TY_RC: return true;  // rc[T] も「後始末が要る値」
+        case TY_WEAK: return true;  // weak[T] も（弱い数え札を減らす。A-50）
         // ★ 中身を持つ列挙（A-41）はヒープの物体です。名前だけの列挙は
         //   ただの i64 なので、後始末は要りません。
         case TY_ENUM: return t->en && t->en->has_payload;
@@ -1050,6 +1053,28 @@ static void record_loan(Own *o, Node *target, Node *rhs) {
     o->loans = l;
 }
 
+// ★ 捕獲した lambda を入れた変数は、捕まえた変数を**借りています**（A-51）。
+//   記録には借りたポインタを置くだけなので、捕まえた変数を書き換えたり
+//   移動したりした後で lambda を使うと、解放済みの値を読みます。
+//   捕まえた変数ごとに借りを登録して、その後の使用を E-BORROW-9 で止めます。
+//   注意: 値型は写して捕まえるので、借りではありません。
+static void record_capture_loans(Own *o, Node *target, Node *caps) {
+    if (!target->ir_name) return;
+    forget_loan(o, target->ir_name);
+    for (Node *c = caps; c; c = c->next) {
+        if (!c->type || !ty_is_owned(c->type)) continue;
+        Place *rp = place_of(c);
+        if (!rp) continue;
+        Loan *l = xmalloc(sizeof(Loan));
+        l->key = target->ir_name;
+        l->disp = target->name;
+        l->src = resolve_place(o, rp);
+        l->hops = hops_of(o, c);
+        l->next = o->loans;
+        o->loans = l;
+    }
+}
+
 // 場所 w が書き換えられた。w（またはその中）を借りている別名を無効にする。
 //
 //   strict … w **そのもの**を借りている別名は残す。`q = b.p` のあとの
@@ -1233,6 +1258,7 @@ static const char *rc_inside(Type *t, SeenCls **seen) {
     if (!t) return NULL;
     switch (t->kind) {
         case TY_RC:
+        case TY_WEAK:   // 数え札はスレッドをまたいで守られていません（A-50）
             return type_name(t);
         case TY_LIST:
         case TY_OPT:
@@ -1520,6 +1546,7 @@ static bool ty_reaches(Type *t, Type *cls, TySeen **seen) {
         case TY_OPT:
         case TY_LIST:
         case TY_RC:
+        case TY_WEAK:   // upgrade すれば届きます（A-50）
         case TY_MUTEX:
         case TY_THREAD: return ty_reaches(t->elem, cls, seen);
         case TY_TUPLE:
@@ -1689,6 +1716,15 @@ static void call_args(Own *o, Flow *f, Node *n, bool skip_self) {
         return;
     }
 
+    // ★ 関数の値を通した呼び出しは、その変数を**読みます**（A-51）。
+    //   捕獲した lambda の変数は捕まえた変数を借りているので、借りていた先を
+    //   書き換えた後に呼ぶと、ここで止まります（E-BORROW-9）。
+    if (n->kind == ND_CALL && n->is_indirect && n->ir_name) {
+        Place *vp = new_place(n->ir_name[0] == '@' ? PL_GLOBAL : PL_LOCAL, NULL,
+                              n->ir_name, n->name);
+        check_use(o, f, vp, n);
+    }
+
     Node *fn = callee_of(o, n);
     if (!fn) {  // 組み込み関数・定義が引けないもの → すべて借用として扱う
         for (Node *a = n->args; a; a = a->next) use_expr(o, f, a);
@@ -1732,6 +1768,12 @@ static void call_args(Own *o, Flow *f, Node *n, bool skip_self) {
     for (Node *a = n->args; a; a = a->next) {
         tail = tail->next = arg_ref(a, pm, pm && pm->mode == PM_MUT, WR_ARG);
         if (pm) pm = pm->next;
+        // ★ 捕獲した lambda を渡すときは、捕まえた変数も**共有の借り**として
+        //   並べます（A-51）。`f(xs, lambda: len(xs))` で xs を mut で渡すと、
+        //   呼び先が書き換えている最中に lambda が読むことになるためです。
+        for (Node *c = a->caps; c; c = c->next)
+            if (c->type && ty_is_owned(c->type))
+                tail = tail->next = arg_ref(c, NULL, false, WR_ARG);
     }
     check_call_borrows(o, f, n, head.next);
     rc_invalidate_call(o, f, n, fn);
@@ -1805,6 +1847,10 @@ static void use_expr(Own *o, Flow *f, Node *n) {
                 elem_ref.rhs = n->rhs;  // 添字の中身は見ないので何でもよい
                 bind_alias(o, lv, &elem_ref);
             }
+
+            // ★ 受け取る名前の分解（A-47）。ループ変数（借りもの）を分解するので、
+            //   名前も借りものになります（stmt の ND_UNPACK）。
+            for (Node *u = n->incr; u; u = u->next) stmt(o, f, u);
 
             if (n->els) use_expr(o, f, n->els);
             move_expr(o, f, n->lhs, MV_APPEND);
@@ -2227,10 +2273,40 @@ static void stmt(Own *o, Flow *f, Node *n) {
             bind_alias(o, n, n->rhs);
             if (owns) forget_loan(o, n->ir_name ? n->ir_name : "");
             else record_loan(o, n, n->rhs);
+            // ★ 捕獲した lambda（A-51）
+            if (n->rhs && n->rhs->caps) record_capture_loans(o, n, n->rhs->caps);
             if (n->ir_name) {
                 Place *p = new_place(n->ir_name[0] == '@' ? PL_GLOBAL : PL_LOCAL,
                                      NULL, n->ir_name, n->name);
                 flow_clear(f, p);
+            }
+            return;
+        }
+
+        // ★ 分解代入 q, r = 右辺（A-47 で塞いだ穴）
+        //
+        //   右辺が**場所**（変数・添字・フィールド）なら、受け取る名前は中身を
+        //   **借りています**（`s: str = p[1]` と同じ扱い）。新しく作った値
+        //   （呼び出し・タプルのリテラル）なら、名前が中身を所有します。
+        //
+        //   注意: 以前はここを素通りしていたので、借りたタプルを分解すると
+        //     名前のほうも解放していました（`for i, p in enumerate(ps): n, s = p`
+        //     で、ループを抜けた後の ps[0][1] が解放後の使用になっていた）。
+        case ND_UNPACK: {
+            Node *r = n->rhs;
+            bool place = r->kind == ND_VAR || r->kind == ND_INDEX || r->kind == ND_FIELD;
+            if (place) use_expr(o, f, r);
+            else move_expr(o, f, r, MV_ASSIGN);
+            for (Node *v = n->params; v; v = v->next) {
+                if (place && ty_is_owned(v->type)) v->binds_borrow = true;
+                remember_decl(o, v);
+                if (place) {
+                    bind_alias(o, v, r);
+                    record_loan(o, v, r);
+                } else {
+                    forget_loan(o, v->ir_name ? v->ir_name : "");
+                }
+                if (v->ir_name) flow_clear(f, new_place(PL_LOCAL, NULL, v->ir_name, v->name));
             }
             return;
         }

@@ -304,6 +304,8 @@ class Emitter:
             return "ptr"
         if t.kind == ast.TY_RC:
             return "ptr"
+        if t.kind == ast.TY_WEAK:
+            return "ptr"          # weak[T]（rc と同じ箱へのポインタ。A-50）
         if t.kind == ast.TY_THREAD:
             return "ptr"          # Thread[R]
         if t.kind == ast.TY_MUTEX:
@@ -346,6 +348,8 @@ class Emitter:
         if t.kind == ast.TY_OPT:
             return "ptr"
         if t.kind == ast.TY_RC:
+            return "ptr"
+        if t.kind == ast.TY_WEAK:
             return "ptr"
         if t.kind == ast.TY_THREAD:
             return "ptr"
@@ -646,6 +650,14 @@ class Emitter:
                 sep = ", "
             argl.append(sep + self.llvm_type(ft.params[i]) + " %a" + str(i))
             i = i + 1
+        # ★ 失敗しうる関数（A-49）。エラー出力の ptr を末尾でそのまま渡す
+        #   対になる定義: src/codegen.c の closure_ref
+        if len(ft.err_classes) > 0:
+            params.append(", ptr %err")
+            if len(ft.params) > 0:
+                argl.append(", ptr %err")
+            else:
+                argl.append("ptr %err")
 
         rt: rc[ast.Type] = ast.elem_of(ft)
         b: list[str] = []
@@ -1338,7 +1350,7 @@ class Emitter:
     def elem_is_ptr(self, elem: rc[ast.Type]) -> bool:
         return (elem.kind == ast.TY_STR or elem.kind == ast.TY_LIST or
                 elem.kind == ast.TY_CLASS or elem.kind == ast.TY_OPT or
-                elem.kind == ast.TY_RC or elem.kind == ast.TY_NULL or
+                elem.kind == ast.TY_RC or elem.kind == ast.TY_WEAK or elem.kind == ast.TY_NULL or
                 elem.kind == ast.TY_IFACE or elem.kind == ast.TY_TUPLE or
                 elem.kind == ast.TY_THREAD or elem.kind == ast.TY_MUTEX)
 
@@ -1409,6 +1421,43 @@ class Emitter:
     #
     # 注意: 隠し変数の alloca は collect_allocas が n.body から拾っている。
     #   ここでは名前を使うだけ。
+    # 内包表記の受け取る名前の分解（A-47）。ループ変数を束縛した直後に通す。
+    #   対になる定義: src/codegen.c の gen_comp_unpack
+    def gen_comp_unpack(mut self, n: rc[ast.Node]) -> None:
+        u: rc[ast.Node] | None = n.incr
+        while u is not None:
+            un: rc[ast.Node] = u
+            self.gen_stmt(un)
+            u = un.next
+
+    # ★ range の増分が変数のとき（A-46。構文解析器が ival = 0 を印にしている）。
+    #   増分を 1 回だけ評価し、0 なら実行時に止める（pl_range_step）。
+    #   対になる定義: src/codegen.c の gen_range_step
+    def gen_range_step(mut self, step: rc[ast.Node]) -> str:
+        self.declare_rt("i64 @pl_range_step(i64)")
+        v: str = self.gen_expr(step)
+        t: str = self.new_tmp()
+        self.emit("  " + t + " = call i64 @pl_range_step(i64 " + v + ")\n")
+        return t
+
+    # 範囲の条件。増分がリテラルなら向きは決まっていて、変数なら select で選ぶ。
+    def gen_range_go(mut self, n: rc[ast.Node], i: str, stop: str, st: str) -> str:
+        go: str = self.new_tmp()
+        if len(st) == 0:
+            pred: str = "sgt"
+            if n.ival > 0:
+                pred = "slt"
+            self.emit("  " + go + " = icmp " + pred + " i64 " + i + ", " + stop + "\n")
+            return go
+        lt: str = self.new_tmp()
+        self.emit("  " + lt + " = icmp slt i64 " + i + ", " + stop + "\n")
+        gt: str = self.new_tmp()
+        self.emit("  " + gt + " = icmp sgt i64 " + i + ", " + stop + "\n")
+        up: str = self.new_tmp()
+        self.emit("  " + up + " = icmp sgt i64 " + st + ", 0\n")
+        self.emit("  " + go + " = select i1 " + up + ", i1 " + lt + ", i1 " + gt + "\n")
+        return go
+
     # ★ 量化子 all(E for …) / any(E for …)。list は作らず、決まった時点で止める。
     #   結果は φ で合流する（最後まで回った道 / 途中で止まった道）。
     #   対になる定義: src/codegen.c の gen_quant（IR は 1 バイトも違えない）
@@ -1431,10 +1480,14 @@ class Emitter:
 
         it: str = ""
         stop: str = ""
+        st: str = ""
         if n.args is not None:
             a1: rc[ast.Node] = node_of(n.args)
             start: str = self.gen_expr(a1)
-            stop = self.gen_expr(node_of(a1.next))
+            a2: rc[ast.Node] = node_of(a1.next)
+            stop = self.gen_expr(a2)
+            if n.ival == 0:
+                st = self.gen_range_step(node_of(a2.next))
             self.emit("  store i64 " + start + ", ptr " + ix.ir_name + "\n")
         else:
             it = self.gen_expr(node_of(n.rhs))
@@ -1443,13 +1496,11 @@ class Emitter:
         self.emit_label(cond_l)
         i: str = self.new_tmp()
         self.emit("  " + i + " = load i64, ptr " + ix.ir_name + "\n")
-        go: str = self.new_tmp()
+        go: str = ""
         if n.args is not None:
-            pred: str = "sgt"
-            if n.ival > 0:
-                pred = "slt"
-            self.emit("  " + go + " = icmp " + pred + " i64 " + i + ", " + stop + "\n")
+            go = self.gen_range_go(n, i, stop, st)
         else:
+            go = self.new_tmp()
             lenp: str = self.new_tmp()
             self.emit("  " + lenp + " = getelementptr i8, ptr " + it + ", i64 8\n")
             ln: str = self.new_tmp()
@@ -1465,6 +1516,7 @@ class Emitter:
             v: str = self.new_tmp()
             self.emit("  " + v + " = load " + sty + ", ptr " + ep + TBAA_LISTELEM + "\n")
             self.gen_store(elem, self.slot_to_elem(elem, v), lv.ir_name)
+        self.gen_comp_unpack(n)
         if n.els is not None:
             c: str = self.gen_expr(node_of(n.els))
             self.emit_cond_br(c, keep_l, next_l)
@@ -1480,10 +1532,12 @@ class Emitter:
         i2: str = self.new_tmp()
         self.emit("  " + i2 + " = load i64, ptr " + ix.ir_name + "\n")
         i3: str = self.new_tmp()
-        stepv: int = 1
-        if n.args is not None:
-            stepv = n.ival
-        self.emit("  " + i3 + " = add i64 " + i2 + ", " + str(stepv) + "\n")
+        stepv: str = "1"
+        if len(st) > 0:
+            stepv = st
+        elif n.args is not None:
+            stepv = str(n.ival)
+        self.emit("  " + i3 + " = add i64 " + i2 + ", " + stepv + "\n")
         self.emit("  store i64 " + i3 + ", ptr " + ix.ir_name + "\n")
         self.emit("  br label %" + cond_l + "\n")
         self.terminated = True
@@ -1534,10 +1588,14 @@ class Emitter:
         # 注意: 対象（list）と range の端は **ループの外で 1 回だけ**評価する
         it: str = ""
         stop: str = ""
+        st: str = ""
         if n.args is not None:
             a1: rc[ast.Node] = node_of(n.args)
             start: str = self.gen_expr(a1)
-            stop = self.gen_expr(node_of(a1.next))
+            a2: rc[ast.Node] = node_of(a1.next)
+            stop = self.gen_expr(a2)
+            if n.ival == 0:
+                st = self.gen_range_step(node_of(a2.next))
             self.emit("  store i64 " + start + ", ptr " + ix.ir_name + "\n")
         else:
             it = self.gen_expr(node_of(n.rhs))
@@ -1546,15 +1604,12 @@ class Emitter:
         self.emit_label(cond_l)
         i: str = self.new_tmp()
         self.emit("  " + i + " = load i64, ptr " + ix.ir_name + "\n")
-        go: str = self.new_tmp()
+        go: str = ""
         if n.args is not None:
-            # 増分の符号で向きが変わる（構文解析器が定数だと確かめている）
-            pred: str = "sgt"
-            if n.ival > 0:
-                pred = "slt"
-            self.emit("  " + go + " = icmp " + pred + " i64 " + i + ", " +
-                      stop + "\n")
+            # 増分の符号で向きが変わる（変数なら実行時に選ぶ。A-46）
+            go = self.gen_range_go(n, i, stop, st)
         else:
+            go = self.new_tmp()
             lenp: str = self.new_tmp()
             self.emit("  " + lenp + " = getelementptr i8, ptr " + it +
                       ", i64 8\n")
@@ -1574,6 +1629,7 @@ class Emitter:
             self.emit("  " + v + " = load " + sty + ", ptr " + ep +
                       TBAA_LISTELEM + "\n")
             self.gen_store(elem, self.slot_to_elem(elem, v), lv.ir_name)
+        self.gen_comp_unpack(n)
 
         # if の条件（あれば）
         if n.els is not None:
@@ -1594,10 +1650,12 @@ class Emitter:
         self.emit("  " + i2 + " = load i64, ptr " + ix.ir_name + "\n")
         i3: str = self.new_tmp()
         # 注意: ここは桁あふれ検査を出さない（長さ／終端までしか進まないため）
-        stepv: int = 1
-        if n.args is not None:
-            stepv = n.ival
-        self.emit("  " + i3 + " = add i64 " + i2 + ", " + str(stepv) + "\n")
+        stepv: str = "1"
+        if len(st) > 0:
+            stepv = st
+        elif n.args is not None:
+            stepv = str(n.ival)
+        self.emit("  " + i3 + " = add i64 " + i2 + ", " + stepv + "\n")
         self.emit("  store i64 " + i3 + ", ptr " + ix.ir_name + "\n")
         self.emit("  br label %" + cond_l + "\n")
         self.terminated = True
@@ -2600,7 +2658,7 @@ class Emitter:
             # ★ rc[T] を own の仮引数へ渡すときは参照を 1 つ増やして渡します。
             #   （対になる定義: src/codegen.c の gen_args の force_retain）
             if self.drop and arg.arg_own_rc:
-                v = self.force_retain(v)
+                v = self.force_retain(type_of(arg), v)
             sep: str = ", "
             if is_first:
                 sep = ""
@@ -2735,6 +2793,15 @@ class Emitter:
 
         obj_node: rc[ast.Node] = node_of(n.lhs)
         ot: rc[ast.Type] = type_of(obj_node)
+
+        # ★ weak[T].upgrade()（A-50）。生きていれば strong を 1 つ増やして返す
+        if ot.kind == ast.TY_WEAK:
+            uw: str = self.gen_expr(obj_node)
+            self.declare_rt("ptr @pl_rc_upgrade(ptr)")
+            ur: str = self.new_tmp()
+            self.emit("  " + ur + " = call ptr @pl_rc_upgrade(ptr " + uw + ")\n")
+            self.drop_temp(obj_node, uw)
+            return ur
 
         # ★ Thread[R].join() / mutex[T].lock(f)（A-18）
         if ot.kind == ast.TY_THREAD:
@@ -2950,20 +3017,33 @@ class Emitter:
         self.emit("  call void " + fn + "(ptr " + val + ")\n")
 
     def ty_is_rc_shared(self, t: rc[ast.Type]) -> bool:
-        if t.kind == ast.TY_RC:
+        if t.kind == ast.TY_RC or t.kind == ast.TY_WEAK:
             return True
         if t.kind == ast.TY_OPT:
-            return ast.elem_of(t).kind == ast.TY_RC
+            ek: int = ast.elem_of(t).kind
+            return ek == ast.TY_RC or ek == ast.TY_WEAK
         return False
+
+    # 参照を 1 つ増やす関数。weak[T] は弱い数え札のほうを増やす（A-50）
+    #   対になる定義: src/codegen.c の retain_rt
+    def retain_rt(mut self, t: rc[ast.Type]) -> str:
+        b: rc[ast.Type] = t
+        if t.kind == ast.TY_OPT:
+            b = ast.elem_of(t)
+        if b.kind == ast.TY_WEAK:
+            self.declare_rt("ptr @pl_rc_weak_retain(ptr)")
+            return "pl_rc_weak_retain"
+        self.declare_rt("ptr @pl_rc_retain(ptr)")
+        return "pl_rc_retain"
 
     # 注意: val は **own** で受け取ります。素通しで返す経路があるので、借用で
     #   受けると「借りものを返す」ことになり、呼び出し側と二重に解放されます。
     # 参照を 1 つ増やす（場所かどうかを問わない）
     #   対になる定義: src/codegen.c の force_retain
-    def force_retain(mut self, val: str) -> str:
-        self.declare_rt("ptr @pl_rc_retain(ptr)")
+    def force_retain(mut self, ty: rc[ast.Type], val: str) -> str:
+        fn: str = self.retain_rt(ty)
         t: str = self.new_tmp()
-        self.emit("  " + t + " = call ptr @pl_rc_retain(ptr " + val + ")\n")
+        self.emit("  " + t + " = call ptr @" + fn + "(ptr " + val + ")\n")
         return t
 
     def maybe_retain(mut self, rhs: rc[ast.Node], val: own str) -> str:
@@ -2975,9 +3055,9 @@ class Emitter:
         if (rhs.kind != ast.ND_VAR and rhs.kind != ast.ND_FIELD and
                 rhs.kind != ast.ND_INDEX):
             return val
-        self.declare_rt("ptr @pl_rc_retain(ptr)")
+        fn: str = self.retain_rt(type_of(rhs))
         t: str = self.new_tmp()
-        self.emit("  " + t + " = call ptr @pl_rc_retain(ptr " + val + ")\n")
+        self.emit("  " + t + " = call ptr @" + fn + "(ptr " + val + ")\n")
         return t
 
     def gen_empty_value(mut self, ty: rc[ast.Type]) -> str:
@@ -3574,6 +3654,10 @@ class Emitter:
             return self.gen_list_drop(t)
         if t.kind == ast.TY_RC:
             return self.gen_rc_drop(t)
+        # ★ 弱参照は中身の型によらず同じ手放し方（A-50）
+        if t.kind == ast.TY_WEAK:
+            self.declare_rt("void @pl_rc_weak_release(ptr)")
+            return "@pl_rc_weak_release"
         if t.kind == ast.TY_CLASS:
             return self.gen_class_drop(class_of(t.cls))
         # ★ 中身を持つ列挙（A-41）。名前だけの列挙は i64 なので何もしません。
@@ -3606,7 +3690,7 @@ class Emitter:
             return unwrap_enumdef(en3).has_payload
         return (t.kind == ast.TY_STR or t.kind == ast.TY_LIST or
                 t.kind == ast.TY_CLASS or t.kind == ast.TY_OPT or
-                t.kind == ast.TY_RC)
+                t.kind == ast.TY_RC or t.kind == ast.TY_WEAK)
 
     # このスコープの解放対象に加える（**先頭に足す**＝たどると宣言の逆順）
     def scope_add(mut self, decl: rc[ast.Node]) -> None:
@@ -4428,6 +4512,9 @@ class Emitter:
             # 注意: gen_args は **区切りを要素に埋め込む**ので、
             #    ここは "" で連結すること（", " だと二重になる）
             ia: str = "ptr " + clo + strings.join(iargs, "")
+            # ★ 失敗しうる関数の値（A-49）。名前で呼ぶときと同じ段取り
+            if n.can_fail:
+                return self.emit_call_to(n, fp, ia)
             if type_of(n).kind == ast.TY_NONE:
                 self.emit("  call void " + fp + "(" + ia + ")\n")
                 return ""
@@ -4484,6 +4571,17 @@ class Emitter:
             mtt: str = self.new_tmp()
             self.emit("  " + mtt + " = call ptr @pl_mutex_new(i64 " + mvi + ")\n")
             return mtt
+
+        # ★ weak(r) — 弱参照を作る（A-50）。r は借りるだけ
+        #   対になる定義: src/codegen.c の gen_call
+        if len(n.ir_name) == 0 and n.name == "weak" and type_of(n).kind == ast.TY_WEAK:
+            wa: rc[ast.Node] = node_of(n.args)
+            wv: str = self.gen_expr(wa)
+            self.declare_rt("ptr @pl_rc_weak_new(ptr)")
+            wt: str = self.new_tmp()
+            self.emit("  " + wt + " = call ptr @pl_rc_weak_new(ptr " + wv + ")\n")
+            self.drop_temp(wa, wv)
+            return wt
 
         # ★ rc(x) — 数え札を付けてくるむ（sema が ir_name を付けない目印）
         if len(n.ir_name) == 0 and n.name == "rc":
@@ -4882,6 +4980,13 @@ class Emitter:
             s: rc[ast.Node] = node_of(st)
             self.collect_allocas(s)
             st = s.next
+        # ★ 内包表記の分解（A-47）。受け取る名前の箱が要る
+        if node.kind == ast.ND_LISTCOMP:
+            uc: rc[ast.Node] | None = node.incr
+            while uc is not None:
+                ucn: rc[ast.Node] = uc
+                self.collect_allocas(ucn)
+                uc = ucn.next
 
     # ── 関数の生成 ──────────────────────────────────────────
 

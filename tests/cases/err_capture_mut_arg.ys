@@ -1,0 +1,8 @@
+# ERROR: E-BORROW-5
+def grow(xs: mut list[int], f: fn() -> int) -> None:
+    xs.append(f())
+
+def main() -> int:
+    xs: list[int] = [1]
+    grow(xs, lambda: len(xs))
+    return 0

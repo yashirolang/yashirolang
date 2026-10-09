@@ -1,0 +1,19 @@
+# OUTPUT: 1 2 x
+# OUTPUT: 2 x 1
+# OUTPUT: 7
+# A-47: 入れ子の分解。括弧で始まる左辺も書けます。
+def f() -> (int, (int, str)):
+    return 1, (2, "x")
+
+def g() -> ((int, str), int):
+    return (2, "x"), 1
+
+def main() -> int:
+    a, (b, c) = f()
+    print(str(a) + " " + str(b) + " " + c)
+    (d, e), h = g()
+    print(str(d) + " " + e + " " + str(h))
+    t: (int, (int, (int, int))) = (1, (2, (3, 1)))
+    p, (q, (r, s)) = t
+    print(str(p + q + r + s))
+    return 0

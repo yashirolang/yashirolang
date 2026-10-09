@@ -1,0 +1,9 @@
+# EXIT: 1
+# RUN-LANG: en
+# STDERR: runtime error: range() step must not be zero
+# A-46: 内包表記でも同じ検査です（英語）。
+def main() -> int:
+    z: int = 0
+    xs: list[int] = [i for i in range(0, 3, z)]
+    print(len(xs))
+    return 0

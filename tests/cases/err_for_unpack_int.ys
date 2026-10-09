@@ -1,0 +1,5 @@
+# ERROR: 分解代入の右辺がタプルではありません
+def main() -> int:
+    for a, b in range(3):
+        print(str(a))
+    return 0

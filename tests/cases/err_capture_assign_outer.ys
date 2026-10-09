@@ -1,0 +1,8 @@
+# ERROR: を借りて捕まえた lambda は、代入では受け取れません
+def main() -> int:
+    f: fn() -> int = lambda: 0
+    if True:
+        s: str = "a" + ""
+        f = lambda: len(s)
+    print(f())
+    return 0

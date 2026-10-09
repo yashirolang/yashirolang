@@ -473,6 +473,9 @@ struct Node {
     //   ND_VARDECL に付きます。型検査をここだけ緩めます（IR では何も
     //   起きません——ポインタを別のクラスとして読むだけです）。
     bool is_enum_view;
+    // ★ match の書き換え（A-48）が作った `case _`。ガードが外れたときの落ち先で、
+    //   内側の列挙の枝が 1 つしかないと届きませんが、それは断りません。
+    bool is_fallback;
 
     // ND_FIELD が指すフィールド（sema が解決する）
     Field *field;

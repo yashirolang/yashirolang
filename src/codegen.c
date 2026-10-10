@@ -225,6 +225,7 @@ static const char *llvm_type(Type *t) {
         case TY_INT: return "i64";
         case TY_FLOAT: return "double";  // IEEE 754 倍精度
         case TY_FN: return "ptr";        // 関数へのポインタ
+        case TY_CLOSURE: return "ptr";   // ヒープの記録へのポインタ（A-51）
         case TY_IFACE: return "ptr";     // 実体へのポインタ
         case TY_TUPLE: return "ptr";     // 構造体へのポインタ
         case TY_BOOL: return "i1";   // レジスタ上は 1 ビット
@@ -257,6 +258,7 @@ static const char *llvm_mem_type(Type *t) {
         case TY_INT: return "i64";
         case TY_FLOAT: return "double";
         case TY_FN: return "ptr";
+        case TY_CLOSURE: return "ptr";
         case TY_IFACE: return "ptr";
         case TY_TUPLE: return "ptr";
         case TY_BOOL: return "i8";  // メモリ上は 1 バイト
@@ -985,6 +987,7 @@ static const char *thunk_for(Emitter *e, Type *fnty);
 static const char *closure_ref(Emitter *e, const char *ir_name, Type *ft);
 // 捕獲した lambda の記録を枠の上に作る（A-43）
 static char *closure_make(Emitter *e, Node *n);
+static char *closure_heap_ref(Emitter *e, Node *n);   // A-51
 static char *pack_i64(Emitter *e, Type *t, char *v);
 static char *unpack_i64(Emitter *e, Type *t, char *v);
 static char *gen_index_addr(Emitter *e, char *obj, char *idx, const char *sty,
@@ -1262,6 +1265,7 @@ static char *gen_expr(Emitter *e, Node *n) {
             if (n->is_func_ref) {
                 // ★ 捕獲した lambda は、枠の上に記録を作ります（A-43）
                 if (n->caps) return closure_make(e, n);
+                if (n->is_closure) return closure_heap_ref(e, n);   // A-51
                 return (char *)closure_ref(e, n->ir_name, n->type);
             }
 
@@ -1525,6 +1529,7 @@ static bool elem_is_ptr(Type *elem) {
     return elem->kind == TY_STR || elem->kind == TY_LIST ||
            elem->kind == TY_CLASS || elem->kind == TY_OPT ||
            elem->kind == TY_RC || elem->kind == TY_WEAK || elem->kind == TY_NULL ||
+           elem->kind == TY_CLOSURE ||
            elem->kind == TY_IFACE || elem->kind == TY_TUPLE ||
            elem->kind == TY_THREAD || elem->kind == TY_MUTEX;
 }
@@ -3600,6 +3605,10 @@ static const char *drop_fn_for(Emitter *e, Type *t) {
             return "@pl_drop_str";
         case TY_LIST: return gen_list_drop(e, t);
         case TY_RC: return gen_rc_drop(e, t);
+        // ★ closure は記録の手前に片付け関数を持っています（A-51）
+        case TY_CLOSURE:
+            declare_rt(e, "void @pl_closure_drop(ptr)");
+            return "@pl_closure_drop";
         // ★ 弱参照は中身の型によらず同じ手放し方です（A-50）
         case TY_WEAK:
             declare_rt(e, "void @pl_rc_weak_release(ptr)");
@@ -3680,6 +3689,7 @@ static bool is_droppable(Node *decl) {
             decl->type->kind == TY_CLASS || decl->type->kind == TY_OPT ||
             decl->type->kind == TY_RC ||   // rc[T] はカウントを減らす
             decl->type->kind == TY_WEAK || // weak[T] は弱い数え札を減らす（A-50）
+            decl->type->kind == TY_CLOSURE || // closure は記録を片付ける（A-51）
             payload_enum);
 }
 
@@ -4904,6 +4914,91 @@ static char *unpack_i64(Emitter *e, Type *t, char *v) {
 //
 // ★ 確保しません（枠が畳まれるだけ）。だから**作った関数より長生きできません**
 //   ——逃がそうとしたら所有権検査が断ります（design/closures.md 案 C）。
+// ── 持ち運べるクロージャ（A-51）──────────────────────────
+//
+// ★ 記録の形は枠の上のものと同じです（先頭が関数ポインタ、続いて捕まえた値）。
+//   違うのは置き場所（ヒープ）と、捕まえた値を**写す**こと（rc / weak は共有）。
+//   記録の手前には、捕まえた値を片付ける関数を置きます（runtime の pl_closure_new）。
+
+// 捕まえる値を、記録が所有する形にする
+static char *capture_own(Emitter *e, Type *t, char *v) {
+    Type *b = t->kind == TY_OPT ? t->elem : t;
+    if (b->kind == TY_RC || b->kind == TY_WEAK) {
+        const char *fn = retain_rt(e, t);
+        char *r = new_tmp(e);
+        sb_printf(&e->fn, "  %s = call ptr @%s(ptr %s)\n", r, fn, v);
+        return r;
+    }
+    const char *cf = copy_fn_for(e, t);
+    if (!cf) return v;   // 値型は写すだけ
+    char *r = new_tmp(e);
+    sb_printf(&e->fn, "  %s = call ptr %s(ptr %s)\n", r, cf, v);
+    return r;
+}
+
+// 記録の中の捕まえた値を片付ける関数（片付けるものが無ければ "null"）
+static const char *closure_drop_fn(Emitter *e, Node *n, const char *rec) {
+    bool any = false;
+    for (Node *c = n->caps; c; c = c->next)
+        if (drop_fn_for(e, c->type)) any = true;
+    if (!any) return "null";
+
+    StrBuf key;
+    sb_init(&key);
+    sb_printf(&key, "cldrop:%s", n->ir_name);
+    const char *hit = drop_fn_cached(e, sb_str(&key));
+    if (hit) return hit;
+    StrBuf name;
+    sb_init(&name);
+    sb_printf(&name, "@%s.cl.drop", n->ir_name);
+    drop_fn_remember(e, sb_str(&key), sb_str(&name));
+
+    StrBuf b;
+    sb_init(&b);
+    sb_printf(&b, "\ndefine internal void %s(ptr %%env) {\nentry:\n", sb_str(&name));
+    int ci = 0;
+    for (Node *c = n->caps; c; c = c->next, ci++) {
+        const char *df = drop_fn_for(e, c->type);
+        if (!df) continue;
+        sb_printf(&b, "  %%dp%d = getelementptr %s, ptr %%env, i32 0, i32 %d\n", ci, rec, ci + 1);
+        sb_printf(&b, "  %%dv%d = load ptr, ptr %%dp%d\n", ci, ci);
+        sb_printf(&b, "  call void %s(ptr %%dv%d)\n", df, ci);
+    }
+    sb_printf(&b, "  ret void\n}\n");
+    sb_printf(&e->thunkdefs, "%s", sb_str(&b));
+    return sb_str(&name);
+}
+
+static char *closure_heap(Emitter *e, Node *n, const char *rec, const char *th) {
+    int ncap = 0;
+    for (Node *c = n->caps; c; c = c->next) ncap++;
+    const char *dropfn = closure_drop_fn(e, n, rec);
+    declare_rt(e, "ptr @pl_closure_new(i64, ptr)");
+    char *clo = new_tmp(e);
+    sb_printf(&e->fn, "  %s = call ptr @pl_closure_new(i64 %d, ptr %s)\n", clo,
+              8 * (1 + ncap), dropfn);
+    sb_printf(&e->fn, "  store ptr %s, ptr %s\n", th, clo);
+    int ci = 0;
+    for (Node *c = n->caps; c; c = c->next, ci++) {
+        char *v = capture_own(e, c->type, gen_load(e, c->type, c->ir_name));
+        char *slot = new_tmp(e);
+        sb_printf(&e->fn, "  %s = getelementptr %s, ptr %s, i32 0, i32 %d\n",
+                  slot, rec, clo, ci + 1);
+        gen_store(e, c->type, v, slot);
+    }
+    return clo;
+}
+
+// def で書いた関数を closure にする（捕まえるものが無い記録をヒープに作る）
+static char *closure_heap_ref(Emitter *e, Node *n) {
+    closure_ref(e, n->ir_name, n->type);   // @<関数>.clo.thunk を用意する
+    declare_rt(e, "ptr @pl_closure_new(i64, ptr)");
+    char *clo = new_tmp(e);
+    sb_printf(&e->fn, "  %s = call ptr @pl_closure_new(i64 8, ptr null)\n", clo);
+    sb_printf(&e->fn, "  store ptr @%s.clo.thunk, ptr %s\n", n->ir_name, clo);
+    return clo;
+}
+
 static char *closure_make(Emitter *e, Node *n) {
     Type *ft = n->type;
 
@@ -4966,6 +5061,9 @@ static char *closure_make(Emitter *e, Node *n) {
                       llvm_type(ft->elem));
         sb_printf(&e->thunkdefs, "%s", sb_str(&b));
     }
+
+    // ★ closure（A-51）はヒープに作ります
+    if (n->is_closure) return closure_heap(e, n, sb_str(&rec), th);
 
     // 記録を枠の上に作って、値を詰める
     char *clo = new_tmp(e);

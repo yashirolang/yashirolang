@@ -169,7 +169,8 @@ def unwrap_enum(e: rc[ast.EnumDef] | None) -> rc[ast.EnumDef]:
 
 def ty_is_owned(t: rc[ast.Type]) -> bool:
     if (t.kind == ast.TY_STR or t.kind == ast.TY_LIST or
-            t.kind == ast.TY_CLASS or t.kind == ast.TY_RC or t.kind == ast.TY_WEAK):
+            t.kind == ast.TY_CLASS or t.kind == ast.TY_RC or t.kind == ast.TY_WEAK or
+            t.kind == ast.TY_CLOSURE):
         return True
     # ★ 中身を持つ列挙（A-41）はヒープの物体です。名前だけの列挙は
     #   ただの i64 なので、後始末は要りません。
@@ -1884,7 +1885,7 @@ def call_args(o: mut Own, f: mut rc[Flow], n: rc[ast.Node], skip_self: bool) -> 
         refs.append(rc(ArgRef(an, is_mut_param, WR_ARG)))
         # ★ 捕獲した lambda を渡すときは、捕まえた変数も共有の借りとして並べる（A-51）
         #   注意: C 版は組み込み（呼び先の定義が無いもの）ではこの検査をしないので合わせる
-        if fn is not None:
+        if fn is not None and not an.is_closure:
             cq: rc[ast.Node] | None = an.caps
             while cq is not None:
                 cqn: rc[ast.Node] = cq
@@ -1933,6 +1934,11 @@ def move_expr(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None, ctx: int) -> 
     if n is None:
         return False
     nn: rc[ast.Node] = n
+
+    # ★ lambda / 関数の名前から作る closure は、その場で作る新しい値（A-51）
+    #   対になる定義: src/ownck.c の move_expr
+    if nn.kind == ast.ND_VAR and nn.is_func_ref and nn.is_closure:
+        return True
 
     # ── rc[T] は共有型。代入しても元は無効になりません ──
     #
@@ -2351,7 +2357,7 @@ def stmt(o: mut Own, f: mut rc[Flow], n: rc[ast.Node] | None) -> None:
         vr: rc[ast.Node] | None = nn.rhs
         if vr is not None:
             vrn: rc[ast.Node] = vr
-            if vrn.caps is not None:
+            if vrn.caps is not None and not vrn.is_closure:
                 record_capture_loans(o, nn, vrn.caps)
         if len(nn.ir_name) > 0:
             pk: int = PL_LOCAL

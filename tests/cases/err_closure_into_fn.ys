@@ -1,0 +1,18 @@
+# ERROR: 型が一致しません
+# ERROR: closure は fn の変数・フィールドには入れられません
+class P:
+    v: int
+    def init(self, v: int) -> None:
+        self.v = v
+
+def mk(k: int) -> closure(int) -> int:
+    return lambda x: x + k
+
+class Keep:
+    f: fn(int) -> int
+    def init(self, f: fn(int) -> int) -> None:
+        self.f = f
+
+def main() -> int:
+    f: fn(int) -> int = mk(3)
+    return 0

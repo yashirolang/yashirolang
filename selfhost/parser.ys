@@ -2124,12 +2124,16 @@ class Parser:
         #    直後に '(' が来たときに関数型として読みます（既存のコードで
         #    fn という名前が使えなくなるのを避けるため）。
         ft: rc[token.Token] = self.peek()
-        if ft.kind == token.TK_IDENT and ft.text == "fn" and self.peek_at(1).is_punct("("):
+        # ★ `closure(A) -> B` も同じ形で読む（A-51）。対になる定義: src/parser.c の type_ref
+        if (ft.kind == token.TK_IDENT and (ft.text == "fn" or ft.text == "closure") and
+                self.peek_at(1).is_punct("(")):
             self.advance()
             fopen: rc[token.Token] = self.advance()
 
             fnode: rc[ast.Node] = ast.new_node(ast.ND_TYPEREF, ft)
             fnode.name = "fn"
+            if ft.text == "closure":
+                fnode.name = "closure"
 
             tail: rc[ast.Node] | None = None
             if not self.peek().is_punct(")"):

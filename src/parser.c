@@ -2319,13 +2319,15 @@ static Node *type_ref(Parser *p, const char *what) {
     //    既存のコードで fn という名前が使えなくなるためです
     //    （型を読む関数と式を読む関数が別なので、ここで迷いません）。
     Token *ft = peek(p);
-    if (ft->kind == TK_IDENT && strcmp(ft->text, "fn") == 0 &&
+    // ★ `closure(A) -> B` も同じ形で読みます（A-51。持ち運べるクロージャ）
+    if (ft->kind == TK_IDENT &&
+        (strcmp(ft->text, "fn") == 0 || strcmp(ft->text, "closure") == 0) &&
         tok_is(peek_at(p, 1), "(")) {
-        advance(p);                     // fn
+        advance(p);                     // fn / closure
         Token *open = advance(p);       // (
 
         Node *n = new_node(ND_TYPEREF, ft);
-        n->name = "fn";
+        n->name = strcmp(ft->text, "fn") == 0 ? "fn" : "closure";
 
         Node *tail = NULL;
         if (!tok_is(peek(p), ")")) {

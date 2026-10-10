@@ -540,6 +540,7 @@ Node *ast_clone(Node *n) {
     c->hid_obj = n->hid_obj;
     c->is_lambda = n->is_lambda;   // A-42
     c->is_fallback = n->is_fallback;   // A-48
+    c->is_closure = n->is_closure;     // A-51
 
     c->lhs = ast_clone(n->lhs);
     c->rhs = ast_clone(n->rhs);

@@ -782,8 +782,37 @@ def make(n: int) -> fn(int) -> bool:
 | `spawn` に渡す | できません（別のスレッドは枠より長生きしえます） |
 
 捕獲しない lambda と、`def` で書いた関数の値には、この制限はありません
-（静的な記録を指すだけです）。状態を持つものをしまいたいときは、
-インタフェース（[design/generics-and-interfaces.md](../design/generics-and-interfaces.md)）を使います。
+（静的な記録を指すだけです）。捕まえたものを返したい・しまいたいときは、次の `closure` を使います。
+
+#### 持ち運べるクロージャ `closure(A) -> B`（A-51）
+
+```python
+def make_adder(k: int) -> closure(int) -> int:
+    return lambda x: x + k              # 返せます
+
+def make_counter() -> closure() -> int:
+    c: rc[Counter] = rc(Counter())
+    return lambda: c.bump()             # 状態を持てます（rc を共有）
+
+class Button:
+    on_click: closure(int) -> str       # しまえます
+    def init(self, on_click: own closure(int) -> str) -> None:
+        self.on_click = on_click
+
+add3: closure(int) -> int = make_adder(3)
+print(count_if(xs, add3))              # fn を受け取る関数へ、そのまま渡せます
+```
+
+- 型を `closure(...) -> T` と書いた場所（変数・引数・フィールド・戻り値・`list` の要素）に
+  `lambda` を書くと、**ヒープに記録を作ります**。`def` で書いた関数の名前も入れられます
+- **所有する値**です。代入・`return` で移動し、スコープを抜けると解放します。しまうには `own` が要ります
+- 捕まえる値は**写し**です。値型はそのまま、`rc[T]` / `weak[T]` は共有（数え札を増やす）、
+  `str` / `list` / `__copy__` を持つクラスは `copy` で写します。写せない型を捕まえると止まります
+- 捕まえた値は lambda の中で `mut` として使えます（記録が所有しているので、ほかに影響しません）
+- `fn(...)` を受け取る引数へは、そのまま渡せます（記録の形が同じです）。ただし呼び先が
+  受け取った関数を**しまう**なら断ります（持ち主の closure が先に消えるため）
+- `closure` を `fn` の変数・フィールドに入れることと、`fn` の値を `closure` にすることはできません
+- `raises` も `fn` と同じく書けます（`closure(str) -> int raises ParseError`）
 
 ### 4.6 内包表記
 

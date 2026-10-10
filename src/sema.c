@@ -556,6 +556,9 @@ static Class *branch_class(Sema *s, EnumDef *e, EnumVal *ev);
 // 捕獲した lambda を逃がさない（A-43）
 static void reject_escaping_closure(Node *v, const char *what);
 static bool capture_by_value(Type *t);   // A-51
+static bool fn_shape_equal(Type *a, Type *b);   // A-51
+static bool closure_to_fn_arg(Sema *s, Node *a, Type *at, FuncSig *f, int pi,
+                              const char *shown);
 static bool fn_param_escapes_at(Sema *s, Node *body, const char *pname,
                                 int hops);
 static Type *check_new(Sema *s, Node *n, Class *c);
@@ -611,10 +614,11 @@ static Node *range_coerce(Sema *s, Node *val, Type *want) {
 // ★ T | None を包む層。
 //   nullable にできるのは参照型（str / list / class）だけです。
 static Type *resolve_type(Sema *s, Node *tr) {
-    // ★ 関数型 fn(A, B) -> C
-    if (tr->name && strcmp(tr->name, "fn") == 0 && !tr->mod_name) {
+    // ★ 関数型 fn(A, B) -> C / 持ち運べるクロージャ closure(A, B) -> C（A-51）
+    if (tr->name && (strcmp(tr->name, "fn") == 0 || strcmp(tr->name, "closure") == 0) &&
+        !tr->mod_name) {
         Type *t = xmalloc(sizeof(Type));
-        t->kind = TY_FN;
+        t->kind = strcmp(tr->name, "fn") == 0 ? TY_FN : TY_CLOSURE;
         int n = 0;
         for (Node *a = tr->body; a; a = a->next) n++;
         t->nparams = n;
@@ -1063,7 +1067,14 @@ static const char *no_implicit_hint(Type *got, Type *want) {
         return MSG2("sema.042", "'{0}' と '{1}' は名前が同じだけの別のクラスです（同じ型かどうかは名前ではなく定義で決まります）", got->cls->ir_name, want->cls->ir_name);
     // ★ 関数型どうしなら、**どこが違うのか**を言います。
     //   「暗黙の型変換がありません」では、何を直せばよいか分かりません。
-    if (got->kind == TY_FN && want->kind == TY_FN) {
+    // ★ closure と fn（A-51）。形が同じなら、違うのは「持ち運べるか」だけです
+    if ((got->kind == TY_FN || got->kind == TY_CLOSURE) &&
+        (want->kind == TY_FN || want->kind == TY_CLOSURE) && got->kind != want->kind &&
+        fn_shape_equal(got, want))
+        return got->kind == TY_CLOSURE
+            ? MSG0("sema.643", "closure は fn の変数・フィールドには入れられません（持ち主がいなくなるため）。fn を受け取る引数へは、そのまま渡せます")
+            : MSG0("sema.644", "fn の値は closure にできません。closure にできるのは lambda と def で書いた関数の名前です");
+    if ((got->kind == TY_FN || got->kind == TY_CLOSURE) && got->kind == want->kind) {
         if (got->nparams != want->nparams)
             return MSG2("sema.043", "引数の数が違います（{0} 個と {1} 個）", diag_fmt("%d", got->nparams), diag_fmt("%d", want->nparams));
         for (int i = 0; i < got->nparams; i++)
@@ -1576,6 +1587,13 @@ static Type *check_unary(Sema *s, Node *n) {
     return t;
 }
 
+// 関数型の「形」（引数・戻り型・raises）が同じか。fn と closure の違いは見ません（A-51）
+static bool fn_shape_equal(Type *a, Type *b) {
+    Type tmp = *b;
+    tmp.kind = a->kind;
+    return type_equal(a, &tmp);
+}
+
 // FuncSig から関数型を作る
 static Type *fn_type_of(FuncSig *f) {
     Type *t = xmalloc(sizeof(Type));
@@ -1642,7 +1660,13 @@ static Type *check_var(Sema *s, Node *n) {
         if (f) {
             n->ir_name = f->ir_name;
             n->is_func_ref = true;
-            return fn_type_of(f);
+            Type *ft = fn_type_of(f);
+            // ★ closure が要る場所なら、関数をヒープの記録に包みます（A-51）
+            if (s->expected && s->expected->kind == TY_CLOSURE && fn_shape_equal(ft, s->expected)) {
+                n->is_closure = true;
+                return s->expected;
+            }
+            return ft;
         }
     }
 
@@ -1829,7 +1853,7 @@ static void check_vardecl(Sema *s, Node *n) {
     VarEntry *v = declare(s, n->name, declared, n->tok);
     n->ir_name = v->ir_name;  // ★ codegen が alloca / store に使う名前
     n->type = declared;
-    if (n->rhs && n->rhs->caps) v->caps = n->rhs->caps;   // A-51
+    if (n->rhs && n->rhs->caps && !n->rhs->is_closure) v->caps = n->rhs->caps;   // A-51
 }
 
 static void check_assign(Sema *s, Node *n) {
@@ -1943,7 +1967,7 @@ static void check_assign(Sema *s, Node *n) {
     // ★ 借りて捕まえた lambda は**宣言でだけ**受け取れます（A-51）。
     //   代入だと、内側のスコープの変数を捕まえた lambda を外側の変数へ
     //   運べてしまい、捕まえた変数が先に解放されます。
-    if (n->rhs->caps) {
+    if (n->rhs->caps && !n->rhs->is_closure) {
         for (Node *c = n->rhs->caps; c; c = c->next)
             if (!capture_by_value(c->type)) {
                 Diag d = {0};
@@ -2939,10 +2963,12 @@ static Type *check_class_method(Sema *s, Node *n, Class *c) {
         s->expected = NULL;
         // ★ 呼び先がしまうなら、捕獲した lambda は渡せません（A-43）
         // 注意: 定義の木が無いときは「しまう」と答えます（安全側）
-        if (a->caps && (!f->node ||
+        if (a->caps && !a->is_closure && (!f->node ||
                         fn_param_escapes_at(s, f->node->body, f->pnames[i + 1], 0)))
             reject_escaping_closure(a, MSG0("sema.410", "しまうことが"));
         mark_arg_own_rc(a, f, i + 1);
+        // ★ closure を fn の引数へ（A-51）。しまわない呼び先にだけ渡せます
+        if (closure_to_fn_arg(s, a, at, f, i + 1, mname)) continue;
         if (!type_assignable(at, f->params[i + 1])) {
             Diag d = {0};
             d.message = MSG4("sema.150", "メソッド '{0}' の第 {1} 引数: 型 '{2}' を '{3}' に渡せません", mname, diag_fmt("%d", i + 1), type_name(at), type_name(f->params[i + 1]));
@@ -3465,10 +3491,12 @@ static Type *check_new(Sema *s, Node *n, Class *c) {
         s->expected = NULL;
         // ★ 生成はふつう「しまう」ので、捕獲した lambda は渡せません（A-43）
         // 注意: 定義の木が無いときは「しまう」と答えます（安全側）
-        if (a->caps && (!f->node ||
+        if (a->caps && !a->is_closure && (!f->node ||
                         fn_param_escapes_at(s, f->node->body, f->pnames[i + 1], 0)))
             reject_escaping_closure(a, MSG0("sema.410", "しまうことが"));
         mark_arg_own_rc(a, f, i + 1);
+        // ★ closure を fn の引数へ（A-51）。しまわない呼び先にだけ渡せます
+        if (closure_to_fn_arg(s, a, at, f, i + 1, c->name)) continue;
         if (!type_assignable(at, f->params[i + 1])) {
             Diag d = {0};
             d.message = MSG4("sema.195", "'{0}' の生成の第 {1} 引数: 型 '{2}' を '{3}' に渡せません", c->name, diag_fmt("%d", i + 1), type_name(at), type_name(f->params[i + 1]));
@@ -3590,7 +3618,7 @@ static Type *check_call(Sema *s, Node *n) {
     // ★ 名前が **関数型の変数**なら間接呼び出しです。
     //   注意: 変数を先に見ます。同名の関数があっても変数が勝ちます。
     VarEntry *fv = lookup(s, n->name);
-    if (fv && fv->type && fv->type->kind == TY_FN) {
+    if (fv && fv->type && (fv->type->kind == TY_FN || fv->type->kind == TY_CLOSURE)) {
         Type *ft = fv->type;
         // ★ 関数型には引数の**名前が入っていません**（A-38）。
         reject_kwargs(n->args,
@@ -4063,6 +4091,26 @@ static void bind_args_sig(Node *n, FuncSig *f, int skip, const char *subject) {
 //
 // ★ モジュール修飾の呼び出し（lexer.make(1)）でも同じ検査が要るので、
 //   関数に切り出しました。呼ぶ側が変わっても、検査は 1 か所のままです。
+// ★ closure を fn を受け取る引数へ渡す（A-51）。渡せたら true。
+//   記録の形が同じなので、何も変換しません。呼び先がしまうなら断ります。
+static bool closure_to_fn_arg(Sema *s, Node *a, Type *at, FuncSig *f, int pi,
+                              const char *shown) {
+    if (at->kind != TY_CLOSURE || f->params[pi]->kind != TY_FN ||
+        !fn_shape_equal(at, f->params[pi]))
+        return false;
+    if (!f->node || fn_param_escapes_at(s, f->node->body, f->pnames[pi], 0)) {
+        Diag d = {0};
+        d.message = MSG1("sema.645", "closure を '{0}' の fn の引数に渡せません", shown);
+        d.primary.tok = a->tok;
+        d.primary.label = MSG0("sema.646", "呼び先がこの関数をしまいます");
+        d.related.tok = f->tok;
+        d.related.label = MSG1("sema.248", "'{0}' は受け取った関数をしまいます", f->pnames[pi]);
+        d.hint = MSG0("sema.647", "しまう相手には、引数の型を closure(...) にして所有ごと渡してください（own closure(...)）");
+        diag_fail(&d);
+    }
+    return true;
+}
+
 static Type *check_call_sig(Sema *s, Node *n, FuncSig *f, const char *what) {
     const char *shown = n->mod_name ? diag_fmt("%s.%s", n->mod_name, n->name)
                                     : f->name;
@@ -4092,12 +4140,13 @@ static Type *check_call_sig(Sema *s, Node *n, FuncSig *f, const char *what) {
         // ★ 例外は**関数型**です（A-42）。lambda はここから型をもらいます。
         //   注意: 関数型に限るのは、[] のような「型注釈を書いてください」と
         //     案内したい形まで通してしまわないためです。
-        s->expected = f->params[i]->kind == TY_FN ? f->params[i] : NULL;
+        s->expected = f->params[i]->kind == TY_FN || f->params[i]->kind == TY_CLOSURE
+                          ? f->params[i] : NULL;
         Type *at = check_expr(s, a);
         s->expected = NULL;
         // ★ 捕獲した lambda は、**しまわない**相手にだけ渡せます（A-43）。
         //   呼ぶだけ・局所に置くだけなら、呼び出しは作った枠より短いので安全です。
-        if (a->caps && f->node && i < f->nparams &&
+        if (a->caps && !a->is_closure && f->node && i < f->nparams &&
             fn_param_escapes_at(s, f->node->body, f->pnames[i], 0)) {
             Diag d = {0};
             d.message = MSG1("sema.247", "捕獲した lambda を '{0}' に渡せません", shown);
@@ -4115,6 +4164,10 @@ static Type *check_call_sig(Sema *s, Node *n, FuncSig *f, const char *what) {
         //   別経路なので旗が立たず、codegen は解放しません（安全側）。
         a->arg_is_borrowed = f->pmodes && f->pmodes[i] != PM_OWN;
         mark_arg_own_rc(a, f, i);
+        // ★ closure は fn を受け取る引数へ**そのまま渡せます**（A-51）。記録の形が
+        //   同じなので、呼び先からは fn に見えます。ただし呼び先がしまうと、
+        //   持ち主（closure）が先に消えるので断ります。
+        if (closure_to_fn_arg(s, a, at, f, i, shown)) continue;
         if (!type_assignable(at, f->params[i])) {
             Diag d = {0};
             d.message = MSG5("sema.249", "{0} '{1}' の第 {2} 引数: 型 '{3}' を '{4}' に渡せません", what, shown, diag_fmt("%d", i + 1), type_name(at), type_name(f->params[i]));
@@ -4140,6 +4193,7 @@ static Type *check_call_sig(Sema *s, Node *n, FuncSig *f, const char *what) {
 //   ここには引っかかりません。制限がかかるのは**捕まえたときだけ**です。
 static void reject_escaping_closure(Node *v, const char *what) {
     if (!v || !v->caps) return;
+    if (v->is_closure) return;   // ★ closure はヒープにあり、持ち運べます（A-51）
     Diag d = {0};
     d.message = MSG1("sema.250", "捕獲した lambda は{0}できません", what);
     d.primary.tok = v->tok;
@@ -6274,7 +6328,7 @@ static FuncSig *instantiate_lambda(Sema *s, FuncSig *tmpl, Node *ref) {
     for (Node *pm = tn->params; pm; pm = pm->next) np++;
 
     Type *want = s->expected;
-    if (!want || want->kind != TY_FN) {
+    if (!want || (want->kind != TY_FN && want->kind != TY_CLOSURE)) {
         Diag d = {0};
         d.message = MSG0("sema.590", "この lambda がどんな関数になるのか決められません");
         d.primary.tok = ref->tok;
@@ -6296,7 +6350,18 @@ static FuncSig *instantiate_lambda(Sema *s, FuncSig *tmpl, Node *ref) {
     Node *caps = NULL;
     collect_captures(s, tn->body, tn->params, &caps);
     int ncap = 0;
+    bool heap = want->kind == TY_CLOSURE;
+    ref->is_closure = heap;
     for (Node *c = caps; c; c = c->next) {
+        // ★ closure（A-51）はヒープに置いて持ち運ぶので、**借りて捕まえません**。
+        //   値型は写し、rc / weak は共有、str / list / クラスは copy で写します。
+        if (heap) {
+            Type *b = c->type->kind == TY_OPT ? c->type->elem : c->type;
+            if (!capture_by_value(c->type) && b->kind != TY_RC && b->kind != TY_WEAK)
+                check_copyable(s, c->type, c->tok);
+            ncap++;
+            continue;
+        }
         if (!capturable(c->type)) {
             Diag d = {0};
             d.message = MSG2("sema.343", "'{0}' は捕まえられません（'{1}' 型）", c->name, type_name(c->type));
@@ -6367,6 +6432,9 @@ static FuncSig *instantiate_lambda(Sema *s, FuncSig *tmpl, Node *ref) {
 
             Node *pm = new_node(ND_PARAM, ref->tok);
             pm->name = c->name;
+            // ★ closure（A-51）の記録は捕まえた値を**所有しています**。中で書き換えても
+            //   ほかに影響しないので、mut で借りて渡します（状態を持つクロージャ）。
+            if (heap) pm->mode = PM_MUT;
             Node *tr = new_node(ND_TYPEREF, ref->tok);
             tr->name = tname;
             pm->type_ref = tr;

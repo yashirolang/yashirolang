@@ -397,6 +397,7 @@ type       ::= [ IDENT "." ] IDENT [ "[" type { "," type } "]" ]   (* 修飾は 
              | type "|" "None"                    (* Nullable *)
              | "(" type "," type { "," type } ")"  (* タプル *)
              | "fn" "(" [ type { "," type } ] ")" "->" type [ raises ]   (* 関数型。raises は A-49 *)
+             | "closure" "(" [ type { "," type } ] ")" "->" type [ raises ]   (* 持ち運べるクロージャ（A-51） *)
 raises     ::= "raises" type { "|" type }
 ```
 

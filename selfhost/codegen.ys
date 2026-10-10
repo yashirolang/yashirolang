@@ -306,6 +306,8 @@ class Emitter:
             return "ptr"
         if t.kind == ast.TY_WEAK:
             return "ptr"          # weak[T]（rc と同じ箱へのポインタ。A-50）
+        if t.kind == ast.TY_CLOSURE:
+            return "ptr"          # closure（ヒープの記録へのポインタ。A-51）
         if t.kind == ast.TY_THREAD:
             return "ptr"          # Thread[R]
         if t.kind == ast.TY_MUTEX:
@@ -350,6 +352,8 @@ class Emitter:
         if t.kind == ast.TY_RC:
             return "ptr"
         if t.kind == ast.TY_WEAK:
+            return "ptr"
+        if t.kind == ast.TY_CLOSURE:
             return "ptr"
         if t.kind == ast.TY_THREAD:
             return "ptr"
@@ -680,6 +684,97 @@ class Emitter:
     #
     # ★ 確保しません（枠が畳まれるだけ）。だから**作った関数より長生き
     #   できません**——逃がす形は sema が断ります。
+    # ── 持ち運べるクロージャ（A-51）──────────────────────────
+    #   対になる定義: src/codegen.c の capture_own / closure_drop_fn /
+    #   closure_heap / closure_heap_ref
+
+    # 捕まえる値を、記録が所有する形にする
+    def capture_own(mut self, t: rc[ast.Type], v: own str) -> str:
+        b: rc[ast.Type] = t
+        if t.kind == ast.TY_OPT:
+            b = ast.elem_of(t)
+        if b.kind == ast.TY_RC or b.kind == ast.TY_WEAK:
+            fn: str = self.retain_rt(t)
+            r: str = self.new_tmp()
+            self.emit("  " + r + " = call ptr @" + fn + "(ptr " + v + ")\n")
+            return r
+        cf: str = self.copy_fn_for(t)
+        if len(cf) == 0:
+            return v   # 値型は写すだけ
+        r2: str = self.new_tmp()
+        self.emit("  " + r2 + " = call ptr " + cf + "(ptr " + v + ")\n")
+        return r2
+
+    # 記録の中の捕まえた値を片付ける関数（片付けるものが無ければ "null"）
+    def closure_drop_fn(mut self, n: rc[ast.Node], rec: str) -> str:
+        any_: bool = False
+        c0: rc[ast.Node] | None = n.caps
+        while c0 is not None:
+            cc: rc[ast.Node] = c0
+            if len(self.drop_fn_for(type_of(cc))) > 0:
+                any_ = True
+            c0 = cc.next
+        if not any_:
+            return "null"
+        key: str = "cldrop:" + n.ir_name
+        hit: str = self.drop_fn_cached(key)
+        if len(hit) > 0:
+            return hit
+        name: str = "@" + n.ir_name + ".cl.drop"
+        self.drop_fn_remember(key, name)
+        b: list[str] = []
+        b.append("\ndefine internal void " + name + "(ptr %env) {\nentry:\n")
+        ci: int = 0
+        c1: rc[ast.Node] | None = n.caps
+        while c1 is not None:
+            cv: rc[ast.Node] = c1
+            df: str = self.drop_fn_for(type_of(cv))
+            if len(df) > 0:
+                b.append("  %dp" + str(ci) + " = getelementptr " + rec + ", ptr %env, i32 0, i32 " +
+                         str(ci + 1) + "\n")
+                b.append("  %dv" + str(ci) + " = load ptr, ptr %dp" + str(ci) + "\n")
+                b.append("  call void " + df + "(ptr %dv" + str(ci) + ")\n")
+            ci = ci + 1
+            c1 = cv.next
+        b.append("  ret void\n}\n")
+        self.thunkdefs.append(strings.join(b, ""))
+        return name
+
+    def closure_heap(mut self, n: rc[ast.Node], rec: str, th: str) -> str:
+        ncap: int = 0
+        c0: rc[ast.Node] | None = n.caps
+        while c0 is not None:
+            cc: rc[ast.Node] = c0
+            ncap = ncap + 1
+            c0 = cc.next
+        dropfn: str = self.closure_drop_fn(n, rec)
+        self.declare_rt("ptr @pl_closure_new(i64, ptr)")
+        clo: str = self.new_tmp()
+        self.emit("  " + clo + " = call ptr @pl_closure_new(i64 " + str(8 * (1 + ncap)) +
+                  ", ptr " + dropfn + ")\n")
+        self.emit("  store ptr " + th + ", ptr " + clo + "\n")
+        ci: int = 0
+        c1: rc[ast.Node] | None = n.caps
+        while c1 is not None:
+            cw: rc[ast.Node] = c1
+            v: str = self.capture_own(type_of(cw), self.gen_load(type_of(cw), cw.ir_name))
+            slot: str = self.new_tmp()
+            self.emit("  " + slot + " = getelementptr " + rec + ", ptr " + clo +
+                      ", i32 0, i32 " + str(ci + 1) + "\n")
+            self.gen_store(type_of(cw), v, slot)
+            ci = ci + 1
+            c1 = cw.next
+        return clo
+
+    # def で書いた関数を closure にする（捕まえるものが無い記録をヒープに作る）
+    def closure_heap_ref(mut self, n: rc[ast.Node]) -> str:
+        self.closure_ref(n.ir_name, type_of(n))   # @<関数>.clo.thunk を用意する
+        self.declare_rt("ptr @pl_closure_new(i64, ptr)")
+        clo: str = self.new_tmp()
+        self.emit("  " + clo + " = call ptr @pl_closure_new(i64 8, ptr null)\n")
+        self.emit("  store ptr @" + n.ir_name + ".clo.thunk, ptr " + clo + "\n")
+        return clo
+
     def closure_make(mut self, n: rc[ast.Node]) -> str:
         ft: rc[ast.Type] = type_of(n)
 
@@ -741,6 +836,10 @@ class Emitter:
                          "(" + strings.join(argl, "") + ")\n  ret " +
                          self.llvm_type(rt) + " %r\n}\n")
             self.thunkdefs.append(strings.join(b, ""))
+
+        # ★ closure（A-51）はヒープに作る
+        if n.is_closure:
+            return self.closure_heap(n, rec, th)
 
         # 記録を枠の上に作って、値を詰める
         clo: str = self.new_tmp()
@@ -938,6 +1037,8 @@ class Emitter:
                 # ★ 捕獲した lambda は枠の上に記録を作ります（A-43）
                 if n.caps is not None:
                     return self.closure_make(n)
+                if n.is_closure:
+                    return self.closure_heap_ref(n)   # A-51
                 return self.closure_ref(n.ir_name, type_of(n))
             # 変数の読み出し（規約 R2）。sema が割り当てた ir_name を使う
             vv: str = self.gen_load(type_of(n), n.ir_name)
@@ -1351,6 +1452,7 @@ class Emitter:
         return (elem.kind == ast.TY_STR or elem.kind == ast.TY_LIST or
                 elem.kind == ast.TY_CLASS or elem.kind == ast.TY_OPT or
                 elem.kind == ast.TY_RC or elem.kind == ast.TY_WEAK or elem.kind == ast.TY_NULL or
+                elem.kind == ast.TY_CLOSURE or
                 elem.kind == ast.TY_IFACE or elem.kind == ast.TY_TUPLE or
                 elem.kind == ast.TY_THREAD or elem.kind == ast.TY_MUTEX)
 
@@ -3654,6 +3756,10 @@ class Emitter:
             return self.gen_list_drop(t)
         if t.kind == ast.TY_RC:
             return self.gen_rc_drop(t)
+        # ★ closure は記録の手前に片付け関数を持っている（A-51）
+        if t.kind == ast.TY_CLOSURE:
+            self.declare_rt("void @pl_closure_drop(ptr)")
+            return "@pl_closure_drop"
         # ★ 弱参照は中身の型によらず同じ手放し方（A-50）
         if t.kind == ast.TY_WEAK:
             self.declare_rt("void @pl_rc_weak_release(ptr)")
@@ -3690,7 +3796,7 @@ class Emitter:
             return unwrap_enumdef(en3).has_payload
         return (t.kind == ast.TY_STR or t.kind == ast.TY_LIST or
                 t.kind == ast.TY_CLASS or t.kind == ast.TY_OPT or
-                t.kind == ast.TY_RC or t.kind == ast.TY_WEAK)
+                t.kind == ast.TY_RC or t.kind == ast.TY_WEAK or t.kind == ast.TY_CLOSURE)
 
     # このスコープの解放対象に加える（**先頭に足す**＝たどると宣言の逆順）
     def scope_add(mut self, decl: rc[ast.Node]) -> None:

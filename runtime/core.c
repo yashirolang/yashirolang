@@ -1922,6 +1922,33 @@ void pl_rc_release(void *p, void (*value_drop)(void *)) {
     if (r->weak == 0) pl_hook_free(r);
 }
 
+// ── 持ち運べるクロージャ closure(A) -> B（A-51）──
+//
+// ★ 記録の中身は fn の記録と同じです（先頭が関数ポインタ、続いて捕まえた値）。
+//   その**手前に 1 語**、記録を片付ける関数を置きます。値として持ち回るのは
+//   記録の先頭へのポインタなので、呼ぶ側は fn と同じ 1 通りで済みます。
+//
+//   ┌──────────┬────────────┬──────────────┐
+//   │ 片付け関数 │ 関数ポインタ │ 捕まえた値 …  │
+//   └──────────┴────────────┴──────────────┘
+//               ↑ closure の値
+typedef struct {
+    void (*drop)(void *);
+} PlClosureHead;
+
+void *pl_closure_new(long long size, void (*drop)(void *)) {
+    PlClosureHead *h = pl_alloc((long long)sizeof(PlClosureHead) + size);
+    h->drop = drop;
+    return h + 1;
+}
+
+void pl_closure_drop(void *p) {
+    if (!p) return;
+    PlClosureHead *h = (PlClosureHead *)p - 1;
+    if (h->drop) h->drop(p);   // 捕まえた値を片付ける
+    pl_hook_free(h);
+}
+
 // ── 弱参照 weak[T]（A-50）──
 //
 // ★ 同じ箱を指します。中身を生かしておく力は持ちません。

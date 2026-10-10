@@ -476,6 +476,8 @@ struct Node {
     // ★ match の書き換え（A-48）が作った `case _`。ガードが外れたときの落ち先で、
     //   内側の列挙の枝が 1 つしかないと届きませんが、それは断りません。
     bool is_fallback;
+    // ★ ND_VAR（lambda / 関数の名前）: `closure(...)` として作る（ヒープの記録。A-51）
+    bool is_closure;
 
     // ND_FIELD が指すフィールド（sema が解決する）
     Field *field;

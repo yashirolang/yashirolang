@@ -983,6 +983,11 @@ sema.639	a lambda that borrows '{0}' cannot be received by assignment	'{0}' を�
 sema.640	assigned to an existing variable here	ここで既にある変数へ入れています
 sema.641	receive it in a new variable declaration (e.g. f2: fn(int) -> int = lambda x: …)	新しい変数の宣言で受け取ってください（例: f2: fn(int) -> int = lambda x: …）
 sema.642	function values, Thread, mutex and ptr cannot be captured; take it as a parameter or write a def function	関数の値・Thread・mutex・ptr は捕まえられません。引数で受け取るか、def で書いた関数にしてください
+sema.643	a closure cannot go into an fn variable or field (its owner would disappear); it can be passed as-is to a parameter that takes fn	closure は fn の変数・フィールドには入れられません（持ち主がいなくなるため）。fn を受け取る引数へは、そのまま渡せます
+sema.644	an fn value cannot become a closure; only a lambda or the name of a def function can	fn の値は closure にできません。closure にできるのは lambda と def で書いた関数の名前です
+sema.645	cannot pass a closure to the fn parameter of '{0}'	closure を '{0}' の fn の引数に渡せません
+sema.646	the callee stores this function	呼び先がこの関数をしまいます
+sema.647	to give it to something that stores it, make the parameter closure(...) and pass ownership (own closure(...))	しまう相手には、引数の型を closure(...) にして所有ごと渡してください（own closure(...)）
 
 # ── 所有権・借用の検査 ──
 own.001	use of possibly moved value '{0}'	移動済みかもしれない値 '{0}' を使っています

@@ -1,0 +1,76 @@
+# OUTPUT: 7
+# OUTPUT: hi bob
+# OUTPUT: 1
+# OUTPUT: 2
+# OUTPUT: 42
+# OUTPUT: 2
+# OUTPUT: 32
+# OUTPUT: x
+# A-51: 持ち運べるクロージャ closure(A) -> B。返す・フィールドにしまう・list に入れる・
+#   fn を受け取る関数へ渡す、ができます。捕まえる値は写し（rc は共有）です。
+class Counter:
+    n: int
+    def init(self) -> None:
+        self.n = 0
+    def bump(mut self) -> int:
+        self.n += 1
+        return self.n
+
+class Button:
+    label: str
+    on_click: closure(int) -> str
+    def init(self, label: own str, on_click: own closure(int) -> str) -> None:
+        self.label = label
+        self.on_click = on_click
+    def click(self, x: int) -> str:
+        f: closure(int) -> str = copy_cl(self)
+        return "?"
+
+def copy_cl(b: Button) -> closure(int) -> str:
+    return lambda x: "x"
+
+def make_adder(k: int) -> closure(int) -> int:
+    return lambda x: x + k
+
+def make_greeter(prefix: str) -> closure(str) -> str:
+    p: str = prefix + ""
+    return lambda who: p + who
+
+def make_counter() -> closure() -> int:
+    c: rc[Counter] = rc(Counter())
+    return lambda: c.bump()
+
+def twice(x: int) -> int:
+    return x * 2
+
+def count_if(xs: list[int], f: fn(int) -> bool) -> int:
+    n: int = 0
+    for x in xs:
+        if f(x):
+            n += 1
+    return n
+
+def main() -> int:
+    add3: closure(int) -> int = make_adder(3)
+    print(add3(4))
+    g: closure(str) -> str = make_greeter("hi " + "")
+    print(g("bob"))
+    tick: closure() -> int = make_counter()
+    print(tick())
+    print(tick())
+    d: closure(int) -> int = twice
+    print(d(21))
+    lim: int = 3
+    big: closure(int) -> bool = lambda x: x > lim
+    print(count_if([1, 5, 2, 7], big))
+    fs: list[closure(int) -> int] = []
+    fs.append(make_adder(10))
+    fs.append(make_adder(20))
+    total: int = 0
+    for f in fs:
+        total += f(1)
+    print(total)
+    b: Button = Button("ok" + "", lambda x: "clicked " + str(x))
+    h: closure(int) -> str = copy_cl(b)
+    print(h(1))
+    return 0

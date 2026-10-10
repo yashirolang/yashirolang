@@ -1,0 +1,30 @@
+# OUTPUT: 3
+# OUTPUT: 2
+# OUTPUT: leaving
+# OUTPUT: free bb
+# OUTPUT: free a
+# OUTPUT: end
+# A-51: closure を手放すと、捕まえた rc も 1 回ずつ片付きます（移した側は二重に解放しません）。
+class Res:
+    name: str
+    def init(self, name: own str) -> None:
+        self.name = name
+    def drop(self) -> None:
+        print("free " + self.name)
+
+def make(name: own str) -> closure() -> int:
+    r: rc[Res] = rc(Res(name))
+    return lambda: len(r.name)
+
+def use() -> None:
+    f: closure() -> int = make("a" + "")
+    g: closure() -> int = make("bb" + "")
+    print(f() + g())
+    h: closure() -> int = g
+    print(h())
+    print("leaving")
+
+def main() -> int:
+    use()
+    print("end")
+    return 0

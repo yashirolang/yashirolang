@@ -140,6 +140,7 @@ bool ty_is_owned(Type *t) {
         case TY_CLASS:
         case TY_RC: return true;  // rc[T] も「後始末が要る値」
         case TY_WEAK: return true;  // weak[T] も（弱い数え札を減らす。A-50）
+        case TY_CLOSURE: return true;  // closure も（記録と写した捕獲を片付ける。A-51）
         // ★ 中身を持つ列挙（A-41）はヒープの物体です。名前だけの列挙は
         //   ただの i64 なので、後始末は要りません。
         case TY_ENUM: return t->en && t->en->has_payload;
@@ -1771,7 +1772,7 @@ static void call_args(Own *o, Flow *f, Node *n, bool skip_self) {
         // ★ 捕獲した lambda を渡すときは、捕まえた変数も**共有の借り**として
         //   並べます（A-51）。`f(xs, lambda: len(xs))` で xs を mut で渡すと、
         //   呼び先が書き換えている最中に lambda が読むことになるためです。
-        for (Node *c = a->caps; c; c = c->next)
+        for (Node *c = a->is_closure ? NULL : a->caps; c; c = c->next)
             if (c->type && ty_is_owned(c->type))
                 tail = tail->next = arg_ref(c, NULL, false, WR_ARG);
     }
@@ -1928,6 +1929,10 @@ static void use_expr(Own *o, Flow *f, Node *n) {
 // 束縛先はその値を所有しません（drop 挿入がこれを見ます）。
 static bool move_expr(Own *o, Flow *f, Node *n, MoveCtx ctx) {
     if (!n) return false;
+
+    // ★ lambda / 関数の名前から作る closure は、**その場で作る新しい値**です（A-51）。
+    //   名前は関数を指しているだけで、変数ではありません。
+    if (n->kind == ND_VAR && n->is_func_ref && n->is_closure) return true;
 
     // ── rc[T] は共有型。代入しても元は無効になりません ──
     //
@@ -2274,7 +2279,8 @@ static void stmt(Own *o, Flow *f, Node *n) {
             if (owns) forget_loan(o, n->ir_name ? n->ir_name : "");
             else record_loan(o, n, n->rhs);
             // ★ 捕獲した lambda（A-51）
-            if (n->rhs && n->rhs->caps) record_capture_loans(o, n, n->rhs->caps);
+            if (n->rhs && n->rhs->caps && !n->rhs->is_closure)
+                record_capture_loans(o, n, n->rhs->caps);
             if (n->ir_name) {
                 Place *p = new_place(n->ir_name[0] == '@' ? PL_GLOBAL : PL_LOCAL,
                                      NULL, n->ir_name, n->name);

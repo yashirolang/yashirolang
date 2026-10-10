@@ -40,6 +40,7 @@ TY_MUTEX: int = 15   # mutex[T]  → ptr（ランタイムの PlMutex への不�
 #   対になる定義: src/types.h の TY_ENUM
 TY_ENUM: int = 16    # enum Color → i64
 TY_WEAK: int = 17    # weak[T] → ptr（rc と同じ箱へのポインタ。A-50）
+TY_CLOSURE: int = 18 # closure(A) -> B → ptr（ヒープの記録へのポインタ。A-51）
 
 # ★ プログラム全体のインタフェース・メソッド数（vtable の長さ）。
 #   注意: sema が数え、codegen が読みます（codegen の引数を増やさないための割り切り）。
@@ -298,7 +299,7 @@ def type_class(name: str, c: rc[Class] | None) -> rc[Type]:
 # nullable にできる型か（参照型だけ）
 def type_can_be_opt(t: rc[Type]) -> bool:
     return (t.kind == TY_STR or t.kind == TY_LIST or t.kind == TY_CLASS or t.kind == TY_RC or
-            t.kind == TY_WEAK)
+            t.kind == TY_WEAK or t.kind == TY_CLOSURE)
 
 def type_opt(elem: mut rc[Type]) -> rc[Type]:
     if elem.kind == TY_OPT:
@@ -331,7 +332,7 @@ def type_equal(a: rc[Type], b: rc[Type]) -> bool:
     if a.kind == TY_LIST:
         return type_equal(elem_of(a), elem_of(b))
     # ★ 関数型は引数の並びと戻り型が全部同じなら同じ型
-    if a.kind == TY_FN:
+    if a.kind == TY_FN or a.kind == TY_CLOSURE:
         if len(a.params) != len(b.params):
             return False
         fi: int = 0
@@ -448,11 +449,14 @@ def type_name(t: rc[Type]) -> str:
         return copy(t.name)
     if t.kind == TY_ENUM:
         return copy(t.name)
-    if t.kind == TY_FN:
+    if t.kind == TY_FN or t.kind == TY_CLOSURE:
         ps: list[str] = []
         for pt in t.params:
             ps.append(type_name(pt))
-        fs: str = "fn(" + strings.join(ps, ", ") + ") -> " + type_name(elem_of(t))
+        kw: str = "fn"
+        if t.kind == TY_CLOSURE:
+            kw = "closure"
+        fs: str = kw + "(" + strings.join(ps, ", ") + ") -> " + type_name(elem_of(t))
         ri: int = 0
         for ec in t.err_classes:
             if ri == 0:
@@ -796,6 +800,8 @@ class Node:
     # ★ match の書き換え（A-48）が作った `case _`（届かなくても断らない）
     #   対になる定義: src/ast.h の is_fallback
     is_fallback: bool
+    # ★ ND_VAR（lambda / 関数の名前）: closure として作る（A-51）
+    is_closure: bool
 
     # 型注釈のモジュール修飾（ND_TYPEREF）
     mod_name: str
@@ -921,6 +927,7 @@ class Node:
         self.is_enum_branch = False
         self.is_enum_view = False
         self.is_fallback = False
+        self.is_closure = False
         self.nullable = False
         self.mod_name = ""
         self.ir_name = ""
@@ -1381,6 +1388,7 @@ def ast_clone(n: rc[Node] | None) -> rc[Node] | None:
     c.is_enum_branch = src.is_enum_branch
     c.is_enum_view = src.is_enum_view
     c.is_fallback = src.is_fallback       # A-48
+    c.is_closure = src.is_closure         # A-51
 
     c.lhs = ast_clone(src.lhs)
     c.rhs = ast_clone(src.rhs)

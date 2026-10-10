@@ -1,0 +1,19 @@
+# ERROR: E-MOVE-1
+class P:
+    v: int
+    def init(self, v: int) -> None:
+        self.v = v
+
+def mk(k: int) -> closure(int) -> int:
+    return lambda x: x + k
+
+class Keep:
+    f: fn(int) -> int
+    def init(self, f: fn(int) -> int) -> None:
+        self.f = f
+
+def main() -> int:
+    c: closure(int) -> int = mk(1)
+    d: closure(int) -> int = c
+    print(c(1))
+    return 0

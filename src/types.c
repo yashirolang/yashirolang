@@ -36,7 +36,7 @@ bool type_can_be_opt(Type *t) {
     // ★ rc[T] もポインタ 1 個なので nullable にできます
     //   （木の「子が無い」を表すのに要ります）。
     return t->kind == TY_STR || t->kind == TY_LIST || t->kind == TY_CLASS ||
-           t->kind == TY_RC || t->kind == TY_WEAK;
+           t->kind == TY_RC || t->kind == TY_WEAK || t->kind == TY_CLOSURE;
 }
 
 Type *type_opt(Type *elem) {
@@ -154,6 +154,7 @@ int type_size(Type *t) {
         case TY_IFACE:  // 実体へのポインタ
         case TY_TUPLE:  // 構造体へのポインタ
         case TY_FN:     // 関数へのポインタ
+        case TY_CLOSURE: // ヒープの記録へのポインタ（A-51）
         case TY_FLOAT:  // double も 8 バイト
         case TY_STR:
         case TY_LIST:
@@ -186,7 +187,7 @@ bool type_equal(Type *a, Type *b) {
 
     // ★ 関数型は「引数の並びと戻り型が全部同じ」なら同じ型です。
     //   注意: 引数名は見ません（型だけが同一性を決めます）。
-    if (a->kind == TY_FN) {
+    if (a->kind == TY_FN || a->kind == TY_CLOSURE) {
         if (a->nparams != b->nparams) return false;
         for (int i = 0; i < a->nparams; i++)
             if (!type_equal(a->params[i], b->params[i])) return false;
@@ -313,10 +314,11 @@ const char *type_name(Type *t) {
             sb_printf(&sb, "%s | None", type_name(t->elem));
             return sb_str(&sb);
         }
-        case TY_FN: {
+        case TY_FN:
+        case TY_CLOSURE: {
             StrBuf sb;
             sb_init(&sb);
-            sb_printf(&sb, "fn(");
+            sb_printf(&sb, "%s(", t->kind == TY_CLOSURE ? "closure" : "fn");
             for (int i = 0; i < t->nparams; i++)
                 sb_printf(&sb, "%s%s", i ? ", " : "", type_name(t->params[i]));
             sb_printf(&sb, ") -> %s", type_name(t->elem));

@@ -402,6 +402,18 @@ def capture_by_value(t: rc[ast.Type]) -> bool:
     return False
 
 
+# 関数型の「形」（引数・戻り型・raises）が同じか。fn と closure の違いは見ない（A-51）
+#   対になる定義: src/sema.c の fn_shape_equal
+def fn_shape_equal(a: rc[ast.Type], b: rc[ast.Type]) -> bool:
+    tmp: rc[ast.Type] = rc(ast.Type(a.kind))
+    for p in b.params:
+        tmp.params.append(p)
+    tmp.elem = b.elem
+    for ec in b.err_classes:
+        tmp.err_classes.append(ec)
+    return ast.type_equal(a, tmp)
+
+
 class Sema:
     prims: ast.Prims | None
     scope: rc[types.Scope] | None
@@ -791,8 +803,12 @@ class Sema:
     # ★ T | None を包む層
     def resolve_type(mut self, tr: mut rc[ast.Node]) -> rc[ast.Type]:
         # ★ 関数型 fn(A, B) -> C
-        if tr.name == "fn" and len(tr.mod_name) == 0:
-            ft: rc[ast.Type] = rc(ast.Type(ast.TY_FN))
+        # ★ closure(A, B) -> C も同じ形（A-51）
+        if (tr.name == "fn" or tr.name == "closure") and len(tr.mod_name) == 0:
+            fkind: int = ast.TY_FN
+            if tr.name == "closure":
+                fkind = ast.TY_CLOSURE
+            ft: rc[ast.Type] = rc(ast.Type(fkind))
             a: rc[ast.Node] | None = tr.body
             while a is not None:
                 an: rc[ast.Node] = a
@@ -1243,7 +1259,14 @@ class Sema:
                         return (diag.msg("sema.042", "'{0}' と '{1}' は名前が同じだけの別のクラスです（同じ型かどうかは名前ではなく定義で決まります）", [copy(gc.ir_name), copy(wc.ir_name)]))
         # ★ 関数型どうしなら、**どこが違うのか**を言う。
         #   「暗黙の型変換がありません」では何を直せばよいか分からない。
-        if got.kind == ast.TY_FN and want.kind == ast.TY_FN:
+        # ★ closure と fn（A-51）。形が同じなら、違うのは「持ち運べるか」だけ
+        gfn: bool = got.kind == ast.TY_FN or got.kind == ast.TY_CLOSURE
+        wfn: bool = want.kind == ast.TY_FN or want.kind == ast.TY_CLOSURE
+        if gfn and wfn and got.kind != want.kind and fn_shape_equal(got, want):
+            if got.kind == ast.TY_CLOSURE:
+                return (diag.msg0("sema.643", "closure は fn の変数・フィールドには入れられません（持ち主がいなくなるため）。fn を受け取る引数へは、そのまま渡せます"))
+            return (diag.msg0("sema.644", "fn の値は closure にできません。closure にできるのは lambda と def で書いた関数の名前です"))
+        if gfn and got.kind == want.kind:
             if len(got.params) != len(want.params):
                 return (diag.msg("sema.043", "引数の数が違います（{0} 個と {1} 個）", [copy(str(len(got.params))), copy(str(len(want.params)))]))
             fi: int = 0
@@ -1754,7 +1777,15 @@ class Sema:
             if fs is not None:
                 n.ir_name = copy(fs.ir_name)
                 n.is_func_ref = True
-                return self.fn_type_of(fs)
+                fty: rc[ast.Type] = self.fn_type_of(fs)
+                # ★ closure が要る場所なら、関数をヒープの記録に包む（A-51）
+                ex: rc[ast.Type] | None = self.expected
+                if ex is not None:
+                    exn: rc[ast.Type] = ex
+                    if exn.kind == ast.TY_CLOSURE and fn_shape_equal(fty, exn):
+                        n.is_closure = True
+                        return exn
+                return fty
 
         if v is None:
             # ★ モジュール名そのものは値ではない
@@ -1957,7 +1988,7 @@ class Sema:
         rh: rc[ast.Node] | None = n.rhs
         if rh is not None:
             rhn: rc[ast.Node] = rh
-            if rhn.caps is not None:
+            if rhn.caps is not None and not rhn.is_closure:
                 v.caps = rhn.caps   # A-51
 
     def check_assign(mut self, n: mut rc[ast.Node]) -> None:
@@ -2075,7 +2106,7 @@ class Sema:
         # ★ 借りて捕まえた lambda は**宣言でだけ**受け取れる（A-51）
         #   対になる定義: src/sema.c の check_assign
         arhs: rc[ast.Node] = unwrap_node(n.rhs)
-        if arhs.caps is not None:
+        if arhs.caps is not None and not arhs.is_closure:
             cq: rc[ast.Node] | None = arhs.caps
             while cq is not None:
                 cqn: rc[ast.Node] = cq
@@ -3390,7 +3421,7 @@ class Sema:
             at: rc[ast.Type] = self.check_expr(arg)
             self.expected = None
             # ★ 呼び先がしまうなら、捕獲した lambda は渡せません（A-43）
-            if arg.caps is not None:
+            if arg.caps is not None and not arg.is_closure:
                 mnode: rc[ast.Node] | None = f.node
                 mstores: bool = True
                 if mnode is not None:
@@ -3399,7 +3430,8 @@ class Sema:
                 if mstores:
                     self.reject_escaping_closure(arg, diag.msg0("sema.410", "しまうことが"))
             mark_arg_own_rc(arg, f, i + 1)
-            if not ast.type_assignable(at, want):
+            # ★ closure を fn の引数へ（A-51）
+            if not self.closure_to_fn_arg(arg, at, f, i + 1, mname) and not ast.type_assignable(at, want):
                 diag.error_full(unwrap_tok(arg.tok),
                                 diag.msg("sema.150", "メソッド '{0}' の第 {1} 引数: 型 '{2}' を '{3}' に渡せません", [copy(mname), copy(str(i + 1)), copy(ast.type_name(at)), copy(ast.type_name(want))]),
                                 diag.msg("sema.051", "これは '{0}' 型です", [copy(ast.type_name(at))]),
@@ -3780,7 +3812,7 @@ class Sema:
             at: rc[ast.Type] = self.check_expr(arg)
             self.expected = None
             # ★ 生成はふつう「しまう」ので、捕獲した lambda は渡せません（A-43）
-            if arg.caps is not None:
+            if arg.caps is not None and not arg.is_closure:
                 cnode: rc[ast.Node] | None = f.node
                 cstores: bool = True
                 if cnode is not None:
@@ -3789,7 +3821,8 @@ class Sema:
                 if cstores:
                     self.reject_escaping_closure(arg, diag.msg0("sema.410", "しまうことが"))
             mark_arg_own_rc(arg, f, i + 1)
-            if not ast.type_assignable(at, want):
+            # ★ closure を fn の引数へ（A-51）
+            if not self.closure_to_fn_arg(arg, at, f, i + 1, c.name) and not ast.type_assignable(at, want):
                 diag.error_full(unwrap_tok(arg.tok),
                                 diag.msg("sema.195", "'{0}' の生成の第 {1} 引数: 型 '{2}' を '{3}' に渡せません", [copy(c.name), copy(str(i + 1)), copy(ast.type_name(at)), copy(ast.type_name(want))]),
                                 diag.msg("sema.051", "これは '{0}' 型です", [copy(ast.type_name(at))]),
@@ -3846,7 +3879,8 @@ class Sema:
         # ★ 名前が **関数型の変数**なら間接呼び出し
         #   注意: 変数を先に見る（同名の関数があっても変数が勝つ）
         fv: rc[types.VarEntry] | None = self.lookup(n.name)
-        if fv is not None and unwrap_type(fv.type).kind == ast.TY_FN:
+        if fv is not None and (unwrap_type(fv.type).kind == ast.TY_FN or
+                               unwrap_type(fv.type).kind == ast.TY_CLOSURE):
             ftv: rc[ast.Type] = unwrap_type(fv.type)
             # ★ 関数型には引数の**名前が入っていません**（A-38）。
             reject_kwargs(n.args,
@@ -4160,12 +4194,12 @@ class Sema:
             # 注意: 引数には期待型を渡さない
             # ★ 例外は**関数型**です（A-42）。lambda はここから型をもらいます。
             self.expected = None
-            if f.params[i].kind == ast.TY_FN:
+            if f.params[i].kind == ast.TY_FN or f.params[i].kind == ast.TY_CLOSURE:
                 self.expected = f.params[i]
             at: rc[ast.Type] = self.check_expr(arg)
             self.expected = None
             # ★ 捕獲した lambda は、**しまわない**相手にだけ渡せます（A-43）
-            if arg.caps is not None:
+            if arg.caps is not None and not arg.is_closure:
                 fnode: rc[ast.Node] | None = f.node
                 stores: bool = True
                 if fnode is not None:
@@ -4187,7 +4221,8 @@ class Sema:
                 arg.arg_is_borrowed = f.pmodes[i] != ast.PM_OWN
             mark_arg_own_rc(arg, f, i)
             want: rc[ast.Type] = f.params[i]
-            if not ast.type_assignable(at, want):
+            # ★ closure を fn の引数へ（A-51）
+            if not self.closure_to_fn_arg(arg, at, f, i, shown) and not ast.type_assignable(at, want):
                 diag.error_full(unwrap_tok(arg.tok),
                                 diag.msg("sema.249", "{0} '{1}' の第 {2} 引数: 型 '{3}' を '{4}' に渡せません", [copy(what), copy(shown), copy(str(i + 1)), copy(ast.type_name(at)), copy(ast.type_name(want))]),
                                 diag.msg("sema.051", "これは '{0}' 型です", [copy(ast.type_name(at))]),
@@ -4197,6 +4232,26 @@ class Sema:
             i = i + 1
             a = arg.next
         return unwrap_type(f.ret)
+
+    # ★ closure を fn を受け取る引数へ渡す（A-51）。渡せたら True
+    #   対になる定義: src/sema.c の closure_to_fn_arg
+    def closure_to_fn_arg(mut self, a: rc[ast.Node], at: rc[ast.Type], f: rc[types.FuncSig],
+                          pi: int, shown: str) -> bool:
+        pt: rc[ast.Type] = f.params[pi]
+        if at.kind != ast.TY_CLOSURE or pt.kind != ast.TY_FN or not fn_shape_equal(at, pt):
+            return False
+        stores: bool = True
+        fnode: rc[ast.Node] | None = f.node
+        if fnode is not None:
+            stores = self.fn_param_escapes_at(unwrap_node(fnode).body, f.pnames[pi], 0)
+        if stores:
+            diag.error_full(unwrap_tok(a.tok),
+                            diag.msg("sema.645", "closure を '{0}' の fn の引数に渡せません", [copy(shown)]),
+                            diag.msg0("sema.646", "呼び先がこの関数をしまいます"),
+                            f.tok,
+                            diag.msg("sema.248", "'{0}' は受け取った関数をしまいます", [copy(f.pnames[pi])]),
+                            diag.msg0("sema.647", "しまう相手には、引数の型を closure(...) にして所有ごと渡してください（own closure(...)）"))
+        return True
 
     # return の検査
     # 分解代入 q, r = f()
@@ -4750,6 +4805,8 @@ class Sema:
         if v is None:
             return
         vv: rc[ast.Node] = v
+        if vv.is_closure:
+            return   # ★ closure はヒープにあり、持ち運べる（A-51）
         c0: rc[ast.Node] | None = vv.caps
         if c0 is None:
             return
@@ -5645,7 +5702,7 @@ class Sema:
                             diag.msg0("sema.592", "型注釈のある変数に入れるか、関数型の引数に渡してください:\n             p: fn(int) -> bool = lambda x: x > 0\n             count_if(xs, lambda x: x > 0)"))
             return tmpl
         want: rc[ast.Type] = want0
-        if want.kind != ast.TY_FN:
+        if want.kind != ast.TY_FN and want.kind != ast.TY_CLOSURE:
             diag.error_full(unwrap_tok(ref.tok),
                             diag.msg0("sema.590", "この lambda がどんな関数になるのか決められません"),
                             diag.msg0("sema.591", "ここでは引数と戻り値の型が決まりません"), None, "",
@@ -5662,7 +5719,19 @@ class Sema:
         #   決めます（この後で持ち上げ先のモジュールへ移ります）。
         caps: list[rc[ast.Node]] = []
         self.collect_captures(tn.body, tn.params, caps)
+        heap: bool = want.kind == ast.TY_CLOSURE
+        ref.is_closure = heap
         for c in caps:
+            # ★ closure（A-51）は借りて捕まえない。値型は写し、rc / weak は共有、
+            #   str / list / クラスは copy で写す。対になる定義: src/sema.c
+            if heap:
+                ct: rc[ast.Type] = unwrap_type(c.type)
+                cb: rc[ast.Type] = ct
+                if ct.kind == ast.TY_OPT:
+                    cb = ast.elem_of(ct)
+                if not capture_by_value(ct) and cb.kind != ast.TY_RC and cb.kind != ast.TY_WEAK:
+                    self.check_copyable(ct, c.tok)
+                continue
             if not self.capturable(unwrap_type(c.type)):
                 diag.error_full(unwrap_tok(ref.tok),
                                 diag.msg("sema.343", "'{0}' は捕まえられません（'{1}' 型）", [copy(c.name), copy(ast.type_name(unwrap_type(c.type)))]),
@@ -5733,6 +5802,9 @@ class Sema:
 
                 pm2: rc[ast.Node] = ast.new_node(ast.ND_PARAM, ref.tok)
                 pm2.name = copy(c3.name)
+                # ★ closure（A-51）の記録は捕まえた値を所有するので、mut で借りて渡す
+                if heap:
+                    pm2.mode = ast.PM_MUT
                 tr2: rc[ast.Node] = ast.new_node(ast.ND_TYPEREF, ref.tok)
                 tr2.name = copy(tname)
                 pm2.type_ref = tr2

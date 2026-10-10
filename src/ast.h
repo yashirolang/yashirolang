@@ -478,6 +478,8 @@ struct Node {
     bool is_fallback;
     // ★ ND_VAR（lambda / 関数の名前）: `closure(...)` として作る（ヒープの記録。A-51）
     bool is_closure;
+    // ★ ND_IMPORT: `import X as Y` の Y（別名。無ければ NULL）。
+    char *alias;
 
     // ND_FIELD が指すフィールド（sema が解決する）
     Field *field;

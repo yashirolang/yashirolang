@@ -802,6 +802,8 @@ class Node:
     is_fallback: bool
     # ★ ND_VAR（lambda / 関数の名前）: closure として作る（A-51）
     is_closure: bool
+    # ★ ND_IMPORT: `import X as Y` の Y（別名。無ければ ""）。対になる定義: src/ast.h の alias
+    alias: str
 
     # 型注釈のモジュール修飾（ND_TYPEREF）
     mod_name: str
@@ -928,6 +930,7 @@ class Node:
         self.is_enum_view = False
         self.is_fallback = False
         self.is_closure = False
+        self.alias = ""
         self.nullable = False
         self.mod_name = ""
         self.ir_name = ""
@@ -1229,7 +1232,10 @@ def dump(n: rc[Node] | None, depth: int) -> None:
             dump(n.lhs, depth + 1)
             print(pad + ")")
     elif n.kind == ND_IMPORT:
-        print(pad + "(import " + n.name + ")")
+        if len(n.alias) > 0:
+            print(pad + "(import " + n.name + " as " + n.alias + ")")
+        else:
+            print(pad + "(import " + n.name + ")")
     # ★ 内包表記（body の 3 つは隠し宣言なので出さない）
     elif n.kind == ND_LISTCOMP:
         lv: rc[Node] | None = n.body
@@ -1389,6 +1395,7 @@ def ast_clone(n: rc[Node] | None) -> rc[Node] | None:
     c.is_enum_view = src.is_enum_view
     c.is_fallback = src.is_fallback       # A-48
     c.is_closure = src.is_closure         # A-51
+    c.alias = copy(src.alias)
 
     c.lhs = ast_clone(src.lhs)
     c.rhs = ast_clone(src.rhs)

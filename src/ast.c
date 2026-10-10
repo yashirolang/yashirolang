@@ -450,7 +450,8 @@ static void dump(Node *n, int depth) {
             printf(")\n");
             break;
         case ND_IMPORT:
-            printf("(import %s)\n", n->name);
+            if (n->alias) printf("(import %s as %s)\n", n->name, n->alias);
+            else printf("(import %s)\n", n->name);
             break;
 
         // ★ 内包表記 [E for x in xs if C]
@@ -541,6 +542,7 @@ Node *ast_clone(Node *n) {
     c->is_lambda = n->is_lambda;   // A-42
     c->is_fallback = n->is_fallback;   // A-48
     c->is_closure = n->is_closure;     // A-51
+    c->alias = n->alias;
 
     c->lhs = ast_clone(n->lhs);
     c->rhs = ast_clone(n->rhs);

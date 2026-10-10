@@ -51,6 +51,7 @@ class Module:
     ast: rc[ast.Node] | None
 
     deps: list[rc[Module]]
+    dep_alias: list[str]   # ★ deps と対。`import X as Y` の Y（別名が無ければ ""）
 
     ll_path: str
 
@@ -67,7 +68,16 @@ class Module:
         self.ll_path = ""
         self.state = 0
         self.deps = []
+        self.dep_alias = []
 
+
+
+# import した相手を、そのモジュールの中で呼ぶ名前（別名があれば別名）
+#   対になる定義: src/module.c の module_dep_name
+def dep_name(m: rc[Module], i: int) -> str:
+    if i < len(m.dep_alias) and len(m.dep_alias[i]) > 0:
+        return copy(m.dep_alias[i])
+    return copy(m.deps[i].name)
 
 class Loader:
     dir: str
@@ -287,9 +297,23 @@ def load(ld: mut Loader, name: str, path: str, from_: rc[token.Token] | None) ->
                                         diag.msg0("mod.017", "重複した import です"), None, "",
                                         diag.msg0("mod.018", "同じモジュールを 2 回書く必要はありません"))
                     k = k + 1
+                # ★ 呼ぶ名前（別名か、モジュール名）がぶつかるのも断る
+                #   対になる定義: src/module.c の load
+                call: str = copy(d.name)
+                if len(d.alias) > 0:
+                    call = copy(d.alias)
+                k2: int = 0
+                while k2 < len(m.deps):
+                    if dep_name(m, k2) == call:
+                        diag.error_full(tok_of(d),
+                                        diag.msg("mod.019", "'{0}' という名前は、別の import が既に使っています", [copy(call)]),
+                                        diag.msg0("mod.020", "同じ名前で 2 つのモジュールを呼ぶことになります"), None, "",
+                                        diag.msg0("mod.021", "どちらかに別の名前を付けてください（例: import shadow.json as sjson）"))
+                    k2 = k2 + 1
                 dep: rc[Module] = load(ld, d.name, path_for(ld, d.name, tok_of(d)),
                                    tok_of(d))
                 m.deps.append(dep)
+                m.dep_alias.append(copy(d.alias))
             d = d.next
     ld.stack = pop_last(ld.stack)
 

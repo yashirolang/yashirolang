@@ -19,6 +19,7 @@ struct Module {
     Node *ast;    // 構文解析した結果
 
     Module **deps;  // import しているモジュール
+    char **dep_alias;  // ★ deps と対。`import X as Y` の Y（別名が無ければ NULL）
     int ndeps;
 
     char *ll_path;  // 出力する .ll のパス（main.c が決める）
@@ -48,6 +49,8 @@ const char *module_lib_dir(void);
 // 入口ファイルから import をたどって全モジュールを読む。
 // 戻り値は依存順に並んだ先頭。*entry_out に入口モジュールを入れる。
 Module *load_modules(const char *entry_path, Module **entry_out);
+// import した相手を、そのモジュールの中で呼ぶ名前（別名があれば別名）
+const char *module_dep_name(Module *m, int i);
 
 // dir か -I の探索場所に <name> があるか
 //（「import を書き忘れていませんか」の診断用。★ lib/ は見ません）

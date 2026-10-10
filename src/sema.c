@@ -289,11 +289,32 @@ static void enter_module(Sema *s, ModuleSyms *ms) {
 
 // import しているモジュールを名前で引く。
 // 注意: import していないモジュールは、たとえ読み込まれていても見えません。
+// ★ `import X as Y` なら、引けるのは別名 Y だけです（module_dep_name）。
 static ModuleSyms *lookup_import(Sema *s, const char *name) {
     Module *m = s->cur->mod;
     for (int i = 0; i < m->ndeps; i++)
-        if (strcmp(m->deps[i]->name, name) == 0) return m->deps[i]->syms;
+        if (strcmp(module_dep_name(m, i), name) == 0) return m->deps[i]->syms;
     return NULL;
+}
+
+// ★ 別名を付けて import したモジュールを、元の名前で書いた（`import math as m` の後の
+//   `math.sqrt`）。`pkg.mod` の先頭（`pkg`）で書いた場合も同じです。
+//   「import していません」「未定義の名前です」より先に、こちらを案内します。
+static void reject_aliased_module(Sema *s, const char *name, Token *tok) {
+    Module *m = s->cur->mod;
+    size_t nl = strlen(name);
+    for (int i = 0; i < m->ndeps; i++) {
+        if (!m->dep_alias || !m->dep_alias[i]) continue;
+        const char *full = m->deps[i]->name;
+        if (strcmp(full, name) != 0 && !(strncmp(full, name, nl) == 0 && full[nl] == '.'))
+            continue;
+        Diag d = {0};
+        d.message = MSG2("sema.648", "'{0}' は '{1}' という別名で import しています", full, m->dep_alias[i]);
+        d.primary.tok = tok;
+        d.primary.label = MSG0("sema.649", "別名を付けたモジュールは、別名でだけ使えます");
+        d.hint = MSG1("sema.650", "'{0}.…' と書いてください", m->dep_alias[i]);
+        diag_fail(&d);
+    }
 }
 
 // IR 上の修飾名を作る（mangle をモジュールにも使う）
@@ -858,6 +879,7 @@ static Type *resolve_base_type(Sema *s, Node *tr) {
     //   引く表が「自分のモジュール」から「そのモジュール」に変わるだけです。
     if (tr->mod_name) {
         ModuleSyms *ms = lookup_import(s, tr->mod_name);
+        if (!ms) reject_aliased_module(s, tr->mod_name, tr->tok);   // A-52
         if (!ms) {
             Diag d = {0};
             d.message = MSG1("sema.009", "モジュール '{0}' を import していません", tr->mod_name);
@@ -1680,6 +1702,8 @@ static Type *check_var(Sema *s, Node *n) {
             d.hint = MSG1("sema.079", "モジュールの中身は '{0}.名前' の形で使います", n->name);
             diag_fail(&d);
         }
+
+        reject_aliased_module(s, n->name, n->tok);   // A-52
 
         // 同名のモジュールが存在するのに import していない場合。
         // ★ 「未定義の名前です」で突き放さず、書き忘れを指摘します。
@@ -5834,6 +5858,7 @@ static void declare_iface(Sema *s, Node *n) {
 static Iface *resolve_iface_ref(Sema *s, Node *tr) {
     if (tr->mod_name) {
         ModuleSyms *ms = lookup_import(s, tr->mod_name);
+        if (!ms) reject_aliased_module(s, tr->mod_name, tr->tok);   // A-52
         if (!ms)
             error_at_hint_m(tr->tok, MSG1("sema.010", "ファイルの先頭に 'import {0}' を書いてください", tr->mod_name), MSG1("sema.009", "モジュール '{0}' を import していません", tr->mod_name));
         Iface *i = lookup_iface_in(ms, tr->name);

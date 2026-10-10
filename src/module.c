@@ -246,11 +246,20 @@ static void push_path(Loader *ld, Module *m) {
 }
 
 // ── 依存の登録 ──────────────────────────────────────────────
-static void add_dep(Module *m, Module *dep) {
+static void add_dep(Module *m, Module *dep, char *alias) {
     Module **p = xmalloc(sizeof(Module *) * (size_t)(m->ndeps + 1));
     memcpy(p, m->deps, sizeof(Module *) * (size_t)m->ndeps);
+    char **a = xmalloc(sizeof(char *) * (size_t)(m->ndeps + 1));
+    if (m->ndeps) memcpy(a, m->dep_alias, sizeof(char *) * (size_t)m->ndeps);
+    a[m->ndeps] = alias;
     p[m->ndeps++] = dep;
     m->deps = p;
+    m->dep_alias = a;
+}
+
+// このモジュールの中で、import した相手を呼ぶ名前（別名があれば別名）
+const char *module_dep_name(Module *m, int i) {
+    return m->dep_alias && m->dep_alias[i] ? m->dep_alias[i] : m->deps[i]->name;
 }
 
 bool module_file_exists(const char *dir, const char *name) {
@@ -320,9 +329,21 @@ static Module *load(Loader *ld, const char *name, const char *path, Token *from)
             e.hint = MSG0("mod.018", "同じモジュールを 2 回書く必要はありません");
             diag_fail(&e);
         }
+        // ★ 呼ぶ名前（別名か、モジュール名）がぶつかるのも断ります
+        //   （`import json` と `import shadow.json as json`）。
+        const char *call = d->alias ? d->alias : d->name;
+        for (int i = 0; i < m->ndeps; i++) {
+            if (strcmp(module_dep_name(m, i), call) != 0) continue;
+            Diag e = {0};
+            e.message = MSG1("mod.019", "'{0}' という名前は、別の import が既に使っています", call);
+            e.primary.tok = d->tok;
+            e.primary.label = MSG0("mod.020", "同じ名前で 2 つのモジュールを呼ぶことになります");
+            e.hint = MSG0("mod.021", "どちらかに別の名前を付けてください（例: import shadow.json as sjson）");
+            diag_fail(&e);
+        }
 
         Module *dep = load(ld, d->name, path_for(ld, d->name, d->tok), d->tok);
-        add_dep(m, dep);
+        add_dep(m, dep, d->alias);
     }
     ld->depth--;
 

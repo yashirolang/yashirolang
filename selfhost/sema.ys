@@ -592,10 +592,25 @@ class Sema:
         m: rc[module.Module] = self.cur_mod()
         i: int = 0
         while i < len(m.deps):
-            if m.deps[i].name == name:
+            if module.dep_name(m, i) == name:   # ★ 別名があれば別名で引く
                 return self.syms_of(m.deps[i])
             i = i + 1
         return None
+
+    # ★ 別名を付けて import したモジュールを、元の名前で書いた（A-52）
+    #   対になる定義: src/sema.c の reject_aliased_module
+    def reject_aliased_module(self, name: str, tok: rc[token.Token] | None) -> None:
+        m: rc[module.Module] = self.cur_mod()
+        i: int = 0
+        while i < len(m.deps):
+            if i < len(m.dep_alias) and len(m.dep_alias[i]) > 0:
+                full: str = m.deps[i].name
+                if full == name or strings.startswith(full, name + "."):
+                    diag.error_full(unwrap_tok(tok),
+                                    diag.msg("sema.648", "'{0}' は '{1}' という別名で import しています", [copy(full), copy(m.dep_alias[i])]),
+                                    diag.msg0("sema.649", "別名を付けたモジュールは、別名でだけ使えます"), None, "",
+                                    diag.msg("sema.650", "'{0}.…' と書いてください", [copy(m.dep_alias[i])]))
+            i = i + 1
 
     def syms_of(self, m: rc[module.Module]) -> rc[types.ModuleSyms] | None:
         i: int = 0
@@ -1029,6 +1044,7 @@ class Sema:
         if len(tr.mod_name) > 0:
             ms: rc[types.ModuleSyms] | None = self.lookup_import(tr.mod_name)
             if ms is None:
+                self.reject_aliased_module(tr.mod_name, tr.tok)   # A-52
                 diag.error_full(unwrap_tok(tr.tok),
                                 diag.msg("sema.009", "モジュール '{0}' を import していません", [copy(tr.mod_name)]),
                                 diag.msg0("sema.372", "この修飾を解決できません"), None, "",
@@ -1794,6 +1810,8 @@ class Sema:
                                 diag.msg("sema.078", "モジュール '{0}' は値として使えません", [copy(n.name)]),
                                 diag.msg0("sema.398", "ここにはモジュール名を書けません"), None, "",
                                 diag.msg("sema.079", "モジュールの中身は '{0}.名前' の形で使います", [copy(n.name)]))
+
+            self.reject_aliased_module(n.name, n.tok)   # A-52
 
             # 同名のモジュールが存在するのに import していない場合
             if module.file_exists(self.cur_mod().dir, n.name):
@@ -5378,6 +5396,7 @@ class Sema:
         if len(tr.mod_name) > 0:
             ms: rc[types.ModuleSyms] | None = self.lookup_import(tr.mod_name)
             if ms is None:
+                self.reject_aliased_module(tr.mod_name, tr.tok)   # A-52
                 diag.error_at_hint(unwrap_tok(tr.tok),
                                    diag.msg("sema.010", "ファイルの先頭に 'import {0}' を書いてください", [copy(tr.mod_name)]),
                                    diag.msg("sema.009", "モジュール '{0}' を import していません", [copy(tr.mod_name)]))

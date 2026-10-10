@@ -1,0 +1,11 @@
+# OUTPUT: 25
+# OUTPUT: 4.0
+# A-52: import X as Y。別名で関数・クラス・型注釈が使えます（パッケージも標準ライブラリも）。
+import geo.shapes as sh
+import math as m
+
+def main() -> int:
+    p: sh.Point = sh.Point(3, 4)
+    print(sh.dist2(p))
+    print(m.sqrt(16.0))
+    return 0

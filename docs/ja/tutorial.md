@@ -697,7 +697,8 @@ def main() -> int:
     return 0
 ```
 
-- **`from x import y` も `as` も相対 import もありません。**
+- 長い名前には別名を付けられます：`import geo.shapes as sh` → `sh.area(3, 4)`（別名を付けたら、使えるのは別名だけです）。
+- **`from x import y` と相対 import はありません。**
 - パッケージの中は `import パッケージ.モジュール` です（`ysm` が `deps/` に置きます）。
 
 ### 6.1 よく使うモジュール

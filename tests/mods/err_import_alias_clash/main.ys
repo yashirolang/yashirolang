@@ -1,0 +1,6 @@
+# ERROR: 'm' という名前は、別の import が既に使っています
+import math as m
+import strings as m
+
+def main() -> int:
+    return 0

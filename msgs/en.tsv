@@ -323,6 +323,9 @@ parse.263	enumerate gives an index and an element (two names)	enumerate で受�
 parse.264	put parentheses around the element to destructure it (e.g. for i, (a, b) in enumerate(pairs):)	要素を分解するときは括弧で囲みます（例: for i, (a, b) in enumerate(pairs):）
 parse.265	case _ cannot have an if guard	case _ には if を書けません
 parse.266	put the condition on a branch or a value instead (e.g. case Shape.Circle(r) if r > 0:)	条件で絞りたいときは、枝や値のほうに書きます（例: case Shape.Circle(r) if r > 0:）
+parse.267	an alias is required	別名が必要です
+parse.268	write it as import pkg.mod as m (a single name after as; no dots)	書き方は import pkg.mod as m です（as の後は名前 1 つ。ドットは書けません）
+parse.269	an alias cannot contain a dot	別名にドットは書けません
 
 # ── モジュールの読み込み ──
 mod.001	found in:	見つかった場所:
@@ -342,6 +345,9 @@ mod.014	cannot resolve this import	この import を解決できません
 mod.015	searched these paths:\n             {0}\n             the module name is the file name without {1}\n             ('pkg.mod' means 'pkg/mod{2}')	次のパスを探しました:\n             {0}\n             モジュール名はファイル名（{1} を除いたもの）です\n             （'pkg.mod' は 'pkg/mod{2}' を指します）
 mod.017	duplicate import	重複した import です
 mod.018	there is no need to import the same module twice	同じモジュールを 2 回書く必要はありません
+mod.019	the name '{0}' is already used by another import	'{0}' という名前は、別の import が既に使っています
+mod.020	two modules would be called by the same name	同じ名前で 2 つのモジュールを呼ぶことになります
+mod.021	give one of them another name (e.g. import shadow.json as sjson)	どちらかに別の名前を付けてください（例: import shadow.json as sjson）
 
 # ── 型検査 ──
 sema.001	'{0}' is the name of an imported module	'{0}' は import したモジュールの名前です
@@ -988,6 +994,9 @@ sema.644	an fn value cannot become a closure; only a lambda or the name of a def
 sema.645	cannot pass a closure to the fn parameter of '{0}'	closure を '{0}' の fn の引数に渡せません
 sema.646	the callee stores this function	呼び先がこの関数をしまいます
 sema.647	to give it to something that stores it, make the parameter closure(...) and pass ownership (own closure(...))	しまう相手には、引数の型を closure(...) にして所有ごと渡してください（own closure(...)）
+sema.648	'{0}' is imported under the alias '{1}'	'{0}' は '{1}' という別名で import しています
+sema.649	a module imported with an alias can only be used by its alias	別名を付けたモジュールは、別名でだけ使えます
+sema.650	write '{0}.…'	'{0}.…' と書いてください
 
 # ── 所有権・借用の検査 ──
 own.001	use of possibly moved value '{0}'	移動済みかもしれない値 '{0}' を使っています

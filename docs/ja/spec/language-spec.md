@@ -1339,9 +1339,23 @@ def main() -> int:
 - 型注釈の修飾は **1 段だけ**（`lexer.Token` / `list[lexer.Token]`）
 - **モジュール名と同じ名前**の変数・関数・クラスは宣言できない
 - **循環 import はエラー**（依存関係は DAG に保つ）
+- **別名**（A-52）：`import pkg.mod as m` と書くと、`m.f()` / `m.Token` で使えます。
+  別名を付けたら、使えるのは**別名だけ**です（元の名前で書くと
+  「'pkg.mod' は 'm' という別名で import しています」）。別名どうし・別名とほかの
+  モジュール名がぶつかるのは断ります。`as` の後は名前 1 つです（ドットは書けません）
 
-**採用しないもの**：`from X import Y`／`import X as Y`／`from X import *`／
-パッケージ（`a.b.c`）。
+```python
+import geo.shapes as sh
+import math as m
+
+def main() -> int:
+    p: sh.Point = sh.Point(3, 4)
+    print(m.sqrt(16.0))
+    return 0
+```
+
+**採用しないもの**：`from X import Y`／`from X import *`（名前の出どころがソースから
+読み取れなくなるため。別名は `m.` が残るので、どのモジュールのものかは読み取れます）。
 
 ---
 

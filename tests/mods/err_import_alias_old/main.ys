@@ -1,0 +1,8 @@
+# ERROR: 'math' は 'm' という別名で import しています
+# ERROR: = ヒント: 'm.…' と書いてください
+# A-52: 別名を付けたら、使えるのは別名だけです（Python と同じ）。
+import math as m
+
+def main() -> int:
+    print(math.sqrt(4.0))
+    return 0

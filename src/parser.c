@@ -3230,6 +3230,18 @@ static Node *import_stmt(Parser *p) {
 
     Node *n = new_node(ND_IMPORT, kw);
     n->name = sb_str(&full);
+
+    // ★ 別名 `import pkg.mod as m`。別名を付けたら、使えるのは**別名だけ**です
+    //   （Python と同じ）。`m.f()` / `m.Token` と書けます。
+    if (consume_kw(p, "as")) {
+        Token *al = peek(p);
+        if (al->kind != TK_IDENT)
+            error_at_hint_m(al, MSG0("parse.268", "書き方は import pkg.mod as m です（as の後は名前 1 つ。ドットは書けません）"), MSG0("parse.267", "別名が必要です"));
+        advance(p);
+        if (tok_is(peek(p), "."))
+            error_at_hint_m(peek(p), MSG0("parse.268", "書き方は import pkg.mod as m です（as の後は名前 1 つ。ドットは書けません）"), MSG0("parse.269", "別名にドットは書けません"));
+        n->alias = al->text;
+    }
     expect_newline(p);
     return n;
 }

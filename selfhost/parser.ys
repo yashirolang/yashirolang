@@ -2986,6 +2986,19 @@ class Parser:
 
         n: rc[ast.Node] = ast.new_node(ast.ND_IMPORT, kw)
         n.name = strings.join(full, "")
+        # ★ 別名 `import pkg.mod as m`。対になる定義: src/parser.c の import_stmt
+        if self.consume_kw("as") is not None:
+            al: rc[token.Token] = self.peek()
+            if al.kind != token.TK_IDENT:
+                self.fail_hint(al,
+                               diag.msg0("parse.268", "書き方は import pkg.mod as m です（as の後は名前 1 つ。ドットは書けません）"),
+                               diag.msg0("parse.267", "別名が必要です"))
+            self.advance()
+            if self.peek().is_punct("."):
+                self.fail_hint(self.peek(),
+                               diag.msg0("parse.268", "書き方は import pkg.mod as m です（as の後は名前 1 つ。ドットは書けません）"),
+                               diag.msg0("parse.269", "別名にドットは書けません"))
+            n.alias = copy(al.text)
         self.expect_newline()
         return n
 

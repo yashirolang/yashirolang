@@ -1,0 +1,9 @@
+class Point:
+    x: int
+    y: int
+    def init(self, x: int, y: int) -> None:
+        self.x = x
+        self.y = y
+
+def dist2(p: Point) -> int:
+    return p.x * p.x + p.y * p.y
